@@ -23,12 +23,26 @@ pub struct DaemonState {
 impl DaemonState {
     pub fn new() -> Arc<Self> {
         let (event_tx, _) = broadcast::channel(1024);
-        Arc::new(Self {
+        let state = Arc::new(Self {
             nodes: RwLock::new(HashMap::new()),
             event_tx,
             workspace: RwLock::new(Workspace::new("main".to_string())),
             pipes: RwLock::new(HashMap::new()),
-        })
+        });
+
+        // Automatically purge and collapse panes when their process exits
+        let mut rx = state.event_tx.subscribe();
+        let state_clone = Arc::clone(&state);
+        tokio::spawn(async move {
+            while let Ok(event) = rx.recv().await {
+                if let StreamEvent::Exit { name, .. } = event {
+                    let mut ws = state_clone.workspace.write().await;
+                    ws.remove(&name);
+                }
+            }
+        });
+
+        state
     }
 
     pub async fn spawn_node(
@@ -104,11 +118,13 @@ impl DaemonState {
     }
 
     pub async fn kill_node(&self, name: &str) -> Result<(), String> {
-        let nodes = self.nodes.read().await;
-        let node = nodes
-            .get(name)
-            .ok_or_else(|| format!("Node '{}' not found", name))?;
-        node.kill().map_err(|e| e.to_string())?;
+        let node = {
+            let mut nodes = self.nodes.write().await;
+            nodes.remove(name).ok_or_else(|| format!("Node '{}' not found", name))?
+        };
+        let _ = node.kill();
+        let mut ws = self.workspace.write().await;
+        ws.remove(name);
         Ok(())
     }
 

@@ -286,3 +286,42 @@ async fn test_virtual_pipe_e2e() {
     let list = client.list_pipes().await.expect("List pipes failed");
     assert!(list.contains(&"agent_bus".to_string()));
 }
+
+#[tokio::test]
+async fn test_pane_auto_removed_on_exit() {
+    use mpx::layout::Direction;
+
+    let (endpoint, _dir) = start_test_daemon().await;
+    let mut client = Client::connect(&endpoint).await.expect("Failed to connect");
+
+    // Spawn long running node 1
+    client
+        .spawn("keep-alive".into(), "cat".into(), vec![], false, None)
+        .await
+        .unwrap();
+
+    // Split with node 2 that exits quickly
+    client
+        .split(
+            Some("keep-alive".into()),
+            "quick-exit".into(),
+            "echo".into(),
+            vec!["bye".into()],
+            false,
+            Direction::Horizontal,
+        )
+        .await
+        .unwrap();
+
+    // Wait for node 2 to finish
+    let _ = client.wait("quick-exit").await;
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // Layout must automatically have purged "quick-exit" and reclaimed the full width!
+    let layout = client.layout(80, 24).await.unwrap();
+    assert_eq!(layout.len(), 1, "Layout should have collapsed back to 1 pane");
+    assert_eq!(layout[0].0, "keep-alive");
+    assert_eq!(layout[0].1.width, 80);
+
+    client.kill("keep-alive").await.unwrap();
+}

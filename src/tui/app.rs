@@ -67,6 +67,9 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
         let layout_h = term_h.saturating_sub(1); // 1 line reserved for tmux status bar
 
         let raw_panes = client.layout(term_w, layout_h).await.unwrap_or_default();
+        if raw_panes.is_empty() {
+            return Ok(());
+        }
         let active_pane = raw_panes
             .iter()
             .find(|(.., focused)| *focused)
@@ -248,9 +251,7 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
                         vt.feed(data.as_bytes());
                     }
                     StreamEvent::Exit { name, .. } => {
-                        if let Some(vt) = vt_screens.get_mut(&name) {
-                            vt.feed(b"\r\n[Process exited]\r\n");
-                        }
+                        vt_screens.remove(&name);
                     }
                     _ => {}
                 }
