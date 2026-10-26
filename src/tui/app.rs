@@ -70,12 +70,11 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
 
     let mut out = BufWriter::with_capacity(64 * 1024, stdout());
     let mut pane_dimensions: HashMap<String, (u16, u16)> = HashMap::new();
-    let mut last_render: Option<std::time::Instant> = None;
+    let mut last_stream_render: Option<std::time::Instant> = None;
     let frame_budget = Duration::from_millis(16);
     let mut layout_cache = LayoutCache::new();
 
     loop {
-        wait_for_frame(last_render, frame_budget).await;
         let (term_w, term_h) = crossterm::terminal::size().unwrap_or((80, 24));
         let layout_h = term_h.saturating_sub(1); // 1 line reserved for tmux status bar
 
@@ -143,8 +142,6 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
                         selection: sel.as_ref(),
                         scroll_offset: offset,
                         badge: badge.as_deref(),
-                        prev_frame: Some(layout_cache.prev_frame.as_mut_slice()),
-                        term_w,
                     },
                 );
             }
@@ -191,7 +188,6 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
         // End DEC 2026 synchronized update and flush frame atomically
         let _ = Compositor::end_sync(&mut out);
         let _ = out.flush();
-        last_render = Some(std::time::Instant::now());
         tokio::select! {
             Some(Ok(event)) = event_reader.next() => {
                 match event {
@@ -498,10 +494,39 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
                         }
                     }
                     Event::Mouse(mouse) => {
+                        let mut latest_mouse = mouse;
+                        while crossterm::event::poll(Duration::from_millis(0)).unwrap_or(false) {
+                            if let Ok(Event::Mouse(next_mouse)) = crossterm::event::read() {
+                                if matches!(next_mouse.kind, MouseEventKind::Drag(_) | MouseEventKind::Moved) {
+                                    latest_mouse = next_mouse;
+                                } else {
+                                    let dirty = handle_mouse(
+                                        latest_mouse.kind,
+                                        latest_mouse.column,
+                                        latest_mouse.row,
+                                        &mut client,
+                                        MouseContext {
+                                            panes: &panes,
+                                            active_pane: &active_pane,
+                                            active_rect,
+                                            copy_state: &mut copy_state,
+                                            vt_screens: &vt_screens,
+                                        },
+                                    ).await;
+                                    if dirty {
+                                        layout_cache.dirty = true;
+                                    }
+                                    latest_mouse = next_mouse;
+                                }
+                            } else {
+                                break;
+                            }
+                        }
+
                         let dirty = handle_mouse(
-                            mouse.kind,
-                            mouse.column,
-                            mouse.row,
+                            latest_mouse.kind,
+                            latest_mouse.column,
+                            latest_mouse.row,
                             &mut client,
                             MouseContext {
                                 panes: &panes,
@@ -538,6 +563,8 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
                         layout_cache.dirty = true;
                     }
                 }
+                wait_for_frame(last_stream_render, frame_budget).await;
+                last_stream_render = Some(std::time::Instant::now());
             }
             else => {
                 sleep(Duration::from_millis(10)).await;
@@ -645,7 +672,6 @@ struct LayoutCache {
     panes: Vec<(String, Rect, bool)>,
     dividers: Vec<Divider>,
     tabs: Vec<WindowTab>,
-    prev_frame: Vec<(char, crossterm::style::Color, crossterm::style::Color)>,
 }
 
 impl LayoutCache {
@@ -655,18 +681,10 @@ impl LayoutCache {
             panes: Vec::new(),
             dividers: Vec::new(),
             tabs: Vec::new(),
-            prev_frame: Vec::new(),
         }
     }
 
     async fn sync(&mut self, client: &mut Client, term_w: u16, layout_h: u16) -> bool {
-        let total = (term_w as usize) * (layout_h as usize + 1);
-        if self.prev_frame.len() != total {
-            self.prev_frame.clear();
-            self.prev_frame.resize(total, ('\0', crossterm::style::Color::Reset, crossterm::style::Color::Reset));
-            self.dirty = true;
-        }
-
         if self.dirty || self.panes.is_empty() {
             if let Ok((p, d, t)) = client.layout(term_w, layout_h).await {
                 if !p.is_empty() {
