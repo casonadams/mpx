@@ -1,3 +1,4 @@
+#[cfg(unix)]
 use std::path::{Path, PathBuf};
 use tokio::io::{AsyncRead, AsyncWrite};
 

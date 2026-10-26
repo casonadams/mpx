@@ -11,7 +11,10 @@ use mpx::protocol::{SplitOpts, StreamEvent};
 
 async fn start_test_daemon() -> (String, tempfile::TempDir) {
     let dir = tempdir().unwrap();
+    #[cfg(unix)]
     let sock_path = dir.path().join("test.sock").to_string_lossy().into_owned();
+    #[cfg(windows)]
+    let sock_path = format!(r"\\.\pipe\mpx-test-{}", fastrand::u64(..));
 
     #[cfg(unix)]
     let listener = IpcListener::bind(&sock_path).unwrap();
