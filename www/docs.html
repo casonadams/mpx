@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Documentation — mpx Multiplexer</title>
+  <meta name="description" content="Complete documentation, keyboard shortcuts, MCP integration, and architecture guide for mpx.">
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="stylesheet" href="css/style.css?v=1">
+</head>
+<body>
+
+  <header class="header">
+    <div class="nav-container">
+      <a href="./" class="brand">
+        <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect width="32" height="32" rx="6" fill="#0d1117"/>
+          <rect x="2" y="2" width="28" height="28" rx="4" stroke="#3fb950" stroke-width="1.5"/>
+          <path d="M6 10 L11 16 L6 22" stroke="#58a6ff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+          <line x1="14" y1="22" x2="24" y2="22" stroke="#3fb950" stroke-width="2.5" stroke-linecap="round"/>
+          <line x1="18" y1="6" x2="18" y2="16" stroke="#d29922" stroke-width="1.5" stroke-dasharray="2 2"/>
+        </svg>
+        mpx
+        <span class="tag">Docs</span>
+      </a>
+
+      <nav>
+        <ul class="nav-links">
+          <li><a href="./" class="nav-link">Home</a></li>
+          <li><a href="#shortcuts" class="nav-link">Shortcuts</a></li>
+          <li><a href="#mcp" class="nav-link">MCP Server</a></li>
+          <li><a href="#pipes" class="nav-link">Pipes</a></li>
+          <li><a href="https://github.com/casonadams/mpx" target="_blank" class="btn btn-secondary">GitHub</a></li>
+        </ul>
+      </nav>
+    </div>
+  </header>
+
+  <main class="container" style="max-width: 900px;">
+    <h1>mpx Documentation</h1>
+    <p class="lead" style="margin-bottom: 2.5rem; color: var(--text-muted);">
+      An ultra-performant, zero-overhead terminal and stream multiplexer engineered in Rust for humans and autonomous AI coding agents.
+    </p>
+
+    <section id="getting-started">
+      <h2>Getting Started</h2>
+      <p>Running bare <code>mpx</code> automatically bootstraps a background daemon, opens your default shell in an interactive PTY, and launches the full-screen terminal interface:</p>
+      <pre><code># Start or attach to the default "main" session (just like tmux)
+mpx
+
+# Start or attach to a named session
+mpx -s dev</code></pre>
+    </section>
+
+    <hr style="border: 0; border-top: 1px solid var(--border); margin: 3rem 0;">
+
+    <section id="shortcuts">
+      <h2>TUI Keybindings & Navigation</h2>
+      <p>Both <strong><code>Ctrl-B</code></strong> (default tmux prefix) and <strong><code>Ctrl-A</code></strong> (common rebind) are supported as leader keys out of the box.</p>
+
+      <h3>Windows (Tabs)</h3>
+      <table>
+        <thead>
+          <tr><th>Shortcut</th><th>Action</th><th>Description</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>Prefix + c</code></td><td>New Window</td><td>Spawns a new window tab running default shell and focuses it</td></tr>
+          <tr><td><code>Prefix + n</code></td><td>Next Window</td><td>Switch to the next window tab</td></tr>
+          <tr><td><code>Prefix + p</code></td><td>Previous Window</td><td>Switch to the previous window tab</td></tr>
+          <tr><td><code>Prefix + 0..9</code></td><td>Select Window</td><td>Jump directly to window tab by index</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Panes (Splits)</h3>
+      <table>
+        <thead>
+          <tr><th>Shortcut</th><th>Action</th><th>Description</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>Prefix + %</code> or <code>Prefix + |</code></td><td>Split Vertical</td><td>Split active window vertically (side-by-side columns, divider │)</td></tr>
+          <tr><td><code>Prefix + "</code> or <code>Prefix + -</code></td><td>Split Horizontal</td><td>Split active window horizontally (top-and-bottom rows, divider ─)</td></tr>
+          <tr><td><code>Prefix + h</code> / <code>Left</code></td><td>Focus Left</td><td>Geometric directional focus move left</td></tr>
+          <tr><td><code>Prefix + j</code> / <code>Down</code></td><td>Focus Down</td><td>Geometric directional focus move down</td></tr>
+          <tr><td><code>Prefix + k</code> / <code>Up</code></td><td>Focus Up</td><td>Geometric directional focus move up</td></tr>
+          <tr><td><code>Prefix + l</code> / <code>Right</code></td><td>Focus Right</td><td>Geometric directional focus move right</td></tr>
+          <tr><td><code>Prefix + o</code> / <code>Tab</code></td><td>Rotate Pane</td><td>Cycle focus to next pane in active window</td></tr>
+          <tr><td><code>Prefix + z</code></td><td>Toggle Zoom</td><td>Maximize active pane to 100% full screen (press again to un-zoom)</td></tr>
+          <tr><td><code>Prefix + x</code></td><td>Kill Pane</td><td>Terminate the active pane process</td></tr>
+          <tr><td><code>Prefix + d</code></td><td>Detach</td><td>Cleanly detach back to host terminal (leaves daemon running)</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Mouse Mode</h3>
+      <ul>
+        <li><strong>Left Click</strong>: Focus clicked pane immediately.</li>
+        <li><strong>Scroll Up</strong>: Automatically enters copy mode and scrolls history upward.</li>
+        <li><strong>Scroll Down</strong>: Scrolls downward toward live output.</li>
+      </ul>
+    </section>
+
+    <hr style="border: 0; border-top: 1px solid var(--border); margin: 3rem 0;">
+
+    <section id="copy-mode">
+      <h2>Vi Copy / Visual Mode</h2>
+      <p>Enter copy mode with <strong><code>Prefix + [</code></strong> or by scrolling up with the mouse wheel. Navigate with a live movable cursor across up to <strong>100,000 lines of scrollback history</strong>:</p>
+
+      <table>
+        <thead>
+          <tr><th>Key</th><th>Function</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>h, j, k, l</code></td><td>Move cursor left, down, up, right (scrolls into history when reaching row 0)</td></tr>
+          <tr><td><code>0</code> / <code>^</code></td><td>Jump to beginning of row</td></tr>
+          <tr><td><code>$</code></td><td>Jump to end of row</td></tr>
+          <tr><td><code>w</code> / <code>b</code></td><td>Jump forward / backward by word</td></tr>
+          <tr><td><code>Ctrl-u</code> / <code>PageUp</code></td><td>Scroll up half page (15 lines)</td></tr>
+          <tr><td><code>Ctrl-d</code> / <code>PageDown</code></td><td>Scroll down half page (15 lines)</td></tr>
+          <tr><td><code>g</code></td><td>Jump to the very beginning of the 100,000 line scrollback history</td></tr>
+          <tr><td><code>G</code></td><td>Jump to bottom live prompt</td></tr>
+          <tr><td><code>v</code></td><td>Begin character-wise visual selection (<code>[VISUAL]</code>)</td></tr>
+          <tr><td><code>V</code> (Shift-V)</td><td><strong>Full-row visual line selection</strong> (<code>[VISUAL LINE]</code>, highlights entire row across history)</td></tr>
+          <tr><td><code>y</code> / <code>Enter</code></td><td><strong>Yank selection</strong> to system clipboard (via <code>pbcopy</code> / OSC 52) and exit copy mode</td></tr>
+          <tr><td><code>Esc</code></td><td>Clear visual selection; second Esc exits copy mode</td></tr>
+          <tr><td><code>q</code></td><td>Exit copy mode</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <hr style="border: 0; border-top: 1px solid var(--border); margin: 3rem 0;">
+
+    <section id="mcp">
+      <h2>Model Context Protocol (MCP) Server</h2>
+      <p>
+        <code>mpx</code> features a native stdio Model Context Protocol (MCP) server conforming to the 2024-11-05 standard.
+        AI coding assistants like <code>oh-my-pi</code>, <code>claude code</code>, Cursor, and Windsurf can orchestrate terminal processes directly without scraping ANSI screen sequences.
+      </p>
+
+      <h3>Agent Configuration (<code>.mcp.json</code>)</h3>
+      <pre><code>{
+  "mcpServers": {
+    "mpx": {
+      "command": "mpx",
+      "args": ["mcp"]
+    }
+  }
+}</code></pre>
+
+      <h3>Exposed MCP Tools</h3>
+      <ul>
+        <li><code>mpx_run(command, args, name, pty)</code>: Spawn a background task or interactive PTY command</li>
+        <li><code>mpx_split(command, direction, args, name, pty)</code>: Split workspace pane and run command</li>
+        <li><code>mpx_list()</code>: Query active stream nodes, types, PIDs, and exit statuses</li>
+        <li><code>mpx_read(name, tail)</code>: Retrieve clean unescaped scrollback logs</li>
+        <li><code>mpx_screen(name)</code>: Snapshot the 2D virtual terminal screen buffer</li>
+        <li><code>mpx_send(name, data)</code>: Send keystrokes / text directly to process stdin</li>
+        <li><code>mpx_wait(name)</code>: Await command exit and return exit code without polling</li>
+        <li><code>mpx_kill(name)</code>: Terminate a running node</li>
+        <li><code>mpx_pipe_write(name, data)</code>: Write message to inter-agent virtual pipe</li>
+        <li><code>mpx_pipe_read(name)</code>: Read content from an inter-agent virtual pipe</li>
+      </ul>
+    </section>
+
+    <hr style="border: 0; border-top: 1px solid var(--border); margin: 3rem 0;">
+
+    <section id="pipes">
+      <h2>Inter-Agent Virtual Pipes</h2>
+      <p>Virtual pipes are in-memory circular FIFO buffers allowing concurrent tools and agents to communicate with zero disk I/O:</p>
+      <pre><code># Create a named pipe channel
+mpx pipe create agent_bus
+
+# Stream structured tokens or JSON into the pipe
+mpx pipe write agent_bus '{"action": "test_complete", "code": 0}'
+
+# Read data from the pipe
+mpx pipe read agent_bus
+
+# List all active pipes
+mpx pipe list</code></pre>
+    </section>
+
+    <hr style="border: 0; border-top: 1px solid var(--border); margin: 3rem 0;">
+
+    <section id="cli">
+      <h2>CLI Command Reference</h2>
+      <pre><code>mpx                      # Start or attach to default session
+mpx -s dev               # Start or attach to session "dev"
+mpx run -- cargo test    # Run command in managed task node
+mpx run --pty -- htop    # Run interactive command in PTY
+mpx list                 # List active nodes (ls alias)
+mpx logs &lt;name&gt; [-f]     # Read or stream logs
+mpx send &lt;name&gt; &lt;text&gt;   # Send input to stdin
+mpx wait &lt;name&gt;          # Wait for process exit code
+mpx kill &lt;name&gt;          # Terminate a node
+mpx stop                 # Stop background daemon (kill-server alias)
+mpx mcp                  # Launch stdio MCP server</code></pre>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="container">
+      <p>mpx is open source software licensed under Apache-2.0.</p>
+      <p>Built by <a href="https://github.com/casonadams" target="_blank">Cason Adams</a> · <a href="https://github.com/casonadams/mpx" target="_blank">GitHub Repository</a></p>
+    </div>
+  </footer>
+
+</body>
+</html>

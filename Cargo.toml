@@ -5,6 +5,12 @@ edition = "2024"
 authors = ["Cason Adams <casonadams@gmail.com>"]
 description = "A simple, ultra-performant process and stream multiplexer in Rust"
 license = "Apache-2.0"
+repository = "https://github.com/casonadams/mpx"
+homepage = "https://casonadams.github.io/mpx/"
+documentation = "https://docs.rs/mpx"
+readme = "README.md"
+keywords = ["terminal", "multiplexer", "tmux", "tui", "mcp"]
+categories = ["command-line-utilities", "development-tools"]
 
 [lib]
 name = "mpx"

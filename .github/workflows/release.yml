@@ -1,0 +1,286 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    name: "Release Please"
+    runs-on: ubuntu-latest
+    outputs:
+      pr: ${{ steps.release.outputs.pr }}
+      releases_created: ${{ steps.release.outputs.releases_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v5
+        id: release
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  update-workspace:
+    runs-on: ubuntu-latest
+    name: "Update Cargo.lock on Release PR"
+    needs: release-please
+    if: ${{ needs.release-please.outputs.pr }}
+    steps:
+      - name: Checkout release PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ fromJSON(needs.release-please.outputs.pr).headBranchName }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Rust Toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
+          rustflags: ""
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Sync Cargo.lock
+        run: |
+          cargo check
+          if git diff --quiet -- Cargo.lock; then
+            echo "Cargo.lock is already up to date"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add Cargo.lock
+            git commit -m "chore: update Cargo.lock for release"
+            git push
+          fi
+
+  publish-crates:
+    name: "Publish to crates.io"
+    needs: release-please
+    if: ${{ needs.release-please.outputs.releases_created == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
+          rustflags: ""
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Exchange OIDC token for a short-lived publish token
+        id: auth
+        if: env.CARGO_REGISTRY_TOKEN == ''
+        continue-on-error: true
+        uses: rust-lang/crates-io-auth-action@v1
+
+      - name: Publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN || steps.auth.outputs.token }}
+        run: |
+          cargo publish --allow-dirty
+
+  build-release:
+    name: "Build ${{ matrix.target }}"
+    needs: release-please
+    if: ${{ needs.release-please.outputs.releases_created == 'true' }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-24.04
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    env:
+      TAG: ${{ needs.release-please.outputs.tag_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: ${{ matrix.target }}
+          cache: false
+          rustflags: ""
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package and upload
+        if: runner.os != 'Windows'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version="${TAG##*v}"
+          name="mpx-${version}-${{ matrix.target }}"
+          package_dir="$(mktemp -d)"
+          trap 'rm -rf "$package_dir"' EXIT
+          install -m 755 "target/${{ matrix.target }}/release/mpx" "$package_dir/mpx"
+          tar czf "$name.tar.gz" -C "$package_dir" mpx
+          gh release upload "$TAG" "$name.tar.gz" --clobber
+
+      - name: Build and upload Linux .deb and .rpm packages
+        if: runner.os == 'Linux'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version="${TAG##*v}"
+          case "${{ matrix.target }}" in
+            x86_64-*)  deb_arch="amd64"; rpm_arch="x86_64" ;;
+            aarch64-*) deb_arch="arm64"; rpm_arch="aarch64" ;;
+            *) exit 0 ;;
+          esac
+          bin_path="$(pwd)/target/${{ matrix.target }}/release/mpx"
+          work_dir="$(mktemp -d)"
+          trap 'rm -rf "$work_dir"' EXIT
+
+          # 1. Build .deb
+          deb_root="$work_dir/deb"
+          mkdir -p "$deb_root/DEBIAN" "$deb_root/usr/bin"
+          install -m 755 "$bin_path" "$deb_root/usr/bin/mpx"
+          cat > "$deb_root/DEBIAN/control" <<EOF
+          Package: mpx
+          Version: ${version}
+          Section: devel
+          Priority: optional
+          Architecture: ${deb_arch}
+          Maintainer: Cason Adams <casonadams@users.noreply.github.com>
+          Homepage: https://github.com/casonadams/mpx
+          Description: Simple, performant process and stream multiplexer in Rust
+          EOF
+          sed -i 's/^          //' "$deb_root/DEBIAN/control"
+          deb_file="mpx_${version}_${deb_arch}.deb"
+          dpkg-deb --build --root-owner-group "$deb_root" "$deb_file"
+
+          # 2. Build .rpm
+          command -v rpmbuild >/dev/null 2>&1 || (sudo apt-get update && sudo apt-get install -y rpm)
+          rpm_top="$work_dir/rpm"
+          mkdir -p "$rpm_top/BUILD" "$rpm_top/RPMS" "$rpm_top/SOURCES" "$rpm_top/SPECS" "$rpm_top/SRPMS"
+          cat > "$rpm_top/SPECS/mpx.spec" <<EOF
+          %define _build_id_links none
+          Name: mpx
+          Version: ${version}
+          Release: 1
+          Summary: Simple, performant process and stream multiplexer in Rust
+          License: Apache-2.0
+          URL: https://github.com/casonadams/mpx
+          AutoReqProv: no
+
+          %description
+          Simple, performant process and stream multiplexer in Rust.
+
+          %install
+          mkdir -p %{buildroot}/usr/bin
+          install -m 755 ${bin_path} %{buildroot}/usr/bin/mpx
+
+          %files
+          /usr/bin/mpx
+          EOF
+          sed -i 's/^          //' "$rpm_top/SPECS/mpx.spec"
+          rpmbuild --define "_topdir $rpm_top" --target "${rpm_arch}" -bb "$rpm_top/SPECS/mpx.spec"
+          rpm_file="mpx-${version}-1.${rpm_arch}.rpm"
+          cp "$rpm_top/RPMS/${rpm_arch}/"*.rpm "$rpm_file"
+
+          gh release upload "$TAG" "$deb_file" "$rpm_file" --clobber
+
+      - name: Package and upload (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $version = $env:TAG -replace '^.*v', ''
+          $name = "mpx-$version-${{ matrix.target }}"
+          Compress-Archive -Path "target/${{ matrix.target }}/release/mpx.exe" -DestinationPath "$name.zip"
+          gh release upload $env:TAG "$name.zip" --clobber
+
+  checksums:
+    name: "Generate SHA256SUMS"
+    needs: [release-please, build-release]
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ needs.release-please.outputs.tag_name }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Download release assets
+        run: gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir dist --clobber
+
+      - name: Generate and upload SHA256SUMS
+        run: |
+          rm -f dist/SHA256SUMS
+          cd dist
+          sha256sum -- * > SHA256SUMS
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" SHA256SUMS --clobber
+
+  sync-lock:
+    name: "Sync Cargo.lock on main after release"
+    needs: [release-please, build-release]
+    if: ${{ needs.release-please.outputs.releases_created == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
+          rustflags: ""
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Sync Cargo.lock on main
+        run: |
+          cargo check
+          if git diff --quiet -- Cargo.lock; then
+            echo "Cargo.lock is already up to date"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add Cargo.lock
+            git commit -m "chore: sync Cargo.lock after ${{ needs.release-please.outputs.tag_name }}"
+            git push
+          fi
+
+  update-homebrew:
+    name: "Dispatch Homebrew tap update"
+    needs: [release-please, checksums]
+    if: ${{ needs.release-please.outputs.releases_created == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger formula update in homebrew-tap
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          if [ -n "$TAP_TOKEN" ]; then
+            curl -L \
+              -X POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $TAP_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              https://api.github.com/repos/casonadams/homebrew-tap/dispatches \
+              -d '{"event_type":"mpx-release","client_payload":{"tag":"'"$TAG"'"}}'
+            echo "Successfully dispatched mpx-release event to casonadams/homebrew-tap"
+          else
+            echo "HOMEBREW_TAP_TOKEN not configured; relying on manual formula update"
+          fi

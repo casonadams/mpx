@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>mpx — Ultra-Performant Process & Terminal Multiplexer in Rust</title>
+  <meta name="description" content="A simple, fast, and intuitive terminal multiplexer in Rust. Built for human developers and autonomous AI coding agents with native MCP support.">
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="stylesheet" href="css/style.css?v=1">
+</head>
+<body>
+
+  <header class="header">
+    <div class="nav-container">
+      <a href="./" class="brand">
+        <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect width="32" height="32" rx="6" fill="#0d1117"/>
+          <rect x="2" y="2" width="28" height="28" rx="4" stroke="#3fb950" stroke-width="1.5"/>
+          <path d="M6 10 L11 16 L6 22" stroke="#58a6ff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+          <line x1="14" y1="22" x2="24" y2="22" stroke="#3fb950" stroke-width="2.5" stroke-linecap="round"/>
+          <line x1="18" y1="6" x2="18" y2="16" stroke="#d29922" stroke-width="1.5" stroke-dasharray="2 2"/>
+        </svg>
+        mpx
+        <span class="tag">v0.1.0</span>
+      </a>
+
+      <nav>
+        <ul class="nav-links">
+          <li><a href="./docs.html" class="nav-link">Documentation</a></li>
+          <li><a href="#features" class="nav-link">Features</a></li>
+          <li><a href="#install" class="nav-link">Install</a></li>
+          <li><a href="https://crates.io/crates/mpx" target="_blank" class="nav-link">Crates.io</a></li>
+          <li><a href="https://github.com/casonadams/mpx" target="_blank" class="btn btn-secondary">GitHub</a></li>
+        </ul>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <h1>The Modern Terminal Multiplexer <br><span class="gradient">Built for Humans & AI Agents</span></h1>
+      <p class="lead">
+        Blazing-fast Rust architecture. Full tmux parity, Neovim-style floating HUD, 100k-line vi copy mode, and native Model Context Protocol (MCP) support.
+      </p>
+
+      <div class="hero-actions">
+        <div class="install-bar">
+          <span class="prompt">$</span>brew install casonadams/tap/mpx
+        </div>
+        <a href="./docs.html" class="btn btn-primary">Read the Docs</a>
+        <a href="https://github.com/casonadams/mpx" target="_blank" class="btn btn-secondary">View on GitHub</a>
+      </div>
+
+      <div class="terminal-window">
+        <div class="terminal-titlebar">
+          <div class="terminal-dots">
+            <span class="terminal-dot dot-red"></span>
+            <span class="terminal-dot dot-yellow"></span>
+            <span class="terminal-dot dot-green"></span>
+          </div>
+          <span class="terminal-title">mpx — interactive terminal workspace</span>
+        </div>
+        <div class="terminal-body"><span style="color:#58a6ff">~ %</span> cargo test --release                                   │ <span style="color:#58a6ff">~ %</span> nvim src/lib.rs
+   <span style="color:#3fb950; font-weight:bold">Compiling</span> mpx v0.1.0                                      │
+    <span style="color:#3fb950; font-weight:bold">Finished</span> test [optimized] target(s) in 0.42s             │ <span style="color:#e3b341">1</span> <span style="color:#f0883e">pub mod</span> <span style="color:#79c0ff">ipc</span>;
+     <span style="color:#3fb950">Running</span> unittests (32 passed, 0 failed)                 │ <span style="color:#e3b341">2</span> <span style="color:#f0883e">pub mod</span> <span style="color:#79c0ff">node</span>;
+                                                             │ <span style="color:#e3b341">3</span> <span style="color:#f0883e">pub mod</span> <span style="color:#79c0ff">vt</span>;
+<span style="color:#58a6ff">~ %</span> git status                                               │ <span style="color:#e3b341">4</span> <span style="color:#f0883e">pub mod</span> <span style="color:#79c0ff">tui</span>;
+On branch main                                               │ <span style="color:#e3b341">5</span> <span style="color:#f0883e">pub mod</span> <span style="color:#79c0ff">mcp</span>;
+Your branch is up to date with 'origin/main'.                │
+                                                             │      <span style="color:#58a6ff">╭────────────────────────────╮</span>
+                                                             │      <span style="color:#58a6ff">│</span> <span style="color:#e3b341">c</span>  → new window            <span style="color:#58a6ff">│</span>
+                                                             │      <span style="color:#58a6ff">│</span> <span style="color:#e3b341">p</span>  → previous window       <span style="color:#58a6ff">│</span>
+                                                             │      <span style="color:#58a6ff">│</span> <span style="color:#e3b341">n</span>  → next window           <span style="color:#58a6ff">│</span>
+                                                             │      <span style="color:#58a6ff">│</span> <span style="color:#e3b341">%</span>  → split vertical        <span style="color:#58a6ff">│</span>
+                                                             │      <span style="color:#58a6ff">│</span> <span style="color:#e3b341">"</span>  → split horizontal      <span style="color:#58a6ff">│</span>
+                                                             │      <span style="color:#58a6ff">│</span> <span style="color:#e3b341">h</span>  → focus left            <span style="color:#58a6ff">│</span>
+                                                             │      <span style="color:#58a6ff">│</span> <span style="color:#e3b341">j</span>  → focus down            <span style="color:#58a6ff">│</span>
+                                                             │      <span style="color:#58a6ff">│</span> <span style="color:#e3b341">k</span>  → focus up              <span style="color:#58a6ff">│</span>
+                                                             │      <span style="color:#58a6ff">│</span> <span style="color:#e3b341">l</span>  → focus right           <span style="color:#58a6ff">│</span>
+                                                             │      <span style="color:#58a6ff">│</span> <span style="color:#e3b341">[</span>  → copy mode             <span style="color:#58a6ff">│</span>
+                                                             │      <span style="color:#58a6ff">│</span> <span style="color:#e3b341">d</span>  → detach                <span style="color:#58a6ff">│</span>
+                                                             │      <span style="color:#58a6ff">╰─────────────── ESC close ──╯</span>
+<span style="background-color:#238636; color:#041407; font-weight:600"> [main] 0:cargo 1:editor*                                                                          10:42 </span></div>
+      </div>
+    </section>
+
+    <section id="features" class="container">
+      <h2 class="section-title">Built for Speed and Modern Workflows</h2>
+      <p class="section-desc">Zero bloat, instant startup, and seamless orchestration for human engineers collaborating with AI agent harnesses.</p>
+
+      <div class="grid">
+        <div class="card">
+          <div class="card-icon">⚡</div>
+          <h3>Zero-Bloat Rust Core</h3>
+          <p>No WebAssembly runtime, no embedded crypto suites or browser tunneling. Compiles in seconds, sub-10MB binary, and uses less than 5MB of memory.</p>
+        </div>
+
+        <div class="card">
+          <div class="card-icon">🪟</div>
+          <h3>tmux Parity & Tabs</h3>
+          <p>Window tabs with <code>Prefix + c</code> (create), <code>Prefix + n/p</code> (nav), <code>%</code> (vertical split), <code>"</code> (horizontal split), and 1-character clean dividers.</p>
+        </div>
+
+        <div class="card">
+          <div class="card-icon">🧭</div>
+          <h3>Vim Navigation (hjkl)</h3>
+          <p>Geometric directional pane focus: <code>Prefix + h</code> (left), <code>j</code> (down), <code>k</code> (up), and <code>l</code> (right) move seamlessly across your splits.</p>
+        </div>
+
+        <div class="card">
+          <div class="card-icon">📋</div>
+          <h3>100k-Line Vi Copy Mode</h3>
+          <p>Movable cursor, <code>Shift-V</code> full-row highlighting, deep scrollback navigation, and instant yank (<code>y</code>) directly to system clipboard via <code>pbcopy</code> and OSC 52.</p>
+        </div>
+
+        <div class="card">
+          <div class="card-icon">🤖</div>
+          <h3>Native Model Context Protocol</h3>
+          <p>Built-in stdio MCP server. AI agents (<code>oh-my-pi</code>, <code>claude code</code>, Cursor, Windsurf) can spawn tasks, query buffers, and supervise processes without terminal scraping.</p>
+        </div>
+
+        <div class="card">
+          <div class="card-icon">🪢</div>
+          <h3>Inter-Agent Virtual Pipes</h3>
+          <p>In-memory circular FIFO channels allowing concurrent agents and sub-processes to exchange structured tokens and JSON streams with zero disk I/O.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="install" class="container">
+      <h2 class="section-title">Installation</h2>
+      <p class="section-desc">Get started in seconds on macOS, Linux, or Windows.</p>
+
+      <h3>Homebrew (macOS & Linux)</h3>
+      <pre><code>brew install casonadams/tap/mpx</code></pre>
+
+      <h3>Cargo (crates.io)</h3>
+      <pre><code>cargo install mpx</code></pre>
+
+      <h3>Prebuilt Static Binaries</h3>
+      <p>Download cross-platform binaries directly from GitHub Releases:</p>
+      <ul>
+        <li><strong>macOS (Apple Silicon & Intel)</strong>: <code>.tar.gz</code></li>
+        <li><strong>Linux (x86_64 & aarch64)</strong>: <code>.tar.gz</code>, <code>.deb</code>, <code>.rpm</code></li>
+        <li><strong>Windows (x86_64)</strong>: <code>.zip</code> (native ConPTY + Named Pipes)</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="container">
+      <p>mpx is open source software licensed under Apache-2.0.</p>
+      <p>Built by <a href="https://github.com/casonadams" target="_blank">Cason Adams</a> · <a href="https://github.com/casonadams/mpx" target="_blank">GitHub Repository</a> · <a href="./docs.html">Documentation</a></p>
+    </div>
+  </footer>
+
+</body>
+</html>
