@@ -20,20 +20,23 @@ Traditional terminal multiplexers were designed in the 1990s and 2000s under the
 
 **`mpx` replaces the legacy PTY restriction with Unified Stream Nodes**:
 
-```
-+-------------------------------------------------------------------------+
-|                              mpx Daemon                                 |
-+------------------------------------+------------------------------------+
-|  Human TUI Interface (60 FPS)      |  Agent IPC Socket & Stdio MCP      |
-|  - DEC 2026 Synchronized Updates   |  - JSON-RPC 2.0 / NDJSON Protocol  |
-|  - Active Green Outline + Connectors| - Token-by-token Output Streams   |
-|  - Inactive Text Dimming           |  - Direct Exit Codes (OnExit)      |
-|  - 100k-Line Vi Copy Mode          |  - Virtual FIFO Message Pipes      |
-+------------------------------------+------------------------------------+
-|                      Unified Execution Nodes                            |
-|       [Interactive PTY]       [Task Runner]       [Virtual Pipe]        |
-|       (zsh / nvim / htop)     (cargo / vite)      (cross-agent bus)     |
-+-------------------------------------------------------------------------+
+```mermaid
+graph TD
+    subgraph Daemon [mpx Daemon Engine]
+        direction TB
+        subgraph Interfaces [Interfaces]
+            direction LR
+            TUI["<b>Human TUI (60 FPS)</b><br/>• DEC 2026 Synchronized Updates<br/>• Active Green Outline + Connectors<br/>• 100k-Line Vi Copy Mode"]
+            IPC["<b>Agent IPC & Stdio MCP</b><br/>• JSON-RPC 2.0 / NDJSON<br/>• Token-by-Token Streams<br/>• Direct Exit Codes (OnExit)"]
+        end
+        subgraph Nodes [Unified Execution Nodes]
+            direction LR
+            PTY["<b>Interactive PTY</b><br/>(zsh / nvim / htop)"]
+            TASK["<b>Task Runner</b><br/>(cargo / vite / tests)"]
+            PIPE["<b>Virtual FIFO Pipe</b><br/>(cross-agent bus)"]
+        end
+        Interfaces --> Nodes
+    end
 ```
 
 | Dimension | `tmux` | `zellij` | `mpx` |
