@@ -51,6 +51,10 @@
         <a href="https://github.com/casonadams/mpx" target="_blank" class="btn btn-secondary">View on GitHub</a>
       </div>
 
+      <div class="telemetry-banner">
+        <strong>100% Local & Zero Telemetry</strong>: Offline-by-design. Zero analytics, zero network calls, zero telemetry, and zero model training. Complete data sovereignty.
+      </div>
+
       <div class="terminal-window">
         <div class="terminal-titlebar">
           <div class="terminal-dots">
@@ -113,41 +117,101 @@ Your branch is up to date with 'origin/main'.
 
       <div class="grid">
         <div class="card">
-          <div class="card-icon">⚡</div>
           <h3>Zero-Bloat Rust Core</h3>
           <p>No WebAssembly runtime, no embedded crypto suites or browser tunneling. Compiles in seconds, sub-10MB binary, and uses less than 5MB of memory.</p>
         </div>
 
         <div class="card">
-          <div class="card-icon">🪟</div>
           <h3>tmux Parity & Tabs</h3>
           <p>Window tabs with <code>Prefix + c</code> (create), <code>Prefix + n/p</code> (nav), <code>%</code> (vertical split), <code>"</code> (horizontal split), and 1-character clean dividers.</p>
         </div>
 
         <div class="card">
-          <div class="card-icon">🧭</div>
           <h3>Vim Navigation (hjkl)</h3>
           <p>Geometric directional pane focus: <code>Prefix + h</code> (left), <code>j</code> (down), <code>k</code> (up), and <code>l</code> (right) move seamlessly across your splits.</p>
         </div>
 
         <div class="card">
-          <div class="card-icon">📋</div>
           <h3>100k-Line Vi Copy Mode</h3>
           <p>Movable cursor, <code>Shift-V</code> full-row highlighting, deep scrollback navigation, and instant yank (<code>y</code>) directly to system clipboard via <code>pbcopy</code> and OSC 52.</p>
         </div>
 
         <div class="card">
-          <div class="card-icon">🤖</div>
           <h3>Native Model Context Protocol</h3>
           <p>Built-in stdio MCP server. AI agents (<code>oh-my-pi</code>, <code>claude code</code>, Cursor, Windsurf) can spawn tasks, query buffers, and supervise processes without terminal scraping.</p>
         </div>
 
         <div class="card">
-          <div class="card-icon">🪢</div>
           <h3>Inter-Agent Virtual Pipes</h3>
           <p>In-memory circular FIFO channels allowing concurrent agents and sub-processes to exchange structured tokens and JSON streams with zero disk I/O.</p>
         </div>
       </div>
+    </section>
+
+    <section id="comparison" class="container">
+      <h2 class="section-title">Why mpx? The Paradigm Shift</h2>
+      <p class="section-desc">From legacy 1990s PTY scraping to unified stream execution nodes.</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Dimension</th>
+            <th>tmux</th>
+            <th>zellij</th>
+            <th>mpx</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Language & Core</strong></td>
+            <td>C (libevent)</td>
+            <td>Rust (multi-thread actor + async-std)</td>
+            <td><strong>Rust (Tokio async)</strong></td>
+          </tr>
+          <tr>
+            <td><strong>Idle Memory</strong></td>
+            <td>~5 MB</td>
+            <td>~60–120 MB</td>
+            <td><strong>~5 MB</strong></td>
+          </tr>
+          <tr>
+            <td><strong>WASM Runtime</strong></td>
+            <td>None</td>
+            <td>Yes (wasmer/WASI bloat)</td>
+            <td><strong>None (Zero Bloat)</strong></td>
+          </tr>
+          <tr>
+            <td><strong>Agent Automation</strong></td>
+            <td><code>send-keys</code> & <code>capture-pane</code> text scraping</td>
+            <td>WASM Plugin API / CLI</td>
+            <td><strong>Native Stdio MCP + Socket JSON-RPC</strong></td>
+          </tr>
+          <tr>
+            <td><strong>Process Supervision</strong></td>
+            <td>Interactive PTY login shells only</td>
+            <td>PTY + WASM Plugins</td>
+            <td><strong>PTY + Pipe Tasks + Virtual Channels</strong></td>
+          </tr>
+          <tr>
+            <td><strong>Stream Storage</strong></td>
+            <td>2D cell grid only</td>
+            <td>2D cell grid only</td>
+            <td><strong>Dual Buffer (Raw Stream + 2D Grid)</strong></td>
+          </tr>
+          <tr>
+            <td><strong>Native Windows</strong></td>
+            <td>Cygwin / WSL required</td>
+            <td>WSL required</td>
+            <td><strong>Native (Named Pipes + ConPTY)</strong></td>
+          </tr>
+          <tr>
+            <td><strong>Data Sovereignty</strong></td>
+            <td>None</td>
+            <td>None</td>
+            <td><strong>100% Offline (Zero Telemetry)</strong></td>
+          </tr>
+        </tbody>
+      </table>
     </section>
 
     <section id="install" class="container">

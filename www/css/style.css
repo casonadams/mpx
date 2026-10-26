@@ -203,8 +203,29 @@ a:hover {
   padding: 0.6rem 1rem;
   font-family: var(--font-mono);
   font-size: 0.95rem;
+
   color: var(--heading);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.telemetry-banner {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  background-color: rgba(63, 185, 80, 0.08);
+  border: 1px solid rgba(63, 185, 80, 0.25);
+  border-radius: 8px;
+  padding: 0.65rem 1.25rem;
+  margin: 1.5rem auto 0;
+  color: var(--text);
+  font-size: 0.88rem;
+  max-width: 680px;
+  text-align: left;
+  line-height: 1.4;
+}
+
+.telemetry-banner strong {
+  color: var(--green);
 }
 
 .install-bar .prompt {
@@ -373,11 +394,6 @@ a:hover {
   border-color: var(--border-active);
 }
 
-.card-icon {
-  font-size: 1.5rem;
-  margin-bottom: 1rem;
-  display: inline-block;
-}
 
 .card h3 {
   font-size: 1.2rem;

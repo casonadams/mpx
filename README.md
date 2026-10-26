@@ -1,116 +1,102 @@
-# mpx (Multi-PlemeXer)
+# mpx
 
-A simple, ultra-performant process and stream multiplexer in Rust.
+[![Crates.io](https://img.shields.io/crates/v/mpx.svg)](https://crates.io/crates/mpx)
+[![CI](https://github.com/casonadams/mpx/actions/workflows/ci.yml/badge.svg)](https://github.com/casonadams/mpx/actions/workflows/ci.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
+[![Documentation](https://img.shields.io/badge/docs-casonadams.github.io%2Fmpx-blue)](https://casonadams.github.io/mpx/)
 
-Designed from first principles for human developers collaborating side-by-side with autonomous AI agents (`oh-my-pi`, `claude code`).
+A simple, ultra-performant process and stream multiplexer in Rust. Built from first principles for human developers collaborating side-by-side with autonomous AI coding agents (`oh-my-pi`, `claude code`).
 
-## Key Highlights
+> **100% Local & Zero Telemetry**: `mpx` is an offline-by-design terminal engine. It contains **zero network calls, zero analytics, zero telemetry, and zero model training**. Your commands, keystrokes, and source code never leave your machine. It operates purely over local Unix domain sockets or Windows Named Pipes, streaming structured JSON-RPC or stdio MCP to whichever agent harness or workflow engine *you* choose to run.
 
-- **Unified Stream Nodes**: Multiplex interactive PTYs, raw pipe task runners, and agent message channels under a single engine.
-- **Cross-Platform Native IPC**:
-  - Unix Domain Sockets on macOS & Linux (`/tmp/mpx-<uid>/<session>.sock` or `$XDG_RUNTIME_DIR`)
-  - Named Pipes on Windows (`\\.\pipe\mpx-<session>`)
-- **Zero-Scraping Agent Protocol**: Standard line-delimited JSON-RPC 2.0 / NDJSON over the local socket. Subscribes to token-by-token output and explicit exit code notifications without terminal screen scraping or sentinel token hacks.
-- **Dual Buffer Engine**: Clean raw stream logs preserved alongside terminal state.
-- **Fast & Minimal**: Zero WASM runtime overhead, no crypto/web tunneling bloat, compiles in seconds.
+---
 
-## CLI Usage
+## What Sets `mpx` Apart?
+
+Traditional terminal multiplexers were designed in the 1990s and 2000s under the assumption that every pane is an interactive login shell inside a PTY:
+
+- **`tmux`**: Ubiquitous and lightweight (~5MB), but constrained by 30-year-old PTY assumptions. AI agents are forced to scrape raw ANSI strings from `capture-pane`, sleep-poll heuristic loops, and inject fake keystrokes via `send-keys`.
+- **`zellij`**: Proven human ergonomics, but heavyweight (~60–120MB idle RAM, 30MB+ binary size), bounces bytes across multi-actor thread hops, and includes heavy WebAssembly runtimes with no native structured agent protocol.
+
+**`mpx` replaces the legacy PTY restriction with Unified Stream Nodes**:
+
+```
++-------------------------------------------------------------------------+
+|                              mpx Daemon                                 |
++------------------------------------+------------------------------------+
+|  Human TUI Interface (60 FPS)      |  Agent IPC Socket & Stdio MCP      |
+|  - DEC 2026 Synchronized Updates   |  - JSON-RPC 2.0 / NDJSON Protocol  |
+|  - Active Green Outline + Connectors| - Token-by-token Output Streams   |
+|  - Inactive Text Dimming           |  - Direct Exit Codes (OnExit)      |
+|  - 100k-Line Vi Copy Mode          |  - Virtual FIFO Message Pipes      |
++------------------------------------+------------------------------------+
+|                      Unified Execution Nodes                            |
+|       [Interactive PTY]       [Task Runner]       [Virtual Pipe]        |
+|       (zsh / nvim / htop)     (cargo / vite)      (cross-agent bus)     |
++-------------------------------------------------------------------------+
+```
+
+| Dimension | `tmux` | `zellij` | `mpx` |
+| :--- | :--- | :--- | :--- |
+| **Language** | C (libevent) | Rust (multi-thread actor + async-std) | **Rust (Tokio async)** |
+| **Idle Memory** | ~5 MB | ~60–120 MB | **~5 MB** |
+| **WASM Runtime** | None | Yes (wasmer/WASI) | **None (Zero Bloat)** |
+| **Agent Automation** | `send-keys` / `capture-pane` scraping | WASM Plugin API / CLI | **Native Stdio MCP + Socket JSON-RPC** |
+| **Process Units** | Interactive PTY only | PTY + WASM Plugins | **PTY + Pipe Tasks + Virtual Channels** |
+| **Stream Storage** | VT screen grid only | VT screen grid only | **Dual Buffer (Raw Stream + 2D Grid)** |
+| **Windows Support** | Cygwin / WSL required | WSL required | **Native (Windows Named Pipes + ConPTY)** |
+| **Telemetry** | None | None | **100% Offline (Zero Telemetry)** |
+
+---
+
+## Quickstart
+
+### Installation
 
 ```bash
-# Start or attach to a session (defaults to "main", exactly like typing `tmux`)
+# macOS & Linux (Homebrew)
+brew install casonadams/tap/mpx
+
+# Ubuntu & Debian (APT)
+echo "deb [trusted=yes] https://casonadams.github.io/homebrew-tap/apt stable main" | sudo tee /etc/apt/sources.list.d/casonadams.list
+sudo apt update && sudo apt install mpx
+
+# Fedora & RHEL (DNF)
+curl -fsSL https://casonadams.github.io/homebrew-tap/rpm/casonadams.repo | sudo tee /etc/yum.repos.d/casonadams.repo
+sudo dnf install mpx
+
+# Cargo (crates.io)
+cargo binstall mpx || cargo install mpx
+```
+
+See **[Installation Guide](docs/INSTALL.md)** for prebuilt `.deb`, `.rpm`, `.tar.gz`, and Windows `.zip` archives.
+
+---
+
+### 30-Second Tour
+
+```bash
+# 1. Start or attach to default session "main" (tmux muscle-memory)
 mpx
 
-# Start or attach to a specific named session
-mpx -s dev
+# 2. Run a background watcher without nesting shells
+mpx run --name "test-watcher" -- cargo watch -x test
 
-# Run a background task in a named stream node
-mpx run --name "test-watcher" -- cargo test
-
-# Run an interactive command inside a managed PTY
-mpx run --pty --name "repl" -- python3
-
-# List all active nodes in the session
+# 3. List running nodes and inspect exit codes
 mpx list
 
-# Inspect buffered log output
-mpx logs test-watcher
-
-# Follow live output stream
+# 4. Stream unpolluted logs in real-time (no escape code scraping)
 mpx logs -f test-watcher
 
-# Send input to a running node's stdin
-mpx send repl "print('hello from mpx')"
-
-# Await completion and exit with child status code
-mpx wait test-watcher
-
-# Terminate a node
-mpx kill test-watcher
-
-# Split active pane horizontally or vertically
-mpx split --direction h --name "worker-2" -- cargo watch
-
-# Inspect 2D virtual terminal screen buffer
-mpx screen repl
-
-# View workspace pane layout geometry
-mpx layout
-
-# Attach interactive full-screen TUI
-mpx attach
-
-### TUI Keyboard Shortcuts & Mouse Mode (tmux Parity)
-
-Supports both **`Ctrl-B`** (default tmux) and **`Ctrl-A`** (popular rebind) as prefix keys.
-
-#### Windows (Tabs)
-- **`Prefix + c`**: Create new window tab running default shell
-- **`Prefix + n`**: Next window tab
-- **`Prefix + p`**: Previous window tab
-- **`Prefix + 0..9`**: Select window tab by index
-
-#### Panes (Splits)
-- **`Prefix + %`** / **`Prefix + |`**: Split window vertically (side-by-side, vertical divider `│`)
-- **`Prefix + "`** / **`Prefix + -`**: Split window horizontally (stacked, horizontal divider `─`)
-- **`Prefix + o`** / **`Tab`**: Cycle focus to next pane
-- **`Prefix + h/j/k/l`** or **Arrow Keys**: Directional pane focus (left / down / up / right)
-- **`Prefix + z`**: Toggle zoom (maximize active pane to 100% full screen, press again to un-zoom)
-- **`Prefix + x`**: Kill active pane
-- **`Prefix + d`**: Detach cleanly from session
-
-#### Mouse Mode
-- **Click**: Focus clicked pane
-- **Scroll Up**: Enter copy mode and scroll history upwards
-- **Scroll Down**: Scroll down in copy mode
-
-#### Copy Mode (Vi-Keys)
-- **`Prefix + [`**: Enter copy mode
-- **`j` / `k`** (or `Down` / `Up`): Scroll down / up by 1 line
-- **`Ctrl+D` / `Ctrl+U`** (or `PageDown` / `PageUp`): Scroll half page down / up
-- **`g` / `G`**: Jump to top / bottom of scrollback history
-- **`y` / `Enter`**: Copy text buffer to system clipboard (`pbcopy` / OSC 52) and exit copy mode
-- **`q` / `Esc`**: Exit copy mode
+# 5. Split pane without stealing focus
+mpx split --detach --name "htop" -- htop
 ```
 
-### Inter-Agent Virtual Pipes
+---
 
-```bash
-# Create a named virtual pipe channel for cross-agent communication
-mpx pipe create agent_bus
+## AI Agent Integration (Model Context Protocol)
 
-# Write structured data or instructions into the pipe
-mpx pipe write agent_bus '{"task": "review_pr", "pr": 42}'
-
-# Read data from the pipe
-mpx pipe read agent_bus
-
-# List active virtual pipes
-mpx pipe list
-```
-
-## Model Context Protocol (MCP) Server
-
-`mpx` features a built-in, zero-dependency MCP stdio server. Any AI coding agent (`oh-my-pi`, `claude code`, Cursor, Windsurf, Zed) can configure `mpx` directly in its `.mcp.json`:
+`mpx` ships with an embedded, zero-dependency stdio MCP server. Add `mpx` directly to your agent's `.mcp.json` (`oh-my-pi`, `claude code`, Cursor, Windsurf):
 
 ```json
 {
@@ -123,35 +109,21 @@ mpx pipe list
 }
 ```
 
-### Exposed MCP Tools
+Agents gain access to 12 deterministic tools (`mpx_run`, `mpx_status`, `mpx_read`, `mpx_split`, `mpx_wait`, `mpx_pipe_write`) to launch build tools, monitor background tasks, and split developer panes without terminal scraping. See **[MCP Guide](docs/MCP.md)** for full workflows.
 
-- **`mpx_run`**: Spawn a command in a managed stream node.
-- **`mpx_split`**: Split a workspace pane and run a command.
-- **`mpx_list`**: List all active stream nodes, their PIDs, types, and statuses.
-- **`mpx_read`**: Read scrollback log buffer from a stream node.
-- **`mpx_screen`**: Snapshot the 2D virtual terminal screen buffer.
-- **`mpx_send`**: Send keystrokes / text to a node's stdin.
-- **`mpx_wait`**: Wait for command execution and retrieve exit status.
-- **`mpx_kill`**: Terminate a running node.
-- **`mpx_pipe_write`**: Write structured messages into an inter-agent virtual pipe.
-- **`mpx_pipe_read`**: Read messages from an inter-agent virtual pipe.
+---
 
-## JSON-RPC 2.0 / NDJSON Socket API
+## Documentation
 
-Agents can connect directly to `/tmp/mpx-<uid>/<session>.sock` (or Windows Named Pipe) and send single-line JSON requests:
+- **[Architecture & Design](docs/ARCHITECTURE.md)**: Dual-buffer engine, stream nodes, and atomic synchronization.
+- **[CLI Reference & Automation](docs/CLI.md)**: Full command manual, flags, and scripting recipes.
+- **[Keyboard Shortcuts & Vi Mode](docs/KEYBINDINGS.md)**: Leader keys (`Ctrl-B` / `Ctrl-A`), splits, directional navigation, and copy mode.
+- **[Model Context Protocol (MCP)](docs/MCP.md)**: Agent configuration, tools catalog, and inter-agent virtual pipes.
+- **[Installation Guide](docs/INSTALL.md)**: Package managers, static archives, and cross-platform builds.
+- **[Interactive Website](https://casonadams.github.io/mpx/)**: Online visual demo and live documentation.
 
-```json
-{"method":"Spawn","params":{"name":"agent-job","command":"cargo","args":["check"],"pty":false,"cwd":null}}
-{"method":"Subscribe","params":{"name":"agent-job"}}
-{"method":"Wait","params":{"name":"agent-job"}}
-```
-
-The daemon streams real-time events as they occur:
-```json
-{"event":"Output","data":{"name":"agent-job","data":"Compiling...\n"}}
-{"event":"Exit","data":{"name":"agent-job","code":0}}
-```
+---
 
 ## License
 
-Apache-2.0
+Licensed under the [Apache License, Version 2.0](LICENSE).
