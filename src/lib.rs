@@ -8,5 +8,7 @@ pub mod protocol;
 pub mod layout;
 pub mod vt;
 pub mod tui;
+pub mod pipe;
+pub mod mcp;
 
 pub use protocol::{Request, Response, StreamEvent};

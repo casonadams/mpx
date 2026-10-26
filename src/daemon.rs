@@ -11,11 +11,13 @@ use crate::node::task::TaskNode;
 use crate::node::Node;
 use crate::protocol::{DaemonMessage, NodeInfo, Request, Response, StreamEvent};
 use crate::layout::{Direction, Rect, Workspace};
+use crate::pipe::VirtualPipe;
 
 pub struct DaemonState {
     nodes: RwLock<HashMap<String, Arc<dyn Node>>>,
     event_tx: broadcast::Sender<StreamEvent>,
     workspace: RwLock<Workspace>,
+    pipes: RwLock<HashMap<String, VirtualPipe>>,
 }
 
 impl DaemonState {
@@ -25,6 +27,7 @@ impl DaemonState {
             nodes: RwLock::new(HashMap::new()),
             event_tx,
             workspace: RwLock::new(Workspace::new("main".to_string())),
+            pipes: RwLock::new(HashMap::new()),
         })
     }
 
@@ -188,6 +191,34 @@ impl DaemonState {
         ws.compute_layout(width, height)
     }
 
+    pub async fn create_pipe(&self, name: String, capacity: Option<usize>) -> Result<(), String> {
+        let mut pipes = self.pipes.write().await;
+        if pipes.contains_key(&name) {
+            return Err(format!("Pipe '{}' already exists", name));
+        }
+        let cap = capacity.unwrap_or(1024 * 1024);
+        pipes.insert(name.clone(), VirtualPipe::new(name, cap));
+        Ok(())
+    }
+
+    pub async fn write_pipe(&self, name: &str, data: &str) -> Result<(), String> {
+        let pipes = self.pipes.read().await;
+        let pipe = pipes.get(name).ok_or_else(|| format!("Pipe '{}' not found", name))?;
+        pipe.write(data.as_bytes()).await;
+        Ok(())
+    }
+
+    pub async fn read_pipe(&self, name: &str) -> Result<String, String> {
+        let pipes = self.pipes.read().await;
+        let pipe = pipes.get(name).ok_or_else(|| format!("Pipe '{}' not found", name))?;
+        Ok(pipe.read_str().await)
+    }
+
+    pub async fn list_pipes(&self) -> Vec<String> {
+        let pipes = self.pipes.read().await;
+        pipes.keys().cloned().collect()
+    }
+
     pub fn subscribe(&self) -> broadcast::Receiver<StreamEvent> {
         self.event_tx.subscribe()
     }
@@ -338,6 +369,43 @@ pub async fn handle_client<S: AsyncStream>(state: Arc<DaemonState>, stream: S) {
                 state.workspace.write().await.focus(&name);
                 let _ = framed
                     .send(serde_json::to_string(&DaemonMessage::Response(Response::Ok)).unwrap())
+                    .await;
+            }
+            Request::CreatePipe { name, capacity } => {
+                let res = state.create_pipe(name, capacity).await;
+                let resp = match res {
+                    Ok(_) => Response::Ok,
+                    Err(e) => Response::Error(e),
+                };
+                let _ = framed
+                    .send(serde_json::to_string(&DaemonMessage::Response(resp)).unwrap())
+                    .await;
+            }
+            Request::WritePipe { name, data } => {
+                let res = state.write_pipe(&name, &data).await;
+                let resp = match res {
+                    Ok(_) => Response::Ok,
+                    Err(e) => Response::Error(e),
+                };
+                let _ = framed
+                    .send(serde_json::to_string(&DaemonMessage::Response(resp)).unwrap())
+                    .await;
+            }
+            Request::ReadPipe { name } => {
+                let res = state.read_pipe(&name).await;
+                let resp = match res {
+                    Ok(text) => Response::PipeData(text),
+                    Err(e) => Response::Error(e),
+                };
+                let _ = framed
+                    .send(serde_json::to_string(&DaemonMessage::Response(resp)).unwrap())
+                    .await;
+            }
+            Request::ListPipes => {
+                let pipes = state.list_pipes().await;
+                let resp = Response::PipeList(pipes);
+                let _ = framed
+                    .send(serde_json::to_string(&DaemonMessage::Response(resp)).unwrap())
                     .await;
             }
             Request::Subscribe { name: filter_name } => {

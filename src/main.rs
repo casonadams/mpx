@@ -3,6 +3,8 @@ use std::time::Duration;
 use tracing_subscriber::EnvFilter;
 
 use mpx::cli::{Cli, Commands};
+use mpx::cli::PipeCommands;
+use mpx::mcp::McpServer;
 use mpx::client::Client;
 use mpx::daemon::run_daemon;
 use mpx::ipc::default_endpoint;
@@ -215,6 +217,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let foc = if focused { "yes" } else { "no" };
                 println!("{:<16} {:<10} {:<10} {:<10}", name, pos, size, foc);
             }
+        }
+        Commands::Pipe { command: pipe_cmd } => {
+            let mut client = ensure_client(&endpoint, &cli.session).await?;
+            match pipe_cmd {
+                PipeCommands::Create { name, capacity } => {
+                    client.create_pipe(&name, capacity).await.map_err(|e| format!("Pipe create error: {}", e))?;
+                    println!("Virtual pipe '{}' created", name);
+                }
+                PipeCommands::Write { name, data } => {
+                    client.write_pipe(&name, &data).await.map_err(|e| format!("Pipe write error: {}", e))?;
+                }
+                PipeCommands::Read { name } => {
+                    let content = client.read_pipe(&name).await.map_err(|e| format!("Pipe read error: {}", e))?;
+                    print!("{}", content);
+                }
+                PipeCommands::List => {
+                    let pipes = client.list_pipes().await.map_err(|e| format!("Pipe list error: {}", e))?;
+                    if pipes.is_empty() {
+                        println!("No virtual pipes in session '{}'", cli.session);
+                    } else {
+                        println!("PIPES ({})", pipes.len());
+                        println!("{}", "-".repeat(30));
+                        for p in pipes {
+                            println!("{}", p);
+                        }
+                    }
+                }
+            }
+        }
+        Commands::Mcp => {
+            let _ = ensure_client(&endpoint, &cli.session).await?;
+            let server = McpServer::new(endpoint, cli.session);
+            server.run_stdio().await.map_err(|e| format!("MCP error: {}", e))?;
         }
     }
 

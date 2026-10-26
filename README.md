@@ -63,6 +63,50 @@ mpx attach
 - **`Ctrl+A d`**: Detach cleanly from TUI (leaves daemon running in background)
 ```
 
+### Inter-Agent Virtual Pipes
+
+```bash
+# Create a named virtual pipe channel for cross-agent communication
+mpx pipe create agent_bus
+
+# Write structured data or instructions into the pipe
+mpx pipe write agent_bus '{"task": "review_pr", "pr": 42}'
+
+# Read data from the pipe
+mpx pipe read agent_bus
+
+# List active virtual pipes
+mpx pipe list
+```
+
+## Model Context Protocol (MCP) Server
+
+`mpx` features a built-in, zero-dependency MCP stdio server. Any AI coding agent (`oh-my-pi`, `claude code`, Cursor, Windsurf, Zed) can configure `mpx` directly in its `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "mpx": {
+      "command": "mpx",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+### Exposed MCP Tools
+
+- **`mpx_run`**: Spawn a command in a managed stream node.
+- **`mpx_split`**: Split a workspace pane and run a command.
+- **`mpx_list`**: List all active stream nodes, their PIDs, types, and statuses.
+- **`mpx_read`**: Read scrollback log buffer from a stream node.
+- **`mpx_screen`**: Snapshot the 2D virtual terminal screen buffer.
+- **`mpx_send`**: Send keystrokes / text to a node's stdin.
+- **`mpx_wait`**: Wait for command execution and retrieve exit status.
+- **`mpx_kill`**: Terminate a running node.
+- **`mpx_pipe_write`**: Write structured messages into an inter-agent virtual pipe.
+- **`mpx_pipe_read`**: Read messages from an inter-agent virtual pipe.
+
 ## JSON-RPC 2.0 / NDJSON Socket API
 
 Agents can connect directly to `/tmp/mpx-<uid>/<session>.sock` (or Windows Named Pipe) and send single-line JSON requests:

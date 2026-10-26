@@ -126,4 +126,39 @@ pub enum Commands {
         #[arg(long)]
         height: Option<u16>,
     },
+
+    /// Manage inter-agent virtual pipes
+    Pipe {
+        #[command(subcommand)]
+        command: PipeCommands,
+    },
+
+    /// Launch stdio Model Context Protocol (MCP) server for AI agent harnesses
+    Mcp,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum PipeCommands {
+    /// Create a new virtual pipe
+    Create {
+        /// Name of the pipe
+        name: String,
+        /// Maximum capacity in bytes
+        #[arg(long)]
+        capacity: Option<usize>,
+    },
+    /// Write data to a virtual pipe
+    Write {
+        /// Name of the pipe
+        name: String,
+        /// Content data string
+        data: String,
+    },
+    /// Read all data from a virtual pipe
+    Read {
+        /// Name of the pipe
+        name: String,
+    },
+    /// List active virtual pipes
+    List,
 }

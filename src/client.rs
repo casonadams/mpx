@@ -200,6 +200,38 @@ impl Client {
             _ => Err("Invalid response to Focus".into()),
         }
     }
+    pub async fn create_pipe(&mut self, name: &str, capacity: Option<usize>) -> Result<(), String> {
+        match self.call(Request::CreatePipe { name: name.to_string(), capacity }).await? {
+            Response::Ok => Ok(()),
+            Response::Error(e) => Err(e),
+            _ => Err("Invalid response to CreatePipe".into()),
+        }
+    }
+
+    pub async fn write_pipe(&mut self, name: &str, data: &str) -> Result<(), String> {
+        match self.call(Request::WritePipe { name: name.to_string(), data: data.to_string() }).await? {
+            Response::Ok => Ok(()),
+            Response::Error(e) => Err(e),
+            _ => Err("Invalid response to WritePipe".into()),
+        }
+    }
+
+    pub async fn read_pipe(&mut self, name: &str) -> Result<String, String> {
+        match self.call(Request::ReadPipe { name: name.to_string() }).await? {
+            Response::PipeData(text) => Ok(text),
+            Response::Error(e) => Err(e),
+            _ => Err("Invalid response to ReadPipe".into()),
+        }
+    }
+
+    pub async fn list_pipes(&mut self) -> Result<Vec<String>, String> {
+        match self.call(Request::ListPipes).await? {
+            Response::PipeList(pipes) => Ok(pipes),
+            Response::Error(e) => Err(e),
+            _ => Err("Invalid response to ListPipes".into()),
+        }
+    }
+
 
 
 

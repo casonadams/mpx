@@ -242,3 +242,20 @@ async fn test_split_and_layout() {
     assert_eq!(left.1.height, 24);
     assert_eq!(right.1.height, 24);
 }
+
+#[tokio::test]
+async fn test_virtual_pipe_e2e() {
+    let (endpoint, _dir) = start_test_daemon().await;
+    let mut client = Client::connect(&endpoint).await.expect("Failed to connect");
+
+    client.create_pipe("agent_bus", None).await.expect("Create pipe failed");
+    client.write_pipe("agent_bus", "message from agent 1\n").await.expect("Write pipe failed");
+    client.write_pipe("agent_bus", "message from agent 2\n").await.expect("Write pipe failed");
+
+    let content = client.read_pipe("agent_bus").await.expect("Read pipe failed");
+    assert!(content.contains("message from agent 1"));
+    assert!(content.contains("message from agent 2"));
+
+    let list = client.list_pipes().await.expect("List pipes failed");
+    assert!(list.contains(&"agent_bus".to_string()));
+}

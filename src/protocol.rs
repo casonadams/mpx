@@ -59,6 +59,18 @@ pub enum Request {
     Focus {
         name: String,
     },
+    CreatePipe {
+        name: String,
+        capacity: Option<usize>,
+    },
+    WritePipe {
+        name: String,
+        data: String,
+    },
+    ReadPipe {
+        name: String,
+    },
+    ListPipes,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,6 +85,8 @@ pub enum Response {
     Error(String),
     Screen(String),
     Layout(Vec<(String, Rect, bool)>),
+    PipeData(String),
+    PipeList(Vec<String>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
