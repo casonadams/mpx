@@ -1,0 +1,184 @@
+use std::sync::Arc;
+use std::time::Duration;
+use tempfile::tempdir;
+use tokio::time::sleep;
+
+use mpx::client::Client;
+use mpx::daemon::{handle_client, DaemonState};
+use mpx::ipc::IpcListener;
+use mpx::protocol::StreamEvent;
+
+async fn start_test_daemon() -> (String, tempfile::TempDir) {
+    let dir = tempdir().unwrap();
+    let sock_path = dir.path().join("test.sock").to_string_lossy().into_owned();
+
+    #[cfg(unix)]
+    let listener = IpcListener::bind(&sock_path).unwrap();
+    #[cfg(windows)]
+    let mut listener = IpcListener::bind(&sock_path).unwrap();
+
+    let state = DaemonState::new();
+
+    tokio::spawn(async move {
+        loop {
+            if let Ok(stream) = listener.accept().await {
+                let s = Arc::clone(&state);
+                tokio::spawn(async move {
+                    handle_client(s, stream).await;
+                });
+            }
+        }
+    });
+
+    // Give listener time to bind
+    sleep(Duration::from_millis(50)).await;
+
+    (sock_path, dir)
+}
+
+#[tokio::test]
+async fn test_daemon_ping() {
+    let (endpoint, _dir) = start_test_daemon().await;
+    let mut client = Client::connect(&endpoint).await.expect("Failed to connect");
+    client.ping().await.expect("Ping failed");
+}
+
+#[tokio::test]
+async fn test_task_spawn_and_logs() {
+    let (endpoint, _dir) = start_test_daemon().await;
+    let mut client = Client::connect(&endpoint).await.expect("Failed to connect");
+
+    let info = client
+        .spawn(
+            "echo-task".into(),
+            "echo".into(),
+            vec!["hello".into(), "world".into()],
+            false,
+            None,
+        )
+        .await
+        .expect("Spawn failed");
+
+    assert_eq!(info.name, "echo-task");
+    assert!(!info.pty);
+
+    let code = client.wait("echo-task").await.expect("Wait failed");
+    assert_eq!(code, Some(0));
+
+    let logs = client.logs("echo-task", None).await.expect("Logs failed");
+    assert!(logs.contains("hello world"), "Logs did not contain 'hello world': {}", logs);
+}
+
+#[tokio::test]
+async fn test_task_send_input() {
+    let (endpoint, _dir) = start_test_daemon().await;
+    let mut client = Client::connect(&endpoint).await.expect("Failed to connect");
+
+    // Spawn cat to test stdin piping
+    client
+        .spawn("cat-task".into(), "cat".into(), vec![], false, None)
+        .await
+        .expect("Spawn cat failed");
+
+    sleep(Duration::from_millis(100)).await;
+
+    client
+        .send_input("cat-task", "piped_input_data\n")
+        .await
+        .expect("Send input failed");
+
+    sleep(Duration::from_millis(150)).await;
+
+    let logs = client.logs("cat-task", None).await.expect("Logs failed");
+    assert!(
+        logs.contains("piped_input_data"),
+        "Buffer did not capture stdin response: {}",
+        logs
+    );
+
+    client.kill("cat-task").await.expect("Kill failed");
+}
+
+#[tokio::test]
+async fn test_node_listing() {
+    let (endpoint, _dir) = start_test_daemon().await;
+    let mut client = Client::connect(&endpoint).await.expect("Failed to connect");
+
+    client
+        .spawn("task-1".into(), "echo".into(), vec!["1".into()], false, None)
+        .await
+        .unwrap();
+
+    client
+        .spawn("task-2".into(), "echo".into(), vec!["2".into()], false, None)
+        .await
+        .unwrap();
+
+    let list = client.list().await.unwrap();
+    assert_eq!(list.len(), 2);
+    let names: Vec<String> = list.into_iter().map(|n| n.name).collect();
+    assert!(names.contains(&"task-1".to_string()));
+    assert!(names.contains(&"task-2".to_string()));
+}
+
+#[tokio::test]
+async fn test_pty_spawn() {
+    let (endpoint, _dir) = start_test_daemon().await;
+    let mut client = Client::connect(&endpoint).await.expect("Failed to connect");
+
+    let info = client
+        .spawn(
+            "pty-task".into(),
+            "echo".into(),
+            vec!["pty_output".into()],
+            true,
+            None,
+        )
+        .await
+        .expect("PTY spawn failed");
+
+    assert!(info.pty);
+
+    let code = client.wait("pty-task").await.expect("Wait failed");
+    assert_eq!(code, Some(0));
+
+    let logs = client.logs("pty-task", None).await.expect("Logs failed");
+    assert!(logs.contains("pty_output"), "PTY log output missing: {}", logs);
+}
+
+#[tokio::test]
+async fn test_stream_subscription() {
+    let (endpoint, _dir) = start_test_daemon().await;
+    let mut client_sub = Client::connect(&endpoint).await.expect("Failed to connect");
+    let mut client_spawn = Client::connect(&endpoint).await.expect("Failed to connect");
+
+    tokio::spawn(async move {
+        sleep(Duration::from_millis(100)).await;
+        client_spawn
+            .spawn(
+                "streamer".into(),
+                "echo".into(),
+                vec!["streaming_event_token".into()],
+                false,
+                None,
+            )
+            .await
+            .unwrap();
+    });
+
+    let mut captured = false;
+    let _ = client_sub
+        .stream_logs(Some("streamer".to_string()), |event| match event {
+            StreamEvent::Output { data, .. } => {
+                if data.contains("streaming_event_token") {
+                    captured = true;
+                }
+                true
+            }
+            StreamEvent::Exit { .. } => false,
+            _ => true,
+        })
+        .await;
+
+    assert!(captured, "Did not receive streamed token over socket subscription");
+}
