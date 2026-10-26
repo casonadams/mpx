@@ -3,7 +3,7 @@ use tokio_util::codec::{Framed, LinesCodec};
 
 use crate::ipc::{connect, IpcStream};
 use crate::protocol::{DaemonMessage, NodeInfo, Request, Response, StreamEvent};
-use crate::layout::{Direction, Divider, Rect};
+use crate::layout::{Direction, Divider, Rect, WindowTab};
 
 pub struct Client {
     framed: Framed<IpcStream, LinesCodec>,
@@ -170,11 +170,61 @@ impl Client {
         }
     }
 
-    pub async fn layout(&mut self, width: u16, height: u16) -> Result<(Vec<(String, Rect, bool)>, Vec<Divider>), String> {
+    pub async fn layout(
+        &mut self,
+        width: u16,
+        height: u16,
+    ) -> Result<(Vec<(String, Rect, bool)>, Vec<Divider>, Vec<WindowTab>), String> {
         match self.call(Request::Layout { width, height }).await? {
-            Response::Layout(rects, dividers) => Ok((rects, dividers)),
+            Response::Layout(rects, dividers, tabs) => Ok((rects, dividers, tabs)),
             Response::Error(e) => Err(e),
             _ => Err("Invalid response to Layout".into()),
+        }
+    }
+
+    pub async fn new_window(
+        &mut self,
+        name: Option<String>,
+        command: String,
+        args: Vec<String>,
+        pty: bool,
+    ) -> Result<NodeInfo, String> {
+        match self
+            .call(Request::NewWindow {
+                name,
+                command,
+                args,
+                pty,
+            })
+            .await?
+        {
+            Response::Node(info) => Ok(info),
+            Response::Error(e) => Err(e),
+            _ => Err("Invalid response to NewWindow".into()),
+        }
+    }
+
+    pub async fn next_window(&mut self) -> Result<(), String> {
+        match self.call(Request::NextWindow).await? {
+            Response::Ok => Ok(()),
+            Response::Error(e) => Err(e),
+            _ => Err("Invalid response to NextWindow".into()),
+        }
+    }
+
+    pub async fn prev_window(&mut self) -> Result<(), String> {
+        match self.call(Request::PrevWindow).await? {
+            Response::Ok => Ok(()),
+            Response::Error(e) => Err(e),
+            _ => Err("Invalid response to PrevWindow".into()),
+        }
+    }
+
+    pub async fn select_window(&mut self, index: usize) -> Result<(), String> {
+        match self.call(Request::SelectWindow { index }).await? {
+            Response::Ok => Ok(()),
+            Response::Error(e) => Err(e),
+            _ => Err("Invalid response to SelectWindow".into()),
         }
     }
     pub async fn focus_next(&mut self) -> Result<(), String> {

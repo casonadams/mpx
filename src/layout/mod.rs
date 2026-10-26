@@ -4,4 +4,4 @@ pub mod workspace;
 
 pub use geometry::Rect;
 pub use tree::{Direction, Divider, LayoutNode};
-pub use workspace::Workspace;
+pub use workspace::{Window, WindowTab, Workspace};

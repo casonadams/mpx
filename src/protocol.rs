@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use crate::layout::{Direction, Divider, Rect};
+use crate::layout::{Direction, Divider, Rect, WindowTab};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeInfo {
@@ -64,6 +64,17 @@ pub enum Request {
         cols: u16,
         rows: u16,
     },
+    NewWindow {
+        name: Option<String>,
+        command: String,
+        args: Vec<String>,
+        pty: bool,
+    },
+    NextWindow,
+    PrevWindow,
+    SelectWindow {
+        index: usize,
+    },
     CreatePipe {
         name: String,
         capacity: Option<usize>,
@@ -89,7 +100,7 @@ pub enum Response {
     Exit { code: Option<i32> },
     Error(String),
     Screen(String),
-    Layout(Vec<(String, Rect, bool)>, Vec<Divider>),
+    Layout(Vec<(String, Rect, bool)>, Vec<Divider>, Vec<WindowTab>),
     PipeData(String),
     PipeList(Vec<String>),
 }

@@ -10,7 +10,7 @@ use crate::node::pty::PtyNode;
 use crate::node::task::TaskNode;
 use crate::node::Node;
 use crate::protocol::{DaemonMessage, NodeInfo, Request, Response, StreamEvent};
-use crate::layout::{Direction, Divider, Rect, Workspace};
+use crate::layout::{Direction, Divider, Rect, WindowTab, Workspace};
 use crate::pipe::VirtualPipe;
 
 pub struct DaemonState {
@@ -233,9 +233,90 @@ impl DaemonState {
         Ok(info)
     }
 
-    pub async fn compute_layout(&self, width: u16, height: u16) -> (Vec<(String, Rect, bool)>, Vec<Divider>) {
+    pub async fn new_window(
+        &self,
+        name: Option<String>,
+        cmd: String,
+        args: Vec<String>,
+        pty: bool,
+    ) -> Result<NodeInfo, String> {
+        let win_label = name.unwrap_or_else(|| {
+            std::path::Path::new(&cmd)
+                .file_name()
+                .map(|f| f.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "shell".into())
+        });
+
+        let node_name = {
+            let ws = self.workspace.read().await;
+            format!("{}-w{}", win_label, ws.next_window_id)
+        };
+
+        let node: Arc<dyn Node> = if pty {
+            let pty_node = PtyNode::spawn(
+                node_name.clone(),
+                cmd,
+                &args,
+                None,
+                self.event_tx.clone(),
+            )
+            .map_err(|e| e.to_string())?;
+            Arc::new(pty_node)
+        } else {
+            let task_node = TaskNode::spawn(
+                node_name.clone(),
+                cmd,
+                &args,
+                None,
+                self.event_tx.clone(),
+            )
+            .map_err(|e| e.to_string())?;
+            Arc::new(task_node)
+        };
+
+        let info = node.info();
+        let _ = self.event_tx.send(StreamEvent::Spawned {
+            name: node_name.clone(),
+            pid: info.pid,
+        });
+
+        {
+            let mut nodes = self.nodes.write().await;
+            nodes.insert(node_name.clone(), node);
+        }
+
+        {
+            let mut ws = self.workspace.write().await;
+            ws.new_window(win_label, node_name);
+        }
+
+        Ok(info)
+    }
+
+    pub async fn next_window(&self) {
+        let mut ws = self.workspace.write().await;
+        ws.next_window();
+    }
+
+    pub async fn prev_window(&self) {
+        let mut ws = self.workspace.write().await;
+        ws.prev_window();
+    }
+
+    pub async fn select_window(&self, idx: usize) -> bool {
+        let mut ws = self.workspace.write().await;
+        ws.select_window(idx)
+    }
+
+    pub async fn compute_layout(
+        &self,
+        width: u16,
+        height: u16,
+    ) -> (Vec<(String, Rect, bool)>, Vec<Divider>, Vec<WindowTab>) {
         let ws = self.workspace.read().await;
-        ws.compute_layout_with_dividers(width, height)
+        let (panes, dividers) = ws.compute_layout_with_dividers(width, height);
+        let tabs = ws.window_tabs();
+        (panes, dividers, tabs)
     }
 
     pub async fn create_pipe(&self, name: String, capacity: Option<usize>) -> Result<(), String> {
@@ -401,8 +482,8 @@ pub async fn handle_client<S: AsyncStream>(state: Arc<DaemonState>, stream: S) {
                     .await;
             }
             Request::Layout { width, height } => {
-                let (rects, dividers) = state.compute_layout(width, height).await;
-                let resp = Response::Layout(rects, dividers);
+                let (rects, dividers, tabs) = state.compute_layout(width, height).await;
+                let resp = Response::Layout(rects, dividers, tabs);
                 let _ = framed
                     .send(serde_json::to_string(&DaemonMessage::Response(resp)).unwrap())
                     .await;
@@ -430,6 +511,44 @@ pub async fn handle_client<S: AsyncStream>(state: Arc<DaemonState>, stream: S) {
                 let resp = match res {
                     Ok(_) => Response::Ok,
                     Err(e) => Response::Error(e),
+                };
+                let _ = framed
+                    .send(serde_json::to_string(&DaemonMessage::Response(resp)).unwrap())
+                    .await;
+            }
+            Request::NewWindow {
+                name,
+                command,
+                args,
+                pty,
+            } => {
+                let res = state.new_window(name, command, args, pty).await;
+                let resp = match res {
+                    Ok(info) => Response::Node(info),
+                    Err(e) => Response::Error(e),
+                };
+                let _ = framed
+                    .send(serde_json::to_string(&DaemonMessage::Response(resp)).unwrap())
+                    .await;
+            }
+            Request::NextWindow => {
+                state.next_window().await;
+                let _ = framed
+                    .send(serde_json::to_string(&DaemonMessage::Response(Response::Ok)).unwrap())
+                    .await;
+            }
+            Request::PrevWindow => {
+                state.prev_window().await;
+                let _ = framed
+                    .send(serde_json::to_string(&DaemonMessage::Response(Response::Ok)).unwrap())
+                    .await;
+            }
+            Request::SelectWindow { index } => {
+                let ok = state.select_window(index).await;
+                let resp = if ok {
+                    Response::Ok
+                } else {
+                    Response::Error("Window index out of bounds".into())
                 };
                 let _ = framed
                     .send(serde_json::to_string(&DaemonMessage::Response(resp)).unwrap())

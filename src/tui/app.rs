@@ -1,4 +1,4 @@
-use crossterm::event::{Event, EventStream, KeyCode, KeyModifiers};
+use crossterm::event::{Event, EventStream, KeyCode, KeyModifiers, MouseButton, MouseEventKind};
 use futures_util::StreamExt;
 use std::collections::HashMap;
 use std::io::{stdout, BufWriter, Write};
@@ -24,6 +24,7 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
     let mut leader_active = false;
     let mut zoomed_pane: Option<String> = None;
     let mut vt_screens: HashMap<String, VtScreen> = HashMap::new();
+    let mut copy_mode_offset: usize = 0;
     let mut split_counter: usize = 1;
 
     // Ensure at least one active running shell node
@@ -69,7 +70,7 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
         let (term_w, term_h) = crossterm::terminal::size().unwrap_or((80, 24));
         let layout_h = term_h.saturating_sub(1); // 1 line reserved for tmux status bar
 
-        let (raw_panes, dividers) = client.layout(term_w, layout_h).await.unwrap_or_default();
+        let (raw_panes, dividers, tabs) = client.layout(term_w, layout_h).await.unwrap_or_default();
         if raw_panes.is_empty() {
             return Ok(());
         }
@@ -138,15 +139,23 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
         let _ = Compositor::draw_status_bar(
             &mut out,
             session,
+            &tabs,
             &panes,
             leader_active,
             term_w,
             layout_h,
         );
 
-        // Render which-key popup when leader key is active
+        // Render modern right-aligned horizontal HUD chip when leader is active
         if leader_active {
-            let _ = Compositor::draw_which_key(&mut out, term_w, layout_h);
+            let _ = Compositor::draw_shortcut_hud(&mut out, term_w, layout_h);
+        }
+
+        // Render copy mode badge in top-right of active pane
+        if copy_mode_offset > 0 {
+            if let Some(rect) = active_rect {
+                let _ = Compositor::draw_copy_mode_badge(&mut out, rect, copy_mode_offset);
+            }
         }
 
         // Position hardware terminal cursor at active shell prompt and unhide
@@ -176,6 +185,47 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
                             leader_active = !leader_active;
                             continue;
                         }
+                        // Handle Copy Mode navigation (tmux vi-keys)
+                        if copy_mode_offset > 0 {
+                            match key.code {
+                                KeyCode::Char('j') | KeyCode::Down => {
+                                    copy_mode_offset = copy_mode_offset.saturating_sub(1);
+                                }
+                                KeyCode::Char('k') | KeyCode::Up => {
+                                    copy_mode_offset += 1;
+                                }
+                                KeyCode::Char('d') if is_ctrl => {
+                                    copy_mode_offset = copy_mode_offset.saturating_sub(15);
+                                }
+                                KeyCode::Char('u') if is_ctrl => {
+                                    copy_mode_offset += 15;
+                                }
+                                KeyCode::PageDown => {
+                                    copy_mode_offset = copy_mode_offset.saturating_sub(15);
+                                }
+                                KeyCode::PageUp => {
+                                    copy_mode_offset += 15;
+                                }
+                                KeyCode::Char('g') => {
+                                    copy_mode_offset = 10000;
+                                }
+                                KeyCode::Char('G') => {
+                                    copy_mode_offset = 0;
+                                }
+                                KeyCode::Char('y') | KeyCode::Enter => {
+                                    if let Ok(logs) = client.logs(&active_pane, None).await {
+                                        super::render::copy_to_clipboard(&logs);
+                                    }
+                                    copy_mode_offset = 0;
+                                }
+                                KeyCode::Char('q') | KeyCode::Esc => {
+                                    copy_mode_offset = 0;
+                                }
+                                _ => {}
+                            }
+                            continue;
+                        }
+
 
                         if leader_active {
                             leader_active = false;
@@ -207,41 +257,53 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
                                 let _ = client.split(target, new_name, shell, vec![], true, Direction::Vertical).await;
                             } else {
                                 match key.code {
-                                // Next pane (tmux o, n, or Tab)
-                                KeyCode::Char('o') | KeyCode::Char('n') | KeyCode::Tab => {
-                                    let _ = client.focus_next().await;
-                                }
-                                // Previous pane (tmux p)
-                                KeyCode::Char('p') => {
-                                    let _ = client.focus_prev().await;
-                                }
-                                // Directional navigation (arrows or hjkl)
-                                KeyCode::Up | KeyCode::Char('k') => {
-                                    let _ = client.focus_prev().await;
-                                }
-                                KeyCode::Down | KeyCode::Char('j') => {
-                                    let _ = client.focus_next().await;
-                                }
-                                KeyCode::Left => {
-                                    let _ = client.focus_prev().await;
-                                }
-                                KeyCode::Right => {
-                                    let _ = client.focus_next().await;
-                                }
-                                // Zoom toggle (tmux Leader + z)
-                                KeyCode::Char('z') => {
-                                    if zoomed_pane.is_some() {
-                                        zoomed_pane = None;
-                                    } else if !active_pane.is_empty() {
-                                        zoomed_pane = Some(active_pane.clone());
+                                    // Next pane in current window (tmux o or Tab)
+                                    KeyCode::Char('o') | KeyCode::Tab => {
+                                        let _ = client.focus_next().await;
                                     }
-                                }
-                                // New window/pane (tmux c)
-                                KeyCode::Char('c') => {
-                                    let count = vt_screens.len() + 1;
-                                    let shell = default_shell();
-                                    let _ = client.spawn(format!("pane-{}", count), shell, vec![], true, None).await;
-                                }
+                                    // Next window tab (tmux n)
+                                    KeyCode::Char('n') => {
+                                        zoomed_pane = None;
+                                        let _ = client.next_window().await;
+                                    }
+                                    // Previous window tab (tmux p)
+                                    KeyCode::Char('p') => {
+                                        zoomed_pane = None;
+                                        let _ = client.prev_window().await;
+                                    }
+                                    // Direct window jump by number (tmux 0..9)
+                                    KeyCode::Char(d @ '0'..='9') => {
+                                        zoomed_pane = None;
+                                        let idx = d.to_digit(10).unwrap() as usize;
+                                        let _ = client.select_window(idx).await;
+                                    }
+                                    // Directional pane navigation (arrows or hjkl)
+                                    KeyCode::Up | KeyCode::Char('k') => {
+                                        let _ = client.focus_prev().await;
+                                    }
+                                    KeyCode::Down | KeyCode::Char('j') => {
+                                        let _ = client.focus_next().await;
+                                    }
+                                    KeyCode::Left | KeyCode::Char('h') => {
+                                        let _ = client.focus_prev().await;
+                                    }
+                                    KeyCode::Right | KeyCode::Char('l') => {
+                                        let _ = client.focus_next().await;
+                                    }
+                                    // Zoom toggle (tmux Leader + z)
+                                    KeyCode::Char('z') => {
+                                        if zoomed_pane.is_some() {
+                                            zoomed_pane = None;
+                                        } else if !active_pane.is_empty() {
+                                            zoomed_pane = Some(active_pane.clone());
+                                        }
+                                    }
+                                    // New window tab (tmux c)
+                                    KeyCode::Char('c') => {
+                                        zoomed_pane = None;
+                                        let shell = default_shell();
+                                        let _ = client.new_window(None, shell, vec![], true).await;
+                                    }
                                 // Kill pane (tmux x)
                                 KeyCode::Char('x') => {
                                     if !active_pane.is_empty() {
@@ -253,8 +315,11 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
                                 KeyCode::Char('d') => {
                                     return Ok(());
                                 }
+                                KeyCode::Char('[') => {
+                                    copy_mode_offset = 1;
+                                }
                                 KeyCode::Esc => {
-                                    // Cancel which-key popup
+                                    // Cancel shortcut popup
                                 }
                                 _ => {}
                             }
@@ -268,6 +333,25 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
                                     let _ = client.send_input(&active_pane, &text).await;
                                 }
                             }
+                        }
+                    }
+                    Event::Mouse(mouse) => {
+                        match mouse.kind {
+                            MouseEventKind::Down(MouseButton::Left) => {
+                                for (name, rect, _) in &panes {
+                                    if rect.contains(mouse.column, mouse.row) {
+                                        let _ = client.focus(name).await;
+                                        break;
+                                    }
+                                }
+                            }
+                            MouseEventKind::ScrollUp => {
+                                copy_mode_offset += 3;
+                            }
+                            MouseEventKind::ScrollDown => {
+                                copy_mode_offset = copy_mode_offset.saturating_sub(3);
+                            }
+                            _ => {}
                         }
                     }
                     Event::Resize(..) => {}

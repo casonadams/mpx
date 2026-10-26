@@ -59,14 +59,37 @@ mpx layout
 # Attach interactive full-screen TUI
 mpx attach
 
-### TUI Keyboard Shortcuts
+### TUI Keyboard Shortcuts & Mouse Mode (tmux Parity)
 
-- **`Ctrl+A %`** / **`Ctrl+A |`** / **`Ctrl+A v`**: Split pane vertically (side-by-side)
-- **`Ctrl+A "`** / **`Ctrl+A -`** / **`Ctrl+A s`**: Split pane horizontally (stacked top/bottom)
-- **`Ctrl+A o`** / **`Tab`**: Switch focus to next pane
-- **`Ctrl+A p`**: Switch focus to previous pane
-- **`Ctrl+A x`**: Kill focused pane
-- **`Ctrl+A d`**: Detach cleanly from TUI (leaves daemon running in background)
+Supports both **`Ctrl-B`** (default tmux) and **`Ctrl-A`** (popular rebind) as prefix keys.
+
+#### Windows (Tabs)
+- **`Prefix + c`**: Create new window tab running default shell
+- **`Prefix + n`**: Next window tab
+- **`Prefix + p`**: Previous window tab
+- **`Prefix + 0..9`**: Select window tab by index
+
+#### Panes (Splits)
+- **`Prefix + %`** / **`Prefix + |`**: Split window vertically (side-by-side, vertical divider `│`)
+- **`Prefix + "`** / **`Prefix + -`**: Split window horizontally (stacked, horizontal divider `─`)
+- **`Prefix + o`** / **`Tab`**: Cycle focus to next pane
+- **`Prefix + h/j/k/l`** or **Arrow Keys**: Directional pane focus (left / down / up / right)
+- **`Prefix + z`**: Toggle zoom (maximize active pane to 100% full screen, press again to un-zoom)
+- **`Prefix + x`**: Kill active pane
+- **`Prefix + d`**: Detach cleanly from session
+
+#### Mouse Mode
+- **Click**: Focus clicked pane
+- **Scroll Up**: Enter copy mode and scroll history upwards
+- **Scroll Down**: Scroll down in copy mode
+
+#### Copy Mode (Vi-Keys)
+- **`Prefix + [`**: Enter copy mode
+- **`j` / `k`** (or `Down` / `Up`): Scroll down / up by 1 line
+- **`Ctrl+D` / `Ctrl+U`** (or `PageDown` / `PageUp`): Scroll half page down / up
+- **`g` / `G`**: Jump to top / bottom of scrollback history
+- **`y` / `Enter`**: Copy text buffer to system clipboard (`pbcopy` / OSC 52) and exit copy mode
+- **`q` / `Esc`**: Exit copy mode
 ```
 
 ### Inter-Agent Virtual Pipes
