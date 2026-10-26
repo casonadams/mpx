@@ -69,7 +69,7 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
         let (term_w, term_h) = crossterm::terminal::size().unwrap_or((80, 24));
         let layout_h = term_h.saturating_sub(1); // 1 line reserved for tmux status bar
 
-        let raw_panes = client.layout(term_w, layout_h).await.unwrap_or_default();
+        let (raw_panes, dividers) = client.layout(term_w, layout_h).await.unwrap_or_default();
         if raw_panes.is_empty() {
             return Ok(());
         }
@@ -127,17 +127,11 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
 
                 let _ = Compositor::draw_pane_content(&mut out, *rect, vt.grid());
             }
+        }
 
-            // Draw thin divider line if multiple panes are present
-            if panes.len() > 1 && zoomed_pane.is_none() {
-                let _ = Compositor::draw_dividers(
-                    &mut out,
-                    *rect,
-                    term_w,
-                    layout_h,
-                    *is_focused,
-                );
-            }
+        // Draw tmux-style single-character dividers between panes
+        if zoomed_pane.is_none() && !dividers.is_empty() {
+            let _ = Compositor::draw_dividers(&mut out, &dividers);
         }
 
         // Clean tmux-style bottom status bar

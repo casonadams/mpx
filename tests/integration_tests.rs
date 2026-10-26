@@ -259,13 +259,14 @@ async fn test_split_and_layout() {
         .await
         .unwrap();
 
-    let layout = client.layout(80, 24).await.expect("Layout failed");
+    let (layout, dividers) = client.layout(80, 24).await.expect("Layout failed");
     assert_eq!(layout.len(), 2);
+    assert_eq!(dividers.len(), 1);
     let left = layout.iter().find(|(n, ..)| n == "pane-left").unwrap();
     let right = layout.iter().find(|(n, ..)| n == "pane-right").unwrap();
 
     assert_eq!(left.1.width, 40);
-    assert_eq!(right.1.width, 40);
+    assert_eq!(right.1.width, 39);
     assert_eq!(left.1.height, 24);
     assert_eq!(right.1.height, 24);
 
@@ -321,7 +322,7 @@ async fn test_pane_auto_removed_on_exit() {
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     // Layout must automatically have purged "quick-exit" and reclaimed the full width!
-    let layout = client.layout(80, 24).await.unwrap();
+    let (layout, _) = client.layout(80, 24).await.unwrap();
     assert_eq!(layout.len(), 1, "Layout should have collapsed back to 1 pane");
     assert_eq!(layout[0].0, "keep-alive");
     assert_eq!(layout[0].1.width, 80);

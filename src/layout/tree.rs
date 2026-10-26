@@ -8,6 +8,14 @@ pub enum Direction {
     Vertical,   // Stacked (top / bottom)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Divider {
+    pub is_vertical: bool, // true for │, false for ─
+    pub x: u16,
+    pub y: u16,
+    pub length: u16,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LayoutNode {
     Leaf {
@@ -27,15 +35,25 @@ impl LayoutNode {
     }
 
     pub fn compute_rects(&self, bounds: Rect) -> Vec<(String, Rect)> {
-        let mut out = Vec::new();
-        self.collect_rects(bounds, &mut out);
-        out
+        self.compute_layout(bounds).0
     }
 
-    fn collect_rects(&self, bounds: Rect, acc: &mut Vec<(String, Rect)>) {
+    pub fn compute_layout(&self, bounds: Rect) -> (Vec<(String, Rect)>, Vec<Divider>) {
+        let mut panes = Vec::new();
+        let mut dividers = Vec::new();
+        self.collect_layout(bounds, &mut panes, &mut dividers);
+        (panes, dividers)
+    }
+
+    fn collect_layout(
+        &self,
+        bounds: Rect,
+        panes: &mut Vec<(String, Rect)>,
+        dividers: &mut Vec<Divider>,
+    ) {
         match self {
             Self::Leaf { name } => {
-                acc.push((name.clone(), bounds));
+                panes.push((name.clone(), bounds));
             }
             Self::Split {
                 direction,
@@ -44,11 +62,29 @@ impl LayoutNode {
                 right,
             } => {
                 let (r1, r2) = match direction {
-                    Direction::Horizontal => bounds.split_horizontal(*ratio),
-                    Direction::Vertical => bounds.split_vertical(*ratio),
+                    Direction::Horizontal => {
+                        let (l, r) = bounds.split_horizontal(*ratio);
+                        dividers.push(Divider {
+                            is_vertical: true,
+                            x: l.x + l.width,
+                            y: bounds.y,
+                            length: bounds.height,
+                        });
+                        (l, r)
+                    }
+                    Direction::Vertical => {
+                        let (t, b) = bounds.split_vertical(*ratio);
+                        dividers.push(Divider {
+                            is_vertical: false,
+                            x: bounds.x,
+                            y: t.y + t.height,
+                            length: bounds.width,
+                        });
+                        (t, b)
+                    }
                 };
-                left.collect_rects(r1, acc);
-                right.collect_rects(r2, acc);
+                left.collect_layout(r1, panes, dividers);
+                right.collect_layout(r2, panes, dividers);
             }
         }
     }

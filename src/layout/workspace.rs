@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::geometry::Rect;
-use super::tree::{Direction, LayoutNode};
+use super::tree::{Direction, Divider, LayoutNode};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Workspace {
@@ -107,19 +107,28 @@ impl Workspace {
     }
 
     pub fn compute_layout(&self, width: u16, height: u16) -> Vec<(String, Rect, bool)> {
+        self.compute_layout_with_dividers(width, height).0
+    }
+
+    pub fn compute_layout_with_dividers(
+        &self,
+        width: u16,
+        height: u16,
+    ) -> (Vec<(String, Rect, bool)>, Vec<Divider>) {
         let bounds = Rect::new(0, 0, width, height);
-        let rects = match &self.root {
-            Some(r) => r.compute_rects(bounds),
-            None => return Vec::new(),
+        let (rects, dividers) = match &self.root {
+            Some(r) => r.compute_layout(bounds),
+            None => return (Vec::new(), Vec::new()),
         };
 
-        rects
+        let panes = rects
             .into_iter()
             .map(|(name, rect)| {
                 let is_focused = self.focused.as_deref() == Some(&name);
                 (name, rect, is_focused)
             })
-            .collect()
+            .collect();
+        (panes, dividers)
     }
 }
 
@@ -153,7 +162,7 @@ mod tests {
         let p2 = layout.iter().find(|(n, ..)| n == "pane2").unwrap();
 
         assert_eq!(p1.1, Rect::new(0, 0, 50, 50));
-        assert_eq!(p2.1, Rect::new(50, 0, 50, 50));
+        assert_eq!(p2.1, Rect::new(51, 0, 49, 50));
         assert!(p2.2, "pane2 should have focus after split");
     }
 

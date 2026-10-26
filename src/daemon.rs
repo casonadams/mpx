@@ -10,7 +10,7 @@ use crate::node::pty::PtyNode;
 use crate::node::task::TaskNode;
 use crate::node::Node;
 use crate::protocol::{DaemonMessage, NodeInfo, Request, Response, StreamEvent};
-use crate::layout::{Direction, Rect, Workspace};
+use crate::layout::{Direction, Divider, Rect, Workspace};
 use crate::pipe::VirtualPipe;
 
 pub struct DaemonState {
@@ -18,6 +18,7 @@ pub struct DaemonState {
     event_tx: broadcast::Sender<StreamEvent>,
     workspace: RwLock<Workspace>,
     pipes: RwLock<HashMap<String, VirtualPipe>>,
+    exited_history: RwLock<HashMap<String, (String, Option<i32>)>>,
 }
 
 impl DaemonState {
@@ -28,16 +29,31 @@ impl DaemonState {
             event_tx,
             workspace: RwLock::new(Workspace::new("main".to_string())),
             pipes: RwLock::new(HashMap::new()),
+            exited_history: RwLock::new(HashMap::new()),
         });
 
-        // Automatically purge and collapse panes when their process exits
+        // Automatically purge and collapse panes from workspace and active nodes when process exits
         let mut rx = state.event_tx.subscribe();
         let state_clone = Arc::clone(&state);
         tokio::spawn(async move {
             while let Ok(event) = rx.recv().await {
-                if let StreamEvent::Exit { name, .. } = event {
-                    let mut ws = state_clone.workspace.write().await;
-                    ws.remove(&name);
+                if let StreamEvent::Exit { name, code } = event {
+                    let logs = {
+                        let nodes = state_clone.nodes.read().await;
+                        nodes.get(&name).map(|n| n.read_buffer(None)).unwrap_or_default()
+                    };
+                    {
+                        let mut hist = state_clone.exited_history.write().await;
+                        hist.insert(name.clone(), (logs, code));
+                    }
+                    {
+                        let mut ws = state_clone.workspace.write().await;
+                        ws.remove(&name);
+                    }
+                    {
+                        let mut nodes = state_clone.nodes.write().await;
+                        nodes.remove(&name);
+                    }
                 }
             }
         });
@@ -101,10 +117,15 @@ impl DaemonState {
 
     pub async fn get_logs(&self, name: &str, tail: Option<usize>) -> Result<String, String> {
         let nodes = self.nodes.read().await;
-        let node = nodes
-            .get(name)
-            .ok_or_else(|| format!("Node '{}' not found", name))?;
-        Ok(node.read_buffer(tail))
+        if let Some(node) = nodes.get(name) {
+            return Ok(node.read_buffer(tail));
+        }
+        drop(nodes);
+        let hist = self.exited_history.read().await;
+        if let Some((logs, _)) = hist.get(name) {
+            return Ok(logs.clone());
+        }
+        Err(format!("Node '{}' not found", name))
     }
 
     pub async fn send_input(&self, name: &str, data: &str) -> Result<(), String> {
@@ -129,23 +150,33 @@ impl DaemonState {
     }
 
     pub async fn wait_node(&self, name: &str) -> Result<Option<i32>, String> {
-        let node = {
+        let node_opt = {
             let nodes = self.nodes.read().await;
-            nodes
-                .get(name)
-                .cloned()
-                .ok_or_else(|| format!("Node '{}' not found", name))?
+            nodes.get(name).cloned()
         };
-        Ok(node.wait_exit().await)
+        if let Some(node) = node_opt {
+            return Ok(node.wait_exit().await);
+        }
+        let hist = self.exited_history.read().await;
+        if let Some((_, code)) = hist.get(name) {
+            return Ok(*code);
+        }
+        Err(format!("Node '{}' not found", name))
     }
 
     pub async fn get_screen(&self, name: &str) -> Result<String, String> {
         let nodes = self.nodes.read().await;
-        let node = nodes
-            .get(name)
-            .ok_or_else(|| format!("Node '{}' not found", name))?;
-        Ok(node.read_screen())
+        if let Some(node) = nodes.get(name) {
+            return Ok(node.read_screen());
+        }
+        drop(nodes);
+        let hist = self.exited_history.read().await;
+        if let Some((logs, _)) = hist.get(name) {
+            return Ok(logs.clone());
+        }
+        Err(format!("Node '{}' not found", name))
     }
+
 
     pub async fn split_node(
         &self,
@@ -202,9 +233,9 @@ impl DaemonState {
         Ok(info)
     }
 
-    pub async fn compute_layout(&self, width: u16, height: u16) -> Vec<(String, Rect, bool)> {
+    pub async fn compute_layout(&self, width: u16, height: u16) -> (Vec<(String, Rect, bool)>, Vec<Divider>) {
         let ws = self.workspace.read().await;
-        ws.compute_layout(width, height)
+        ws.compute_layout_with_dividers(width, height)
     }
 
     pub async fn create_pipe(&self, name: String, capacity: Option<usize>) -> Result<(), String> {
@@ -370,8 +401,8 @@ pub async fn handle_client<S: AsyncStream>(state: Arc<DaemonState>, stream: S) {
                     .await;
             }
             Request::Layout { width, height } => {
-                let rects = state.compute_layout(width, height).await;
-                let resp = Response::Layout(rects);
+                let (rects, dividers) = state.compute_layout(width, height).await;
+                let resp = Response::Layout(rects, dividers);
                 let _ = framed
                     .send(serde_json::to_string(&DaemonMessage::Response(resp)).unwrap())
                     .await;

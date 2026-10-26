@@ -3,7 +3,7 @@ use tokio_util::codec::{Framed, LinesCodec};
 
 use crate::ipc::{connect, IpcStream};
 use crate::protocol::{DaemonMessage, NodeInfo, Request, Response, StreamEvent};
-use crate::layout::{Direction, Rect};
+use crate::layout::{Direction, Divider, Rect};
 
 pub struct Client {
     framed: Framed<IpcStream, LinesCodec>,
@@ -170,9 +170,9 @@ impl Client {
         }
     }
 
-    pub async fn layout(&mut self, width: u16, height: u16) -> Result<Vec<(String, Rect, bool)>, String> {
+    pub async fn layout(&mut self, width: u16, height: u16) -> Result<(Vec<(String, Rect, bool)>, Vec<Divider>), String> {
         match self.call(Request::Layout { width, height }).await? {
-            Response::Layout(rects) => Ok(rects),
+            Response::Layout(rects, dividers) => Ok((rects, dividers)),
             Response::Error(e) => Err(e),
             _ => Err("Invalid response to Layout".into()),
         }

@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use crate::layout::{Direction, Rect};
+use crate::layout::{Direction, Divider, Rect};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeInfo {
@@ -89,7 +89,7 @@ pub enum Response {
     Exit { code: Option<i32> },
     Error(String),
     Screen(String),
-    Layout(Vec<(String, Rect, bool)>),
+    Layout(Vec<(String, Rect, bool)>, Vec<Divider>),
     PipeData(String),
     PipeList(Vec<String>),
 }

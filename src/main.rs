@@ -208,7 +208,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let w = width.unwrap_or(term_w);
             let h = height.unwrap_or(term_h);
 
-            let rects = client.layout(w, h).await.map_err(|e| format!("Layout error: {}", e))?;
+            let (rects, _dividers) = client.layout(w, h).await.map_err(|e| format!("Layout error: {}", e))?;
             println!("Workspace Layout ({}x{}):", w, h);
             println!("{:<16} {:<10} {:<10} {:<10}", "PANE", "RECT (x,y)", "SIZE (wxh)", "FOCUSED");
             println!("{}", "-".repeat(50));

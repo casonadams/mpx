@@ -5,7 +5,7 @@ use crossterm::{
     style::{Color, Print, ResetColor, SetBackgroundColor, SetForegroundColor},
 };
 
-use crate::layout::geometry::Rect;
+use crate::layout::{geometry::Rect, Divider};
 use crate::vt::grid::{Cell, Grid};
 
 pub struct Compositor;
@@ -33,39 +33,24 @@ impl Compositor {
         Ok(())
     }
 
-    /// Renders thin tmux-style single-line dividers between panes
+    /// Renders clean tmux-style single-line dividers between panes
     pub fn draw_dividers<W: Write>(
         w: &mut W,
-        rect: Rect,
-        screen_w: u16,
-        screen_h: u16,
-        is_focused: bool,
+        dividers: &[Divider],
     ) -> io::Result<()> {
-        let border_fg = if is_focused {
-            Color::Green
-        } else {
-            Color::DarkGrey
-        };
-
-        execute!(w, SetForegroundColor(border_fg))?;
-
-        // Draw vertical right divider if not at the right screen edge
-        let right_x = rect.x + rect.width;
-        if right_x < screen_w {
-            for y in rect.y..(rect.y + rect.height) {
-                execute!(w, MoveTo(right_x, y), Print("│"))?;
+        execute!(w, SetForegroundColor(Color::DarkGrey))?;
+        for div in dividers {
+            if div.is_vertical {
+                for y in div.y..(div.y + div.length) {
+                    execute!(w, MoveTo(div.x, y), Print("│"))?;
+                }
+            } else {
+                execute!(w, MoveTo(div.x, div.y))?;
+                for _ in 0..div.length {
+                    execute!(w, Print("─"))?;
+                }
             }
         }
-
-        // Draw horizontal bottom divider if not at the bottom statusline edge
-        let bottom_y = rect.y + rect.height;
-        if bottom_y < screen_h {
-            execute!(w, MoveTo(rect.x, bottom_y))?;
-            for _ in 0..rect.width {
-                execute!(w, Print("─"))?;
-            }
-        }
-
         execute!(w, ResetColor)?;
         Ok(())
     }

@@ -27,22 +27,24 @@ impl Rect {
     }
 
     pub fn split_horizontal(&self, ratio: f32) -> (Rect, Rect) {
+        let avail_w = self.width.saturating_sub(1);
         let ratio = ratio.clamp(0.1, 0.9);
-        let left_w = ((self.width as f32) * ratio).round() as u16;
-        let right_w = self.width.saturating_sub(left_w);
+        let left_w = ((avail_w as f32) * ratio).round() as u16;
+        let right_w = avail_w.saturating_sub(left_w);
 
         let left = Rect::new(self.x, self.y, left_w, self.height);
-        let right = Rect::new(self.x + left_w, self.y, right_w, self.height);
+        let right = Rect::new(self.x + left_w + 1, self.y, right_w, self.height);
         (left, right)
     }
 
     pub fn split_vertical(&self, ratio: f32) -> (Rect, Rect) {
+        let avail_h = self.height.saturating_sub(1);
         let ratio = ratio.clamp(0.1, 0.9);
-        let top_h = ((self.height as f32) * ratio).round() as u16;
-        let bottom_h = self.height.saturating_sub(top_h);
+        let top_h = ((avail_h as f32) * ratio).round() as u16;
+        let bottom_h = avail_h.saturating_sub(top_h);
 
         let top = Rect::new(self.x, self.y, self.width, top_h);
-        let bottom = Rect::new(self.x, self.y + top_h, self.width, bottom_h);
+        let bottom = Rect::new(self.x, self.y + top_h + 1, self.width, bottom_h);
         (top, bottom)
     }
 }
