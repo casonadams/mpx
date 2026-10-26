@@ -147,6 +147,33 @@ async fn test_pty_spawn() {
 }
 
 #[tokio::test]
+async fn test_interactive_pty_shell() {
+    let (endpoint, _dir) = start_test_daemon().await;
+    let mut client = Client::connect(&endpoint).await.expect("Failed to connect");
+
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
+    client
+        .spawn("shell-test".into(), shell, vec![], true, None)
+        .await
+        .expect("Spawn shell failed");
+
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    client
+        .send_input("shell-test", "echo PTY_INTERACTIVE_OK\n")
+        .await
+        .expect("Send input failed");
+
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+    let logs = client.logs("shell-test", None).await.expect("Logs failed");
+    println!("SHELL LOGS:\n{}", logs);
+    assert!(logs.contains("PTY_INTERACTIVE_OK"), "PTY did not execute interactive input: {}", logs);
+
+    client.kill("shell-test").await.unwrap();
+}
+
+#[tokio::test]
 async fn test_stream_subscription() {
     let (endpoint, _dir) = start_test_daemon().await;
     let mut client_sub = Client::connect(&endpoint).await.expect("Failed to connect");

@@ -2,8 +2,8 @@ use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use std::io::{Read, Write};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use tokio::sync::{broadcast, Mutex, Notify, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
+use tokio::sync::{broadcast, mpsc, Notify};
 
 use super::{Node, NodeError};
 use crate::buffer::RingBuffer;
@@ -16,7 +16,7 @@ pub struct PtyNode {
     pid: Option<u32>,
     buffer: Arc<RwLock<RingBuffer>>,
     screen: Arc<RwLock<VtScreen>>,
-    writer: Arc<Mutex<Box<dyn Write + Send>>>,
+    stdin_tx: mpsc::UnboundedSender<Vec<u8>>,
     master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
     exit_code: Arc<RwLock<Option<i32>>>,
     exit_notify: Arc<Notify>,
@@ -53,11 +53,15 @@ impl PtyNode {
             .map_err(|e| NodeError::Internal(format!("Failed to spawn command in PTY: {}", e)))?;
         let pid = child.process_id();
 
+        // Crucial for POSIX: drop the slave fd in the parent process so that
+        // child exit / EOF correctly signals the master reader.
+        drop(pair.slave);
+
         let mut reader = pair
             .master
             .try_clone_reader()
             .map_err(|e| NodeError::Internal(format!("Failed to clone PTY reader: {}", e)))?;
-        let writer = pair
+        let mut writer = pair
             .master
             .take_writer()
             .map_err(|e| NodeError::Internal(format!("Failed to take PTY writer: {}", e)))?;
@@ -74,7 +78,21 @@ impl PtyNode {
             format!("{} {}", cmd, args.join(" "))
         };
 
-        // Background reader thread for synchronous PTY reader
+        // Dedicated synchronous FIFO writer thread
+        let (stdin_tx, mut stdin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let running_write = Arc::clone(&running);
+        std::thread::spawn(move || {
+            while running_write.load(Ordering::SeqCst) {
+                if let Some(data) = stdin_rx.blocking_recv() {
+                    let _ = writer.write_all(&data);
+                    let _ = writer.flush();
+                } else {
+                    break;
+                }
+            }
+        });
+
+        // Dedicated synchronous reader thread
         let buf_clone = Arc::clone(&buffer);
         let screen_clone = Arc::clone(&screen);
         let tx_clone = event_tx.clone();
@@ -88,10 +106,10 @@ impl PtyNode {
                     Ok(0) => break,
                     Ok(n) => {
                         let bytes = &chunk[..n];
-                        if let Ok(mut b) = buf_clone.try_write() {
+                        if let Ok(mut b) = buf_clone.write() {
                             b.write(bytes);
                         }
-                        if let Ok(mut sc) = screen_clone.try_write() {
+                        if let Ok(mut sc) = screen_clone.write() {
                             sc.feed(bytes);
                         }
                         let text = String::from_utf8_lossy(bytes).into_owned();
@@ -115,7 +133,7 @@ impl PtyNode {
         std::thread::spawn(move || {
             let status = child.wait();
             let code = status.ok().map(|s| s.exit_code() as i32);
-            if let Ok(mut ec) = exit_clone.try_write() {
+            if let Ok(mut ec) = exit_clone.write() {
                 *ec = code;
             }
             running_clone.store(false, Ordering::SeqCst);
@@ -132,7 +150,7 @@ impl PtyNode {
             pid,
             buffer,
             screen,
-            writer: Arc::new(Mutex::new(writer)),
+            stdin_tx,
             master: Arc::new(Mutex::new(pair.master)),
             exit_code,
             exit_notify,
@@ -151,7 +169,7 @@ impl Node for PtyNode {
         let status = if is_running {
             "running".to_string()
         } else {
-            let code = self.exit_code.try_read().ok().and_then(|c| *c);
+            let code = self.exit_code.read().ok().and_then(|c| *c);
             match code {
                 Some(c) => format!("exited({})", c),
                 None => "exited".to_string(),
@@ -171,20 +189,14 @@ impl Node for PtyNode {
         if !self.running.load(Ordering::SeqCst) {
             return Err(NodeError::NotRunning);
         }
-        let writer = Arc::clone(&self.writer);
-        let data = data.to_vec();
-
-        tokio::spawn(async move {
-            let mut w = writer.lock().await;
-            let _ = w.write_all(&data);
-            let _ = w.flush();
-        });
-
+        self.stdin_tx
+            .send(data.to_vec())
+            .map_err(|_| NodeError::NotRunning)?;
         Ok(())
     }
 
     fn read_buffer(&self, tail: Option<usize>) -> String {
-        let buf = self.buffer.try_read();
+        let buf = self.buffer.read();
         match buf {
             Ok(b) => match tail {
                 Some(n) => b.tail_lines(n),
@@ -193,9 +205,10 @@ impl Node for PtyNode {
             Err(_) => String::new(),
         }
     }
+
     fn read_screen(&self) -> String {
         self.screen
-            .try_read()
+            .read()
             .map(|s| s.snapshot())
             .unwrap_or_default()
     }
@@ -203,7 +216,7 @@ impl Node for PtyNode {
     fn resize(&self, cols: u16, rows: u16) -> Result<(), NodeError> {
         let cols = cols.max(1);
         let rows = rows.max(1);
-        if let Ok(master) = self.master.try_lock() {
+        if let Ok(master) = self.master.lock() {
             let _ = master.resize(PtySize {
                 rows,
                 cols,
@@ -211,21 +224,20 @@ impl Node for PtyNode {
                 pixel_height: 0,
             });
         }
-        if let Ok(mut screen) = self.screen.try_write() {
+        if let Ok(mut screen) = self.screen.write() {
             screen.grid_mut().resize(cols as usize, rows as usize);
         }
         Ok(())
     }
 
     fn cursor(&self) -> (usize, usize, bool) {
-        if let Ok(screen) = self.screen.try_read() {
+        if let Ok(screen) = self.screen.read() {
             let c = screen.grid().cursor;
             (c.x, c.y, c.visible)
         } else {
             (0, 0, true)
         }
     }
-
 
     fn kill(&self) -> Result<(), NodeError> {
         self.running.store(false, Ordering::SeqCst);
@@ -235,10 +247,10 @@ impl Node for PtyNode {
     fn wait_exit<'a>(&'a self) -> Pin<Box<dyn Future<Output = Option<i32>> + Send + 'a>> {
         Box::pin(async move {
             if !self.running.load(Ordering::SeqCst) {
-                return *self.exit_code.read().await;
+                return self.exit_code.read().ok().and_then(|c| *c);
             }
             self.exit_notify.notified().await;
-            *self.exit_code.read().await
+            self.exit_code.read().ok().and_then(|c| *c)
         })
     }
 

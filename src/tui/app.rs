@@ -24,13 +24,29 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
     let mut zoomed_pane: Option<String> = None;
     let mut vt_screens: HashMap<String, VtScreen> = HashMap::new();
 
-    // Spawn default shell pane if session is empty
+    // Ensure at least one active running shell node
     let list = client.list().await?;
-    if list.is_empty() {
+    let has_running = list.iter().any(|n| n.status == "running");
+    if !has_running {
+        let count = list.len() + 1;
         let shell = default_shell();
         let _ = client
-            .spawn("shell".into(), shell, vec![], true, None)
+            .spawn(format!("shell-{}", count), shell, vec![], true, None)
             .await?;
+    }
+
+    // Preload existing buffer logs into virtual screens
+    if let Ok(nodes) = client.list().await {
+        for node in nodes {
+            if let Ok(logs) = client.logs(&node.name, None).await {
+                if !logs.is_empty() {
+                    let vt = vt_screens
+                        .entry(node.name)
+                        .or_insert_with(|| VtScreen::new(80, 24));
+                    vt.feed(logs.as_bytes());
+                }
+            }
+        }
     }
 
     // Subscribe to event stream in background task
@@ -263,13 +279,18 @@ fn key_to_bytes(code: KeyCode, modifiers: KeyModifiers) -> Vec<u8> {
             c.encode_utf8(&mut buf).as_bytes().to_vec()
         }
         KeyCode::Enter => vec![b'\r'],
-        KeyCode::Backspace => vec![0x08],
+        KeyCode::Backspace => vec![0x7F],
+        KeyCode::Delete => vec![0x1B, b'[', b'3', b'~'],
         KeyCode::Tab => vec![b'\t'],
         KeyCode::Esc => vec![0x1B],
         KeyCode::Up => vec![0x1B, b'[', b'A'],
         KeyCode::Down => vec![0x1B, b'[', b'B'],
         KeyCode::Right => vec![0x1B, b'[', b'C'],
         KeyCode::Left => vec![0x1B, b'[', b'D'],
+        KeyCode::Home => vec![0x1B, b'[', b'H'],
+        KeyCode::End => vec![0x1B, b'[', b'F'],
+        KeyCode::PageUp => vec![0x1B, b'[', b'5', b'~'],
+        KeyCode::PageDown => vec![0x1B, b'[', b'6', b'~'],
         _ => Vec::new(),
     }
 }
