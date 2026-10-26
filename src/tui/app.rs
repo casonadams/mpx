@@ -24,6 +24,7 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
     let mut leader_active = false;
     let mut zoomed_pane: Option<String> = None;
     let mut vt_screens: HashMap<String, VtScreen> = HashMap::new();
+    let mut split_counter: usize = 1;
 
     // Ensure at least one active running shell node
     let list = client.list().await?;
@@ -184,21 +185,34 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
 
                         if leader_active {
                             leader_active = false;
-                            match key.code {
-                                // Split vertical (side-by-side columns: tmux %, |, or v)
-                                KeyCode::Char('%') | KeyCode::Char('|') | KeyCode::Char('v') => {
-                                    zoomed_pane = None;
-                                    let count = vt_screens.len() + 1;
-                                    let shell = default_shell();
-                                    let _ = client.split(None, format!("pane-{}", count), shell, vec![], true, Direction::Vertical).await;
-                                }
-                                // Split horizontal (top/bottom rows: tmux ", -, s, or h)
-                                KeyCode::Char('"') | KeyCode::Char('-') | KeyCode::Char('s') | KeyCode::Char('h') => {
-                                    zoomed_pane = None;
-                                    let count = vt_screens.len() + 1;
-                                    let shell = default_shell();
-                                    let _ = client.split(None, format!("pane-{}", count), shell, vec![], true, Direction::Horizontal).await;
-                                }
+
+                            let is_split_vert = key.code == KeyCode::Char('%')
+                                || key.code == KeyCode::Char('|')
+                                || key.code == KeyCode::Char('v')
+                                || (key.code == KeyCode::Char('5') && key.modifiers.contains(KeyModifiers::SHIFT));
+
+                            let is_split_horz = key.code == KeyCode::Char('"')
+                                || key.code == KeyCode::Char('-')
+                                || key.code == KeyCode::Char('s')
+                                || key.code == KeyCode::Char('h')
+                                || (key.code == KeyCode::Char('\'') && key.modifiers.contains(KeyModifiers::SHIFT));
+
+                            if is_split_vert {
+                                zoomed_pane = None;
+                                split_counter += 1;
+                                let new_name = format!("pane-{}", split_counter);
+                                let shell = default_shell();
+                                let target = if active_pane.is_empty() { None } else { Some(active_pane.clone()) };
+                                let _ = client.split(target, new_name, shell, vec![], true, Direction::Horizontal).await;
+                            } else if is_split_horz {
+                                zoomed_pane = None;
+                                split_counter += 1;
+                                let new_name = format!("pane-{}", split_counter);
+                                let shell = default_shell();
+                                let target = if active_pane.is_empty() { None } else { Some(active_pane.clone()) };
+                                let _ = client.split(target, new_name, shell, vec![], true, Direction::Vertical).await;
+                            } else {
+                                match key.code {
                                 // Next pane (tmux o, n, or Tab)
                                 KeyCode::Char('o') | KeyCode::Char('n') | KeyCode::Tab => {
                                     let _ = client.focus_next().await;
@@ -250,7 +264,8 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
                                 }
                                 _ => {}
                             }
-                        } else {
+                        }
+                    } else {
                             // Forward key input directly to active pane
                             if !active_pane.is_empty() {
                                 let payload = key_to_bytes(key.code, key.modifiers);

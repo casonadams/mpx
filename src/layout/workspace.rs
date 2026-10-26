@@ -171,4 +171,19 @@ mod tests {
         ws.focus_prev();
         assert_eq!(ws.focused.as_deref(), Some("pane1"));
     }
+
+    #[test]
+    fn test_workspace_multiple_consecutive_splits() {
+        let mut ws = Workspace::new("main".to_string());
+        ws.add_or_split("pane1".to_string(), Direction::Horizontal);
+        ws.add_or_split("pane2".to_string(), Direction::Vertical);
+        ws.add_or_split("pane3".to_string(), Direction::Horizontal);
+        ws.add_or_split("pane4".to_string(), Direction::Vertical);
+        ws.add_or_split("pane5".to_string(), Direction::Horizontal);
+
+        let layout = ws.compute_layout(100, 50);
+        assert_eq!(layout.len(), 5);
+        let names: Vec<_> = layout.iter().map(|(n, ..)| n.as_str()).collect();
+        assert_eq!(names, vec!["pane1", "pane2", "pane3", "pane4", "pane5"]);
+    }
 }

@@ -61,8 +61,8 @@ mpx attach
 
 ### TUI Keyboard Shortcuts
 
-- **`Ctrl+A |`** or **`Ctrl+A v`**: Split pane vertically
-- **`Ctrl+A -`** or **`Ctrl+A h`**: Split pane horizontally
+- **`Ctrl+A %`** / **`Ctrl+A |`** / **`Ctrl+A v`**: Split pane vertically (side-by-side)
+- **`Ctrl+A "`** / **`Ctrl+A -`** / **`Ctrl+A s`**: Split pane horizontally (stacked top/bottom)
 - **`Ctrl+A o`** / **`Tab`**: Switch focus to next pane
 - **`Ctrl+A p`**: Switch focus to previous pane
 - **`Ctrl+A x`**: Kill focused pane
