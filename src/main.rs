@@ -8,6 +8,7 @@ use mpx::mcp::McpServer;
 use mpx::client::Client;
 use mpx::daemon::run_daemon;
 use mpx::ipc::default_endpoint;
+use mpx::protocol::SplitOpts;
 use mpx::protocol::StreamEvent;
 use mpx::layout::Direction;
 
@@ -208,8 +209,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Direction::Horizontal
             };
 
+            let current_dir = std::env::current_dir().ok().map(|p| p.to_string_lossy().into_owned());
             let info = client
-                .split(target, node_name, command, args, pty, dir)
+                .split(SplitOpts {
+                    target,
+                    name: node_name,
+                    command,
+                    args,
+                    pty,
+                    direction: dir,
+                    cwd: current_dir,
+                })
                 .await
                 .map_err(|e| format!("Split error: {}", e))?;
 

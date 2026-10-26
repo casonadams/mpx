@@ -22,6 +22,7 @@ pub struct TaskNode {
     exit_code: Arc<RwLock<Option<i32>>>,
     exit_notify: Arc<Notify>,
     running: Arc<AtomicBool>,
+    cwd: Option<String>,
 }
 
 impl TaskNode {
@@ -164,6 +165,7 @@ impl TaskNode {
             exit_code,
             exit_notify,
             running,
+            cwd: cwd.map(|s| s.to_string()),
         })
     }
 }
@@ -244,7 +246,12 @@ impl Node for TaskNode {
         }
     }
     fn cwd(&self) -> Option<String> {
-        std::env::current_dir().ok().map(|p| p.to_string_lossy().into_owned())
+        if let Some(pid) = self.pid {
+            if let Some(dir) = crate::node::pty::get_process_cwd(pid) {
+                return Some(dir);
+            }
+        }
+        self.cwd.clone()
     }
 
 

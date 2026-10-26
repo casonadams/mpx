@@ -6,7 +6,7 @@ use tokio::time::sleep;
 use mpx::client::Client;
 use mpx::daemon::{handle_client, DaemonState};
 use mpx::ipc::IpcListener;
-use mpx::protocol::StreamEvent;
+use mpx::protocol::{SplitOpts, StreamEvent};
 
 async fn start_test_daemon() -> (String, tempfile::TempDir) {
     let dir = tempdir().unwrap();
@@ -251,14 +251,15 @@ async fn test_split_and_layout() {
         .unwrap();
 
     client
-        .split(
-            Some("pane-left".into()),
-            "pane-right".into(),
-            "cat".into(),
-            vec![],
-            false,
-            Direction::Horizontal,
-        )
+        .split(SplitOpts {
+            target: Some("pane-left".into()),
+            name: "pane-right".into(),
+            command: "cat".into(),
+            args: vec![],
+            pty: false,
+            direction: Direction::Horizontal,
+            cwd: None,
+        })
         .await
         .unwrap();
 
@@ -309,14 +310,15 @@ async fn test_pane_auto_removed_on_exit() {
 
     // Split with node 2 that exits quickly
     client
-        .split(
-            Some("keep-alive".into()),
-            "quick-exit".into(),
-            "echo".into(),
-            vec!["bye".into()],
-            false,
-            Direction::Horizontal,
-        )
+        .split(SplitOpts {
+            target: Some("keep-alive".into()),
+            name: "quick-exit".into(),
+            command: "echo".into(),
+            args: vec!["bye".into()],
+            pty: false,
+            direction: Direction::Horizontal,
+            cwd: None,
+        })
         .await
         .unwrap();
 
@@ -346,4 +348,48 @@ async fn test_resize_pane_e2e() {
     client.resize_pane("resizer", 120, 40).await.expect("Resize pane failed");
 
     client.kill("resizer").await.unwrap();
+}
+
+#[tokio::test]
+async fn test_cwd_propagation_e2e() {
+    use mpx::layout::Direction;
+    use mpx::protocol::NewWindowOpts;
+
+    let (endpoint, dir) = start_test_daemon().await;
+    let mut client = Client::connect(&endpoint).await.expect("Failed to connect");
+
+    let custom_dir = std::fs::canonicalize(dir.path()).unwrap().to_string_lossy().into_owned();
+
+    let win_info = client
+        .new_window(NewWindowOpts {
+            name: Some("test-win".into()),
+            command: "cat".into(),
+            args: vec![],
+            pty: false,
+            cwd: Some(custom_dir.clone()),
+        })
+        .await
+        .unwrap();
+
+    let fetched_cwd = client.get_cwd(&win_info.name).await.unwrap();
+    assert_eq!(fetched_cwd, Some(custom_dir.clone()));
+
+    let split_info = client
+        .split(SplitOpts {
+            target: Some(win_info.name.clone()),
+            name: "test-split".into(),
+            command: "cat".into(),
+            args: vec![],
+            pty: false,
+            direction: Direction::Horizontal,
+            cwd: Some(custom_dir.clone()),
+        })
+        .await
+        .unwrap();
+
+    let split_cwd = client.get_cwd(&split_info.name).await.unwrap();
+    assert_eq!(split_cwd, Some(custom_dir));
+
+    client.kill(&win_info.name).await.unwrap();
+    client.kill(&split_info.name).await.unwrap();
 }

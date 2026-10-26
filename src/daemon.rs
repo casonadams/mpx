@@ -9,7 +9,7 @@ use crate::ipc::{AsyncStream, IpcListener};
 use crate::node::pty::PtyNode;
 use crate::node::task::TaskNode;
 use crate::node::Node;
-use crate::protocol::{DaemonMessage, NodeInfo, Request, Response, StreamEvent};
+use crate::protocol::{DaemonMessage, NewWindowOpts, NodeInfo, Request, Response, SplitOpts, StreamEvent};
 use crate::layout::{Direction, Divider, Rect, WindowTab, Workspace};
 use crate::pipe::VirtualPipe;
 
@@ -178,29 +178,22 @@ impl DaemonState {
     }
 
 
-    pub async fn split_node(
-        &self,
-        target: Option<String>,
-        name: String,
-        cmd: String,
-        args: Vec<String>,
-        pty: bool,
-        dir: Direction,
-    ) -> Result<NodeInfo, String> {
+    pub async fn split_node(&self, opts: SplitOpts) -> Result<NodeInfo, String> {
         let mut nodes = self.nodes.write().await;
-        if nodes.contains_key(&name) {
-            return Err(format!("Node '{}' already exists", name));
+        if nodes.contains_key(&opts.name) {
+            return Err(format!("Node '{}' already exists", opts.name));
         }
 
-        let active_cwd = target.as_ref().and_then(|t| {
-            nodes.get(t).and_then(|n| n.cwd())
-        });
+        let active_cwd = opts
+            .cwd
+            .or_else(|| opts.target.as_ref().and_then(|t| nodes.get(t).and_then(|n| n.cwd())))
+            .or_else(|| std::env::current_dir().ok().map(|p| p.to_string_lossy().into_owned()));
 
-        let node: Arc<dyn Node> = if pty {
+        let node: Arc<dyn Node> = if opts.pty {
             let pty_node = PtyNode::spawn(
-                name.clone(),
-                cmd,
-                &args,
+                opts.name.clone(),
+                opts.command,
+                &opts.args,
                 active_cwd.as_deref(),
                 self.event_tx.clone(),
             )
@@ -208,9 +201,9 @@ impl DaemonState {
             Arc::new(pty_node)
         } else {
             let task_node = TaskNode::spawn(
-                name.clone(),
-                cmd,
-                &args,
+                opts.name.clone(),
+                opts.command,
+                &opts.args,
                 active_cwd.as_deref(),
                 self.event_tx.clone(),
             )
@@ -220,32 +213,26 @@ impl DaemonState {
 
         let info = node.info();
         let _ = self.event_tx.send(StreamEvent::Spawned {
-            name: name.clone(),
+            name: opts.name.clone(),
             pid: info.pid,
         });
 
-        nodes.insert(name.clone(), node);
+        nodes.insert(opts.name.clone(), node);
 
         {
             let mut ws = self.workspace.write().await;
-            if let Some(t) = target {
-                ws.focus(&t);
+            if let Some(ref t) = opts.target {
+                ws.focus(t);
             }
-            ws.add_or_split(name, dir);
+            ws.add_or_split(opts.name, opts.direction);
         }
 
         Ok(info)
     }
 
-    pub async fn new_window(
-        &self,
-        name: Option<String>,
-        cmd: String,
-        args: Vec<String>,
-        pty: bool,
-    ) -> Result<NodeInfo, String> {
-        let win_label = name.unwrap_or_else(|| {
-            std::path::Path::new(&cmd)
+    pub async fn new_window(&self, opts: NewWindowOpts) -> Result<NodeInfo, String> {
+        let win_label = opts.name.unwrap_or_else(|| {
+            std::path::Path::new(&opts.command)
                 .file_name()
                 .map(|f| f.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "shell".into())
@@ -256,23 +243,21 @@ impl DaemonState {
             format!("{}-w{}", win_label, ws.next_window_id)
         };
 
-        let active_cwd = {
-            let ws = self.workspace.read().await;
-            let focused_node = ws.active_window().and_then(|w| w.focused.clone());
-            drop(ws);
-            if let Some(fn_name) = focused_node {
-                let nodes = self.nodes.read().await;
-                nodes.get(&fn_name).and_then(|n| n.cwd())
-            } else {
-                None
-            }
-        };
+        let active_cwd = opts
+            .cwd
+            .or_else(|| {
+                let ws = self.workspace.try_read().ok()?;
+                let focused_node = ws.active_window().and_then(|w| w.focused.clone())?;
+                let nodes = self.nodes.try_read().ok()?;
+                nodes.get(&focused_node).and_then(|n| n.cwd())
+            })
+            .or_else(|| std::env::current_dir().ok().map(|p| p.to_string_lossy().into_owned()));
 
-        let node: Arc<dyn Node> = if pty {
+        let node: Arc<dyn Node> = if opts.pty {
             let pty_node = PtyNode::spawn(
                 node_name.clone(),
-                cmd,
-                &args,
+                opts.command,
+                &opts.args,
                 active_cwd.as_deref(),
                 self.event_tx.clone(),
             )
@@ -281,8 +266,8 @@ impl DaemonState {
         } else {
             let task_node = TaskNode::spawn(
                 node_name.clone(),
-                cmd,
-                &args,
+                opts.command,
+                &opts.args,
                 active_cwd.as_deref(),
                 self.event_tx.clone(),
             )
@@ -333,6 +318,11 @@ impl DaemonState {
         let (panes, dividers) = ws.compute_layout_with_dividers(width, height);
         let tabs = ws.window_tabs();
         (panes, dividers, tabs)
+    }
+
+    pub async fn get_cwd(&self, name: &str) -> Option<String> {
+        let nodes = self.nodes.read().await;
+        nodes.get(name).and_then(|n| n.cwd())
     }
 
     pub async fn create_pipe(&self, name: String, capacity: Option<usize>) -> Result<(), String> {
@@ -478,17 +468,8 @@ pub async fn handle_client<S: AsyncStream>(state: Arc<DaemonState>, stream: S) {
                     .send(serde_json::to_string(&DaemonMessage::Response(resp)).unwrap())
                     .await;
             }
-            Request::Split {
-                target,
-                name,
-                command,
-                args,
-                pty,
-                direction,
-            } => {
-                let res = state
-                    .split_node(target, name, command, args, pty, direction)
-                    .await;
+            Request::Split(opts) => {
+                let res = state.split_node(opts).await;
                 let resp = match res {
                     Ok(info) => Response::Node(info),
                     Err(e) => Response::Error(e),
@@ -532,17 +513,19 @@ pub async fn handle_client<S: AsyncStream>(state: Arc<DaemonState>, stream: S) {
                     .send(serde_json::to_string(&DaemonMessage::Response(resp)).unwrap())
                     .await;
             }
-            Request::NewWindow {
-                name,
-                command,
-                args,
-                pty,
-            } => {
-                let res = state.new_window(name, command, args, pty).await;
+            Request::NewWindow(opts) => {
+                let res = state.new_window(opts).await;
                 let resp = match res {
                     Ok(info) => Response::Node(info),
                     Err(e) => Response::Error(e),
                 };
+                let _ = framed
+                    .send(serde_json::to_string(&DaemonMessage::Response(resp)).unwrap())
+                    .await;
+            }
+            Request::GetCwd { name } => {
+                let cwd = state.get_cwd(&name).await;
+                let resp = Response::Cwd(cwd);
                 let _ = framed
                     .send(serde_json::to_string(&DaemonMessage::Response(resp)).unwrap())
                     .await;

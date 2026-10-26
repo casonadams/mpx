@@ -2,8 +2,8 @@ use futures_util::{SinkExt, StreamExt};
 use tokio_util::codec::{Framed, LinesCodec};
 
 use crate::ipc::{connect, IpcStream};
-use crate::protocol::{DaemonMessage, NodeInfo, Request, Response, StreamEvent};
-use crate::layout::{Direction, Divider, Rect, WindowTab};
+use crate::protocol::{DaemonMessage, NewWindowOpts, NodeInfo, Request, Response, SplitOpts, StreamEvent};
+use crate::layout::{Divider, Rect, WindowTab};
 
 pub struct Client {
     framed: Framed<IpcStream, LinesCodec>,
@@ -144,26 +144,8 @@ impl Client {
         }
     }
 
-    pub async fn split(
-        &mut self,
-        target: Option<String>,
-        name: String,
-        command: String,
-        args: Vec<String>,
-        pty: bool,
-        direction: Direction,
-    ) -> Result<NodeInfo, String> {
-        match self
-            .call(Request::Split {
-                target,
-                name,
-                command,
-                args,
-                pty,
-                direction,
-            })
-            .await?
-        {
+    pub async fn split(&mut self, opts: SplitOpts) -> Result<NodeInfo, String> {
+        match self.call(Request::Split(opts)).await? {
             Response::Node(info) => Ok(info),
             Response::Error(e) => Err(e),
             _ => Err("Invalid response to Split".into()),
@@ -182,25 +164,19 @@ impl Client {
         }
     }
 
-    pub async fn new_window(
-        &mut self,
-        name: Option<String>,
-        command: String,
-        args: Vec<String>,
-        pty: bool,
-    ) -> Result<NodeInfo, String> {
-        match self
-            .call(Request::NewWindow {
-                name,
-                command,
-                args,
-                pty,
-            })
-            .await?
-        {
+    pub async fn new_window(&mut self, opts: NewWindowOpts) -> Result<NodeInfo, String> {
+        match self.call(Request::NewWindow(opts)).await? {
             Response::Node(info) => Ok(info),
             Response::Error(e) => Err(e),
             _ => Err("Invalid response to NewWindow".into()),
+        }
+    }
+
+    pub async fn get_cwd(&mut self, name: &str) -> Result<Option<String>, String> {
+        match self.call(Request::GetCwd { name: name.to_string() }).await? {
+            Response::Cwd(cwd) => Ok(cwd),
+            Response::Error(e) => Err(e),
+            _ => Err("Invalid response to GetCwd".into()),
         }
     }
 

@@ -4,6 +4,7 @@ use std::io::{self, BufRead, Write};
 
 use crate::client::Client;
 use crate::layout::Direction;
+use crate::protocol::SplitOpts;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct JsonRpcRequest {
@@ -279,7 +280,17 @@ impl McpServer {
                 };
                 let pty = args.get("pty").and_then(|v| v.as_bool()).unwrap_or(false);
 
-                let info = client.split(None, name, command.to_string(), node_args, pty, dir).await?;
+                let info = client
+                    .split(SplitOpts {
+                        target: None,
+                        name,
+                        command: command.to_string(),
+                        args: node_args,
+                        pty,
+                        direction: dir,
+                        cwd: None,
+                    })
+                    .await?;
                 Ok(json!({
                     "content": [{ "type": "text", "text": format!("Split pane '{}' created (pid: {:?})", info.name, info.pid) }]
                 }))

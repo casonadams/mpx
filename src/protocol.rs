@@ -9,6 +9,26 @@ pub struct NodeInfo {
     pub command: String,
     pub status: String,
 }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SplitOpts {
+    pub target: Option<String>,
+    pub name: String,
+    pub command: String,
+    pub args: Vec<String>,
+    pub pty: bool,
+    pub direction: Direction,
+    pub cwd: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewWindowOpts {
+    pub name: Option<String>,
+    pub command: String,
+    pub args: Vec<String>,
+    pub pty: bool,
+    pub cwd: Option<String>,
+}
+
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "method", content = "params")]
@@ -42,14 +62,7 @@ pub enum Request {
     Screen {
         name: String,
     },
-    Split {
-        target: Option<String>,
-        name: String,
-        command: String,
-        args: Vec<String>,
-        pty: bool,
-        direction: Direction,
-    },
+    Split(SplitOpts),
     Layout {
         width: u16,
         height: u16,
@@ -64,16 +77,14 @@ pub enum Request {
         cols: u16,
         rows: u16,
     },
-    NewWindow {
-        name: Option<String>,
-        command: String,
-        args: Vec<String>,
-        pty: bool,
-    },
+    NewWindow(NewWindowOpts),
     NextWindow,
     PrevWindow,
     SelectWindow {
         index: usize,
+    },
+    GetCwd {
+        name: String,
     },
     CreatePipe {
         name: String,
@@ -103,6 +114,7 @@ pub enum Response {
     Layout(Vec<(String, Rect, bool)>, Vec<Divider>, Vec<WindowTab>),
     PipeData(String),
     PipeList(Vec<String>),
+    Cwd(Option<String>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

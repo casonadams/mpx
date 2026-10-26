@@ -6,7 +6,7 @@ use crossterm::{
 };
 
 use crate::layout::{geometry::Rect, Divider, WindowTab};
-use crate::vt::grid::{Cell, Grid};
+use crate::vt::grid::Grid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SelectionRange {
@@ -279,6 +279,15 @@ impl Compositor {
         }
         Ok(())
     }
+    /// Emits DEC 2026 Begin Synchronized Update sequence to eliminate tearing and cursor jitter
+    pub fn begin_sync<W: Write>(w: &mut W) -> io::Result<()> {
+        w.write_all(b"\x1b[?2026h")
+    }
+
+    /// Emits DEC 2026 End Synchronized Update sequence to flush complete frame atomically
+    pub fn end_sync<W: Write>(w: &mut W) -> io::Result<()> {
+        w.write_all(b"\x1b[?2026l")
+    }
 
     /// Places the live terminal hardware cursor at the focused pane's active position
     pub fn position_cursor<W: Write>(
@@ -297,8 +306,38 @@ impl Compositor {
         let cy = (pane_rect.y as usize + cursor_y).min((pane_rect.y + pane_rect.height).saturating_sub(1) as usize) as u16;
 
         execute!(w, MoveTo(cx, cy), Show)?;
-        w.flush()?;
         Ok(())
+    }
+}
+
+fn cell_content(
+    col: usize,
+    row: usize,
+    abs_row: usize,
+    ctx: &RenderPaneContext<'_>,
+    badge_info: Option<(usize, &[char])>,
+) -> (char, Color, Color) {
+    if row == 0 {
+        if let Some((b_start, b_chars)) = badge_info {
+            if col >= b_start && col < b_start + b_chars.len() {
+                return (
+                    b_chars[col - b_start],
+                    Color::Black,
+                    Color::Rgb { r: 255, g: 140, b: 0 },
+                );
+            }
+        }
+    }
+
+    let cell = ctx.grid.get_cell_scrolled(col, row, ctx.scroll_offset).copied().unwrap_or_default();
+    if ctx.selection.map_or(false, |s| s.contains_abs(col, abs_row)) {
+        (cell.c, Color::Black, Color::Rgb { r: 255, g: 140, b: 0 })
+    } else {
+        (
+            cell.c,
+            cell.style.fg.map(convert_color).unwrap_or(Color::Reset),
+            cell.style.bg.map(convert_color).unwrap_or(Color::Reset),
+        )
     }
 }
 
@@ -310,51 +349,22 @@ fn render_row_cells<W: Write>(
 ) -> io::Result<()> {
     let abs_row = ctx.grid.abs_line(row, ctx.scroll_offset);
     execute!(w, MoveTo(ctx.rect.x, ctx.rect.y + row as u16))?;
+    let mut cur_fg: Option<Color> = None;
+    let mut cur_bg: Option<Color> = None;
+
     for col in 0..ctx.rect.width as usize {
-        if row == 0 {
-            if let Some((b_start, b_chars)) = badge_info {
-                if col >= b_start && col < b_start + b_chars.len() {
-                    let ch = b_chars[col - b_start];
-                    execute!(
-                        w,
-                        SetBackgroundColor(Color::Rgb { r: 255, g: 140, b: 0 }),
-                        SetForegroundColor(Color::Black),
-                        Print(ch),
-                        ResetColor
-                    )?;
-                    continue;
-                }
-            }
+        let (ch, fg, bg) = cell_content(col, row, abs_row, ctx, badge_info);
+        if cur_fg != Some(fg) {
+            execute!(w, SetForegroundColor(fg))?;
+            cur_fg = Some(fg);
         }
-
-        let cell = ctx.grid.get_cell_scrolled(col, row, ctx.scroll_offset).copied().unwrap_or_default();
-        let is_selected = ctx.selection.map_or(false, |s| s.contains_abs(col, abs_row));
-        if is_selected {
-            execute!(
-                w,
-                SetBackgroundColor(Color::Rgb { r: 255, g: 140, b: 0 }),
-                SetForegroundColor(Color::Black),
-                Print(cell.c),
-                ResetColor
-            )?;
-        } else {
-            write_cell(w, cell)?;
+        if cur_bg != Some(bg) {
+            execute!(w, SetBackgroundColor(bg))?;
+            cur_bg = Some(bg);
         }
+        execute!(w, Print(ch))?;
     }
-    Ok(())
-}
-
-fn write_cell<W: Write>(w: &mut W, cell: Cell) -> io::Result<()> {
-    match cell.style.fg {
-        Some(fg) => execute!(w, SetForegroundColor(convert_color(fg)))?,
-        None => execute!(w, SetForegroundColor(Color::Reset))?,
-    }
-    match cell.style.bg {
-        Some(bg) => execute!(w, SetBackgroundColor(convert_color(bg)))?,
-        None => execute!(w, SetBackgroundColor(Color::Reset))?,
-    }
-
-    execute!(w, Print(cell.c))?;
+    execute!(w, ResetColor)?;
     Ok(())
 }
 

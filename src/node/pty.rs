@@ -21,6 +21,7 @@ pub struct PtyNode {
     exit_code: Arc<RwLock<Option<i32>>>,
     exit_notify: Arc<Notify>,
     running: Arc<AtomicBool>,
+    cwd: Option<String>,
 }
 
 impl PtyNode {
@@ -161,6 +162,7 @@ impl PtyNode {
             exit_code,
             exit_notify,
             running,
+            cwd: cwd.map(|s| s.to_string()),
         })
     }
 }
@@ -245,8 +247,12 @@ impl Node for PtyNode {
         }
     }
     fn cwd(&self) -> Option<String> {
-        let pid = self.pid?;
-        get_process_cwd(pid)
+        if let Some(pid) = self.pid {
+            if let Some(dir) = get_process_cwd(pid) {
+                return Some(dir);
+            }
+        }
+        self.cwd.clone()
     }
 
 
@@ -271,7 +277,7 @@ impl Node for PtyNode {
 }
 
 #[cfg(target_os = "macos")]
-fn get_process_cwd(pid: u32) -> Option<String> {
+pub(crate) fn get_process_cwd(pid: u32) -> Option<String> {
     let output = std::process::Command::new("lsof")
         .args(["-p", &pid.to_string(), "-a", "-d", "cwd", "-Fn"])
         .output()
@@ -288,13 +294,13 @@ fn get_process_cwd(pid: u32) -> Option<String> {
 }
 
 #[cfg(target_os = "linux")]
-fn get_process_cwd(pid: u32) -> Option<String> {
+pub(crate) fn get_process_cwd(pid: u32) -> Option<String> {
     std::fs::read_link(format!("/proc/{}/cwd", pid))
         .ok()
         .map(|p| p.to_string_lossy().into_owned())
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-fn get_process_cwd(_pid: u32) -> Option<String> {
+pub(crate) fn get_process_cwd(_pid: u32) -> Option<String> {
     None
 }

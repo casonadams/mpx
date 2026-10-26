@@ -2,7 +2,6 @@ use crossterm::event::{Event, EventStream, KeyCode, KeyModifiers, MouseButton, M
 use futures_util::StreamExt;
 use std::collections::HashMap;
 use std::io::{stdout, BufWriter, Write};
-use crossterm::execute;
 use std::time::Duration;
 use tokio::time::sleep;
 
@@ -11,7 +10,7 @@ use super::terminal::TerminalGuard;
 use crate::client::Client;
 use crate::layout::geometry::Rect;
 use crate::layout::Direction;
-use crate::protocol::StreamEvent;
+use crate::protocol::{NewWindowOpts, SplitOpts, StreamEvent};
 use crate::vt::VtScreen;
 
 pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
@@ -32,7 +31,16 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
     let has_running = list.iter().any(|n| n.status == "running");
     if !has_running {
         let shell = default_shell();
-        let _ = client.new_window(None, shell, vec![], true).await;
+        let cur_dir = std::env::current_dir().ok().map(|p| p.to_string_lossy().into_owned());
+        let _ = client
+            .new_window(NewWindowOpts {
+                name: None,
+                command: shell,
+                args: vec![],
+                pty: true,
+                cwd: cur_dir,
+            })
+            .await;
     }
 
     // Preload existing buffer logs into virtual screens
@@ -62,8 +70,10 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
 
     let mut out = BufWriter::with_capacity(64 * 1024, stdout());
     let mut pane_dimensions: HashMap<String, (u16, u16)> = HashMap::new();
-
+    let mut last_render: Option<std::time::Instant> = None;
+    let frame_budget = Duration::from_millis(16);
     loop {
+        wait_for_frame(last_render, frame_budget).await;
         let (term_w, term_h) = crossterm::terminal::size().unwrap_or((80, 24));
         let layout_h = term_h.saturating_sub(1); // 1 line reserved for tmux status bar
 
@@ -88,29 +98,10 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
             raw_panes.clone()
         };
 
-        // Handle PTY resizing and VT stream reflow whenever pane dimensions change
-        for (name, rect, _) in &panes {
-            if rect.width == 0 || rect.height == 0 {
-                continue;
-            }
-            let current_dim = (rect.width, rect.height);
-            let prev_dim = pane_dimensions.get(name).copied();
-            if prev_dim != Some(current_dim) {
-                pane_dimensions.insert(name.clone(), current_dim);
-                let _ = client.resize_pane(name, rect.width, rect.height).await;
+        sync_pane_dimensions(&mut client, &panes, &mut pane_dimensions, &mut vt_screens).await;
 
-                // Replay raw stream buffer at the new column width for perfect reflow
-                if let Ok(logs) = client.logs(name, None).await {
-                    let mut new_vt = VtScreen::new(rect.width as usize, rect.height as usize);
-                    new_vt.feed(logs.as_bytes());
-                    vt_screens.insert(name.clone(), new_vt);
-                }
-            }
-        }
-
-        // Hide hardware cursor during frame buffer generation
-        let _ = execute!(out, crossterm::cursor::Hide);
-
+        // Begin DEC 2026 synchronized update to eliminate tearing and cursor jitter
+        let _ = Compositor::begin_sync(&mut out);
         let mut active_rect: Option<Rect> = None;
 
         for (name, rect, is_focused) in &panes {
@@ -190,10 +181,10 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
                 vis,
             );
         }
-
-        // Atomic single flush to terminal emulator
+        // End DEC 2026 synchronized update and flush frame atomically
+        let _ = Compositor::end_sync(&mut out);
         let _ = out.flush();
-
+        last_render = Some(std::time::Instant::now());
         tokio::select! {
             Some(Ok(event)) = event_reader.next() => {
                 match event {
@@ -330,20 +321,46 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
                                 || key.code == KeyCode::Char('-')
                                 || (key.code == KeyCode::Char('\'') && key.modifiers.contains(KeyModifiers::SHIFT));
 
+                            let cur_cwd = if !active_pane.is_empty() {
+                                client.get_cwd(&active_pane).await.ok().flatten()
+                            } else {
+                                None
+                            }.or_else(|| std::env::current_dir().ok().map(|p| p.to_string_lossy().into_owned()));
+
                             if is_split_vert {
                                 zoomed_pane = None;
                                 split_counter += 1;
                                 let new_name = format!("pane-{}", split_counter);
                                 let shell = default_shell();
                                 let target = if active_pane.is_empty() { None } else { Some(active_pane.clone()) };
-                                let _ = client.split(target, new_name, shell, vec![], true, Direction::Horizontal).await;
+                                let _ = client
+                                    .split(SplitOpts {
+                                        target,
+                                        name: new_name,
+                                        command: shell,
+                                        args: vec![],
+                                        pty: true,
+                                        direction: Direction::Horizontal,
+                                        cwd: cur_cwd,
+                                    })
+                                    .await;
                             } else if is_split_horz {
                                 zoomed_pane = None;
                                 split_counter += 1;
                                 let new_name = format!("pane-{}", split_counter);
                                 let shell = default_shell();
                                 let target = if active_pane.is_empty() { None } else { Some(active_pane.clone()) };
-                                let _ = client.split(target, new_name, shell, vec![], true, Direction::Vertical).await;
+                                let _ = client
+                                    .split(SplitOpts {
+                                        target,
+                                        name: new_name,
+                                        command: shell,
+                                        args: vec![],
+                                        pty: true,
+                                        direction: Direction::Vertical,
+                                        cwd: cur_cwd,
+                                    })
+                                    .await;
                             } else {
                                 match key.code {
                                     // Next pane in current window (tmux o or Tab)
@@ -399,7 +416,20 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
                                     KeyCode::Char('c') => {
                                         zoomed_pane = None;
                                         let shell = default_shell();
-                                        let _ = client.new_window(None, shell, vec![], true).await;
+                                        let cur_cwd = if !active_pane.is_empty() {
+                                            client.get_cwd(&active_pane).await.ok().flatten()
+                                        } else {
+                                            None
+                                        }.or_else(|| std::env::current_dir().ok().map(|p| p.to_string_lossy().into_owned()));
+                                        let _ = client
+                                            .new_window(NewWindowOpts {
+                                                name: None,
+                                                command: shell,
+                                                args: vec![],
+                                                pty: true,
+                                                cwd: cur_cwd,
+                                            })
+                                            .await;
                                     }
                                     // Kill pane (tmux x)
                                     KeyCode::Char('x') => {
@@ -571,18 +601,7 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
                 }
 
                 for ev in events {
-                    match ev {
-                        StreamEvent::Output { name, data } => {
-                            let vt = vt_screens
-                                .entry(name)
-                                .or_insert_with(|| VtScreen::new(80, 24));
-                            vt.feed(data.as_bytes());
-                        }
-                        StreamEvent::Exit { name, .. } => {
-                            vt_screens.remove(&name);
-                        }
-                        _ => {}
-                    }
+                    apply_stream_event(ev, &mut vt_screens);
                 }
             }
             else => {
@@ -634,6 +653,53 @@ fn default_shell() -> String {
         "powershell.exe".to_string()
     } else {
         "/bin/sh".to_string()
+    }
+}
+
+async fn wait_for_frame(last_render: Option<std::time::Instant>, budget: Duration) {
+    if let Some(lr) = last_render {
+        if lr.elapsed() < budget {
+            tokio::time::sleep(budget.saturating_sub(lr.elapsed())).await;
+        }
+    }
+}
+
+async fn sync_pane_dimensions(
+    client: &mut Client,
+    panes: &[(String, Rect, bool)],
+    pane_dimensions: &mut HashMap<String, (u16, u16)>,
+    vt_screens: &mut HashMap<String, VtScreen>,
+) {
+    for (name, rect, _) in panes {
+        if rect.width == 0 || rect.height == 0 {
+            continue;
+        }
+        let current_dim = (rect.width, rect.height);
+        let prev_dim = pane_dimensions.get(name).copied();
+        if prev_dim != Some(current_dim) {
+            pane_dimensions.insert(name.clone(), current_dim);
+            let _ = client.resize_pane(name, rect.width, rect.height).await;
+            if let Ok(logs) = client.logs(name, None).await {
+                let mut new_vt = VtScreen::new(rect.width as usize, rect.height as usize);
+                new_vt.feed(logs.as_bytes());
+                vt_screens.insert(name.clone(), new_vt);
+            }
+        }
+    }
+}
+
+fn apply_stream_event(ev: StreamEvent, vt_screens: &mut HashMap<String, VtScreen>) {
+    match ev {
+        StreamEvent::Output { name, data } => {
+            let vt = vt_screens
+                .entry(name)
+                .or_insert_with(|| VtScreen::new(80, 24));
+            vt.feed(data.as_bytes());
+        }
+        StreamEvent::Exit { name, .. } => {
+            vt_screens.remove(&name);
+        }
+        _ => {}
     }
 }
 
