@@ -451,11 +451,52 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
                     }
                     Event::Mouse(mouse) => {
                         match mouse.kind {
+                            MouseEventKind::Moved => {
+                                // Ignore hover movement without triggering redraw or cursor flicker!
+                                continue;
+                            }
                             MouseEventKind::Down(MouseButton::Left) => {
                                 for (name, rect, _) in &panes {
                                     if rect.contains(mouse.column, mouse.row) {
-                                        let _ = client.focus(name).await;
+                                        if *name != active_pane {
+                                            let _ = client.focus(name).await;
+                                        }
+                                        let local_x = (mouse.column.saturating_sub(rect.x) as usize).min(rect.width.saturating_sub(1) as usize);
+                                        let local_y = (mouse.row.saturating_sub(rect.y) as usize).min(rect.height.saturating_sub(1) as usize);
+                                        let abs_y = if let Some(vt) = vt_screens.get(name) {
+                                            vt.grid().abs_line(local_y, 0)
+                                        } else {
+                                            local_y
+                                        };
+                                        copy_state = Some(CopyState {
+                                            cursor_x: local_x,
+                                            cursor_y: local_y,
+                                            scroll_offset: 0,
+                                            anchor_x: local_x,
+                                            anchor_abs_y: abs_y,
+                                            mode: SelectionKind::Character,
+                                        });
                                         break;
+                                    }
+                                }
+                            }
+                            MouseEventKind::Drag(MouseButton::Left) => {
+                                if let (Some(rect), Some(cs)) = (active_rect, &mut copy_state) {
+                                    let local_x = (mouse.column.saturating_sub(rect.x) as usize).min(rect.width.saturating_sub(1) as usize);
+                                    let local_y = (mouse.row.saturating_sub(rect.y) as usize).min(rect.height.saturating_sub(1) as usize);
+                                    cs.cursor_x = local_x;
+                                    cs.cursor_y = local_y;
+                                }
+                            }
+                            MouseEventKind::Up(MouseButton::Left) => {
+                                if let (Some(cs), Some(vt)) = (&copy_state, vt_screens.get(&active_pane)) {
+                                    let cursor_abs_y = vt.grid().abs_line(cs.cursor_y, cs.scroll_offset);
+                                    if cs.anchor_x != cs.cursor_x || cs.anchor_abs_y != cursor_abs_y {
+                                        // Automatically yank selection on mouse drag release (tmux MouseDragEnd1Pane)
+                                        let text = cs.yank_text(vt.grid());
+                                        if !text.trim().is_empty() {
+                                            super::render::copy_to_clipboard(&text);
+                                        }
                                     }
                                 }
                             }
@@ -472,25 +513,37 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
                                     } else {
                                         0
                                     };
+                                    let initial_scroll = 3.min(hist_len);
+                                    let initial_y = if hist_len == 0 { cy.saturating_sub(3) } else { cy };
                                     copy_state = Some(CopyState {
                                         cursor_x: cx,
-                                        cursor_y: cy,
-                                        scroll_offset: 3.min(hist_len),
+                                        cursor_y: initial_y,
+                                        scroll_offset: initial_scroll,
                                         anchor_x: cx,
                                         anchor_abs_y: abs_y,
                                         mode: SelectionKind::None,
                                     });
                                 } else if let Some(cs) = &mut copy_state {
-                                    cs.scroll_offset = (cs.scroll_offset + 3).min(hist_len);
+                                    if hist_len > 0 && cs.scroll_offset < hist_len {
+                                        cs.scroll_offset = (cs.scroll_offset + 3).min(hist_len);
+                                    } else {
+                                        cs.cursor_y = cs.cursor_y.saturating_sub(3);
+                                    }
                                 }
                             }
                             MouseEventKind::ScrollDown => {
                                 if let Some(cs) = &mut copy_state {
-                                    let pane_h = active_rect.map(|r| r.height as usize).unwrap_or(24);
-                                    cs.cursor_y = (cs.cursor_y + 3).min(pane_h.saturating_sub(1));
+                                    if cs.scroll_offset > 0 {
+                                        cs.scroll_offset = cs.scroll_offset.saturating_sub(3);
+                                    } else {
+                                        let pane_h = active_rect.map(|r| r.height as usize).unwrap_or(24);
+                                        cs.cursor_y = (cs.cursor_y + 3).min(pane_h.saturating_sub(1));
+                                    }
                                 }
                             }
-                            _ => {}
+                            _ => {
+                                continue;
+                            }
                         }
                     }
                     Event::Paste(pasted) => {
