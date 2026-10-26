@@ -192,12 +192,16 @@ impl DaemonState {
             return Err(format!("Node '{}' already exists", name));
         }
 
+        let active_cwd = target.as_ref().and_then(|t| {
+            nodes.get(t).and_then(|n| n.cwd())
+        });
+
         let node: Arc<dyn Node> = if pty {
             let pty_node = PtyNode::spawn(
                 name.clone(),
                 cmd,
                 &args,
-                None,
+                active_cwd.as_deref(),
                 self.event_tx.clone(),
             )
             .map_err(|e| e.to_string())?;
@@ -207,7 +211,7 @@ impl DaemonState {
                 name.clone(),
                 cmd,
                 &args,
-                None,
+                active_cwd.as_deref(),
                 self.event_tx.clone(),
             )
             .map_err(|e| e.to_string())?;
@@ -252,12 +256,24 @@ impl DaemonState {
             format!("{}-w{}", win_label, ws.next_window_id)
         };
 
+        let active_cwd = {
+            let ws = self.workspace.read().await;
+            let focused_node = ws.active_window().and_then(|w| w.focused.clone());
+            drop(ws);
+            if let Some(fn_name) = focused_node {
+                let nodes = self.nodes.read().await;
+                nodes.get(&fn_name).and_then(|n| n.cwd())
+            } else {
+                None
+            }
+        };
+
         let node: Arc<dyn Node> = if pty {
             let pty_node = PtyNode::spawn(
                 node_name.clone(),
                 cmd,
                 &args,
-                None,
+                active_cwd.as_deref(),
                 self.event_tx.clone(),
             )
             .map_err(|e| e.to_string())?;
@@ -267,7 +283,7 @@ impl DaemonState {
                 node_name.clone(),
                 cmd,
                 &args,
-                None,
+                active_cwd.as_deref(),
                 self.event_tx.clone(),
             )
             .map_err(|e| e.to_string())?;

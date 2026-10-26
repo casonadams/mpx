@@ -60,40 +60,40 @@ impl SelectionRange {
         }
     }
 }
+pub struct RenderPaneContext<'a> {
+    pub rect: Rect,
+    pub grid: &'a Grid,
+    pub selection: Option<&'a SelectionRange>,
+    pub scroll_offset: usize,
+    pub badge: Option<&'a str>,
+}
+
 
 pub struct Compositor;
 
 impl Compositor {
-    /// Renders terminal pane content directly into its bounding box with optional visual selection and scroll offset
+    /// Renders terminal pane content directly into its bounding box with optional visual selection, scroll offset, and badge
+    /// Renders terminal pane content directly into its bounding box
     pub fn draw_pane_content<W: Write>(
         w: &mut W,
-        rect: Rect,
-        grid: &Grid,
-        selection: Option<&SelectionRange>,
-        scroll_offset: usize,
+        ctx: RenderPaneContext<'_>,
     ) -> io::Result<()> {
-        if rect.width == 0 || rect.height == 0 {
+        if ctx.rect.width == 0 || ctx.rect.height == 0 {
             return Ok(());
         }
 
-        for row in 0..rect.height as usize {
-            let abs_row = grid.abs_line(row, scroll_offset);
-            execute!(w, MoveTo(rect.x, rect.y + row as u16))?;
-            for col in 0..rect.width as usize {
-                let cell = grid.get_cell_scrolled(col, row, scroll_offset).copied().unwrap_or_default();
-                let is_selected = selection.map_or(false, |s| s.contains_abs(col, abs_row));
-                if is_selected {
-                    execute!(
-                        w,
-                        SetBackgroundColor(Color::Rgb { r: 255, g: 140, b: 0 }),
-                        SetForegroundColor(Color::Black),
-                        Print(cell.c),
-                        ResetColor
-                    )?;
-                } else {
-                    write_cell(w, cell)?;
-                }
+        let badge_chars = ctx.badge.map(|b| b.chars().collect::<Vec<char>>());
+        let badge_info = badge_chars.as_ref().and_then(|chars| {
+            if (ctx.rect.width as usize) > chars.len() + 1 {
+                let start_col = (ctx.rect.width as usize) - chars.len() - 1;
+                Some((start_col, chars.as_slice()))
+            } else {
+                None
             }
+        });
+
+        for row in 0..ctx.rect.height as usize {
+            render_row_cells(w, row, &ctx, badge_info)?;
         }
 
         execute!(w, ResetColor)?;
@@ -302,6 +302,48 @@ impl Compositor {
     }
 }
 
+fn render_row_cells<W: Write>(
+    w: &mut W,
+    row: usize,
+    ctx: &RenderPaneContext<'_>,
+    badge_info: Option<(usize, &[char])>,
+) -> io::Result<()> {
+    let abs_row = ctx.grid.abs_line(row, ctx.scroll_offset);
+    execute!(w, MoveTo(ctx.rect.x, ctx.rect.y + row as u16))?;
+    for col in 0..ctx.rect.width as usize {
+        if row == 0 {
+            if let Some((b_start, b_chars)) = badge_info {
+                if col >= b_start && col < b_start + b_chars.len() {
+                    let ch = b_chars[col - b_start];
+                    execute!(
+                        w,
+                        SetBackgroundColor(Color::Rgb { r: 255, g: 140, b: 0 }),
+                        SetForegroundColor(Color::Black),
+                        Print(ch),
+                        ResetColor
+                    )?;
+                    continue;
+                }
+            }
+        }
+
+        let cell = ctx.grid.get_cell_scrolled(col, row, ctx.scroll_offset).copied().unwrap_or_default();
+        let is_selected = ctx.selection.map_or(false, |s| s.contains_abs(col, abs_row));
+        if is_selected {
+            execute!(
+                w,
+                SetBackgroundColor(Color::Rgb { r: 255, g: 140, b: 0 }),
+                SetForegroundColor(Color::Black),
+                Print(cell.c),
+                ResetColor
+            )?;
+        } else {
+            write_cell(w, cell)?;
+        }
+    }
+    Ok(())
+}
+
 fn write_cell<W: Write>(w: &mut W, cell: Cell) -> io::Result<()> {
     match cell.style.fg {
         Some(fg) => execute!(w, SetForegroundColor(convert_color(fg)))?,
@@ -340,14 +382,19 @@ fn convert_color(c: crate::vt::grid::Color) -> Color {
 }
 
 fn get_current_time() -> String {
-    // Standard HH:MM without heavy external chrono dependency
-    let secs = std::time::SystemTime::now()
+    // 12-hour %I:%M:%S matching tmux status-right
+    let total_secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    let mins = (secs / 60) % 60;
-    let hours = (secs / 3600) % 24;
-    format!("{:02}:{:02}", hours, mins)
+    let secs = total_secs % 60;
+    let mins = (total_secs / 60) % 60;
+    let hours_24 = (total_secs / 3600) % 24;
+    let hours_12 = match hours_24 % 12 {
+        0 => 12,
+        h => h,
+    };
+    format!(" {:02}:{:02}:{:02}", hours_12, mins, secs)
 }
 
 pub fn copy_to_clipboard(text: &str) {
@@ -407,7 +454,17 @@ mod tests {
         let mut grid = Grid::new(10, 5);
         grid.put_char('A');
         let rect = Rect::new(0, 0, 10, 5);
-        Compositor::draw_pane_content(&mut buf, rect, &grid, None, 0).unwrap();
+        Compositor::draw_pane_content(
+            &mut buf,
+            RenderPaneContext {
+                rect,
+                grid: &grid,
+                selection: None,
+                scroll_offset: 0,
+                badge: None,
+            },
+        )
+        .unwrap();
         let out = String::from_utf8_lossy(&buf);
         assert!(out.contains('A'));
     }

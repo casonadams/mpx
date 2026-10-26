@@ -243,6 +243,10 @@ impl Node for TaskNode {
             (0, 0, true)
         }
     }
+    fn cwd(&self) -> Option<String> {
+        std::env::current_dir().ok().map(|p| p.to_string_lossy().into_owned())
+    }
+
 
 
     fn kill(&self) -> Result<(), NodeError> {

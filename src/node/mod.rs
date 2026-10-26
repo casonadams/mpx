@@ -26,6 +26,7 @@ pub trait Node: Send + Sync {
     fn read_screen(&self) -> String;
     fn resize(&self, cols: u16, rows: u16) -> Result<(), NodeError>;
     fn cursor(&self) -> (usize, usize, bool);
+    fn cwd(&self) -> Option<String>;
     fn kill(&self) -> Result<(), NodeError>;
     fn wait_exit<'a>(&'a self) -> Pin<Box<dyn Future<Output = Option<i32>> + Send + 'a>>;
     fn is_running(&self) -> bool;

@@ -244,6 +244,11 @@ impl Node for PtyNode {
             (0, 0, true)
         }
     }
+    fn cwd(&self) -> Option<String> {
+        let pid = self.pid?;
+        get_process_cwd(pid)
+    }
+
 
     fn kill(&self) -> Result<(), NodeError> {
         self.running.store(false, Ordering::SeqCst);
@@ -263,4 +268,33 @@ impl Node for PtyNode {
     fn is_running(&self) -> bool {
         self.running.load(Ordering::SeqCst)
     }
+}
+
+#[cfg(target_os = "macos")]
+fn get_process_cwd(pid: u32) -> Option<String> {
+    let output = std::process::Command::new("lsof")
+        .args(["-p", &pid.to_string(), "-a", "-d", "cwd", "-Fn"])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    for line in text.lines() {
+        if let Some(path) = line.strip_prefix('n') {
+            if std::path::Path::new(path).is_dir() {
+                return Some(path.to_string());
+            }
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn get_process_cwd(pid: u32) -> Option<String> {
+    std::fs::read_link(format!("/proc/{}/cwd", pid))
+        .ok()
+        .map(|p| p.to_string_lossy().into_owned())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn get_process_cwd(_pid: u32) -> Option<String> {
+    None
 }

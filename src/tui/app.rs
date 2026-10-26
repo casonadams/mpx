@@ -123,14 +123,32 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
                     .entry(name.clone())
                     .or_insert_with(|| VtScreen::new(rect.width as usize, rect.height as usize));
 
-                let (sel, offset) = if *is_focused {
+                let (sel, offset, badge) = if *is_focused {
                     let s = copy_state.as_ref().and_then(|cs| cs.selection_range(vt.grid()));
                     let off = copy_state.as_ref().map(|cs| cs.scroll_offset).unwrap_or(0);
-                    (s, off)
+                    let b = copy_state.as_ref().map(|cs| {
+                        let label = match cs.mode {
+                            SelectionKind::None => "COPY",
+                            SelectionKind::Character => "VISUAL",
+                            SelectionKind::Line => "VISUAL LINE",
+                        };
+                        let hist_len = vt.grid().history_len();
+                        format!("[{} -{}/{} | y: yank | q: exit]", label, cs.scroll_offset, hist_len)
+                    });
+                    (s, off, b)
                 } else {
-                    (None, 0)
+                    (None, 0, None)
                 };
-                let _ = Compositor::draw_pane_content(&mut out, *rect, vt.grid(), sel.as_ref(), offset);
+                let _ = Compositor::draw_pane_content(
+                    &mut out,
+                    super::render::RenderPaneContext {
+                        rect: *rect,
+                        grid: vt.grid(),
+                        selection: sel.as_ref(),
+                        scroll_offset: offset,
+                        badge: badge.as_deref(),
+                    },
+                );
             }
         }
 
@@ -155,16 +173,6 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
             let _ = Compositor::draw_shortcut_hud(&mut out, term_w, layout_h);
         }
 
-        // Render copy mode badge in top-right of active pane
-        if let (Some(rect), Some(cs)) = (active_rect, &copy_state) {
-            let label = match cs.mode {
-                SelectionKind::None => "COPY MODE",
-                SelectionKind::Character => "VISUAL",
-                SelectionKind::Line => "VISUAL LINE",
-            };
-            let hist_len = vt_screens.get(&active_pane).map(|vt| vt.grid().history_len()).unwrap_or(0);
-            let _ = Compositor::draw_copy_mode_badge(&mut out, rect, label, cs.scroll_offset, hist_len);
-        }
 
         // Position hardware terminal cursor at active shell prompt and unhide
         if let (Some(rect), Some(vt)) = (active_rect, vt_screens.get(&active_pane)) {
