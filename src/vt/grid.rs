@@ -89,6 +89,29 @@ impl Grid {
             current_style: CellStyle::default(),
         }
     }
+    pub fn resize(&mut self, new_cols: usize, new_rows: usize) {
+        let new_cols = new_cols.max(1);
+        let new_rows = new_rows.max(1);
+        if new_cols == self.cols && new_rows == self.rows {
+            return;
+        }
+        let mut new_cells = vec![Cell::default(); new_cols * new_rows];
+        let copy_cols = self.cols.min(new_cols);
+        let copy_rows = self.rows.min(new_rows);
+        for y in 0..copy_rows {
+            for x in 0..copy_cols {
+                new_cells[y * new_cols + x] = self.cells[y * self.cols + x];
+            }
+        }
+        self.cols = new_cols;
+        self.rows = new_rows;
+        self.cells = new_cells;
+        self.scroll_top = 0;
+        self.scroll_bottom = new_rows.saturating_sub(1);
+        self.cursor.x = self.cursor.x.min(new_cols.saturating_sub(1));
+        self.cursor.y = self.cursor.y.min(new_rows.saturating_sub(1));
+    }
+
 
     #[inline]
     fn index(&self, x: usize, y: usize) -> usize {

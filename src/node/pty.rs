@@ -17,7 +17,7 @@ pub struct PtyNode {
     buffer: Arc<RwLock<RingBuffer>>,
     screen: Arc<RwLock<VtScreen>>,
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
-    _master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
+    master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
     exit_code: Arc<RwLock<Option<i32>>>,
     exit_notify: Arc<Notify>,
     running: Arc<AtomicBool>,
@@ -133,7 +133,7 @@ impl PtyNode {
             buffer,
             screen,
             writer: Arc::new(Mutex::new(writer)),
-            _master: Arc::new(Mutex::new(pair.master)),
+            master: Arc::new(Mutex::new(pair.master)),
             exit_code,
             exit_notify,
             running,
@@ -198,6 +198,32 @@ impl Node for PtyNode {
             .try_read()
             .map(|s| s.snapshot())
             .unwrap_or_default()
+    }
+
+    fn resize(&self, cols: u16, rows: u16) -> Result<(), NodeError> {
+        let cols = cols.max(1);
+        let rows = rows.max(1);
+        if let Ok(master) = self.master.try_lock() {
+            let _ = master.resize(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            });
+        }
+        if let Ok(mut screen) = self.screen.try_write() {
+            screen.grid_mut().resize(cols as usize, rows as usize);
+        }
+        Ok(())
+    }
+
+    fn cursor(&self) -> (usize, usize, bool) {
+        if let Ok(screen) = self.screen.try_read() {
+            let c = screen.grid().cursor;
+            (c.x, c.y, c.visible)
+        } else {
+            (0, 0, true)
+        }
     }
 
 

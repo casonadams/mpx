@@ -226,6 +226,22 @@ impl Node for TaskNode {
             .unwrap_or_default()
     }
 
+    fn resize(&self, cols: u16, rows: u16) -> Result<(), NodeError> {
+        if let Ok(mut screen) = self.screen.try_write() {
+            screen.grid_mut().resize(cols as usize, rows as usize);
+        }
+        Ok(())
+    }
+
+    fn cursor(&self) -> (usize, usize, bool) {
+        if let Ok(screen) = self.screen.try_read() {
+            let c = screen.grid().cursor;
+            (c.x, c.y, c.visible)
+        } else {
+            (0, 0, true)
+        }
+    }
+
 
     fn kill(&self) -> Result<(), NodeError> {
         if let Some(child_arc) = &self.child_handle {

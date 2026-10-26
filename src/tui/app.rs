@@ -21,6 +21,7 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
 
     let mut event_reader = EventStream::new();
     let mut leader_active = false;
+    let mut zoomed_pane: Option<String> = None;
     let mut vt_screens: HashMap<String, VtScreen> = HashMap::new();
 
     // Spawn default shell pane if session is empty
@@ -46,44 +47,94 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
     let mut stdout = stdout();
 
     loop {
-        // Redraw current workspace
         let (term_w, term_h) = crossterm::terminal::size().unwrap_or((80, 24));
-        let layout_h = term_h.saturating_sub(1); // 1 line reserved for status bar
+        let layout_h = term_h.saturating_sub(1); // 1 line reserved for tmux status bar
 
-        let panes = client.layout(term_w, layout_h).await.unwrap_or_default();
-        let active_pane = panes
+        let raw_panes = client.layout(term_w, layout_h).await.unwrap_or_default();
+        let active_pane = raw_panes
             .iter()
             .find(|(.., focused)| *focused)
             .map(|(name, ..)| name.clone())
             .unwrap_or_default();
 
-        for (name, rect, is_focused) in &panes {
-            let _ = Compositor::draw_borders(&mut stdout, *rect, name, *is_focused);
+        // Handle Zoom (tmux Leader + z)
+        let panes: Vec<(String, Rect, bool)> = if let Some(z_name) = &zoomed_pane {
+            vec![(
+                z_name.clone(),
+                Rect::new(0, 0, term_w, layout_h),
+                true,
+            )]
+        } else {
+            raw_panes.clone()
+        };
 
-            if rect.width > 2 && rect.height > 2 {
-                let inner = Rect::new(rect.x + 1, rect.y + 1, rect.width - 2, rect.height - 2);
+        let mut active_rect: Option<Rect> = None;
+
+        for (name, rect, is_focused) in &panes {
+            if *is_focused {
+                active_rect = Some(*rect);
+            }
+
+            if rect.width > 0 && rect.height > 0 {
                 let vt = vt_screens
                     .entry(name.clone())
-                    .or_insert_with(|| VtScreen::new(inner.width as usize, inner.height as usize));
-                let _ = Compositor::draw_pane_content(&mut stdout, inner, vt.grid());
+                    .or_insert_with(|| VtScreen::new(rect.width as usize, rect.height as usize));
+
+                if vt.grid().cols != rect.width as usize || vt.grid().rows != rect.height as usize {
+                    vt.grid_mut().resize(rect.width as usize, rect.height as usize);
+                }
+
+                let _ = Compositor::draw_pane_content(&mut stdout, *rect, vt.grid());
+            }
+
+            // Draw thin divider line if multiple panes are present
+            if panes.len() > 1 && zoomed_pane.is_none() {
+                let _ = Compositor::draw_dividers(
+                    &mut stdout,
+                    *rect,
+                    term_w,
+                    layout_h,
+                    *is_focused,
+                );
             }
         }
 
+        // Clean tmux-style bottom status bar
         let _ = Compositor::draw_status_bar(
             &mut stdout,
             session,
-            &active_pane,
+            &panes,
             leader_active,
             term_w,
             layout_h,
         );
 
+        // Render which-key popup when leader key is active
+        if leader_active {
+            let _ = Compositor::draw_which_key(&mut stdout, term_w, layout_h);
+        }
+
+        // Position hardware terminal cursor at active shell prompt
+        if let (Some(rect), Some(vt)) = (active_rect, vt_screens.get(&active_pane)) {
+            let cursor = vt.grid().cursor;
+            let _ = Compositor::position_cursor(
+                &mut stdout,
+                rect,
+                cursor.x,
+                cursor.y,
+                cursor.visible,
+            );
+        }
+
         tokio::select! {
             Some(Ok(event)) = event_reader.next() => {
                 match event {
                     Event::Key(key) => {
-                        // Check for Ctrl-A leader key
-                        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('a') {
+                        // Supports both Ctrl-b (standard tmux) and Ctrl-a (common tmux rebind)
+                        let is_ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+                        let is_leader_key = is_ctrl && (key.code == KeyCode::Char('b') || key.code == KeyCode::Char('a'));
+
+                        if is_leader_key {
                             leader_active = !leader_active;
                             continue;
                         }
@@ -91,35 +142,73 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
                         if leader_active {
                             leader_active = false;
                             match key.code {
-                                KeyCode::Char('|') | KeyCode::Char('v') => {
+                                // Split vertical (side-by-side columns: tmux %, |, or v)
+                                KeyCode::Char('%') | KeyCode::Char('|') | KeyCode::Char('v') => {
+                                    zoomed_pane = None;
                                     let count = vt_screens.len() + 1;
                                     let shell = default_shell();
                                     let _ = client.split(None, format!("pane-{}", count), shell, vec![], true, Direction::Vertical).await;
                                 }
-                                KeyCode::Char('-') | KeyCode::Char('h') => {
+                                // Split horizontal (top/bottom rows: tmux ", -, s, or h)
+                                KeyCode::Char('"') | KeyCode::Char('-') | KeyCode::Char('s') | KeyCode::Char('h') => {
+                                    zoomed_pane = None;
                                     let count = vt_screens.len() + 1;
                                     let shell = default_shell();
                                     let _ = client.split(None, format!("pane-{}", count), shell, vec![], true, Direction::Horizontal).await;
                                 }
+                                // Next pane (tmux o, n, or Tab)
                                 KeyCode::Char('o') | KeyCode::Char('n') | KeyCode::Tab => {
                                     let _ = client.focus_next().await;
                                 }
+                                // Previous pane (tmux p)
                                 KeyCode::Char('p') => {
                                     let _ = client.focus_prev().await;
                                 }
+                                // Directional navigation (arrows or hjkl)
+                                KeyCode::Up | KeyCode::Char('k') => {
+                                    let _ = client.focus_prev().await;
+                                }
+                                KeyCode::Down | KeyCode::Char('j') => {
+                                    let _ = client.focus_next().await;
+                                }
+                                KeyCode::Left => {
+                                    let _ = client.focus_prev().await;
+                                }
+                                KeyCode::Right => {
+                                    let _ = client.focus_next().await;
+                                }
+                                // Zoom toggle (tmux Leader + z)
+                                KeyCode::Char('z') => {
+                                    if zoomed_pane.is_some() {
+                                        zoomed_pane = None;
+                                    } else if !active_pane.is_empty() {
+                                        zoomed_pane = Some(active_pane.clone());
+                                    }
+                                }
+                                // New window/pane (tmux c)
+                                KeyCode::Char('c') => {
+                                    let count = vt_screens.len() + 1;
+                                    let shell = default_shell();
+                                    let _ = client.spawn(format!("pane-{}", count), shell, vec![], true, None).await;
+                                }
+                                // Kill pane (tmux x)
                                 KeyCode::Char('x') => {
                                     if !active_pane.is_empty() {
+                                        zoomed_pane = None;
                                         let _ = client.kill(&active_pane).await;
                                     }
                                 }
+                                // Detach (tmux d)
                                 KeyCode::Char('d') => {
-                                    // Detach from TUI
                                     return Ok(());
+                                }
+                                KeyCode::Esc => {
+                                    // Cancel which-key popup
                                 }
                                 _ => {}
                             }
                         } else {
-                            // Forward key input to active pane
+                            // Forward key input directly to active pane
                             if !active_pane.is_empty() {
                                 let payload = key_to_bytes(key.code, key.modifiers);
                                 if !payload.is_empty() {

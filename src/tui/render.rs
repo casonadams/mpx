@@ -1,6 +1,6 @@
 use std::io::{self, Write};
 use crossterm::{
-    cursor::MoveTo,
+    cursor::{Hide, MoveTo, Show},
     execute,
     style::{Color, Print, ResetColor, SetBackgroundColor, SetForegroundColor},
 };
@@ -11,79 +11,19 @@ use crate::vt::grid::{Cell, Grid};
 pub struct Compositor;
 
 impl Compositor {
-    pub fn draw_borders<W: Write>(
-        w: &mut W,
-        rect: Rect,
-        title: &str,
-        is_focused: bool,
-    ) -> io::Result<()> {
-        if rect.width < 3 || rect.height < 3 {
-            return Ok(());
-        }
-
-        let border_fg = if is_focused {
-            Color::Cyan
-        } else {
-            Color::DarkGrey
-        };
-
-        execute!(w, SetForegroundColor(border_fg))?;
-
-        // Top border with title
-        execute!(w, MoveTo(rect.x, rect.y), Print("┌"))?;
-        let title_str = format!(" {} ", title);
-        let max_title_len = (rect.width.saturating_sub(4)) as usize;
-        let displayed_title = if title_str.len() > max_title_len {
-            &title_str[..max_title_len]
-        } else {
-            &title_str
-        };
-
-        execute!(
-            w,
-            SetForegroundColor(if is_focused { Color::White } else { Color::Grey }),
-            Print(displayed_title),
-            SetForegroundColor(border_fg)
-        )?;
-
-        let title_len = displayed_title.chars().count() as u16;
-        let remaining_top = rect.width.saturating_sub(2 + title_len);
-        execute!(w, Print("─".repeat(remaining_top as usize)), Print("┐"))?;
-
-        // Side borders
-        for y in (rect.y + 1)..(rect.y + rect.height.saturating_sub(1)) {
-            execute!(w, MoveTo(rect.x, y), Print("│"))?;
-            execute!(w, MoveTo(rect.x + rect.width.saturating_sub(1), y), Print("│"))?;
-        }
-
-        // Bottom border
-        execute!(
-            w,
-            MoveTo(rect.x, rect.y + rect.height.saturating_sub(1)),
-            Print("└"),
-            Print("─".repeat((rect.width.saturating_sub(2)) as usize)),
-            Print("┘")
-        )?;
-
-        execute!(w, ResetColor)?;
-        Ok(())
-    }
-
+    /// Renders terminal pane content directly into its bounding box
     pub fn draw_pane_content<W: Write>(
         w: &mut W,
-        inner_rect: Rect,
+        rect: Rect,
         grid: &Grid,
     ) -> io::Result<()> {
-        if inner_rect.width == 0 || inner_rect.height == 0 {
+        if rect.width == 0 || rect.height == 0 {
             return Ok(());
         }
 
-        for row in 0..inner_rect.height as usize {
-            if row >= grid.rows {
-                break;
-            }
-            execute!(w, MoveTo(inner_rect.x, inner_rect.y + row as u16))?;
-            for col in 0..inner_rect.width as usize {
+        for row in 0..rect.height as usize {
+            execute!(w, MoveTo(rect.x, rect.y + row as u16))?;
+            for col in 0..rect.width as usize {
                 let cell = grid.get_cell(col, row).copied().unwrap_or_default();
                 write_cell(w, cell)?;
             }
@@ -93,10 +33,48 @@ impl Compositor {
         Ok(())
     }
 
+    /// Renders thin tmux-style single-line dividers between panes
+    pub fn draw_dividers<W: Write>(
+        w: &mut W,
+        rect: Rect,
+        screen_w: u16,
+        screen_h: u16,
+        is_focused: bool,
+    ) -> io::Result<()> {
+        let border_fg = if is_focused {
+            Color::Green
+        } else {
+            Color::DarkGrey
+        };
+
+        execute!(w, SetForegroundColor(border_fg))?;
+
+        // Draw vertical right divider if not at the right screen edge
+        let right_x = rect.x + rect.width;
+        if right_x < screen_w {
+            for y in rect.y..(rect.y + rect.height) {
+                execute!(w, MoveTo(right_x, y), Print("│"))?;
+            }
+        }
+
+        // Draw horizontal bottom divider if not at the bottom statusline edge
+        let bottom_y = rect.y + rect.height;
+        if bottom_y < screen_h {
+            execute!(w, MoveTo(rect.x, bottom_y))?;
+            for _ in 0..rect.width {
+                execute!(w, Print("─"))?;
+            }
+        }
+
+        execute!(w, ResetColor)?;
+        Ok(())
+    }
+
+    /// Renders a clean tmux-style status line at the bottom
     pub fn draw_status_bar<W: Write>(
         w: &mut W,
         session: &str,
-        active_pane: &str,
+        panes: &[(String, Rect, bool)],
         leader_active: bool,
         width: u16,
         y: u16,
@@ -104,18 +82,126 @@ impl Compositor {
         execute!(
             w,
             MoveTo(0, y),
-            SetBackgroundColor(Color::DarkBlue),
-            SetForegroundColor(Color::White)
+            SetBackgroundColor(Color::DarkGreen),
+            SetForegroundColor(Color::Black)
         )?;
 
-        let leader_text = if leader_active { " [CTRL-A ACTIVE] " } else { " " };
-        let status = format!(
-            " MPX: {} | Pane: {}{}│ [^A |: split-v] [^A -: split-h] [^A o: next] [^A d: detach]",
-            session, active_pane, leader_text
-        );
+        let mut left = format!("[{}] ", session);
+        for (i, (name, _, is_focused)) in panes.iter().enumerate() {
+            let active_mark = if *is_focused { "*" } else { "-" };
+            left.push_str(&format!("{}:{}{} ", i, name, active_mark));
+        }
 
-        let pad_len = (width as usize).saturating_sub(status.chars().count());
-        execute!(w, Print(status), Print(" ".repeat(pad_len)), ResetColor)?;
+        let prefix_badge = if leader_active { " [PREFIX] " } else { " " };
+        let right = format!("{}{}", prefix_badge, get_current_time());
+
+        let total_chars = left.chars().count() + right.chars().count();
+        let pad_len = (width as usize).saturating_sub(total_chars);
+
+        execute!(
+            w,
+            Print(&left),
+            Print(" ".repeat(pad_len)),
+            Print(&right),
+            ResetColor
+        )?;
+
+        Ok(())
+    }
+    /// Floating which-key popup rendered when leader prefix is triggered
+    pub fn draw_which_key<W: Write>(w: &mut W, screen_w: u16, screen_h: u16) -> io::Result<()> {
+        let box_w: u16 = 58.min(screen_w.saturating_sub(4));
+        let box_h: u16 = 6;
+        if box_w < 30 || screen_h < box_h + 2 {
+            return Ok(());
+        }
+
+        let box_x = (screen_w.saturating_sub(box_w)) / 2;
+        let box_y = screen_h.saturating_sub(box_h + 2);
+
+        // Header
+        execute!(
+            w,
+            MoveTo(box_x, box_y),
+            SetBackgroundColor(Color::Black),
+            SetForegroundColor(Color::Cyan),
+            Print("┌─ which-key "),
+            Print("─".repeat((box_w.saturating_sub(15)) as usize)),
+            Print("┐"),
+            ResetColor
+        )?;
+
+        let items = [
+            (" % / | / v ", "split-v", " \" / - / s ", "split-h"),
+            (" o / Tab   ", "next-pane", " p         ", "prev-pane"),
+            (" z         ", "zoom-pane", " x         ", "kill-pane"),
+            (" c         ", "new-pane", " d         ", "detach"),
+        ];
+
+        for (i, (k1, d1, k2, d2)) in items.iter().enumerate() {
+            let row_y = box_y + 1 + i as u16;
+            execute!(
+                w,
+                MoveTo(box_x, row_y),
+                SetBackgroundColor(Color::Black),
+                SetForegroundColor(Color::Cyan),
+                Print("│"),
+                SetForegroundColor(Color::Yellow),
+                Print(*k1),
+                SetForegroundColor(Color::White),
+                Print(format!("{:<11}", d1)),
+                SetForegroundColor(Color::DarkGrey),
+                Print(" │ "),
+                SetForegroundColor(Color::Yellow),
+                Print(*k2),
+                SetForegroundColor(Color::White),
+                Print(format!("{:<11}", d2)),
+            )?;
+            let used = 1 + 11 + 11 + 3 + 11 + 11;
+            let pad = (box_w.saturating_sub(used as u16 + 1)) as usize;
+            execute!(
+                w,
+                Print(" ".repeat(pad)),
+                SetForegroundColor(Color::Cyan),
+                Print("│"),
+                ResetColor
+            )?;
+        }
+
+        // Footer
+        execute!(
+            w,
+            MoveTo(box_x, box_y + box_h - 1),
+            SetBackgroundColor(Color::Black),
+            SetForegroundColor(Color::Cyan),
+            Print("└"),
+            Print("─".repeat((box_w.saturating_sub(2)) as usize)),
+            Print("┘"),
+            ResetColor
+        )?;
+
+        Ok(())
+    }
+
+
+    /// Places the live terminal hardware cursor at the focused pane's active position
+    pub fn position_cursor<W: Write>(
+        w: &mut W,
+        pane_rect: Rect,
+        cursor_x: usize,
+        cursor_y: usize,
+        visible: bool,
+    ) -> io::Result<()> {
+        if !visible {
+            execute!(w, Hide)?;
+            return Ok(());
+        }
+
+        let cx = (pane_rect.x as usize + cursor_x).min((pane_rect.x + pane_rect.width).saturating_sub(1) as usize) as u16;
+        let cy = (pane_rect.y as usize + cursor_y).min((pane_rect.y + pane_rect.height).saturating_sub(1) as usize) as u16;
+
+        execute!(w, MoveTo(cx, cy), Show)?;
+        w.flush()?;
         Ok(())
     }
 }
@@ -155,42 +241,51 @@ fn convert_color(c: crate::vt::grid::Color) -> Color {
     }
 }
 
+fn get_current_time() -> String {
+    // Standard HH:MM without heavy external chrono dependency
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let mins = (secs / 60) % 60;
+    let hours = (secs / 3600) % 24;
+    format!("{:02}:{:02}", hours, mins)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::vt::grid::Grid;
 
     #[test]
-    fn test_compositor_draw_borders() {
-        let mut buf = Vec::new();
-        let rect = Rect::new(0, 0, 20, 10);
-        Compositor::draw_borders(&mut buf, rect, "test-pane", true).unwrap();
-        let out = String::from_utf8_lossy(&buf);
-        assert!(out.contains("test-pane"));
-        assert!(out.contains("┌"));
-        assert!(out.contains("┐"));
-        assert!(out.contains("└"));
-        assert!(out.contains("┘"));
-    }
-
-    #[test]
-    fn test_compositor_draw_status_bar() {
-        let mut buf = Vec::new();
-        Compositor::draw_status_bar(&mut buf, "sess1", "pane1", true, 80, 23).unwrap();
-        let out = String::from_utf8_lossy(&buf);
-        assert!(out.contains("MPX: sess1"));
-        assert!(out.contains("Pane: pane1"));
-        assert!(out.contains("CTRL-A ACTIVE"));
-    }
-
-    #[test]
-    fn test_compositor_draw_pane_content() {
+    fn test_draw_pane_content() {
         let mut buf = Vec::new();
         let mut grid = Grid::new(10, 5);
-        grid.put_char('Z');
-        let inner = Rect::new(1, 1, 10, 5);
-        Compositor::draw_pane_content(&mut buf, inner, &grid).unwrap();
+        grid.put_char('A');
+        let rect = Rect::new(0, 0, 10, 5);
+        Compositor::draw_pane_content(&mut buf, rect, &grid).unwrap();
         let out = String::from_utf8_lossy(&buf);
-        assert!(out.contains('Z'));
+        assert!(out.contains('A'));
+    }
+
+    #[test]
+    fn test_draw_status_bar() {
+        let mut buf = Vec::new();
+        let panes = vec![("main".to_string(), Rect::new(0, 0, 80, 23), true)];
+        Compositor::draw_status_bar(&mut buf, "sess", &panes, false, 80, 23).unwrap();
+        let out = String::from_utf8_lossy(&buf);
+        assert!(out.contains("[sess]"));
+        assert!(out.contains("0:main*"));
+    }
+
+    #[test]
+    fn test_draw_which_key() {
+        let mut buf = Vec::new();
+        Compositor::draw_which_key(&mut buf, 80, 24).unwrap();
+        let out = String::from_utf8_lossy(&buf);
+        assert!(out.contains("which-key"));
+        assert!(out.contains("split-v"));
+        assert!(out.contains("split-h"));
+        assert!(out.contains("detach"));
     }
 }
