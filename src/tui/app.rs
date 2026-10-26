@@ -6,7 +6,7 @@ use crossterm::execute;
 use std::time::Duration;
 use tokio::time::sleep;
 
-use super::render::Compositor;
+use super::render::{Compositor, SelectionRange};
 use super::terminal::TerminalGuard;
 use crate::client::Client;
 use crate::layout::geometry::Rect;
@@ -24,7 +24,7 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
     let mut leader_active = false;
     let mut zoomed_pane: Option<String> = None;
     let mut vt_screens: HashMap<String, VtScreen> = HashMap::new();
-    let mut copy_mode_offset: usize = 0;
+    let mut copy_state: Option<CopyState> = None;
     let mut split_counter: usize = 1;
 
     // Ensure at least one active window running default shell
@@ -69,11 +69,6 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
 
         let (raw_panes, dividers, tabs) = client.layout(term_w, layout_h).await.unwrap_or_default();
         if raw_panes.is_empty() {
-            let shell = default_shell();
-            if client.new_window(None, shell, vec![], true).await.is_ok() {
-                tokio::time::sleep(Duration::from_millis(50)).await;
-                continue;
-            }
             return Ok(());
         }
         let active_pane = raw_panes
@@ -128,7 +123,12 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
                     .entry(name.clone())
                     .or_insert_with(|| VtScreen::new(rect.width as usize, rect.height as usize));
 
-                let _ = Compositor::draw_pane_content(&mut out, *rect, vt.grid());
+                let sel = if *is_focused {
+                    copy_state.as_ref().and_then(|cs| cs.selection_range())
+                } else {
+                    None
+                };
+                let _ = Compositor::draw_pane_content(&mut out, *rect, vt.grid(), sel.as_ref());
             }
         }
 
@@ -154,21 +154,29 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
         }
 
         // Render copy mode badge in top-right of active pane
-        if copy_mode_offset > 0 {
-            if let Some(rect) = active_rect {
-                let _ = Compositor::draw_copy_mode_badge(&mut out, rect, copy_mode_offset);
-            }
+        if let (Some(rect), Some(cs)) = (active_rect, &copy_state) {
+            let label = match cs.mode {
+                SelectionKind::None => "COPY MODE",
+                SelectionKind::Character => "VISUAL",
+                SelectionKind::Line => "VISUAL LINE",
+            };
+            let _ = Compositor::draw_copy_mode_badge(&mut out, rect, label);
         }
 
         // Position hardware terminal cursor at active shell prompt and unhide
         if let (Some(rect), Some(vt)) = (active_rect, vt_screens.get(&active_pane)) {
-            let cursor = vt.grid().cursor;
+            let (cx, cy, vis) = if let Some(cs) = &copy_state {
+                (cs.cursor_x, cs.cursor_y, true)
+            } else {
+                let cursor = vt.grid().cursor;
+                (cursor.x, cursor.y, cursor.visible)
+            };
             let _ = Compositor::position_cursor(
                 &mut out,
                 rect,
-                cursor.x,
-                cursor.y,
-                cursor.visible,
+                cx,
+                cy,
+                vis,
             );
         }
 
@@ -187,60 +195,115 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
                             leader_active = !leader_active;
                             continue;
                         }
-                        // Handle Copy Mode navigation (tmux vi-keys)
-                        if copy_mode_offset > 0 {
+                        // Handle Copy / Visual Mode navigation (tmux vi-keys)
+                        if let Some(cs) = &mut copy_state {
+                            let pane_w = active_rect.map(|r| r.width as usize).unwrap_or(80);
+                            let pane_h = active_rect.map(|r| r.height as usize).unwrap_or(24);
+
                             match key.code {
-                                KeyCode::Char('j') | KeyCode::Down => {
-                                    copy_mode_offset = copy_mode_offset.saturating_sub(1);
+                                KeyCode::Char('h') | KeyCode::Left => {
+                                    cs.cursor_x = cs.cursor_x.saturating_sub(1);
+                                }
+                                KeyCode::Char('l') | KeyCode::Right => {
+                                    cs.cursor_x = (cs.cursor_x + 1).min(pane_w.saturating_sub(1));
                                 }
                                 KeyCode::Char('k') | KeyCode::Up => {
-                                    copy_mode_offset += 1;
+                                    cs.cursor_y = cs.cursor_y.saturating_sub(1);
                                 }
-                                KeyCode::Char('d') if is_ctrl => {
-                                    copy_mode_offset = copy_mode_offset.saturating_sub(15);
+                                KeyCode::Char('j') | KeyCode::Down => {
+                                    cs.cursor_y = (cs.cursor_y + 1).min(pane_h.saturating_sub(1));
+                                }
+                                KeyCode::Char('0') | KeyCode::Char('^') => {
+                                    cs.cursor_x = 0;
+                                }
+                                KeyCode::Char('$') => {
+                                    cs.cursor_x = pane_w.saturating_sub(1);
+                                }
+                                KeyCode::Char('w') => {
+                                    cs.cursor_x = (cs.cursor_x + 4).min(pane_w.saturating_sub(1));
+                                }
+                                KeyCode::Char('b') => {
+                                    cs.cursor_x = cs.cursor_x.saturating_sub(4);
                                 }
                                 KeyCode::Char('u') if is_ctrl => {
-                                    copy_mode_offset += 15;
+                                    cs.cursor_y = cs.cursor_y.saturating_sub(10);
                                 }
-                                KeyCode::PageDown => {
-                                    copy_mode_offset = copy_mode_offset.saturating_sub(15);
+                                KeyCode::Char('d') if is_ctrl => {
+                                    cs.cursor_y = (cs.cursor_y + 10).min(pane_h.saturating_sub(1));
                                 }
                                 KeyCode::PageUp => {
-                                    copy_mode_offset += 15;
+                                    cs.cursor_y = cs.cursor_y.saturating_sub(10);
+                                }
+                                KeyCode::PageDown => {
+                                    cs.cursor_y = (cs.cursor_y + 10).min(pane_h.saturating_sub(1));
                                 }
                                 KeyCode::Char('g') => {
-                                    copy_mode_offset = 10000;
+                                    cs.cursor_y = 0;
+                                    cs.cursor_x = 0;
                                 }
                                 KeyCode::Char('G') => {
-                                    copy_mode_offset = 0;
+                                    cs.cursor_y = pane_h.saturating_sub(1);
                                 }
-                                KeyCode::Char('y') | KeyCode::Enter => {
-                                    if let Ok(logs) = client.logs(&active_pane, None).await {
-                                        super::render::copy_to_clipboard(&logs);
+                                // Shift-V: Visual Line mode (highlights whole row!)
+                                KeyCode::Char('V') => {
+                                    if matches!(cs.mode, SelectionKind::Line) {
+                                        cs.mode = SelectionKind::None;
+                                        cs.anchor = None;
+                                    } else {
+                                        cs.mode = SelectionKind::Line;
+                                        cs.anchor = Some((0, cs.cursor_y));
                                     }
-                                    copy_mode_offset = 0;
                                 }
-                                KeyCode::Char('q') | KeyCode::Esc => {
-                                    copy_mode_offset = 0;
+                                KeyCode::Char('v') => {
+                                    if key.modifiers.contains(KeyModifiers::SHIFT) {
+                                        if matches!(cs.mode, SelectionKind::Line) {
+                                            cs.mode = SelectionKind::None;
+                                            cs.anchor = None;
+                                        } else {
+                                            cs.mode = SelectionKind::Line;
+                                            cs.anchor = Some((0, cs.cursor_y));
+                                        }
+                                    } else if matches!(cs.mode, SelectionKind::Character) {
+                                        cs.mode = SelectionKind::None;
+                                        cs.anchor = None;
+                                    } else {
+                                        cs.mode = SelectionKind::Character;
+                                        cs.anchor = Some((cs.cursor_x, cs.cursor_y));
+                                    }
+                                }
+                                // y or Enter: Yank selection to clipboard and exit copy mode
+                                KeyCode::Char('y') | KeyCode::Enter => {
+                                    if let Some(vt) = vt_screens.get(&active_pane) {
+                                        let text = cs.yank_text(vt.grid());
+                                        super::render::copy_to_clipboard(&text);
+                                    }
+                                    copy_state = None;
+                                }
+                                KeyCode::Esc => {
+                                    if !matches!(cs.mode, SelectionKind::None) {
+                                        cs.mode = SelectionKind::None;
+                                        cs.anchor = None;
+                                    } else {
+                                        copy_state = None;
+                                    }
+                                }
+                                KeyCode::Char('q') => {
+                                    copy_state = None;
                                 }
                                 _ => {}
                             }
                             continue;
                         }
 
-
                         if leader_active {
                             leader_active = false;
 
                             let is_split_vert = key.code == KeyCode::Char('%')
                                 || key.code == KeyCode::Char('|')
-                                || key.code == KeyCode::Char('v')
                                 || (key.code == KeyCode::Char('5') && key.modifiers.contains(KeyModifiers::SHIFT));
 
                             let is_split_horz = key.code == KeyCode::Char('"')
                                 || key.code == KeyCode::Char('-')
-                                || key.code == KeyCode::Char('s')
-                                || key.code == KeyCode::Char('h')
                                 || (key.code == KeyCode::Char('\'') && key.modifiers.contains(KeyModifiers::SHIFT));
 
                             if is_split_vert {
@@ -279,18 +342,26 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
                                         let idx = d.to_digit(10).unwrap() as usize;
                                         let _ = client.select_window(idx).await;
                                     }
-                                    // Directional pane navigation (arrows or hjkl)
-                                    KeyCode::Up | KeyCode::Char('k') => {
-                                        let _ = client.focus_prev().await;
+                                    // Directional pane navigation (hjkl or arrow keys)
+                                    KeyCode::Char('h') | KeyCode::Left => {
+                                        if let Some(target) = find_directional_pane(&panes, &active_pane, MoveDir::Left) {
+                                            let _ = client.focus(&target).await;
+                                        }
                                     }
-                                    KeyCode::Down | KeyCode::Char('j') => {
-                                        let _ = client.focus_next().await;
+                                    KeyCode::Char('j') | KeyCode::Down => {
+                                        if let Some(target) = find_directional_pane(&panes, &active_pane, MoveDir::Down) {
+                                            let _ = client.focus(&target).await;
+                                        }
                                     }
-                                    KeyCode::Left | KeyCode::Char('h') => {
-                                        let _ = client.focus_prev().await;
+                                    KeyCode::Char('k') | KeyCode::Up => {
+                                        if let Some(target) = find_directional_pane(&panes, &active_pane, MoveDir::Up) {
+                                            let _ = client.focus(&target).await;
+                                        }
                                     }
-                                    KeyCode::Right | KeyCode::Char('l') => {
-                                        let _ = client.focus_next().await;
+                                    KeyCode::Char('l') | KeyCode::Right => {
+                                        if let Some(target) = find_directional_pane(&panes, &active_pane, MoveDir::Right) {
+                                            let _ = client.focus(&target).await;
+                                        }
                                     }
                                     // Zoom toggle (tmux Leader + z)
                                     KeyCode::Char('z') => {
@@ -318,7 +389,17 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
                                     return Ok(());
                                 }
                                 KeyCode::Char('[') => {
-                                    copy_mode_offset = 1;
+                                    let (cx, cy) = if let Some(vt) = vt_screens.get(&active_pane) {
+                                        (vt.grid().cursor.x, vt.grid().cursor.y)
+                                    } else {
+                                        (0, 0)
+                                    };
+                                    copy_state = Some(CopyState {
+                                        cursor_x: cx,
+                                        cursor_y: cy,
+                                        anchor: None,
+                                        mode: SelectionKind::None,
+                                    });
                                 }
                                 KeyCode::Esc => {
                                     // Cancel shortcut popup
@@ -348,10 +429,27 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
                                 }
                             }
                             MouseEventKind::ScrollUp => {
-                                copy_mode_offset += 3;
+                                if copy_state.is_none() {
+                                    let (cx, cy) = if let Some(vt) = vt_screens.get(&active_pane) {
+                                        (vt.grid().cursor.x, vt.grid().cursor.y)
+                                    } else {
+                                        (0, 0)
+                                    };
+                                    copy_state = Some(CopyState {
+                                        cursor_x: cx,
+                                        cursor_y: cy.saturating_sub(3),
+                                        anchor: None,
+                                        mode: SelectionKind::None,
+                                    });
+                                } else if let Some(cs) = &mut copy_state {
+                                    cs.cursor_y = cs.cursor_y.saturating_sub(3);
+                                }
                             }
                             MouseEventKind::ScrollDown => {
-                                copy_mode_offset = copy_mode_offset.saturating_sub(3);
+                                if let Some(cs) = &mut copy_state {
+                                    let pane_h = active_rect.map(|r| r.height as usize).unwrap_or(24);
+                                    cs.cursor_y = (cs.cursor_y + 3).min(pane_h.saturating_sub(1));
+                                }
                             }
                             _ => {}
                         }
@@ -425,5 +523,151 @@ fn default_shell() -> String {
         "powershell.exe".to_string()
     } else {
         "/bin/sh".to_string()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MoveDir {
+    Left,
+    Down,
+    Up,
+    Right,
+}
+
+fn find_directional_pane(
+    panes: &[(String, Rect, bool)],
+    active_pane: &str,
+    dir: MoveDir,
+) -> Option<String> {
+    let current_rect = panes
+        .iter()
+        .find(|(name, ..)| name == active_pane)
+        .map(|(.., rect, _)| *rect)?;
+
+    let cx = current_rect.x as i32 + current_rect.width as i32 / 2;
+    let cy = current_rect.y as i32 + current_rect.height as i32 / 2;
+
+    let mut best_candidate: Option<(&String, i32)> = None;
+
+    for (name, rect, _) in panes {
+        if name == active_pane {
+            continue;
+        }
+
+        let ocx = rect.x as i32 + rect.width as i32 / 2;
+        let ocy = rect.y as i32 + rect.height as i32 / 2;
+
+        let valid = match dir {
+            MoveDir::Left => (rect.x + rect.width) <= (current_rect.x + 2),
+            MoveDir::Right => (rect.x + 2) >= (current_rect.x + current_rect.width),
+            MoveDir::Up => (rect.y + rect.height) <= (current_rect.y + 2),
+            MoveDir::Down => (rect.y + 2) >= (current_rect.y + current_rect.height),
+        };
+
+        if valid {
+            let dx = (cx - ocx).abs();
+            let dy = (cy - ocy).abs();
+            let score = match dir {
+                MoveDir::Left | MoveDir::Right => dx + dy * 3,
+                MoveDir::Up | MoveDir::Down => dy + dx * 3,
+            };
+
+            if best_candidate.as_ref().map_or(true, |(_, best_score)| score < *best_score) {
+                best_candidate = Some((name, score));
+            }
+        }
+    }
+
+    best_candidate.map(|(name, _)| name.clone())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SelectionKind {
+    None,
+    Character,
+    Line,
+}
+
+#[derive(Debug, Clone)]
+struct CopyState {
+    cursor_x: usize,
+    cursor_y: usize,
+    anchor: Option<(usize, usize)>,
+    mode: SelectionKind,
+}
+
+impl CopyState {
+    fn selection_range(&self) -> Option<SelectionRange> {
+        let (ax, ay) = self.anchor?;
+        match self.mode {
+            SelectionKind::None => None,
+            SelectionKind::Line => Some(SelectionRange::Line {
+                start_y: ay,
+                end_y: self.cursor_y,
+            }),
+            SelectionKind::Character => Some(SelectionRange::Character {
+                start_x: ax,
+                start_y: ay,
+                end_x: self.cursor_x,
+                end_y: self.cursor_y,
+            }),
+        }
+    }
+
+    fn yank_text(&self, grid: &crate::vt::grid::Grid) -> String {
+        match self.selection_range() {
+            Some(SelectionRange::Line { start_y, end_y }) => {
+                let min_y = start_y.min(end_y);
+                let max_y = start_y.max(end_y);
+                let mut lines = Vec::new();
+                for y in min_y..=max_y {
+                    let mut line = String::new();
+                    for x in 0..grid.cols {
+                        let c = grid.get_cell(x, y).map(|cell| cell.c).unwrap_or(' ');
+                        line.push(c);
+                    }
+                    lines.push(line.trim_end().to_string());
+                }
+                lines.join("\n")
+            }
+            Some(SelectionRange::Character {
+                start_x,
+                start_y,
+                end_x,
+                end_y,
+            }) => {
+                let (sx, sy, ex, ey) = if (start_y, start_x) <= (end_y, end_x) {
+                    (start_x, start_y, end_x, end_y)
+                } else {
+                    (end_x, end_y, start_x, start_y)
+                };
+
+                let mut out = String::new();
+                for y in sy..=ey {
+                    let from_x = if y == sy { sx } else { 0 };
+                    let to_x = if y == ey { ex } else { grid.cols.saturating_sub(1) };
+                    let mut line = String::new();
+                    for x in from_x..=to_x {
+                        let c = grid.get_cell(x, y).map(|cell| cell.c).unwrap_or(' ');
+                        line.push(c);
+                    }
+                    if y < ey {
+                        out.push_str(line.trim_end());
+                        out.push('\n');
+                    } else {
+                        out.push_str(&line);
+                    }
+                }
+                out
+            }
+            None => {
+                let mut line = String::new();
+                for x in 0..grid.cols {
+                    let c = grid.get_cell(x, self.cursor_y).map(|cell| cell.c).unwrap_or(' ');
+                    line.push(c);
+                }
+                line.trim_end().to_string()
+            }
+        }
     }
 }

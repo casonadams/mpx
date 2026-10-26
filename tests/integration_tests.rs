@@ -105,12 +105,12 @@ async fn test_node_listing() {
     let mut client = Client::connect(&endpoint).await.expect("Failed to connect");
 
     client
-        .spawn("task-1".into(), "echo".into(), vec!["1".into()], false, None)
+        .spawn("task-1".into(), "cat".into(), vec![], false, None)
         .await
         .unwrap();
 
     client
-        .spawn("task-2".into(), "echo".into(), vec!["2".into()], false, None)
+        .spawn("task-2".into(), "cat".into(), vec![], false, None)
         .await
         .unwrap();
 
@@ -119,6 +119,9 @@ async fn test_node_listing() {
     let names: Vec<String> = list.into_iter().map(|n| n.name).collect();
     assert!(names.contains(&"task-1".to_string()));
     assert!(names.contains(&"task-2".to_string()));
+
+    client.kill("task-1").await.unwrap();
+    client.kill("task-2").await.unwrap();
 }
 
 #[tokio::test]

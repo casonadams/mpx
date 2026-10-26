@@ -4,7 +4,7 @@ use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
     execute,
     terminal::{
-        disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+        disable_raw_mode, enable_raw_mode, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen,
     },
 };
 
@@ -16,7 +16,7 @@ impl TerminalGuard {
     pub fn enter() -> io::Result<Self> {
         enable_raw_mode()?;
         let mut out = stdout();
-        execute!(out, EnterAlternateScreen, Hide, EnableMouseCapture)?;
+        execute!(out, EnterAlternateScreen, Clear(ClearType::All), Hide, EnableMouseCapture)?;
         out.flush()?;
         Ok(Self { _private: () })
     }

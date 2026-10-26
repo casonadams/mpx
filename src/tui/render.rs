@@ -8,14 +8,66 @@ use crossterm::{
 use crate::layout::{geometry::Rect, Divider, WindowTab};
 use crate::vt::grid::{Cell, Grid};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectionRange {
+    Character {
+        start_x: usize,
+        start_y: usize,
+        end_x: usize,
+        end_y: usize,
+    },
+    Line {
+        start_y: usize,
+        end_y: usize,
+    },
+}
+
+impl SelectionRange {
+    pub fn contains(&self, x: usize, y: usize) -> bool {
+        match self {
+            Self::Line { start_y, end_y } => {
+                let min_y = (*start_y).min(*end_y);
+                let max_y = (*start_y).max(*end_y);
+                y >= min_y && y <= max_y
+            }
+            Self::Character {
+                start_x,
+                start_y,
+                end_x,
+                end_y,
+            } => {
+                let (sx, sy, ex, ey) = if (*start_y, *start_x) <= (*end_y, *end_x) {
+                    (*start_x, *start_y, *end_x, *end_y)
+                } else {
+                    (*end_x, *end_y, *start_x, *start_y)
+                };
+
+                if y < sy || y > ey {
+                    false
+                } else if sy == ey {
+                    x >= sx && x <= ex
+                } else if y == sy {
+                    x >= sx
+                } else if y == ey {
+                    x <= ex
+                } else {
+                    true
+                }
+            }
+        }
+    }
+}
+
 pub struct Compositor;
 
 impl Compositor {
     /// Renders terminal pane content directly into its bounding box
+    /// Renders terminal pane content directly into its bounding box with optional visual selection
     pub fn draw_pane_content<W: Write>(
         w: &mut W,
         rect: Rect,
         grid: &Grid,
+        selection: Option<&SelectionRange>,
     ) -> io::Result<()> {
         if rect.width == 0 || rect.height == 0 {
             return Ok(());
@@ -25,7 +77,19 @@ impl Compositor {
             execute!(w, MoveTo(rect.x, rect.y + row as u16))?;
             for col in 0..rect.width as usize {
                 let cell = grid.get_cell(col, row).copied().unwrap_or_default();
-                write_cell(w, cell)?;
+                let is_selected = selection.map_or(false, |s| s.contains(col, row));
+                if is_selected {
+                    // tmux color 208 orange background, black text, bold!
+                    execute!(
+                        w,
+                        SetBackgroundColor(Color::Rgb { r: 255, g: 140, b: 0 }),
+                        SetForegroundColor(Color::Black),
+                        Print(cell.c),
+                        ResetColor
+                    )?;
+                } else {
+                    write_cell(w, cell)?;
+                }
             }
         }
 
@@ -101,94 +165,90 @@ impl Compositor {
 
         Ok(())
     }
-    /// Floating modern horizontal HUD chip rendered in bottom-right corner when leader is active
+    /// Floating modern vertical popup menu anchored in bottom-right corner (Neovim style)
     pub fn draw_shortcut_hud<W: Write>(w: &mut W, screen_w: u16, screen_h: u16) -> io::Result<()> {
-        let box_w: u16 = 60.min(screen_w.saturating_sub(2));
-        let box_h: u16 = 4;
-        if box_w < 35 || screen_h < box_h + 1 {
+        let items: &[(&str, &str)] = &[
+            ("c", "new window"),
+            ("p", "previous window"),
+            ("n", "next window"),
+            ("%", "split vertical"),
+            ("\"", "split horizontal"),
+            ("h", "focus left"),
+            ("j", "focus down"),
+            ("k", "focus up"),
+            ("l", "focus right"),
+            ("o", "rotate pane"),
+            ("z", "toggle zoom"),
+            ("[", "copy mode"),
+            ("x", "kill pane"),
+            ("d", "detach"),
+        ];
+
+        let box_w: u16 = 30;
+        let box_h: u16 = (items.len() as u16 + 2).min(screen_h.saturating_sub(2));
+        if box_w >= screen_w || box_h < 4 {
             return Ok(());
         }
 
-        let box_x = screen_w.saturating_sub(box_w + 1);
-        let box_y = screen_h.saturating_sub(box_h + 1);
+        let box_x = screen_w.saturating_sub(box_w + 2);
+        let box_y = screen_h.saturating_sub(box_h + 1); // 1 line above bottom statusline
 
-        // Header border
+        // Header (rounded border)
         execute!(
             w,
             MoveTo(box_x, box_y),
             SetBackgroundColor(Color::Black),
-            SetForegroundColor(Color::Cyan),
-            Print("┌"),
+            SetForegroundColor(Color::DarkCyan),
+            Print("╭"),
             Print("─".repeat((box_w.saturating_sub(2)) as usize)),
-            Print("┐"),
+            Print("╮"),
             ResetColor
         )?;
 
-        let rows = [
-            [
-                ("c", "win"),
-                ("%", "split-v"),
-                ("\"", "split-h"),
-                ("o", "pane"),
-                ("z", "zoom"),
-            ],
-            [
-                ("n", "next"),
-                ("p", "prev"),
-                ("[", "copy"),
-                ("x", "kill"),
-                ("d", "detach"),
-            ],
-        ];
-
-        for (i, row) in rows.iter().enumerate() {
+        let visible_items = (box_h.saturating_sub(2)) as usize;
+        for (i, (key, desc)) in items.iter().take(visible_items).enumerate() {
             let row_y = box_y + 1 + i as u16;
             execute!(
                 w,
                 MoveTo(box_x, row_y),
                 SetBackgroundColor(Color::Black),
+                SetForegroundColor(Color::DarkCyan),
+                Print("│ "),
+                SetForegroundColor(Color::Yellow),
+                Print(format!("{:<2}", key)),
+                SetForegroundColor(Color::DarkGrey),
+                Print(" → "),
                 SetForegroundColor(Color::Cyan),
-                Print("│")
+                Print(format!("{:<18}", desc)),
             )?;
-
-            for (j, (k, desc)) in row.iter().enumerate() {
-                execute!(
-                    w,
-                    SetBackgroundColor(Color::Black),
-                    SetForegroundColor(Color::Yellow),
-                    Print(format!(" {} ", k)),
-                    SetForegroundColor(Color::White),
-                    Print(format!("{:<6}", desc)),
-                )?;
-                if j < row.len() - 1 {
-                    execute!(
-                        w,
-                        SetForegroundColor(Color::DarkGrey),
-                        Print("│"),
-                    )?;
-                }
-            }
-
-            let used = 1 + 5 * 9 + 4 * 1;
+            let used = 2 + 2 + 3 + 18; // 25
             let pad = (box_w as usize).saturating_sub(used + 1);
             execute!(
                 w,
                 Print(" ".repeat(pad)),
-                SetForegroundColor(Color::Cyan),
+                SetForegroundColor(Color::DarkCyan),
                 Print("│"),
                 ResetColor
             )?;
         }
 
-        // Bottom border
+        // Footer (ESC close)
+        let footer_y = box_y + box_h - 1;
+        let footer_text = " ESC close ";
+        let dash_count = (box_w as usize).saturating_sub(footer_text.len() + 2);
         execute!(
             w,
-            MoveTo(box_x, box_y + box_h - 1),
+            MoveTo(box_x, footer_y),
             SetBackgroundColor(Color::Black),
-            SetForegroundColor(Color::Cyan),
-            Print("└"),
-            Print("─".repeat((box_w.saturating_sub(2)) as usize)),
-            Print("┘"),
+            SetForegroundColor(Color::DarkCyan),
+            Print("╰"),
+            Print("─".repeat(dash_count)),
+            SetForegroundColor(Color::Yellow),
+            Print(" ESC "),
+            SetForegroundColor(Color::DarkGrey),
+            Print("close"),
+            SetForegroundColor(Color::DarkCyan),
+            Print(" ╯"),
             ResetColor
         )?;
 
@@ -198,9 +258,9 @@ impl Compositor {
     pub fn draw_copy_mode_badge<W: Write>(
         w: &mut W,
         rect: Rect,
-        scroll_offset: usize,
+        mode_label: &str,
     ) -> io::Result<()> {
-        let text = format!(" [COPY MODE: -{} lines | v: select | y: copy | q: exit] ", scroll_offset);
+        let text = format!(" [{} | y: yank | q: exit] ", mode_label);
         let badge_x = (rect.x + rect.width).saturating_sub(text.len() as u16 + 1);
         if badge_x >= rect.x {
             execute!(
@@ -340,7 +400,7 @@ mod tests {
         let mut grid = Grid::new(10, 5);
         grid.put_char('A');
         let rect = Rect::new(0, 0, 10, 5);
-        Compositor::draw_pane_content(&mut buf, rect, &grid).unwrap();
+        Compositor::draw_pane_content(&mut buf, rect, &grid, None).unwrap();
         let out = String::from_utf8_lossy(&buf);
         assert!(out.contains('A'));
     }
@@ -360,18 +420,28 @@ mod tests {
         let mut buf = Vec::new();
         Compositor::draw_shortcut_hud(&mut buf, 80, 24).unwrap();
         let out = String::from_utf8_lossy(&buf);
-        assert!(out.contains("┌"));
-        assert!(out.contains("split-v"));
-        assert!(out.contains("split-h"));
-        assert!(out.contains("detach"));
+        assert!(out.contains("╭"));
+        assert!(out.contains("split vertical"));
+        assert!(out.contains("split horizontal"));
+        assert!(out.contains("ESC"));
     }
 
     #[test]
     fn test_draw_copy_mode_badge() {
         let mut buf = Vec::new();
         let rect = Rect::new(0, 0, 80, 24);
-        Compositor::draw_copy_mode_badge(&mut buf, rect, 15).unwrap();
+        Compositor::draw_copy_mode_badge(&mut buf, rect, "VISUAL LINE").unwrap();
         let out = String::from_utf8_lossy(&buf);
-        assert!(out.contains("COPY MODE: -15 lines"));
+        assert!(out.contains("VISUAL LINE"));
+    }
+
+    #[test]
+    fn test_selection_range_line() {
+        let range = SelectionRange::Line { start_y: 2, end_y: 4 };
+        assert!(!range.contains(5, 1));
+        assert!(range.contains(0, 2));
+        assert!(range.contains(50, 3));
+        assert!(range.contains(10, 4));
+        assert!(!range.contains(0, 5));
     }
 }
