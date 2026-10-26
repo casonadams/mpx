@@ -322,6 +322,24 @@ pub async fn handle_client<S: AsyncStream>(state: Arc<DaemonState>, stream: S) {
                     .send(serde_json::to_string(&DaemonMessage::Response(resp)).unwrap())
                     .await;
             }
+            Request::FocusNext => {
+                state.workspace.write().await.focus_next();
+                let _ = framed
+                    .send(serde_json::to_string(&DaemonMessage::Response(Response::Ok)).unwrap())
+                    .await;
+            }
+            Request::FocusPrev => {
+                state.workspace.write().await.focus_prev();
+                let _ = framed
+                    .send(serde_json::to_string(&DaemonMessage::Response(Response::Ok)).unwrap())
+                    .await;
+            }
+            Request::Focus { name } => {
+                state.workspace.write().await.focus(&name);
+                let _ = framed
+                    .send(serde_json::to_string(&DaemonMessage::Response(Response::Ok)).unwrap())
+                    .await;
+            }
             Request::Subscribe { name: filter_name } => {
                 let mut rx = state.subscribe();
                 let _ = framed

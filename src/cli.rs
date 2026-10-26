@@ -18,6 +18,9 @@ pub enum Commands {
     /// Start the mpx background daemon
     Daemon,
 
+    /// Attach interactive full-screen TUI to the session
+    Attach,
+
     /// Run a task or command in a managed stream node
     Run {
         /// Name of the stream node (defaults to command name)

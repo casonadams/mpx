@@ -52,6 +52,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Daemon => {
             run_daemon(&endpoint).await?;
         }
+        Commands::Attach => {
+            let _ = ensure_client(&endpoint, &cli.session).await?;
+            mpx::tui::run_tui(&endpoint, &cli.session)
+                .await
+                .map_err(|e| format!("TUI error: {}", e))?;
+        }
         Commands::Run {
             name,
             pty,

@@ -177,6 +177,30 @@ impl Client {
             _ => Err("Invalid response to Layout".into()),
         }
     }
+    pub async fn focus_next(&mut self) -> Result<(), String> {
+        match self.call(Request::FocusNext).await? {
+            Response::Ok => Ok(()),
+            Response::Error(e) => Err(e),
+            _ => Err("Invalid response to FocusNext".into()),
+        }
+    }
+
+    pub async fn focus_prev(&mut self) -> Result<(), String> {
+        match self.call(Request::FocusPrev).await? {
+            Response::Ok => Ok(()),
+            Response::Error(e) => Err(e),
+            _ => Err("Invalid response to FocusPrev".into()),
+        }
+    }
+
+    pub async fn focus(&mut self, name: &str) -> Result<(), String> {
+        match self.call(Request::Focus { name: name.to_string() }).await? {
+            Response::Ok => Ok(()),
+            Response::Error(e) => Err(e),
+            _ => Err("Invalid response to Focus".into()),
+        }
+    }
+
 
 
     pub async fn stream_logs<F>(&mut self, name: Option<String>, mut handler: F) -> Result<(), String>

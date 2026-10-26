@@ -54,6 +54,11 @@ pub enum Request {
         width: u16,
         height: u16,
     },
+    FocusNext,
+    FocusPrev,
+    Focus {
+        name: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

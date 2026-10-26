@@ -49,6 +49,18 @@ mpx screen repl
 
 # View workspace pane layout geometry
 mpx layout
+
+# Attach interactive full-screen TUI
+mpx attach
+
+### TUI Keyboard Shortcuts
+
+- **`Ctrl+A |`** or **`Ctrl+A v`**: Split pane vertically
+- **`Ctrl+A -`** or **`Ctrl+A h`**: Split pane horizontally
+- **`Ctrl+A o`** / **`Tab`**: Switch focus to next pane
+- **`Ctrl+A p`**: Switch focus to previous pane
+- **`Ctrl+A x`**: Kill focused pane
+- **`Ctrl+A d`**: Detach cleanly from TUI (leaves daemon running in background)
 ```
 
 ## JSON-RPC 2.0 / NDJSON Socket API
