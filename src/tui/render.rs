@@ -119,14 +119,14 @@ impl Compositor {
         let box_x = (screen_w.saturating_sub(box_w)) / 2;
         let box_y = screen_h.saturating_sub(box_h + 2);
 
-        // Header
+        // Header - identical width to footer
         execute!(
             w,
             MoveTo(box_x, box_y),
             SetBackgroundColor(Color::Black),
             SetForegroundColor(Color::Cyan),
-            Print("┌─ which-key "),
-            Print("─".repeat((box_w.saturating_sub(15)) as usize)),
+            Print("┌"),
+            Print("─".repeat((box_w.saturating_sub(2)) as usize)),
             Print("┐"),
             ResetColor
         )?;
@@ -283,7 +283,7 @@ mod tests {
         let mut buf = Vec::new();
         Compositor::draw_which_key(&mut buf, 80, 24).unwrap();
         let out = String::from_utf8_lossy(&buf);
-        assert!(out.contains("which-key"));
+        assert!(out.contains("┌"));
         assert!(out.contains("split-v"));
         assert!(out.contains("split-h"));
         assert!(out.contains("detach"));
