@@ -444,8 +444,8 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
                                             let _ = client.kill(&active_pane).await;
                                         }
                                     }
-                                    // Detach (tmux d)
-                                    KeyCode::Char('d') => {
+                                    // Detach or Quit (tmux d or q)
+                                    KeyCode::Char('d') | KeyCode::Char('q') => {
                                         return Ok(());
                                     }
                                     // Enter copy mode (tmux [)
@@ -562,6 +562,9 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
                     if apply_stream_event(ev, &mut vt_screens) {
                         layout_cache.dirty = true;
                     }
+                }
+                if vt_screens.is_empty() {
+                    return Ok(());
                 }
                 wait_for_frame(last_stream_render, frame_budget).await;
                 last_stream_render = Some(std::time::Instant::now());
@@ -687,12 +690,10 @@ impl LayoutCache {
     async fn sync(&mut self, client: &mut Client, term_w: u16, layout_h: u16) -> bool {
         if self.dirty || self.panes.is_empty() {
             if let Ok((p, d, t)) = client.layout(term_w, layout_h).await {
-                if !p.is_empty() {
-                    self.panes = p;
-                    self.dividers = d;
-                    self.tabs = t;
-                    self.dirty = false;
-                }
+                self.panes = p;
+                self.dividers = d;
+                self.tabs = t;
+                self.dirty = false;
             }
         }
         !self.panes.is_empty()

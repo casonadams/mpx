@@ -25,6 +25,7 @@ impl TerminalGuard {
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let mut out = stdout();
+        let _ = out.write_all(b"\x1b[?2026l");
         let _ = execute!(out, DisableMouseCapture, LeaveAlternateScreen, Show);
         let _ = out.flush();
         let _ = disable_raw_mode();
