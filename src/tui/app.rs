@@ -26,7 +26,7 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
     // Spawn default shell pane if session is empty
     let list = client.list().await?;
     if list.is_empty() {
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
+        let shell = default_shell();
         let _ = client
             .spawn("shell".into(), shell, vec![], true, None)
             .await?;
@@ -93,12 +93,12 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
                             match key.code {
                                 KeyCode::Char('|') | KeyCode::Char('v') => {
                                     let count = vt_screens.len() + 1;
-                                    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
+                                    let shell = default_shell();
                                     let _ = client.split(None, format!("pane-{}", count), shell, vec![], true, Direction::Vertical).await;
                                 }
                                 KeyCode::Char('-') | KeyCode::Char('h') => {
                                     let count = vt_screens.len() + 1;
-                                    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
+                                    let shell = default_shell();
                                     let _ = client.split(None, format!("pane-{}", count), shell, vec![], true, Direction::Horizontal).await;
                                 }
                                 KeyCode::Char('o') | KeyCode::Char('n') | KeyCode::Tab => {
@@ -182,5 +182,18 @@ fn key_to_bytes(code: KeyCode, modifiers: KeyModifiers) -> Vec<u8> {
         KeyCode::Right => vec![0x1B, b'[', b'C'],
         KeyCode::Left => vec![0x1B, b'[', b'D'],
         _ => Vec::new(),
+    }
+}
+
+fn default_shell() -> String {
+    if let Ok(sh) = std::env::var("SHELL") {
+        if !sh.is_empty() {
+            return sh;
+        }
+    }
+    if cfg!(windows) {
+        "powershell.exe".to_string()
+    } else {
+        "/bin/sh".to_string()
     }
 }

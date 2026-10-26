@@ -10,7 +10,7 @@ pub struct Cli {
     pub endpoint: Option<String>,
 
     #[command(subcommand)]
-    pub command: Commands,
+    pub command: Option<Commands>,
 }
 
 #[derive(Subcommand, Debug)]

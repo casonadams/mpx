@@ -17,6 +17,12 @@ Designed from first principles for human developers collaborating side-by-side w
 ## CLI Usage
 
 ```bash
+# Start or attach to a session (defaults to "main", exactly like typing `tmux`)
+mpx
+
+# Start or attach to a specific named session
+mpx -s dev
+
 # Run a background task in a named stream node
 mpx run --name "test-watcher" -- cargo test
 

@@ -50,7 +50,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .endpoint
         .unwrap_or_else(|| default_endpoint(&cli.session));
 
-    match cli.command {
+    let command = cli.command.unwrap_or(Commands::Attach);
+    match command {
         Commands::Daemon => {
             run_daemon(&endpoint).await?;
         }
