@@ -174,19 +174,24 @@ async fn test_interactive_pty_shell() {
         .await
         .expect("Spawn shell failed");
 
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
     client
-        .send_input("shell-test", "echo PTY_INTERACTIVE_OK\n")
+        .send_input("shell-test", "echo PTY_INTERACTIVE_OK\r\n")
         .await
         .expect("Send input failed");
 
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-
-    let logs = client.logs("shell-test", None).await.expect("Logs failed");
-    println!("SHELL LOGS:\n{}", logs);
-    assert!(logs.contains("PTY_INTERACTIVE_OK"), "PTY did not execute interactive input: {}", logs);
-
+    let mut found = false;
+    for _ in 0..20 {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        if let Ok(logs) = client.logs("shell-test", None).await {
+            if logs.contains("PTY_INTERACTIVE_OK") {
+                found = true;
+                break;
+            }
+        }
+    }
+    assert!(found, "PTY did not execute interactive input");
     client.kill("shell-test").await.unwrap();
 }
 

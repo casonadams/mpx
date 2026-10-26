@@ -148,7 +148,7 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
 
         // Draw tmux-style single-character dividers between panes
         if zoomed_pane.is_none() && !dividers.is_empty() {
-            let _ = Compositor::draw_dividers(&mut out, &dividers);
+            let _ = Compositor::draw_dividers(&mut out, &dividers, active_rect);
         }
 
         // Clean tmux-style bottom status bar

@@ -69,6 +69,91 @@ pub struct RenderPaneContext<'a> {
     pub dimmed: bool,
 }
 
+fn divider_char_color(x: u16, y: u16, rect: Option<Rect>) -> Color {
+    if let Some(r) = rect {
+        let is_left = x + 1 == r.x && y + 1 >= r.y && y <= r.y + r.height;
+        let is_right = x == r.x + r.width && y + 1 >= r.y && y <= r.y + r.height;
+        let is_top = y + 1 == r.y && x + 1 >= r.x && x <= r.x + r.width;
+        let is_bottom = y == r.y + r.height && x + 1 >= r.x && x <= r.x + r.width;
+        if is_left || is_right || is_top || is_bottom {
+            return Color::Green;
+        }
+    }
+    Color::DarkGrey
+}
+
+fn junction_char(up: bool, down: bool, left: bool, right: bool) -> &'static str {
+    match (up, down, left, right) {
+        (true, true, true, true) => "┼",
+        (true, true, true, false) => "┤",
+        (true, true, false, true) => "├",
+        (false, true, true, true) => "┬",
+        (true, false, true, true) => "┴",
+        (false, true, false, true) => "┌",
+        (false, true, true, false) => "┐",
+        (true, false, false, true) => "└",
+        (true, false, true, false) => "┘",
+        (true, true, false, false) => "│",
+        (false, false, true, true) => "─",
+        _ => "┼",
+    }
+}
+
+fn get_divider_char(div: &Divider, x: u16, y: u16, all: &[Divider]) -> &'static str {
+    let has_v = all.iter().any(|d| d.is_vertical && d.x == x && (y + 1 >= d.y && y <= d.y + d.length));
+    let has_h = all.iter().any(|d| !d.is_vertical && d.y == y && (x + 1 >= d.x && x <= d.x + d.length));
+
+    if has_v && has_h {
+        let up = all.iter().any(|d| d.is_vertical && d.x == x && d.y < y);
+        let down = all.iter().any(|d| d.is_vertical && d.x == x && (d.y == y + 1 || d.y + d.length > y));
+        let left = all.iter().any(|d| !d.is_vertical && d.y == y && d.x < x);
+        let right = all.iter().any(|d| !d.is_vertical && d.y == y && (d.x == x + 1 || d.x + d.length > x));
+        junction_char(up, down, left, right)
+    } else if div.is_vertical {
+        "│"
+    } else {
+        "─"
+    }
+}
+
+fn render_vertical_divider<W: Write>(
+    w: &mut W,
+    div: &Divider,
+    all_dividers: &[Divider],
+    active_rect: Option<Rect>,
+    cur_color: &mut Option<Color>,
+) -> io::Result<()> {
+    for y in div.y..(div.y + div.length) {
+        let color = divider_char_color(div.x, y, active_rect);
+        if *cur_color != Some(color) {
+            execute!(w, SetForegroundColor(color))?;
+            *cur_color = Some(color);
+        }
+        let ch = get_divider_char(div, div.x, y, all_dividers);
+        execute!(w, MoveTo(div.x, y), Print(ch))?;
+    }
+    Ok(())
+}
+
+fn render_horizontal_divider<W: Write>(
+    w: &mut W,
+    div: &Divider,
+    all_dividers: &[Divider],
+    active_rect: Option<Rect>,
+    cur_color: &mut Option<Color>,
+) -> io::Result<()> {
+    for x in div.x..(div.x + div.length) {
+        let color = divider_char_color(x, div.y, active_rect);
+        if *cur_color != Some(color) {
+            execute!(w, SetForegroundColor(color))?;
+            *cur_color = Some(color);
+        }
+        let ch = get_divider_char(div, x, div.y, all_dividers);
+        execute!(w, MoveTo(x, div.y), Print(ch))?;
+    }
+    Ok(())
+}
+
 
 pub struct Compositor;
 
@@ -101,22 +186,18 @@ impl Compositor {
         Ok(())
     }
 
-    /// Renders clean tmux-style single-line dividers between panes
+    /// Renders clean tmux-style single-line dividers between panes with green active pane highlighting
     pub fn draw_dividers<W: Write>(
         w: &mut W,
         dividers: &[Divider],
+        active_rect: Option<Rect>,
     ) -> io::Result<()> {
-        execute!(w, SetForegroundColor(Color::DarkGrey))?;
+        let mut cur_color: Option<Color> = None;
         for div in dividers {
             if div.is_vertical {
-                for y in div.y..(div.y + div.length) {
-                    execute!(w, MoveTo(div.x, y), Print("│"))?;
-                }
+                render_vertical_divider(w, div, dividers, active_rect, &mut cur_color)?;
             } else {
-                execute!(w, MoveTo(div.x, div.y))?;
-                for _ in 0..div.length {
-                    execute!(w, Print("─"))?;
-                }
+                render_horizontal_divider(w, div, dividers, active_rect, &mut cur_color)?;
             }
         }
         execute!(w, ResetColor)?;
@@ -399,9 +480,9 @@ fn dim_color(c: Color) -> Color {
     match c {
         Color::Reset | Color::White | Color::Grey => Color::DarkGrey,
         Color::Rgb { r, g, b } => Color::Rgb {
-            r: (r as u16 * 160 / 255) as u8,
-            g: (g as u16 * 160 / 255) as u8,
-            b: (b as u16 * 160 / 255) as u8,
+            r: (r as u16 * 140 / 255) as u8,
+            g: (g as u16 * 140 / 255) as u8,
+            b: (b as u16 * 140 / 255) as u8,
         },
         Color::Red => Color::DarkRed,
         Color::Green => Color::DarkGreen,
@@ -415,14 +496,16 @@ fn dim_color(c: Color) -> Color {
 
 fn dim_bg(c: Color) -> Color {
     match c {
+        Color::Reset | Color::Black => Color::Rgb { r: 10, g: 12, b: 16 },
         Color::Rgb { r, g, b } => Color::Rgb {
-            r: (r as u16 * 180 / 255) as u8,
-            g: (g as u16 * 180 / 255) as u8,
-            b: (b as u16 * 180 / 255) as u8,
+            r: (r as u16 * 220 / 255) as u8,
+            g: (g as u16 * 220 / 255) as u8,
+            b: (b as u16 * 220 / 255) as u8,
         },
         other => other,
     }
 }
+
 
 fn get_current_time() -> String {
     // 12-hour %I:%M:%S matching tmux status-right
@@ -574,5 +657,18 @@ mod tests {
         assert!(range.contains_abs(50, 3));
         assert!(range.contains_abs(10, 4));
         assert!(!range.contains_abs(0, 5));
+    }
+
+    #[test]
+    fn test_draw_dividers_with_junction_and_active_highlight() {
+        let mut buf = Vec::new();
+        let dividers = vec![
+            Divider { is_vertical: false, x: 0, y: 10, length: 80 },
+            Divider { is_vertical: true, x: 40, y: 11, length: 13 },
+        ];
+        let active_rect = Some(Rect::new(41, 11, 39, 13));
+        Compositor::draw_dividers(&mut buf, &dividers, active_rect).unwrap();
+        let out = String::from_utf8_lossy(&buf);
+        assert!(out.contains('┬'), "Intersection must render a box-drawing connector");
     }
 }
