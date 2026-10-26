@@ -418,7 +418,7 @@ fn cell_content(
         let fg = cell.style.fg.map(convert_color).unwrap_or(Color::Reset);
         let bg = cell.style.bg.map(convert_color).unwrap_or(Color::Reset);
         if ctx.dimmed {
-            (cell.c, dim_color(fg), dim_bg(bg))
+            (cell.c, dim_color(fg), bg)
         } else {
             (cell.c, fg, bg)
         }
@@ -490,18 +490,6 @@ fn dim_color(c: Color) -> Color {
         Color::Blue => Color::DarkBlue,
         Color::Magenta => Color::DarkMagenta,
         Color::Cyan => Color::DarkCyan,
-        other => other,
-    }
-}
-
-fn dim_bg(c: Color) -> Color {
-    match c {
-        Color::Reset | Color::Black => Color::Rgb { r: 10, g: 12, b: 16 },
-        Color::Rgb { r, g, b } => Color::Rgb {
-            r: (r as u16 * 220 / 255) as u8,
-            g: (g as u16 * 220 / 255) as u8,
-            b: (b as u16 * 220 / 255) as u8,
-        },
         other => other,
     }
 }
