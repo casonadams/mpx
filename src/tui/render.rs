@@ -11,44 +11,47 @@ use crate::vt::grid::{Cell, Grid};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SelectionRange {
     Character {
-        start_x: usize,
-        start_y: usize,
-        end_x: usize,
-        end_y: usize,
+        anchor_x: usize,
+        anchor_abs_y: usize,
+        cursor_x: usize,
+        cursor_abs_y: usize,
     },
     Line {
-        start_y: usize,
-        end_y: usize,
+        start_abs_y: usize,
+        end_abs_y: usize,
     },
 }
 
 impl SelectionRange {
-    pub fn contains(&self, x: usize, y: usize) -> bool {
+    pub fn contains_abs(&self, x: usize, abs_y: usize) -> bool {
         match self {
-            Self::Line { start_y, end_y } => {
-                let min_y = (*start_y).min(*end_y);
-                let max_y = (*start_y).max(*end_y);
-                y >= min_y && y <= max_y
+            Self::Line {
+                start_abs_y,
+                end_abs_y,
+            } => {
+                let min_y = (*start_abs_y).min(*end_abs_y);
+                let max_y = (*start_abs_y).max(*end_abs_y);
+                abs_y >= min_y && abs_y <= max_y
             }
             Self::Character {
-                start_x,
-                start_y,
-                end_x,
-                end_y,
+                anchor_x,
+                anchor_abs_y,
+                cursor_x,
+                cursor_abs_y,
             } => {
-                let (sx, sy, ex, ey) = if (*start_y, *start_x) <= (*end_y, *end_x) {
-                    (*start_x, *start_y, *end_x, *end_y)
+                let ((sx, sy), (ex, ey)) = if (*anchor_abs_y, *anchor_x) <= (*cursor_abs_y, *cursor_x) {
+                    ((*anchor_x, *anchor_abs_y), (*cursor_x, *cursor_abs_y))
                 } else {
-                    (*end_x, *end_y, *start_x, *start_y)
+                    ((*cursor_x, *cursor_abs_y), (*anchor_x, *anchor_abs_y))
                 };
 
-                if y < sy || y > ey {
+                if abs_y < sy || abs_y > ey {
                     false
                 } else if sy == ey {
                     x >= sx && x <= ex
-                } else if y == sy {
+                } else if abs_y == sy {
                     x >= sx
-                } else if y == ey {
+                } else if abs_y == ey {
                     x <= ex
                 } else {
                     true
@@ -74,10 +77,11 @@ impl Compositor {
         }
 
         for row in 0..rect.height as usize {
+            let abs_row = grid.abs_line(row, scroll_offset);
             execute!(w, MoveTo(rect.x, rect.y + row as u16))?;
             for col in 0..rect.width as usize {
                 let cell = grid.get_cell_scrolled(col, row, scroll_offset).copied().unwrap_or_default();
-                let is_selected = selection.map_or(false, |s| s.contains(col, row));
+                let is_selected = selection.map_or(false, |s| s.contains_abs(col, abs_row));
                 if is_selected {
                     execute!(
                         w,
@@ -299,11 +303,13 @@ impl Compositor {
 }
 
 fn write_cell<W: Write>(w: &mut W, cell: Cell) -> io::Result<()> {
-    if let Some(fg) = cell.style.fg {
-        execute!(w, SetForegroundColor(convert_color(fg)))?;
+    match cell.style.fg {
+        Some(fg) => execute!(w, SetForegroundColor(convert_color(fg)))?,
+        None => execute!(w, SetForegroundColor(Color::Reset))?,
     }
-    if let Some(bg) = cell.style.bg {
-        execute!(w, SetBackgroundColor(convert_color(bg)))?;
+    match cell.style.bg {
+        Some(bg) => execute!(w, SetBackgroundColor(convert_color(bg)))?,
+        None => execute!(w, SetBackgroundColor(Color::Reset))?,
     }
 
     execute!(w, Print(cell.c))?;
@@ -313,13 +319,13 @@ fn write_cell<W: Write>(w: &mut W, cell: Cell) -> io::Result<()> {
 fn convert_color(c: crate::vt::grid::Color) -> Color {
     match c {
         crate::vt::grid::Color::Black => Color::Black,
-        crate::vt::grid::Color::Red => Color::DarkRed,
-        crate::vt::grid::Color::Green => Color::DarkGreen,
-        crate::vt::grid::Color::Yellow => Color::DarkYellow,
-        crate::vt::grid::Color::Blue => Color::DarkBlue,
-        crate::vt::grid::Color::Magenta => Color::DarkMagenta,
-        crate::vt::grid::Color::Cyan => Color::DarkCyan,
-        crate::vt::grid::Color::White => Color::Grey,
+        crate::vt::grid::Color::Red => Color::Red,
+        crate::vt::grid::Color::Green => Color::Green,
+        crate::vt::grid::Color::Yellow => Color::Yellow,
+        crate::vt::grid::Color::Blue => Color::Blue,
+        crate::vt::grid::Color::Magenta => Color::Magenta,
+        crate::vt::grid::Color::Cyan => Color::Cyan,
+        crate::vt::grid::Color::White => Color::White,
         crate::vt::grid::Color::BrightBlack => Color::DarkGrey,
         crate::vt::grid::Color::BrightRed => Color::Red,
         crate::vt::grid::Color::BrightGreen => Color::Green,
@@ -438,11 +444,11 @@ mod tests {
 
     #[test]
     fn test_selection_range_line() {
-        let range = SelectionRange::Line { start_y: 2, end_y: 4 };
-        assert!(!range.contains(5, 1));
-        assert!(range.contains(0, 2));
-        assert!(range.contains(50, 3));
-        assert!(range.contains(10, 4));
-        assert!(!range.contains(0, 5));
+        let range = SelectionRange::Line { start_abs_y: 2, end_abs_y: 4 };
+        assert!(!range.contains_abs(5, 1));
+        assert!(range.contains_abs(0, 2));
+        assert!(range.contains_abs(50, 3));
+        assert!(range.contains_abs(10, 4));
+        assert!(!range.contains_abs(0, 5));
     }
 }

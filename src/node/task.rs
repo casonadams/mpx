@@ -37,6 +37,8 @@ impl TaskNode {
         if let Some(dir) = cwd {
             command.current_dir(dir);
         }
+        command.env("TERM", "xterm-256color");
+        command.env("COLORTERM", "truecolor");
         command.stdin(Stdio::piped());
         command.stdout(Stdio::piped());
         command.stderr(Stdio::piped());

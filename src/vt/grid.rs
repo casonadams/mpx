@@ -166,6 +166,28 @@ impl Grid {
         }
     }
 
+    pub fn abs_line(&self, screen_y: usize, scroll_offset: usize) -> usize {
+        let total_hist = self.history.len();
+        let scroll_offset = scroll_offset.min(total_hist);
+        (total_hist + screen_y).saturating_sub(scroll_offset)
+    }
+
+    pub fn get_line_cells(&self, abs_line: usize) -> Option<Vec<Cell>> {
+        let total_hist = self.history.len();
+        if abs_line < total_hist {
+            self.history.get(abs_line).cloned()
+        } else {
+            let live_y = abs_line - total_hist;
+            if live_y < self.rows {
+                let start = live_y * self.cols;
+                let end = start + self.cols;
+                Some(self.cells[start..end].to_vec())
+            } else {
+                None
+            }
+        }
+    }
+
 
     pub fn put_char(&mut self, c: char) {
         if self.cursor.x >= self.cols {

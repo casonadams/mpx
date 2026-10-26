@@ -124,7 +124,7 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
                     .or_insert_with(|| VtScreen::new(rect.width as usize, rect.height as usize));
 
                 let (sel, offset) = if *is_focused {
-                    let s = copy_state.as_ref().and_then(|cs| cs.selection_range());
+                    let s = copy_state.as_ref().and_then(|cs| cs.selection_range(vt.grid()));
                     let off = copy_state.as_ref().map(|cs| cs.scroll_offset).unwrap_or(0);
                     (s, off)
                 } else {
@@ -261,29 +261,31 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
                                 }
                                 // Shift-V: Visual Line mode (highlights whole row!)
                                 KeyCode::Char('V') => {
+                                    let abs_y = vt_screens.get(&active_pane).map(|vt| vt.grid().abs_line(cs.cursor_y, cs.scroll_offset)).unwrap_or(0);
                                     if matches!(cs.mode, SelectionKind::Line) {
                                         cs.mode = SelectionKind::None;
-                                        cs.anchor = None;
                                     } else {
                                         cs.mode = SelectionKind::Line;
-                                        cs.anchor = Some((0, cs.cursor_y));
+                                        cs.anchor_abs_y = abs_y;
+                                        cs.anchor_x = 0;
                                     }
                                 }
                                 KeyCode::Char('v') => {
+                                    let abs_y = vt_screens.get(&active_pane).map(|vt| vt.grid().abs_line(cs.cursor_y, cs.scroll_offset)).unwrap_or(0);
                                     if key.modifiers.contains(KeyModifiers::SHIFT) {
                                         if matches!(cs.mode, SelectionKind::Line) {
                                             cs.mode = SelectionKind::None;
-                                            cs.anchor = None;
                                         } else {
                                             cs.mode = SelectionKind::Line;
-                                            cs.anchor = Some((0, cs.cursor_y));
+                                            cs.anchor_abs_y = abs_y;
+                                            cs.anchor_x = 0;
                                         }
                                     } else if matches!(cs.mode, SelectionKind::Character) {
                                         cs.mode = SelectionKind::None;
-                                        cs.anchor = None;
                                     } else {
                                         cs.mode = SelectionKind::Character;
-                                        cs.anchor = Some((cs.cursor_x, cs.cursor_y));
+                                        cs.anchor_abs_y = abs_y;
+                                        cs.anchor_x = cs.cursor_x;
                                     }
                                 }
                                 // y or Enter: Yank selection to clipboard and exit copy mode
@@ -297,7 +299,6 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
                                 KeyCode::Esc => {
                                     if !matches!(cs.mode, SelectionKind::None) {
                                         cs.mode = SelectionKind::None;
-                                        cs.anchor = None;
                                     } else {
                                         copy_state = None;
                                     }
@@ -410,11 +411,17 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
                                         } else {
                                             (0, 0)
                                         };
+                                        let abs_y = if let Some(vt) = vt_screens.get(&active_pane) {
+                                            vt.grid().abs_line(cy, 0)
+                                        } else {
+                                            0
+                                        };
                                         copy_state = Some(CopyState {
                                             cursor_x: cx,
                                             cursor_y: cy,
                                             scroll_offset: 0,
-                                            anchor: None,
+                                            anchor_x: cx,
+                                            anchor_abs_y: abs_y,
                                             mode: SelectionKind::None,
                                         });
                                     }
@@ -460,11 +467,17 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
                                     } else {
                                         (0, 0)
                                     };
+                                    let abs_y = if let Some(vt) = vt_screens.get(&active_pane) {
+                                        vt.grid().abs_line(cy, 0)
+                                    } else {
+                                        0
+                                    };
                                     copy_state = Some(CopyState {
                                         cursor_x: cx,
                                         cursor_y: cy,
                                         scroll_offset: 3.min(hist_len),
-                                        anchor: None,
+                                        anchor_x: cx,
+                                        anchor_abs_y: abs_y,
                                         mode: SelectionKind::None,
                                     });
                                 } else if let Some(cs) = &mut copy_state {
@@ -630,81 +643,85 @@ struct CopyState {
     cursor_x: usize,
     cursor_y: usize,
     scroll_offset: usize,
-    anchor: Option<(usize, usize)>,
+    anchor_x: usize,
+    anchor_abs_y: usize,
     mode: SelectionKind,
 }
 
 impl CopyState {
-    fn selection_range(&self) -> Option<SelectionRange> {
-        let (ax, ay) = self.anchor?;
+    fn selection_range(&self, grid: &crate::vt::grid::Grid) -> Option<SelectionRange> {
         match self.mode {
             SelectionKind::None => None,
-            SelectionKind::Line => Some(SelectionRange::Line {
-                start_y: ay,
-                end_y: self.cursor_y,
-            }),
-            SelectionKind::Character => Some(SelectionRange::Character {
-                start_x: ax,
-                start_y: ay,
-                end_x: self.cursor_x,
-                end_y: self.cursor_y,
-            }),
+            SelectionKind::Line => {
+                let cursor_abs_y = grid.abs_line(self.cursor_y, self.scroll_offset);
+                Some(SelectionRange::Line {
+                    start_abs_y: self.anchor_abs_y,
+                    end_abs_y: cursor_abs_y,
+                })
+            }
+            SelectionKind::Character => {
+                let cursor_abs_y = grid.abs_line(self.cursor_y, self.scroll_offset);
+                Some(SelectionRange::Character {
+                    anchor_x: self.anchor_x,
+                    anchor_abs_y: self.anchor_abs_y,
+                    cursor_x: self.cursor_x,
+                    cursor_abs_y,
+                })
+            }
         }
     }
 
     fn yank_text(&self, grid: &crate::vt::grid::Grid) -> String {
-        match self.selection_range() {
-            Some(SelectionRange::Line { start_y, end_y }) => {
-                let min_y = start_y.min(end_y);
-                let max_y = start_y.max(end_y);
+        let cursor_abs_y = grid.abs_line(self.cursor_y, self.scroll_offset);
+        match self.mode {
+            SelectionKind::Line => {
+                let min_y = self.anchor_abs_y.min(cursor_abs_y);
+                let max_y = self.anchor_abs_y.max(cursor_abs_y);
                 let mut lines = Vec::new();
                 for y in min_y..=max_y {
-                    let mut row_str = String::new();
-                    for x in 0..grid.cols {
-                        let c = grid.get_cell_scrolled(x, y, self.scroll_offset).map(|cell| cell.c).unwrap_or(' ');
-                        row_str.push(c);
+                    if let Some(cells) = grid.get_line_cells(y) {
+                        let row_str: String = cells.into_iter().map(|c| c.c).collect();
+                        lines.push(row_str.trim_end().to_string());
                     }
-                    lines.push(row_str.trim_end().to_string());
                 }
                 lines.join("\n")
             }
-            Some(SelectionRange::Character {
-                start_x,
-                start_y,
-                end_x,
-                end_y,
-            }) => {
-                let (sx, sy, ex, ey) = if (start_y, start_x) <= (end_y, end_x) {
-                    (start_x, start_y, end_x, end_y)
+            SelectionKind::Character => {
+                let ((sx, sy), (ex, ey)) = if (self.anchor_abs_y, self.anchor_x) <= (cursor_abs_y, self.cursor_x) {
+                    ((self.anchor_x, self.anchor_abs_y), (self.cursor_x, cursor_abs_y))
                 } else {
-                    (end_x, end_y, start_x, start_y)
+                    ((self.cursor_x, cursor_abs_y), (self.anchor_x, self.anchor_abs_y))
                 };
 
                 let mut out = String::new();
                 for y in sy..=ey {
-                    let from_x = if y == sy { sx } else { 0 };
-                    let to_x = if y == ey { ex } else { grid.cols.saturating_sub(1) };
-                    let mut row_str = String::new();
-                    for x in from_x..=to_x {
-                        let c = grid.get_cell_scrolled(x, y, self.scroll_offset).map(|cell| cell.c).unwrap_or(' ');
-                        row_str.push(c);
-                    }
-                    if y < ey {
-                        out.push_str(row_str.trim_end());
-                        out.push('\n');
-                    } else {
-                        out.push_str(&row_str);
+                    if let Some(cells) = grid.get_line_cells(y) {
+                        let from_x = if y == sy { sx } else { 0 };
+                        let to_x = if y == ey { ex } else { cells.len().saturating_sub(1) };
+                        if from_x <= to_x && from_x < cells.len() {
+                            let end_bound = (to_x + 1).min(cells.len());
+                            let row_str: String = cells[from_x..end_bound]
+                                .iter()
+                                .map(|c| c.c)
+                                .collect();
+                            if y < ey {
+                                out.push_str(row_str.trim_end());
+                                out.push('\n');
+                            } else {
+                                out.push_str(&row_str);
+                            }
+                        }
                     }
                 }
                 out
             }
-            None => {
-                let mut row_str = String::new();
-                for x in 0..grid.cols {
-                    let c = grid.get_cell_scrolled(x, self.cursor_y, self.scroll_offset).map(|cell| cell.c).unwrap_or(' ');
-                    row_str.push(c);
+            SelectionKind::None => {
+                if let Some(cells) = grid.get_line_cells(cursor_abs_y) {
+                    let row_str: String = cells.into_iter().map(|c| c.c).collect();
+                    row_str.trim_end().to_string()
+                } else {
+                    String::new()
                 }
-                row_str.trim_end().to_string()
             }
         }
     }

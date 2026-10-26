@@ -46,6 +46,8 @@ impl PtyNode {
         if let Some(dir) = cwd {
             cmd_builder.cwd(dir);
         }
+        cmd_builder.env("TERM", "xterm-256color");
+        cmd_builder.env("COLORTERM", "truecolor");
 
         let mut child = pair
             .slave

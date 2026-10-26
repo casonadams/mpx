@@ -67,8 +67,16 @@ impl VtHandler {
                 106 => self.grid.current_style.bg = Some(Color::BrightCyan),
                 107 => self.grid.current_style.bg = Some(Color::BrightWhite),
                 38 => {
-                    // 256-color or truecolor foreground
-                    if let Some(sub2) = iter.next() {
+                    if sub.len() >= 5 && sub[1] == 2 {
+                        let (r, g, b) = if sub.len() >= 6 {
+                            (sub[3] as u8, sub[4] as u8, sub[5] as u8)
+                        } else {
+                            (sub[2] as u8, sub[3] as u8, sub[4] as u8)
+                        };
+                        self.grid.current_style.fg = Some(Color::Rgb(r, g, b));
+                    } else if sub.len() >= 3 && sub[1] == 5 {
+                        self.grid.current_style.fg = Some(Color::Indexed(sub[2] as u8));
+                    } else if let Some(sub2) = iter.next() {
                         if sub2[0] == 5 {
                             if let Some(c) = iter.next() {
                                 self.grid.current_style.fg = Some(Color::Indexed(c[0] as u8));
@@ -82,8 +90,16 @@ impl VtHandler {
                     }
                 }
                 48 => {
-                    // 256-color or truecolor background
-                    if let Some(sub2) = iter.next() {
+                    if sub.len() >= 5 && sub[1] == 2 {
+                        let (r, g, b) = if sub.len() >= 6 {
+                            (sub[3] as u8, sub[4] as u8, sub[5] as u8)
+                        } else {
+                            (sub[2] as u8, sub[3] as u8, sub[4] as u8)
+                        };
+                        self.grid.current_style.bg = Some(Color::Rgb(r, g, b));
+                    } else if sub.len() >= 3 && sub[1] == 5 {
+                        self.grid.current_style.bg = Some(Color::Indexed(sub[2] as u8));
+                    } else if let Some(sub2) = iter.next() {
                         if sub2[0] == 5 {
                             if let Some(c) = iter.next() {
                                 self.grid.current_style.bg = Some(Color::Indexed(c[0] as u8));
