@@ -103,5 +103,14 @@ pub type IpcStream = tokio::net::windows::named_pipe::NamedPipeClient;
 
 #[cfg(windows)]
 pub async fn connect(endpoint: &str) -> std::io::Result<IpcStream> {
+    for _ in 0..50 {
+        match tokio::net::windows::named_pipe::ClientOptions::new().open(endpoint) {
+            Ok(client) => return Ok(client),
+            Err(e) if e.raw_os_error() == Some(231) => {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            Err(e) => return Err(e),
+        }
+    }
     tokio::net::windows::named_pipe::ClientOptions::new().open(endpoint)
 }

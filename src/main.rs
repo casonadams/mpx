@@ -76,9 +76,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Attach => {
             let _ = ensure_client(&endpoint, &cli.session).await?;
-            mpx::tui::run_tui(&endpoint, &cli.session)
-                .await
-                .map_err(|e| format!("TUI error: {}", e))?;
+            let _ = mpx::tui::run_tui(&endpoint, &cli.session).await;
+            std::process::exit(0);
         }
         Commands::Run {
             name,
