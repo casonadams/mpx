@@ -165,7 +165,7 @@ async fn test_interactive_pty_shell() {
     let mut client = Client::connect(&endpoint).await.expect("Failed to connect");
 
     let shell = if cfg!(windows) {
-        "powershell.exe".to_string()
+        "cmd.exe".to_string()
     } else {
         std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into())
     };
