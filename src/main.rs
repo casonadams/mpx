@@ -12,9 +12,14 @@ use mpx::protocol::StreamEvent;
 use mpx::layout::Direction;
 
 async fn ensure_client(endpoint: &str, session: &str) -> Result<Client, String> {
-    if let Ok(client) = Client::connect(endpoint).await {
-        return Ok(client);
+    if let Ok(mut client) = Client::connect(endpoint).await {
+        if client.ping().await.is_ok() {
+            return Ok(client);
+        }
     }
+
+    #[cfg(unix)]
+    let _ = std::fs::remove_file(endpoint);
 
     // Attempt to auto-start daemon in background
     let current_exe = std::env::current_exe().map_err(|e| e.to_string())?;
@@ -31,8 +36,10 @@ async fn ensure_client(endpoint: &str, session: &str) -> Result<Client, String> 
     // Retry connection up to 2 seconds
     for _ in 0..20 {
         tokio::time::sleep(Duration::from_millis(100)).await;
-        if let Ok(client) = Client::connect(endpoint).await {
-            return Ok(client);
+        if let Ok(mut client) = Client::connect(endpoint).await {
+            if client.ping().await.is_ok() {
+                return Ok(client);
+            }
         }
     }
 
@@ -54,6 +61,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match command {
         Commands::Daemon => {
             run_daemon(&endpoint).await?;
+        }
+        Commands::Stop => {
+            if let Ok(mut client) = Client::connect(&endpoint).await {
+                let list = client.list().await.unwrap_or_default();
+                for node in list {
+                    let _ = client.kill(&node.name).await;
+                }
+            }
+            #[cfg(unix)]
+            let _ = std::fs::remove_file(&endpoint);
+            println!("Session '{}' stopped", cli.session);
         }
         Commands::Attach => {
             let _ = ensure_client(&endpoint, &cli.session).await?;

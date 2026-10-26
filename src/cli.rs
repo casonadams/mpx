@@ -17,6 +17,9 @@ pub struct Cli {
 pub enum Commands {
     /// Start the mpx background daemon
     Daemon,
+    /// Stop the background daemon server (tmux kill-server equivalent)
+    #[command(alias = "kill-server")]
+    Stop,
 
     /// Attach interactive full-screen TUI to the session
     Attach,

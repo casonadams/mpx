@@ -27,15 +27,12 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
     let mut copy_mode_offset: usize = 0;
     let mut split_counter: usize = 1;
 
-    // Ensure at least one active running shell node
+    // Ensure at least one active window running default shell
     let list = client.list().await?;
     let has_running = list.iter().any(|n| n.status == "running");
     if !has_running {
-        let count = list.len() + 1;
         let shell = default_shell();
-        let _ = client
-            .spawn(format!("shell-{}", count), shell, vec![], true, None)
-            .await?;
+        let _ = client.new_window(None, shell, vec![], true).await;
     }
 
     // Preload existing buffer logs into virtual screens
@@ -72,6 +69,11 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
 
         let (raw_panes, dividers, tabs) = client.layout(term_w, layout_h).await.unwrap_or_default();
         if raw_panes.is_empty() {
+            let shell = default_shell();
+            if client.new_window(None, shell, vec![], true).await.is_ok() {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                continue;
+            }
             return Ok(());
         }
         let active_pane = raw_panes
