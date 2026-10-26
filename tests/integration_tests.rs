@@ -182,3 +182,63 @@ async fn test_stream_subscription() {
 
     assert!(captured, "Did not receive streamed token over socket subscription");
 }
+
+#[tokio::test]
+async fn test_screen_snapshot() {
+    let (endpoint, _dir) = start_test_daemon().await;
+    let mut client = Client::connect(&endpoint).await.expect("Failed to connect");
+
+    client
+        .spawn(
+            "screen-node".into(),
+            "echo".into(),
+            vec!["virtual_terminal_screen_text".into()],
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let _ = client.wait("screen-node").await;
+    let screen = client.screen("screen-node").await.expect("Screen failed");
+    assert!(
+        screen.contains("virtual_terminal_screen_text"),
+        "Screen buffer missing text: {}",
+        screen
+    );
+}
+
+#[tokio::test]
+async fn test_split_and_layout() {
+    use mpx::layout::Direction;
+
+    let (endpoint, _dir) = start_test_daemon().await;
+    let mut client = Client::connect(&endpoint).await.expect("Failed to connect");
+
+    client
+        .spawn("pane-left".into(), "echo".into(), vec!["left".into()], false, None)
+        .await
+        .unwrap();
+
+    client
+        .split(
+            Some("pane-left".into()),
+            "pane-right".into(),
+            "echo".into(),
+            vec!["right".into()],
+            false,
+            Direction::Horizontal,
+        )
+        .await
+        .unwrap();
+
+    let layout = client.layout(80, 24).await.expect("Layout failed");
+    assert_eq!(layout.len(), 2);
+    let left = layout.iter().find(|(n, ..)| n == "pane-left").unwrap();
+    let right = layout.iter().find(|(n, ..)| n == "pane-right").unwrap();
+
+    assert_eq!(left.1.width, 40);
+    assert_eq!(right.1.width, 40);
+    assert_eq!(left.1.height, 24);
+    assert_eq!(right.1.height, 24);
+}

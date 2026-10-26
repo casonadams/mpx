@@ -9,12 +9,14 @@ use tokio::sync::{broadcast, Mutex, Notify, RwLock};
 use super::{Node, NodeError};
 use crate::buffer::RingBuffer;
 use crate::protocol::{NodeInfo, StreamEvent};
+use crate::vt::VtScreen;
 
 pub struct TaskNode {
     name: String,
     command: String,
     pid: Option<u32>,
     buffer: Arc<RwLock<RingBuffer>>,
+    screen: Arc<RwLock<VtScreen>>,
     stdin: Option<Arc<Mutex<tokio::process::ChildStdin>>>,
     child_handle: Option<Arc<Mutex<tokio::process::Child>>>,
     exit_code: Arc<RwLock<Option<i32>>>,
@@ -47,6 +49,7 @@ impl TaskNode {
         let stderr = child.stderr.take();
 
         let buffer = Arc::new(RwLock::new(RingBuffer::default()));
+        let screen = Arc::new(RwLock::new(VtScreen::new(80, 24)));
         let exit_code = Arc::new(RwLock::new(None));
         let exit_notify = Arc::new(Notify::new());
         let running = Arc::new(AtomicBool::new(true));
@@ -61,6 +64,7 @@ impl TaskNode {
         if let Some(mut out) = stdout {
             let buf_clone = Arc::clone(&buffer);
             let tx_clone = event_tx.clone();
+            let screen_clone = Arc::clone(&screen);
             let node_name = name.clone();
             tokio::spawn(async move {
                 let mut chunk = [0u8; 4096];
@@ -72,6 +76,10 @@ impl TaskNode {
                             {
                                 let mut b = buf_clone.write().await;
                                 b.write(bytes);
+                            }
+                            {
+                                let mut sc = screen_clone.write().await;
+                                sc.feed(bytes);
                             }
                             let text = String::from_utf8_lossy(bytes).into_owned();
                             let _ = tx_clone.send(StreamEvent::Output {
@@ -90,6 +98,7 @@ impl TaskNode {
             let buf_clone = Arc::clone(&buffer);
             let tx_clone = event_tx.clone();
             let node_name = name.clone();
+            let screen_clone = Arc::clone(&screen);
             tokio::spawn(async move {
                 let mut chunk = [0u8; 4096];
                 loop {
@@ -102,6 +111,10 @@ impl TaskNode {
                                 b.write(bytes);
                             }
                             let text = String::from_utf8_lossy(bytes).into_owned();
+                            {
+                                let mut sc = screen_clone.write().await;
+                                sc.feed(bytes);
+                            }
                             let _ = tx_clone.send(StreamEvent::Output {
                                 name: node_name.clone(),
                                 data: text,
@@ -143,6 +156,7 @@ impl TaskNode {
             command: display_cmd,
             pid,
             buffer,
+            screen,
             stdin,
             child_handle: Some(child_arc),
             exit_code,
@@ -205,6 +219,13 @@ impl Node for TaskNode {
             Err(_) => String::new(),
         }
     }
+    fn read_screen(&self) -> String {
+        self.screen
+            .try_read()
+            .map(|s| s.snapshot())
+            .unwrap_or_default()
+    }
+
 
     fn kill(&self) -> Result<(), NodeError> {
         if let Some(child_arc) = &self.child_handle {

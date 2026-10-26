@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use crate::layout::{Direction, Rect};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeInfo {
@@ -38,6 +39,21 @@ pub enum Request {
     Subscribe {
         name: Option<String>,
     },
+    Screen {
+        name: String,
+    },
+    Split {
+        target: Option<String>,
+        name: String,
+        command: String,
+        args: Vec<String>,
+        pty: bool,
+        direction: Direction,
+    },
+    Layout {
+        width: u16,
+        height: u16,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,6 +66,8 @@ pub enum Response {
     Logs(String),
     Exit { code: Option<i32> },
     Error(String),
+    Screen(String),
+    Layout(Vec<(String, Rect, bool)>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

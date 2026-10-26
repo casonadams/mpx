@@ -40,6 +40,15 @@ mpx wait test-watcher
 
 # Terminate a node
 mpx kill test-watcher
+
+# Split active pane horizontally or vertically
+mpx split --direction h --name "worker-2" -- cargo watch
+
+# Inspect 2D virtual terminal screen buffer
+mpx screen repl
+
+# View workspace pane layout geometry
+mpx layout
 ```
 
 ## JSON-RPC 2.0 / NDJSON Socket API

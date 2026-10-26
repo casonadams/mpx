@@ -8,12 +8,14 @@ use tokio::sync::{broadcast, Mutex, Notify, RwLock};
 use super::{Node, NodeError};
 use crate::buffer::RingBuffer;
 use crate::protocol::{NodeInfo, StreamEvent};
+use crate::vt::VtScreen;
 
 pub struct PtyNode {
     name: String,
     command: String,
     pid: Option<u32>,
     buffer: Arc<RwLock<RingBuffer>>,
+    screen: Arc<RwLock<VtScreen>>,
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     _master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
     exit_code: Arc<RwLock<Option<i32>>>,
@@ -61,6 +63,7 @@ impl PtyNode {
             .map_err(|e| NodeError::Internal(format!("Failed to take PTY writer: {}", e)))?;
 
         let buffer = Arc::new(RwLock::new(RingBuffer::default()));
+        let screen = Arc::new(RwLock::new(VtScreen::new(80, 24)));
         let exit_code = Arc::new(RwLock::new(None));
         let exit_notify = Arc::new(Notify::new());
         let running = Arc::new(AtomicBool::new(true));
@@ -73,6 +76,7 @@ impl PtyNode {
 
         // Background reader thread for synchronous PTY reader
         let buf_clone = Arc::clone(&buffer);
+        let screen_clone = Arc::clone(&screen);
         let tx_clone = event_tx.clone();
         let node_name = name.clone();
         let running_read = Arc::clone(&running);
@@ -86,6 +90,9 @@ impl PtyNode {
                         let bytes = &chunk[..n];
                         if let Ok(mut b) = buf_clone.try_write() {
                             b.write(bytes);
+                        }
+                        if let Ok(mut sc) = screen_clone.try_write() {
+                            sc.feed(bytes);
                         }
                         let text = String::from_utf8_lossy(bytes).into_owned();
                         let _ = tx_clone.send(StreamEvent::Output {
@@ -124,6 +131,7 @@ impl PtyNode {
             command: display_cmd,
             pid,
             buffer,
+            screen,
             writer: Arc::new(Mutex::new(writer)),
             _master: Arc::new(Mutex::new(pair.master)),
             exit_code,
@@ -185,6 +193,13 @@ impl Node for PtyNode {
             Err(_) => String::new(),
         }
     }
+    fn read_screen(&self) -> String {
+        self.screen
+            .try_read()
+            .map(|s| s.snapshot())
+            .unwrap_or_default()
+    }
+
 
     fn kill(&self) -> Result<(), NodeError> {
         self.running.store(false, Ordering::SeqCst);

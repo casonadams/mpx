@@ -10,10 +10,12 @@ use crate::node::pty::PtyNode;
 use crate::node::task::TaskNode;
 use crate::node::Node;
 use crate::protocol::{DaemonMessage, NodeInfo, Request, Response, StreamEvent};
+use crate::layout::{Direction, Rect, Workspace};
 
 pub struct DaemonState {
     nodes: RwLock<HashMap<String, Arc<dyn Node>>>,
     event_tx: broadcast::Sender<StreamEvent>,
+    workspace: RwLock<Workspace>,
 }
 
 impl DaemonState {
@@ -22,6 +24,7 @@ impl DaemonState {
         Arc::new(Self {
             nodes: RwLock::new(HashMap::new()),
             event_tx,
+            workspace: RwLock::new(Workspace::new("main".to_string())),
         })
     }
 
@@ -66,7 +69,11 @@ impl DaemonState {
             pid: info.pid,
         });
 
-        nodes.insert(name, node);
+        nodes.insert(name.clone(), node);
+        {
+            let mut ws = self.workspace.write().await;
+            ws.add_or_split(name.clone(), Direction::Horizontal);
+        }
         Ok(info)
     }
 
@@ -111,6 +118,74 @@ impl DaemonState {
                 .ok_or_else(|| format!("Node '{}' not found", name))?
         };
         Ok(node.wait_exit().await)
+    }
+
+    pub async fn get_screen(&self, name: &str) -> Result<String, String> {
+        let nodes = self.nodes.read().await;
+        let node = nodes
+            .get(name)
+            .ok_or_else(|| format!("Node '{}' not found", name))?;
+        Ok(node.read_screen())
+    }
+
+    pub async fn split_node(
+        &self,
+        target: Option<String>,
+        name: String,
+        cmd: String,
+        args: Vec<String>,
+        pty: bool,
+        dir: Direction,
+    ) -> Result<NodeInfo, String> {
+        let mut nodes = self.nodes.write().await;
+        if nodes.contains_key(&name) {
+            return Err(format!("Node '{}' already exists", name));
+        }
+
+        let node: Arc<dyn Node> = if pty {
+            let pty_node = PtyNode::spawn(
+                name.clone(),
+                cmd,
+                &args,
+                None,
+                self.event_tx.clone(),
+            )
+            .map_err(|e| e.to_string())?;
+            Arc::new(pty_node)
+        } else {
+            let task_node = TaskNode::spawn(
+                name.clone(),
+                cmd,
+                &args,
+                None,
+                self.event_tx.clone(),
+            )
+            .map_err(|e| e.to_string())?;
+            Arc::new(task_node)
+        };
+
+        let info = node.info();
+        let _ = self.event_tx.send(StreamEvent::Spawned {
+            name: name.clone(),
+            pid: info.pid,
+        });
+
+        nodes.insert(name.clone(), node);
+
+        {
+            let mut ws = self.workspace.write().await;
+            if let Some(t) = target {
+                ws.focus(&t);
+            }
+            ws.add_or_split(name, dir);
+        }
+
+        Ok(info)
+    }
+
+    pub async fn compute_layout(&self, width: u16, height: u16) -> Vec<(String, Rect, bool)> {
+        let ws = self.workspace.read().await;
+        ws.compute_layout(width, height)
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<StreamEvent> {
@@ -207,6 +282,42 @@ pub async fn handle_client<S: AsyncStream>(state: Arc<DaemonState>, stream: S) {
                     Ok(code) => Response::Exit { code },
                     Err(e) => Response::Error(e),
                 };
+                let _ = framed
+                    .send(serde_json::to_string(&DaemonMessage::Response(resp)).unwrap())
+                    .await;
+            }
+            Request::Screen { name } => {
+                let res = state.get_screen(&name).await;
+                let resp = match res {
+                    Ok(text) => Response::Screen(text),
+                    Err(e) => Response::Error(e),
+                };
+                let _ = framed
+                    .send(serde_json::to_string(&DaemonMessage::Response(resp)).unwrap())
+                    .await;
+            }
+            Request::Split {
+                target,
+                name,
+                command,
+                args,
+                pty,
+                direction,
+            } => {
+                let res = state
+                    .split_node(target, name, command, args, pty, direction)
+                    .await;
+                let resp = match res {
+                    Ok(info) => Response::Node(info),
+                    Err(e) => Response::Error(e),
+                };
+                let _ = framed
+                    .send(serde_json::to_string(&DaemonMessage::Response(resp)).unwrap())
+                    .await;
+            }
+            Request::Layout { width, height } => {
+                let rects = state.compute_layout(width, height).await;
+                let resp = Response::Layout(rects);
                 let _ = framed
                     .send(serde_json::to_string(&DaemonMessage::Response(resp)).unwrap())
                     .await;

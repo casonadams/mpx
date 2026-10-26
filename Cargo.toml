@@ -26,6 +26,8 @@ bytes = "1.10"
 thiserror = "2.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+vte = "0.14"
+crossterm = { version = "0.28", features = ["event-stream"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

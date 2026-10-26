@@ -3,6 +3,7 @@ use tokio_util::codec::{Framed, LinesCodec};
 
 use crate::ipc::{connect, IpcStream};
 use crate::protocol::{DaemonMessage, NodeInfo, Request, Response, StreamEvent};
+use crate::layout::{Direction, Rect};
 
 pub struct Client {
     framed: Framed<IpcStream, LinesCodec>,
@@ -130,6 +131,53 @@ impl Client {
             _ => Err("Invalid response to Wait".into()),
         }
     }
+    pub async fn screen(&mut self, name: &str) -> Result<String, String> {
+        match self
+            .call(Request::Screen {
+                name: name.to_string(),
+            })
+            .await?
+        {
+            Response::Screen(text) => Ok(text),
+            Response::Error(e) => Err(e),
+            _ => Err("Invalid response to Screen".into()),
+        }
+    }
+
+    pub async fn split(
+        &mut self,
+        target: Option<String>,
+        name: String,
+        command: String,
+        args: Vec<String>,
+        pty: bool,
+        direction: Direction,
+    ) -> Result<NodeInfo, String> {
+        match self
+            .call(Request::Split {
+                target,
+                name,
+                command,
+                args,
+                pty,
+                direction,
+            })
+            .await?
+        {
+            Response::Node(info) => Ok(info),
+            Response::Error(e) => Err(e),
+            _ => Err("Invalid response to Split".into()),
+        }
+    }
+
+    pub async fn layout(&mut self, width: u16, height: u16) -> Result<Vec<(String, Rect, bool)>, String> {
+        match self.call(Request::Layout { width, height }).await? {
+            Response::Layout(rects) => Ok(rects),
+            Response::Error(e) => Err(e),
+            _ => Err("Invalid response to Layout".into()),
+        }
+    }
+
 
     pub async fn stream_logs<F>(&mut self, name: Option<String>, mut handler: F) -> Result<(), String>
     where

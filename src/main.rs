@@ -7,6 +7,7 @@ use mpx::client::Client;
 use mpx::daemon::run_daemon;
 use mpx::ipc::default_endpoint;
 use mpx::protocol::StreamEvent;
+use mpx::layout::Direction;
 
 async fn ensure_client(endpoint: &str, session: &str) -> Result<Client, String> {
     if let Ok(client) = Client::connect(endpoint).await {
@@ -151,6 +152,62 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let code = client.wait(&name).await.map_err(|e| format!("Wait error: {}", e))?;
             if let Some(c) = code {
                 std::process::exit(c);
+            }
+        }
+        Commands::Screen { name } => {
+            let mut client = ensure_client(&endpoint, &cli.session).await?;
+            let screen = client.screen(&name).await.map_err(|e| format!("Screen error: {}", e))?;
+            print!("{}", screen);
+        }
+        Commands::Split {
+            target,
+            name,
+            direction,
+            pty,
+            command,
+            args,
+        } => {
+            let mut client = ensure_client(&endpoint, &cli.session).await?;
+            let node_name = name.unwrap_or_else(|| {
+                std::path::Path::new(&command)
+                    .file_name()
+                    .map(|f| f.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "task".to_string())
+            });
+
+            let dir = if direction.to_lowercase().starts_with('v') {
+                Direction::Vertical
+            } else {
+                Direction::Horizontal
+            };
+
+            let info = client
+                .split(target, node_name, command, args, pty, dir)
+                .await
+                .map_err(|e| format!("Split error: {}", e))?;
+
+            println!(
+                "Split pane created: '{}' (pid: {}, pty: {})",
+                info.name,
+                info.pid.map(|p| p.to_string()).unwrap_or("-".into()),
+                info.pty
+            );
+        }
+        Commands::Layout { width, height } => {
+            let mut client = ensure_client(&endpoint, &cli.session).await?;
+            let (term_w, term_h) = crossterm::terminal::size().unwrap_or((80, 24));
+            let w = width.unwrap_or(term_w);
+            let h = height.unwrap_or(term_h);
+
+            let rects = client.layout(w, h).await.map_err(|e| format!("Layout error: {}", e))?;
+            println!("Workspace Layout ({}x{}):", w, h);
+            println!("{:<16} {:<10} {:<10} {:<10}", "PANE", "RECT (x,y)", "SIZE (wxh)", "FOCUSED");
+            println!("{}", "-".repeat(50));
+            for (name, rect, focused) in rects {
+                let pos = format!("{},{}", rect.x, rect.y);
+                let size = format!("{}x{}", rect.width, rect.height);
+                let foc = if focused { "yes" } else { "no" };
+                println!("{:<16} {:<10} {:<10} {:<10}", name, pos, size, foc);
             }
         }
     }
