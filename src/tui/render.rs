@@ -66,6 +66,8 @@ pub struct RenderPaneContext<'a> {
     pub selection: Option<&'a SelectionRange>,
     pub scroll_offset: usize,
     pub badge: Option<&'a str>,
+    pub prev_frame: Option<&'a mut [(char, Color, Color)]>,
+    pub term_w: u16,
 }
 
 
@@ -76,7 +78,7 @@ impl Compositor {
     /// Renders terminal pane content directly into its bounding box
     pub fn draw_pane_content<W: Write>(
         w: &mut W,
-        ctx: RenderPaneContext<'_>,
+        mut ctx: RenderPaneContext<'_>,
     ) -> io::Result<()> {
         if ctx.rect.width == 0 || ctx.rect.height == 0 {
             return Ok(());
@@ -93,7 +95,7 @@ impl Compositor {
         });
 
         for row in 0..ctx.rect.height as usize {
-            render_row_cells(w, row, &ctx, badge_info)?;
+            render_row_cells(w, row, &mut ctx, badge_info)?;
         }
 
         execute!(w, ResetColor)?;
@@ -341,19 +343,50 @@ fn cell_content(
     }
 }
 
+fn should_skip_cell(
+    prev_frame: &mut Option<&mut [(char, Color, Color)]>,
+    screen_x: u16,
+    screen_y: u16,
+    term_w: u16,
+    cell: (char, Color, Color),
+) -> bool {
+    if let Some(prev) = prev_frame {
+        let idx = (screen_y as usize) * (term_w as usize) + (screen_x as usize);
+        if idx < prev.len() {
+            if prev[idx] == cell {
+                return true;
+            }
+            prev[idx] = cell;
+        }
+    }
+    false
+}
+
 fn render_row_cells<W: Write>(
     w: &mut W,
     row: usize,
-    ctx: &RenderPaneContext<'_>,
+    ctx: &mut RenderPaneContext<'_>,
     badge_info: Option<(usize, &[char])>,
 ) -> io::Result<()> {
     let abs_row = ctx.grid.abs_line(row, ctx.scroll_offset);
-    execute!(w, MoveTo(ctx.rect.x, ctx.rect.y + row as u16))?;
+    let screen_y = ctx.rect.y + row as u16;
     let mut cur_fg: Option<Color> = None;
     let mut cur_bg: Option<Color> = None;
+    let mut cursor_x: Option<u16> = None;
+    let term_w = ctx.term_w;
 
     for col in 0..ctx.rect.width as usize {
+        let screen_x = ctx.rect.x + col as u16;
         let (ch, fg, bg) = cell_content(col, row, abs_row, ctx, badge_info);
+        let cell_tuple = (ch, fg, bg);
+
+        if should_skip_cell(&mut ctx.prev_frame, screen_x, screen_y, term_w, cell_tuple) {
+            continue;
+        }
+
+        if cursor_x != Some(screen_x) {
+            execute!(w, MoveTo(screen_x, screen_y))?;
+        }
         if cur_fg != Some(fg) {
             execute!(w, SetForegroundColor(fg))?;
             cur_fg = Some(fg);
@@ -363,6 +396,7 @@ fn render_row_cells<W: Write>(
             cur_bg = Some(bg);
         }
         execute!(w, Print(ch))?;
+        cursor_x = Some(screen_x + 1);
     }
     execute!(w, ResetColor)?;
     Ok(())
@@ -472,11 +506,53 @@ mod tests {
                 selection: None,
                 scroll_offset: 0,
                 badge: None,
+                prev_frame: None,
+                term_w: 10,
             },
         )
         .unwrap();
         let out = String::from_utf8_lossy(&buf);
         assert!(out.contains('A'));
+    }
+
+    #[test]
+    fn test_draw_pane_content_differential() {
+        let mut buf1 = Vec::new();
+        let mut grid = Grid::new(10, 5);
+        grid.put_char('A');
+        let rect = Rect::new(0, 0, 10, 5);
+        let mut prev_frame = vec![('\0', Color::Reset, Color::Reset); 50];
+
+        Compositor::draw_pane_content(
+            &mut buf1,
+            RenderPaneContext {
+                rect,
+                grid: &grid,
+                selection: None,
+                scroll_offset: 0,
+                badge: None,
+                prev_frame: Some(&mut prev_frame),
+                term_w: 10,
+            },
+        )
+        .unwrap();
+        assert!(String::from_utf8_lossy(&buf1).contains('A'));
+
+        let mut buf2 = Vec::new();
+        Compositor::draw_pane_content(
+            &mut buf2,
+            RenderPaneContext {
+                rect,
+                grid: &grid,
+                selection: None,
+                scroll_offset: 0,
+                badge: None,
+                prev_frame: Some(&mut prev_frame),
+                term_w: 10,
+            },
+        )
+        .unwrap();
+        assert!(!String::from_utf8_lossy(&buf2).contains('A'));
     }
 
     #[test]

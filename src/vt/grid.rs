@@ -233,31 +233,35 @@ impl Grid {
         let top = self.scroll_top;
         let bottom = self.scroll_bottom;
         let cols = self.cols;
+        let window_height = bottom - top + 1;
+        let actual_count = count.min(window_height);
 
-        for _ in 0..count {
-            if top == 0 {
-                let mut line = Vec::with_capacity(cols);
-                for i in 0..cols {
-                    line.push(self.cells[i]);
-                }
-                if self.history.len() >= self.history_limit {
-                    self.history.pop_front();
-                }
+        if top == 0 {
+            for row in 0..actual_count {
+                let start = row * cols;
+                let end = start + cols;
+                let mut line = if self.history.len() >= self.history_limit {
+                    let mut recycled = self.history.pop_front().unwrap_or_default();
+                    recycled.clear();
+                    recycled
+                } else {
+                    Vec::with_capacity(cols)
+                };
+                line.extend_from_slice(&self.cells[start..end]);
                 self.history.push_back(line);
             }
-
-            for y in top..bottom {
-                let src_start = (y + 1) * cols;
-                let dst_start = y * cols;
-                for i in 0..cols {
-                    self.cells[dst_start + i] = self.cells[src_start + i];
-                }
-            }
-            let clear_start = bottom * cols;
-            for i in 0..cols {
-                self.cells[clear_start + i] = Cell::default();
-            }
         }
+
+        if actual_count < window_height {
+            let src_start = (top + actual_count) * cols;
+            let src_end = (bottom + 1) * cols;
+            let dst_start = top * cols;
+            self.cells.copy_within(src_start..src_end, dst_start);
+        }
+
+        let clear_start = (bottom + 1 - actual_count) * cols;
+        let clear_end = (bottom + 1) * cols;
+        self.cells[clear_start..clear_end].fill(Cell::default());
     }
 
     pub fn clear_line(&mut self, mode: usize) {
@@ -382,6 +386,21 @@ mod tests {
         assert!(!rendered.contains("line1"));
         assert!(rendered.contains("line2"));
         assert!(rendered.contains("line3"));
+    }
+
+    #[test]
+    fn test_grid_multi_scroll_and_history() {
+        let mut grid = Grid::new(10, 4);
+        for i in 0..6 {
+            for c in format!("row{}", i).chars() {
+                grid.put_char(c);
+            }
+            grid.carriage_return();
+            grid.newline();
+        }
+        assert!(grid.history.len() >= 2);
+        assert_eq!(grid.history[0][0].c, 'r');
+        assert_eq!(grid.history[0][3].c, '0');
     }
 
     #[test]

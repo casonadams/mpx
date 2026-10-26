@@ -9,7 +9,7 @@ use super::render::{Compositor, SelectionRange};
 use super::terminal::TerminalGuard;
 use crate::client::Client;
 use crate::layout::geometry::Rect;
-use crate::layout::Direction;
+use crate::layout::{Direction, Divider, WindowTab};
 use crate::protocol::{NewWindowOpts, SplitOpts, StreamEvent};
 use crate::vt::VtScreen;
 
@@ -72,15 +72,20 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
     let mut pane_dimensions: HashMap<String, (u16, u16)> = HashMap::new();
     let mut last_render: Option<std::time::Instant> = None;
     let frame_budget = Duration::from_millis(16);
+    let mut layout_cache = LayoutCache::new();
+
     loop {
         wait_for_frame(last_render, frame_budget).await;
         let (term_w, term_h) = crossterm::terminal::size().unwrap_or((80, 24));
         let layout_h = term_h.saturating_sub(1); // 1 line reserved for tmux status bar
 
-        let (raw_panes, dividers, tabs) = client.layout(term_w, layout_h).await.unwrap_or_default();
-        if raw_panes.is_empty() {
+        if !layout_cache.sync(&mut client, term_w, layout_h).await {
             return Ok(());
         }
+        let raw_panes = &layout_cache.panes;
+        let dividers = &layout_cache.dividers;
+        let tabs = &layout_cache.tabs;
+
         let active_pane = raw_panes
             .iter()
             .find(|(.., focused)| *focused)
@@ -138,6 +143,8 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
                         selection: sel.as_ref(),
                         scroll_offset: offset,
                         badge: badge.as_deref(),
+                        prev_frame: Some(layout_cache.prev_frame.as_mut_slice()),
+                        term_w,
                     },
                 );
             }
@@ -312,6 +319,7 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
 
                         if leader_active {
                             leader_active = false;
+                            layout_cache.dirty = true;
 
                             let is_split_vert = key.code == KeyCode::Char('%')
                                 || key.code == KeyCode::Char('|')
@@ -490,100 +498,21 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
                         }
                     }
                     Event::Mouse(mouse) => {
-                        match mouse.kind {
-                            MouseEventKind::Moved => {
-                                // Ignore hover movement without triggering redraw or cursor flicker!
-                                continue;
-                            }
-                            MouseEventKind::Down(MouseButton::Left) => {
-                                for (name, rect, _) in &panes {
-                                    if rect.contains(mouse.column, mouse.row) {
-                                        if *name != active_pane {
-                                            let _ = client.focus(name).await;
-                                        }
-                                        let local_x = (mouse.column.saturating_sub(rect.x) as usize).min(rect.width.saturating_sub(1) as usize);
-                                        let local_y = (mouse.row.saturating_sub(rect.y) as usize).min(rect.height.saturating_sub(1) as usize);
-                                        let abs_y = if let Some(vt) = vt_screens.get(name) {
-                                            vt.grid().abs_line(local_y, 0)
-                                        } else {
-                                            local_y
-                                        };
-                                        copy_state = Some(CopyState {
-                                            cursor_x: local_x,
-                                            cursor_y: local_y,
-                                            scroll_offset: 0,
-                                            anchor_x: local_x,
-                                            anchor_abs_y: abs_y,
-                                            mode: SelectionKind::Character,
-                                        });
-                                        break;
-                                    }
-                                }
-                            }
-                            MouseEventKind::Drag(MouseButton::Left) => {
-                                if let (Some(rect), Some(cs)) = (active_rect, &mut copy_state) {
-                                    let local_x = (mouse.column.saturating_sub(rect.x) as usize).min(rect.width.saturating_sub(1) as usize);
-                                    let local_y = (mouse.row.saturating_sub(rect.y) as usize).min(rect.height.saturating_sub(1) as usize);
-                                    cs.cursor_x = local_x;
-                                    cs.cursor_y = local_y;
-                                }
-                            }
-                            MouseEventKind::Up(MouseButton::Left) => {
-                                if let (Some(cs), Some(vt)) = (&copy_state, vt_screens.get(&active_pane)) {
-                                    let cursor_abs_y = vt.grid().abs_line(cs.cursor_y, cs.scroll_offset);
-                                    if cs.anchor_x != cs.cursor_x || cs.anchor_abs_y != cursor_abs_y {
-                                        // Automatically yank selection on mouse drag release (tmux MouseDragEnd1Pane)
-                                        let text = cs.yank_text(vt.grid());
-                                        if !text.trim().is_empty() {
-                                            super::render::copy_to_clipboard(&text);
-                                        }
-                                    }
-                                }
-                            }
-                            MouseEventKind::ScrollUp => {
-                                let hist_len = vt_screens.get(&active_pane).map(|vt| vt.grid().history_len()).unwrap_or(0);
-                                if copy_state.is_none() {
-                                    let (cx, cy) = if let Some(vt) = vt_screens.get(&active_pane) {
-                                        (vt.grid().cursor.x, vt.grid().cursor.y)
-                                    } else {
-                                        (0, 0)
-                                    };
-                                    let abs_y = if let Some(vt) = vt_screens.get(&active_pane) {
-                                        vt.grid().abs_line(cy, 0)
-                                    } else {
-                                        0
-                                    };
-                                    let initial_scroll = 3.min(hist_len);
-                                    let initial_y = if hist_len == 0 { cy.saturating_sub(3) } else { cy };
-                                    copy_state = Some(CopyState {
-                                        cursor_x: cx,
-                                        cursor_y: initial_y,
-                                        scroll_offset: initial_scroll,
-                                        anchor_x: cx,
-                                        anchor_abs_y: abs_y,
-                                        mode: SelectionKind::None,
-                                    });
-                                } else if let Some(cs) = &mut copy_state {
-                                    if hist_len > 0 && cs.scroll_offset < hist_len {
-                                        cs.scroll_offset = (cs.scroll_offset + 3).min(hist_len);
-                                    } else {
-                                        cs.cursor_y = cs.cursor_y.saturating_sub(3);
-                                    }
-                                }
-                            }
-                            MouseEventKind::ScrollDown => {
-                                if let Some(cs) = &mut copy_state {
-                                    if cs.scroll_offset > 0 {
-                                        cs.scroll_offset = cs.scroll_offset.saturating_sub(3);
-                                    } else {
-                                        let pane_h = active_rect.map(|r| r.height as usize).unwrap_or(24);
-                                        cs.cursor_y = (cs.cursor_y + 3).min(pane_h.saturating_sub(1));
-                                    }
-                                }
-                            }
-                            _ => {
-                                continue;
-                            }
+                        let dirty = handle_mouse(
+                            mouse.kind,
+                            mouse.column,
+                            mouse.row,
+                            &mut client,
+                            MouseContext {
+                                panes: &panes,
+                                active_pane: &active_pane,
+                                active_rect,
+                                copy_state: &mut copy_state,
+                                vt_screens: &vt_screens,
+                            },
+                        ).await;
+                        if dirty {
+                            layout_cache.dirty = true;
                         }
                     }
                     Event::Paste(pasted) => {
@@ -591,7 +520,9 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
                             let _ = client.send_input(&active_pane, &pasted).await;
                         }
                     }
-                    Event::Resize(..) => {}
+                    Event::Resize(..) => {
+                        layout_cache.dirty = true;
+                    }
                     _ => {}
                 }
             }
@@ -603,7 +534,9 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
                 }
 
                 for ev in events {
-                    apply_stream_event(ev, &mut vt_screens);
+                    if apply_stream_event(ev, &mut vt_screens) {
+                        layout_cache.dirty = true;
+                    }
                 }
             }
             else => {
@@ -690,19 +623,163 @@ async fn sync_pane_dimensions(
     }
 }
 
-fn apply_stream_event(ev: StreamEvent, vt_screens: &mut HashMap<String, VtScreen>) {
+fn apply_stream_event(ev: StreamEvent, vt_screens: &mut HashMap<String, VtScreen>) -> bool {
     match ev {
         StreamEvent::Output { name, data } => {
             let vt = vt_screens
                 .entry(name)
                 .or_insert_with(|| VtScreen::new(80, 24));
             vt.feed(data.as_bytes());
+            false
         }
         StreamEvent::Exit { name, .. } => {
             vt_screens.remove(&name);
+            true
+        }
+        _ => false,
+    }
+}
+
+struct LayoutCache {
+    dirty: bool,
+    panes: Vec<(String, Rect, bool)>,
+    dividers: Vec<Divider>,
+    tabs: Vec<WindowTab>,
+    prev_frame: Vec<(char, crossterm::style::Color, crossterm::style::Color)>,
+}
+
+impl LayoutCache {
+    fn new() -> Self {
+        Self {
+            dirty: true,
+            panes: Vec::new(),
+            dividers: Vec::new(),
+            tabs: Vec::new(),
+            prev_frame: Vec::new(),
+        }
+    }
+
+    async fn sync(&mut self, client: &mut Client, term_w: u16, layout_h: u16) -> bool {
+        let total = (term_w as usize) * (layout_h as usize + 1);
+        if self.prev_frame.len() != total {
+            self.prev_frame.clear();
+            self.prev_frame.resize(total, ('\0', crossterm::style::Color::Reset, crossterm::style::Color::Reset));
+            self.dirty = true;
+        }
+
+        if self.dirty || self.panes.is_empty() {
+            if let Ok((p, d, t)) = client.layout(term_w, layout_h).await {
+                if !p.is_empty() {
+                    self.panes = p;
+                    self.dividers = d;
+                    self.tabs = t;
+                    self.dirty = false;
+                }
+            }
+        }
+        !self.panes.is_empty()
+    }
+}
+
+struct MouseContext<'a> {
+    panes: &'a [(String, Rect, bool)],
+    active_pane: &'a str,
+    active_rect: Option<Rect>,
+    copy_state: &'a mut Option<CopyState>,
+    vt_screens: &'a HashMap<String, VtScreen>,
+}
+
+async fn handle_mouse(
+    kind: MouseEventKind,
+    col: u16,
+    row: u16,
+    client: &mut Client,
+    ctx: MouseContext<'_>,
+) -> bool {
+    let mut layout_dirty = false;
+    match kind {
+        MouseEventKind::Moved => {}
+        MouseEventKind::Down(MouseButton::Left) => {
+            for (name, rect, _) in ctx.panes {
+                if rect.contains(col, row) {
+                    if *name != ctx.active_pane {
+                        let _ = client.focus(name).await;
+                        layout_dirty = true;
+                    }
+                    let local_x = (col.saturating_sub(rect.x) as usize).min(rect.width.saturating_sub(1) as usize);
+                    let local_y = (row.saturating_sub(rect.y) as usize).min(rect.height.saturating_sub(1) as usize);
+                    let abs_y = if let Some(vt) = ctx.vt_screens.get(name) {
+                        vt.grid().abs_line(local_y, 0)
+                    } else {
+                        local_y
+                    };
+                    *ctx.copy_state = Some(CopyState {
+                        cursor_x: local_x,
+                        cursor_y: local_y,
+                        scroll_offset: 0,
+                        anchor_x: local_x,
+                        anchor_abs_y: abs_y,
+                        mode: SelectionKind::Character,
+                    });
+                    break;
+                }
+            }
+        }
+        MouseEventKind::Drag(MouseButton::Left) => {
+            if let (Some(rect), Some(cs)) = (ctx.active_rect, ctx.copy_state) {
+                let local_x = (col.saturating_sub(rect.x) as usize).min(rect.width.saturating_sub(1) as usize);
+                let local_y = (row.saturating_sub(rect.y) as usize).min(rect.height.saturating_sub(1) as usize);
+                cs.cursor_x = local_x;
+                cs.cursor_y = local_y;
+            }
+        }
+        MouseEventKind::Up(MouseButton::Left) => {
+            if let (Some(cs), Some(vt)) = (&*ctx.copy_state, ctx.vt_screens.get(ctx.active_pane)) {
+                let cursor_abs_y = vt.grid().abs_line(cs.cursor_y, cs.scroll_offset);
+                if cs.anchor_x != cs.cursor_x || cs.anchor_abs_y != cursor_abs_y {
+                    let text = cs.yank_text(vt.grid());
+                    if !text.trim().is_empty() {
+                        super::render::copy_to_clipboard(&text);
+                    }
+                }
+            }
+        }
+        MouseEventKind::ScrollUp => {
+            let hist_len = ctx.vt_screens.get(ctx.active_pane).map(|vt| vt.grid().history_len()).unwrap_or(0);
+            if ctx.copy_state.is_none() {
+                let (cx, cy) = ctx.vt_screens.get(ctx.active_pane).map(|vt| (vt.grid().cursor.x, vt.grid().cursor.y)).unwrap_or((0, 0));
+                let abs_y = ctx.vt_screens.get(ctx.active_pane).map(|vt| vt.grid().abs_line(cy, 0)).unwrap_or(0);
+                let initial_scroll = 3.min(hist_len);
+                let initial_y = if hist_len == 0 { cy.saturating_sub(3) } else { cy };
+                *ctx.copy_state = Some(CopyState {
+                    cursor_x: cx,
+                    cursor_y: initial_y,
+                    scroll_offset: initial_scroll,
+                    anchor_x: cx,
+                    anchor_abs_y: abs_y,
+                    mode: SelectionKind::None,
+                });
+            } else if let Some(cs) = ctx.copy_state {
+                if hist_len > 0 && cs.scroll_offset < hist_len {
+                    cs.scroll_offset = (cs.scroll_offset + 3).min(hist_len);
+                } else {
+                    cs.cursor_y = cs.cursor_y.saturating_sub(3);
+                }
+            }
+        }
+        MouseEventKind::ScrollDown => {
+            if let Some(cs) = ctx.copy_state {
+                if cs.scroll_offset > 0 {
+                    cs.scroll_offset = cs.scroll_offset.saturating_sub(3);
+                } else {
+                    let pane_h = ctx.active_rect.map(|r| r.height as usize).unwrap_or(24);
+                    cs.cursor_y = (cs.cursor_y + 3).min(pane_h.saturating_sub(1));
+                }
+            }
         }
         _ => {}
     }
+    layout_dirty
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
