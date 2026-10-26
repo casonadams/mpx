@@ -123,12 +123,14 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
                     .entry(name.clone())
                     .or_insert_with(|| VtScreen::new(rect.width as usize, rect.height as usize));
 
-                let sel = if *is_focused {
-                    copy_state.as_ref().and_then(|cs| cs.selection_range())
+                let (sel, offset) = if *is_focused {
+                    let s = copy_state.as_ref().and_then(|cs| cs.selection_range());
+                    let off = copy_state.as_ref().map(|cs| cs.scroll_offset).unwrap_or(0);
+                    (s, off)
                 } else {
-                    None
+                    (None, 0)
                 };
-                let _ = Compositor::draw_pane_content(&mut out, *rect, vt.grid(), sel.as_ref());
+                let _ = Compositor::draw_pane_content(&mut out, *rect, vt.grid(), sel.as_ref(), offset);
             }
         }
 
@@ -160,7 +162,8 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
                 SelectionKind::Character => "VISUAL",
                 SelectionKind::Line => "VISUAL LINE",
             };
-            let _ = Compositor::draw_copy_mode_badge(&mut out, rect, label);
+            let hist_len = vt_screens.get(&active_pane).map(|vt| vt.grid().history_len()).unwrap_or(0);
+            let _ = Compositor::draw_copy_mode_badge(&mut out, rect, label, cs.scroll_offset, hist_len);
         }
 
         // Position hardware terminal cursor at active shell prompt and unhide
@@ -200,6 +203,8 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
                             let pane_w = active_rect.map(|r| r.width as usize).unwrap_or(80);
                             let pane_h = active_rect.map(|r| r.height as usize).unwrap_or(24);
 
+                            let hist_len = vt_screens.get(&active_pane).map(|vt| vt.grid().history_len()).unwrap_or(0);
+
                             match key.code {
                                 KeyCode::Char('h') | KeyCode::Left => {
                                     cs.cursor_x = cs.cursor_x.saturating_sub(1);
@@ -208,10 +213,18 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
                                     cs.cursor_x = (cs.cursor_x + 1).min(pane_w.saturating_sub(1));
                                 }
                                 KeyCode::Char('k') | KeyCode::Up => {
-                                    cs.cursor_y = cs.cursor_y.saturating_sub(1);
+                                    if cs.cursor_y > 0 {
+                                        cs.cursor_y -= 1;
+                                    } else if cs.scroll_offset < hist_len {
+                                        cs.scroll_offset += 1;
+                                    }
                                 }
                                 KeyCode::Char('j') | KeyCode::Down => {
-                                    cs.cursor_y = (cs.cursor_y + 1).min(pane_h.saturating_sub(1));
+                                    if cs.cursor_y + 1 < pane_h {
+                                        cs.cursor_y += 1;
+                                    } else if cs.scroll_offset > 0 {
+                                        cs.scroll_offset -= 1;
+                                    }
                                 }
                                 KeyCode::Char('0') | KeyCode::Char('^') => {
                                     cs.cursor_x = 0;
@@ -226,22 +239,24 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
                                     cs.cursor_x = cs.cursor_x.saturating_sub(4);
                                 }
                                 KeyCode::Char('u') if is_ctrl => {
-                                    cs.cursor_y = cs.cursor_y.saturating_sub(10);
+                                    cs.scroll_offset = (cs.scroll_offset + 15).min(hist_len);
                                 }
                                 KeyCode::Char('d') if is_ctrl => {
-                                    cs.cursor_y = (cs.cursor_y + 10).min(pane_h.saturating_sub(1));
+                                    cs.scroll_offset = cs.scroll_offset.saturating_sub(15);
                                 }
                                 KeyCode::PageUp => {
-                                    cs.cursor_y = cs.cursor_y.saturating_sub(10);
+                                    cs.scroll_offset = (cs.scroll_offset + 15).min(hist_len);
                                 }
                                 KeyCode::PageDown => {
-                                    cs.cursor_y = (cs.cursor_y + 10).min(pane_h.saturating_sub(1));
+                                    cs.scroll_offset = cs.scroll_offset.saturating_sub(15);
                                 }
                                 KeyCode::Char('g') => {
+                                    cs.scroll_offset = hist_len;
                                     cs.cursor_y = 0;
                                     cs.cursor_x = 0;
                                 }
                                 KeyCode::Char('G') => {
+                                    cs.scroll_offset = 0;
                                     cs.cursor_y = pane_h.saturating_sub(1);
                                 }
                                 // Shift-V: Visual Line mode (highlights whole row!)
@@ -377,37 +392,39 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
                                         let shell = default_shell();
                                         let _ = client.new_window(None, shell, vec![], true).await;
                                     }
-                                // Kill pane (tmux x)
-                                KeyCode::Char('x') => {
-                                    if !active_pane.is_empty() {
-                                        zoomed_pane = None;
-                                        let _ = client.kill(&active_pane).await;
+                                    // Kill pane (tmux x)
+                                    KeyCode::Char('x') => {
+                                        if !active_pane.is_empty() {
+                                            zoomed_pane = None;
+                                            let _ = client.kill(&active_pane).await;
+                                        }
                                     }
+                                    // Detach (tmux d)
+                                    KeyCode::Char('d') => {
+                                        return Ok(());
+                                    }
+                                    // Enter copy mode (tmux [)
+                                    KeyCode::Char('[') => {
+                                        let (cx, cy) = if let Some(vt) = vt_screens.get(&active_pane) {
+                                            (vt.grid().cursor.x, vt.grid().cursor.y)
+                                        } else {
+                                            (0, 0)
+                                        };
+                                        copy_state = Some(CopyState {
+                                            cursor_x: cx,
+                                            cursor_y: cy,
+                                            scroll_offset: 0,
+                                            anchor: None,
+                                            mode: SelectionKind::None,
+                                        });
+                                    }
+                                    KeyCode::Esc => {
+                                        // Cancel shortcut popup
+                                    }
+                                    _ => {}
                                 }
-                                // Detach (tmux d)
-                                KeyCode::Char('d') => {
-                                    return Ok(());
-                                }
-                                KeyCode::Char('[') => {
-                                    let (cx, cy) = if let Some(vt) = vt_screens.get(&active_pane) {
-                                        (vt.grid().cursor.x, vt.grid().cursor.y)
-                                    } else {
-                                        (0, 0)
-                                    };
-                                    copy_state = Some(CopyState {
-                                        cursor_x: cx,
-                                        cursor_y: cy,
-                                        anchor: None,
-                                        mode: SelectionKind::None,
-                                    });
-                                }
-                                KeyCode::Esc => {
-                                    // Cancel shortcut popup
-                                }
-                                _ => {}
                             }
-                        }
-                    } else {
+                        } else {
                             // Forward key input directly to active pane with instant batching
                             if !active_pane.is_empty() {
                                 let mut payload = key_to_bytes(key.code, key.modifiers);
@@ -436,6 +453,7 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
                                 }
                             }
                             MouseEventKind::ScrollUp => {
+                                let hist_len = vt_screens.get(&active_pane).map(|vt| vt.grid().history_len()).unwrap_or(0);
                                 if copy_state.is_none() {
                                     let (cx, cy) = if let Some(vt) = vt_screens.get(&active_pane) {
                                         (vt.grid().cursor.x, vt.grid().cursor.y)
@@ -444,12 +462,13 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
                                     };
                                     copy_state = Some(CopyState {
                                         cursor_x: cx,
-                                        cursor_y: cy.saturating_sub(3),
+                                        cursor_y: cy,
+                                        scroll_offset: 3.min(hist_len),
                                         anchor: None,
                                         mode: SelectionKind::None,
                                     });
                                 } else if let Some(cs) = &mut copy_state {
-                                    cs.cursor_y = cs.cursor_y.saturating_sub(3);
+                                    cs.scroll_offset = (cs.scroll_offset + 3).min(hist_len);
                                 }
                             }
                             MouseEventKind::ScrollDown => {
@@ -610,6 +629,7 @@ enum SelectionKind {
 struct CopyState {
     cursor_x: usize,
     cursor_y: usize,
+    scroll_offset: usize,
     anchor: Option<(usize, usize)>,
     mode: SelectionKind,
 }
@@ -639,12 +659,12 @@ impl CopyState {
                 let max_y = start_y.max(end_y);
                 let mut lines = Vec::new();
                 for y in min_y..=max_y {
-                    let mut line = String::new();
+                    let mut row_str = String::new();
                     for x in 0..grid.cols {
-                        let c = grid.get_cell(x, y).map(|cell| cell.c).unwrap_or(' ');
-                        line.push(c);
+                        let c = grid.get_cell_scrolled(x, y, self.scroll_offset).map(|cell| cell.c).unwrap_or(' ');
+                        row_str.push(c);
                     }
-                    lines.push(line.trim_end().to_string());
+                    lines.push(row_str.trim_end().to_string());
                 }
                 lines.join("\n")
             }
@@ -664,27 +684,27 @@ impl CopyState {
                 for y in sy..=ey {
                     let from_x = if y == sy { sx } else { 0 };
                     let to_x = if y == ey { ex } else { grid.cols.saturating_sub(1) };
-                    let mut line = String::new();
+                    let mut row_str = String::new();
                     for x in from_x..=to_x {
-                        let c = grid.get_cell(x, y).map(|cell| cell.c).unwrap_or(' ');
-                        line.push(c);
+                        let c = grid.get_cell_scrolled(x, y, self.scroll_offset).map(|cell| cell.c).unwrap_or(' ');
+                        row_str.push(c);
                     }
                     if y < ey {
-                        out.push_str(line.trim_end());
+                        out.push_str(row_str.trim_end());
                         out.push('\n');
                     } else {
-                        out.push_str(&line);
+                        out.push_str(&row_str);
                     }
                 }
                 out
             }
             None => {
-                let mut line = String::new();
+                let mut row_str = String::new();
                 for x in 0..grid.cols {
-                    let c = grid.get_cell(x, self.cursor_y).map(|cell| cell.c).unwrap_or(' ');
-                    line.push(c);
+                    let c = grid.get_cell_scrolled(x, self.cursor_y, self.scroll_offset).map(|cell| cell.c).unwrap_or(' ');
+                    row_str.push(c);
                 }
-                line.trim_end().to_string()
+                row_str.trim_end().to_string()
             }
         }
     }

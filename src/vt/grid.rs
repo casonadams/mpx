@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Color {
     Black,
@@ -71,6 +73,8 @@ pub struct Grid {
     pub scroll_top: usize,
     pub scroll_bottom: usize,
     pub current_style: CellStyle,
+    pub history: VecDeque<Vec<Cell>>,
+    pub history_limit: usize,
 }
 
 impl Grid {
@@ -87,6 +91,8 @@ impl Grid {
             scroll_top: 0,
             scroll_bottom: rows.saturating_sub(1),
             current_style: CellStyle::default(),
+            history: VecDeque::new(),
+            history_limit: 100_000,
         }
     }
     pub fn resize(&mut self, new_cols: usize, new_rows: usize) {
@@ -134,6 +140,32 @@ impl Grid {
             None
         }
     }
+    pub fn history_len(&self) -> usize {
+        self.history.len()
+    }
+
+    pub fn get_cell_scrolled(&self, x: usize, y: usize, scroll_offset: usize) -> Option<&Cell> {
+        if x >= self.cols || y >= self.rows {
+            return None;
+        }
+
+        if scroll_offset == 0 || self.history.is_empty() {
+            return self.get_cell(x, y);
+        }
+
+        let total_hist = self.history.len();
+        let scroll_offset = scroll_offset.min(total_hist);
+        let top_virtual_idx = total_hist.saturating_sub(scroll_offset);
+        let virtual_y = top_virtual_idx + y;
+
+        if virtual_y < total_hist {
+            self.history.get(virtual_y).and_then(|row| row.get(x))
+        } else {
+            let live_y = virtual_y - total_hist;
+            self.get_cell(x, live_y)
+        }
+    }
+
 
     pub fn put_char(&mut self, c: char) {
         if self.cursor.x >= self.cols {
@@ -181,6 +213,17 @@ impl Grid {
         let cols = self.cols;
 
         for _ in 0..count {
+            if top == 0 {
+                let mut line = Vec::with_capacity(cols);
+                for i in 0..cols {
+                    line.push(self.cells[i]);
+                }
+                if self.history.len() >= self.history_limit {
+                    self.history.pop_front();
+                }
+                self.history.push_back(line);
+            }
+
             for y in top..bottom {
                 let src_start = (y + 1) * cols;
                 let dst_start = y * cols;

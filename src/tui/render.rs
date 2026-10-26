@@ -61,13 +61,13 @@ impl SelectionRange {
 pub struct Compositor;
 
 impl Compositor {
-    /// Renders terminal pane content directly into its bounding box
-    /// Renders terminal pane content directly into its bounding box with optional visual selection
+    /// Renders terminal pane content directly into its bounding box with optional visual selection and scroll offset
     pub fn draw_pane_content<W: Write>(
         w: &mut W,
         rect: Rect,
         grid: &Grid,
         selection: Option<&SelectionRange>,
+        scroll_offset: usize,
     ) -> io::Result<()> {
         if rect.width == 0 || rect.height == 0 {
             return Ok(());
@@ -76,10 +76,9 @@ impl Compositor {
         for row in 0..rect.height as usize {
             execute!(w, MoveTo(rect.x, rect.y + row as u16))?;
             for col in 0..rect.width as usize {
-                let cell = grid.get_cell(col, row).copied().unwrap_or_default();
+                let cell = grid.get_cell_scrolled(col, row, scroll_offset).copied().unwrap_or_default();
                 let is_selected = selection.map_or(false, |s| s.contains(col, row));
                 if is_selected {
-                    // tmux color 208 orange background, black text, bold!
                     execute!(
                         w,
                         SetBackgroundColor(Color::Rgb { r: 255, g: 140, b: 0 }),
@@ -259,8 +258,10 @@ impl Compositor {
         w: &mut W,
         rect: Rect,
         mode_label: &str,
+        scroll_offset: usize,
+        total_history: usize,
     ) -> io::Result<()> {
-        let text = format!(" [{} | y: yank | q: exit] ", mode_label);
+        let text = format!(" [{} | -{}/{} lines | y: yank | q: exit] ", mode_label, scroll_offset, total_history);
         let badge_x = (rect.x + rect.width).saturating_sub(text.len() as u16 + 1);
         if badge_x >= rect.x {
             execute!(
@@ -400,7 +401,7 @@ mod tests {
         let mut grid = Grid::new(10, 5);
         grid.put_char('A');
         let rect = Rect::new(0, 0, 10, 5);
-        Compositor::draw_pane_content(&mut buf, rect, &grid, None).unwrap();
+        Compositor::draw_pane_content(&mut buf, rect, &grid, None, 0).unwrap();
         let out = String::from_utf8_lossy(&buf);
         assert!(out.contains('A'));
     }
@@ -430,7 +431,7 @@ mod tests {
     fn test_draw_copy_mode_badge() {
         let mut buf = Vec::new();
         let rect = Rect::new(0, 0, 80, 24);
-        Compositor::draw_copy_mode_badge(&mut buf, rect, "VISUAL LINE").unwrap();
+        Compositor::draw_copy_mode_badge(&mut buf, rect, "VISUAL LINE", 15, 100).unwrap();
         let out = String::from_utf8_lossy(&buf);
         assert!(out.contains("VISUAL LINE"));
     }
