@@ -200,6 +200,14 @@ impl Client {
             _ => Err("Invalid response to Focus".into()),
         }
     }
+    pub async fn resize_pane(&mut self, name: &str, cols: u16, rows: u16) -> Result<(), String> {
+        match self.call(Request::ResizePane { name: name.to_string(), cols, rows }).await? {
+            Response::Ok => Ok(()),
+            Response::Error(e) => Err(e),
+            _ => Err("Invalid response to ResizePane".into()),
+        }
+    }
+
     pub async fn create_pipe(&mut self, name: &str, capacity: Option<usize>) -> Result<(), String> {
         match self.call(Request::CreatePipe { name: name.to_string(), capacity }).await? {
             Response::Ok => Ok(()),

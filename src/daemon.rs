@@ -235,6 +235,13 @@ impl DaemonState {
         pipes.keys().cloned().collect()
     }
 
+    pub async fn resize_node(&self, name: &str, cols: u16, rows: u16) -> Result<(), String> {
+        let nodes = self.nodes.read().await;
+        let node = nodes.get(name).ok_or_else(|| format!("Node '{}' not found", name))?;
+        node.resize(cols, rows).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
     pub fn subscribe(&self) -> broadcast::Receiver<StreamEvent> {
         self.event_tx.subscribe()
     }
@@ -385,6 +392,16 @@ pub async fn handle_client<S: AsyncStream>(state: Arc<DaemonState>, stream: S) {
                 state.workspace.write().await.focus(&name);
                 let _ = framed
                     .send(serde_json::to_string(&DaemonMessage::Response(Response::Ok)).unwrap())
+                    .await;
+            }
+            Request::ResizePane { name, cols, rows } => {
+                let res = state.resize_node(&name, cols, rows).await;
+                let resp = match res {
+                    Ok(_) => Response::Ok,
+                    Err(e) => Response::Error(e),
+                };
+                let _ = framed
+                    .send(serde_json::to_string(&DaemonMessage::Response(resp)).unwrap())
                     .await;
             }
             Request::CreatePipe { name, capacity } => {

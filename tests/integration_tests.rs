@@ -243,7 +243,7 @@ async fn test_split_and_layout() {
     let mut client = Client::connect(&endpoint).await.expect("Failed to connect");
 
     client
-        .spawn("pane-left".into(), "echo".into(), vec!["left".into()], false, None)
+        .spawn("pane-left".into(), "cat".into(), vec![], false, None)
         .await
         .unwrap();
 
@@ -251,8 +251,8 @@ async fn test_split_and_layout() {
         .split(
             Some("pane-left".into()),
             "pane-right".into(),
-            "echo".into(),
-            vec!["right".into()],
+            "cat".into(),
+            vec![],
             false,
             Direction::Horizontal,
         )
@@ -268,6 +268,9 @@ async fn test_split_and_layout() {
     assert_eq!(right.1.width, 40);
     assert_eq!(left.1.height, 24);
     assert_eq!(right.1.height, 24);
+
+    client.kill("pane-left").await.unwrap();
+    client.kill("pane-right").await.unwrap();
 }
 
 #[tokio::test]
@@ -324,4 +327,19 @@ async fn test_pane_auto_removed_on_exit() {
     assert_eq!(layout[0].1.width, 80);
 
     client.kill("keep-alive").await.unwrap();
+}
+
+#[tokio::test]
+async fn test_resize_pane_e2e() {
+    let (endpoint, _dir) = start_test_daemon().await;
+    let mut client = Client::connect(&endpoint).await.expect("Failed to connect");
+
+    client
+        .spawn("resizer".into(), "cat".into(), vec![], true, None)
+        .await
+        .unwrap();
+
+    client.resize_pane("resizer", 120, 40).await.expect("Resize pane failed");
+
+    client.kill("resizer").await.unwrap();
 }

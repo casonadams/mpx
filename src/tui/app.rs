@@ -1,7 +1,8 @@
 use crossterm::event::{Event, EventStream, KeyCode, KeyModifiers};
 use futures_util::StreamExt;
 use std::collections::HashMap;
-use std::io::stdout;
+use std::io::{stdout, BufWriter, Write};
+use crossterm::execute;
 use std::time::Duration;
 use tokio::time::sleep;
 
@@ -60,7 +61,8 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
             .await;
     });
 
-    let mut stdout = stdout();
+    let mut out = BufWriter::with_capacity(64 * 1024, stdout());
+    let mut pane_dimensions: HashMap<String, (u16, u16)> = HashMap::new();
 
     loop {
         let (term_w, term_h) = crossterm::terminal::size().unwrap_or((80, 24));
@@ -87,6 +89,29 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
             raw_panes.clone()
         };
 
+        // Handle PTY resizing and VT stream reflow whenever pane dimensions change
+        for (name, rect, _) in &panes {
+            if rect.width == 0 || rect.height == 0 {
+                continue;
+            }
+            let current_dim = (rect.width, rect.height);
+            let prev_dim = pane_dimensions.get(name).copied();
+            if prev_dim != Some(current_dim) {
+                pane_dimensions.insert(name.clone(), current_dim);
+                let _ = client.resize_pane(name, rect.width, rect.height).await;
+
+                // Replay raw stream buffer at the new column width for perfect reflow
+                if let Ok(logs) = client.logs(name, None).await {
+                    let mut new_vt = VtScreen::new(rect.width as usize, rect.height as usize);
+                    new_vt.feed(logs.as_bytes());
+                    vt_screens.insert(name.clone(), new_vt);
+                }
+            }
+        }
+
+        // Hide hardware cursor during frame buffer generation
+        let _ = execute!(out, crossterm::cursor::Hide);
+
         let mut active_rect: Option<Rect> = None;
 
         for (name, rect, is_focused) in &panes {
@@ -99,17 +124,13 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
                     .entry(name.clone())
                     .or_insert_with(|| VtScreen::new(rect.width as usize, rect.height as usize));
 
-                if vt.grid().cols != rect.width as usize || vt.grid().rows != rect.height as usize {
-                    vt.grid_mut().resize(rect.width as usize, rect.height as usize);
-                }
-
-                let _ = Compositor::draw_pane_content(&mut stdout, *rect, vt.grid());
+                let _ = Compositor::draw_pane_content(&mut out, *rect, vt.grid());
             }
 
             // Draw thin divider line if multiple panes are present
             if panes.len() > 1 && zoomed_pane.is_none() {
                 let _ = Compositor::draw_dividers(
-                    &mut stdout,
+                    &mut out,
                     *rect,
                     term_w,
                     layout_h,
@@ -120,7 +141,7 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
 
         // Clean tmux-style bottom status bar
         let _ = Compositor::draw_status_bar(
-            &mut stdout,
+            &mut out,
             session,
             &panes,
             leader_active,
@@ -130,20 +151,23 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
 
         // Render which-key popup when leader key is active
         if leader_active {
-            let _ = Compositor::draw_which_key(&mut stdout, term_w, layout_h);
+            let _ = Compositor::draw_which_key(&mut out, term_w, layout_h);
         }
 
-        // Position hardware terminal cursor at active shell prompt
+        // Position hardware terminal cursor at active shell prompt and unhide
         if let (Some(rect), Some(vt)) = (active_rect, vt_screens.get(&active_pane)) {
             let cursor = vt.grid().cursor;
             let _ = Compositor::position_cursor(
-                &mut stdout,
+                &mut out,
                 rect,
                 cursor.x,
                 cursor.y,
                 cursor.visible,
             );
         }
+
+        // Atomic single flush to terminal emulator
+        let _ = out.flush();
 
         tokio::select! {
             Some(Ok(event)) = event_reader.next() => {
