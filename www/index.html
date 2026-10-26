@@ -6,7 +6,7 @@
   <title>mpx — Ultra-Performant Process & Terminal Multiplexer in Rust</title>
   <meta name="description" content="A simple, fast, and intuitive terminal multiplexer in Rust. Built for human developers and autonomous AI coding agents with native MCP support.">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
-  <link rel="stylesheet" href="css/style.css?v=1">
+  <link rel="stylesheet" href="css/style.css?v=2">
 </head>
 <body>
 
@@ -60,28 +60,50 @@
           </div>
           <span class="terminal-title">mpx — interactive terminal workspace</span>
         </div>
-        <div class="terminal-body"><span style="color:#58a6ff">~ %</span> cargo test --release                                   │ <span style="color:#58a6ff">~ %</span> nvim src/lib.rs
-   <span style="color:#3fb950; font-weight:bold">Compiling</span> mpx v0.1.0                                      │
-    <span style="color:#3fb950; font-weight:bold">Finished</span> test [optimized] target(s) in 0.42s             │ <span style="color:#e3b341">1</span> <span style="color:#f0883e">pub mod</span> <span style="color:#79c0ff">ipc</span>;
-     <span style="color:#3fb950">Running</span> unittests (32 passed, 0 failed)                 │ <span style="color:#e3b341">2</span> <span style="color:#f0883e">pub mod</span> <span style="color:#79c0ff">node</span>;
-                                                             │ <span style="color:#e3b341">3</span> <span style="color:#f0883e">pub mod</span> <span style="color:#79c0ff">vt</span>;
-<span style="color:#58a6ff">~ %</span> git status                                               │ <span style="color:#e3b341">4</span> <span style="color:#f0883e">pub mod</span> <span style="color:#79c0ff">tui</span>;
-On branch main                                               │ <span style="color:#e3b341">5</span> <span style="color:#f0883e">pub mod</span> <span style="color:#79c0ff">mcp</span>;
-Your branch is up to date with 'origin/main'.                │
-                                                             │      <span style="color:#58a6ff">╭────────────────────────────╮</span>
-                                                             │      <span style="color:#58a6ff">│</span> <span style="color:#e3b341">c</span>  → new window            <span style="color:#58a6ff">│</span>
-                                                             │      <span style="color:#58a6ff">│</span> <span style="color:#e3b341">p</span>  → previous window       <span style="color:#58a6ff">│</span>
-                                                             │      <span style="color:#58a6ff">│</span> <span style="color:#e3b341">n</span>  → next window           <span style="color:#58a6ff">│</span>
-                                                             │      <span style="color:#58a6ff">│</span> <span style="color:#e3b341">%</span>  → split vertical        <span style="color:#58a6ff">│</span>
-                                                             │      <span style="color:#58a6ff">│</span> <span style="color:#e3b341">"</span>  → split horizontal      <span style="color:#58a6ff">│</span>
-                                                             │      <span style="color:#58a6ff">│</span> <span style="color:#e3b341">h</span>  → focus left            <span style="color:#58a6ff">│</span>
-                                                             │      <span style="color:#58a6ff">│</span> <span style="color:#e3b341">j</span>  → focus down            <span style="color:#58a6ff">│</span>
-                                                             │      <span style="color:#58a6ff">│</span> <span style="color:#e3b341">k</span>  → focus up              <span style="color:#58a6ff">│</span>
-                                                             │      <span style="color:#58a6ff">│</span> <span style="color:#e3b341">l</span>  → focus right           <span style="color:#58a6ff">│</span>
-                                                             │      <span style="color:#58a6ff">│</span> <span style="color:#e3b341">[</span>  → copy mode             <span style="color:#58a6ff">│</span>
-                                                             │      <span style="color:#58a6ff">│</span> <span style="color:#e3b341">d</span>  → detach                <span style="color:#58a6ff">│</span>
-                                                             │      <span style="color:#58a6ff">╰─────────────── ESC close ──╯</span>
-<span style="background-color:#238636; color:#041407; font-weight:600"> [main] 0:cargo 1:editor*                                                                          10:42 </span></div>
+        <div class="terminal-split">
+          <div class="terminal-pane">
+<span style="color:#58a6ff">~ %</span> cargo test --release
+   <span style="color:#3fb950; font-weight:bold">Compiling</span> mpx v0.1.1
+    <span style="color:#3fb950; font-weight:bold">Finished</span> test [optimized] in 0.42s
+     <span style="color:#3fb950">Running</span> unittests (32 passed, 0 failed)
+
+<span style="color:#58a6ff">~ %</span> git status
+On branch main
+Your branch is up to date with 'origin/main'.
+          </div>
+
+          <div class="terminal-divider"></div>
+
+          <div class="terminal-pane">
+<span style="color:#58a6ff">~ %</span> nvim src/lib.rs
+
+<span style="color:#e3b341">1</span> <span style="color:#f0883e">pub mod</span> <span style="color:#79c0ff">ipc</span>;
+<span style="color:#e3b341">2</span> <span style="color:#f0883e">pub mod</span> <span style="color:#79c0ff">node</span>;
+<span style="color:#e3b341">3</span> <span style="color:#f0883e">pub mod</span> <span style="color:#79c0ff">vt</span>;
+<span style="color:#e3b341">4</span> <span style="color:#f0883e">pub mod</span> <span style="color:#79c0ff">tui</span>;
+<span style="color:#e3b341">5</span> <span style="color:#f0883e">pub mod</span> <span style="color:#79c0ff">mcp</span>;
+          </div>
+
+          <div class="terminal-popup">
+            <div class="terminal-popup-item"><span class="terminal-popup-key">c</span><span class="terminal-popup-arrow">→</span><span class="terminal-popup-desc">new window</span></div>
+            <div class="terminal-popup-item"><span class="terminal-popup-key">p</span><span class="terminal-popup-arrow">→</span><span class="terminal-popup-desc">previous window</span></div>
+            <div class="terminal-popup-item"><span class="terminal-popup-key">n</span><span class="terminal-popup-arrow">→</span><span class="terminal-popup-desc">next window</span></div>
+            <div class="terminal-popup-item"><span class="terminal-popup-key">%</span><span class="terminal-popup-arrow">→</span><span class="terminal-popup-desc">split vertical</span></div>
+            <div class="terminal-popup-item"><span class="terminal-popup-key">"</span><span class="terminal-popup-arrow">→</span><span class="terminal-popup-desc">split horizontal</span></div>
+            <div class="terminal-popup-item"><span class="terminal-popup-key">h</span><span class="terminal-popup-arrow">→</span><span class="terminal-popup-desc">focus left</span></div>
+            <div class="terminal-popup-item"><span class="terminal-popup-key">j</span><span class="terminal-popup-arrow">→</span><span class="terminal-popup-desc">focus down</span></div>
+            <div class="terminal-popup-item"><span class="terminal-popup-key">k</span><span class="terminal-popup-arrow">→</span><span class="terminal-popup-desc">focus up</span></div>
+            <div class="terminal-popup-item"><span class="terminal-popup-key">l</span><span class="terminal-popup-arrow">→</span><span class="terminal-popup-desc">focus right</span></div>
+            <div class="terminal-popup-item"><span class="terminal-popup-key">[</span><span class="terminal-popup-arrow">→</span><span class="terminal-popup-desc">copy mode</span></div>
+            <div class="terminal-popup-item"><span class="terminal-popup-key">d</span><span class="terminal-popup-arrow">→</span><span class="terminal-popup-desc">detach</span></div>
+            <div class="terminal-popup-footer"><span style="color:var(--yellow); font-weight:bold;">ESC</span> close</div>
+          </div>
+        </div>
+
+        <div class="terminal-statusbar">
+          <span>[main] 0:cargo 1:editor*</span>
+          <span>10:42</span>
+        </div>
       </div>
     </section>
 

@@ -256,12 +256,84 @@ a:hover {
   color: var(--text-muted);
 }
 
-.terminal-body {
-  padding: 1rem;
-  overflow-x: auto;
+.terminal-split {
+  display: flex;
+  position: relative;
+  min-height: 420px;
+  background-color: var(--surface);
+}
+
+.terminal-pane {
+  flex: 1;
+  padding: 1.25rem 1.5rem;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 0.88rem;
+  line-height: 1.6;
   white-space: pre;
-  color: var(--heading);
-  line-height: 1.4;
+}
+
+.terminal-divider {
+  width: 1px;
+  background-color: var(--border);
+  flex-shrink: 0;
+}
+
+.terminal-popup {
+  position: absolute;
+  right: 1.5rem;
+  bottom: 1.25rem;
+  background-color: #05070a;
+  border: 1px solid #41a6b5;
+  border-radius: 8px;
+  padding: 0.75rem 1.15rem;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.8);
+  font-family: var(--font-mono);
+  font-size: 0.84rem;
+  line-height: 1.45;
+  min-width: 250px;
+}
+
+.terminal-popup-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.2rem;
+}
+
+.terminal-popup-key {
+  color: var(--yellow);
+  font-weight: 700;
+  width: 1.4rem;
+}
+
+.terminal-popup-arrow {
+  color: var(--text-muted);
+}
+
+.terminal-popup-desc {
+  color: var(--cyan);
+}
+
+.terminal-popup-footer {
+  margin-top: 0.5rem;
+  padding-top: 0.4rem;
+  border-top: 1px dashed rgba(65, 166, 181, 0.3);
+  text-align: right;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.terminal-statusbar {
+  background-color: #238636;
+  color: #041407;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  padding: 0.35rem 1.25rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.84rem;
 }
 
 /* Features Grid */
