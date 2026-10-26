@@ -3,7 +3,6 @@ use futures_util::StreamExt;
 use std::collections::HashMap;
 use std::io::{stdout, BufWriter, Write};
 use std::time::Duration;
-use tokio::time::sleep;
 
 use super::render::{Compositor, SelectionRange};
 use super::terminal::TerminalGuard;
@@ -73,7 +72,7 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
     let mut last_stream_render: Option<std::time::Instant> = None;
     let frame_budget = Duration::from_millis(16);
     let mut layout_cache = LayoutCache::new();
-
+    let mut tick_timer = tokio::time::interval(Duration::from_secs(1));
     loop {
         let (term_w, term_h) = crossterm::terminal::size().unwrap_or((80, 24));
         let layout_h = term_h.saturating_sub(1); // 1 line reserved for tmux status bar
@@ -107,7 +106,6 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
         // Begin DEC 2026 synchronized update to eliminate tearing and cursor jitter
         let _ = Compositor::begin_sync(&mut out);
         let mut active_rect: Option<Rect> = None;
-
         for (name, rect, is_focused) in &panes {
             if *is_focused {
                 active_rect = Some(*rect);
@@ -142,6 +140,7 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
                         selection: sel.as_ref(),
                         scroll_offset: offset,
                         badge: badge.as_deref(),
+                        dimmed: is_dimmed(panes.len(), zoomed_pane.is_some(), *is_focused),
                     },
                 );
             }
@@ -569,9 +568,7 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
                 wait_for_frame(last_stream_render, frame_budget).await;
                 last_stream_render = Some(std::time::Instant::now());
             }
-            else => {
-                sleep(Duration::from_millis(10)).await;
-            }
+            _ = tick_timer.tick() => {}
         }
     }
 }
@@ -950,4 +947,8 @@ impl CopyState {
             }
         }
     }
+}
+
+fn is_dimmed(panes_count: usize, is_zoomed: bool, is_focused: bool) -> bool {
+    panes_count > 1 && !is_zoomed && !is_focused
 }

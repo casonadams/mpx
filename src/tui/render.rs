@@ -66,6 +66,7 @@ pub struct RenderPaneContext<'a> {
     pub selection: Option<&'a SelectionRange>,
     pub scroll_offset: usize,
     pub badge: Option<&'a str>,
+    pub dimmed: bool,
 }
 
 
@@ -333,11 +334,13 @@ fn cell_content(
     if ctx.selection.map_or(false, |s| s.contains_abs(col, abs_row)) {
         (cell.c, Color::Black, Color::Rgb { r: 255, g: 140, b: 0 })
     } else {
-        (
-            cell.c,
-            cell.style.fg.map(convert_color).unwrap_or(Color::Reset),
-            cell.style.bg.map(convert_color).unwrap_or(Color::Reset),
-        )
+        let fg = cell.style.fg.map(convert_color).unwrap_or(Color::Reset);
+        let bg = cell.style.bg.map(convert_color).unwrap_or(Color::Reset);
+        if ctx.dimmed {
+            (cell.c, dim_color(fg), dim_bg(bg))
+        } else {
+            (cell.c, fg, bg)
+        }
     }
 }
 
@@ -389,6 +392,35 @@ fn convert_color(c: crate::vt::grid::Color) -> Color {
         crate::vt::grid::Color::BrightWhite => Color::White,
         crate::vt::grid::Color::Indexed(i) => Color::AnsiValue(i),
         crate::vt::grid::Color::Rgb(r, g, b) => Color::Rgb { r, g, b },
+    }
+}
+
+fn dim_color(c: Color) -> Color {
+    match c {
+        Color::Reset | Color::White | Color::Grey => Color::DarkGrey,
+        Color::Rgb { r, g, b } => Color::Rgb {
+            r: (r as u16 * 160 / 255) as u8,
+            g: (g as u16 * 160 / 255) as u8,
+            b: (b as u16 * 160 / 255) as u8,
+        },
+        Color::Red => Color::DarkRed,
+        Color::Green => Color::DarkGreen,
+        Color::Yellow => Color::DarkYellow,
+        Color::Blue => Color::DarkBlue,
+        Color::Magenta => Color::DarkMagenta,
+        Color::Cyan => Color::DarkCyan,
+        other => other,
+    }
+}
+
+fn dim_bg(c: Color) -> Color {
+    match c {
+        Color::Rgb { r, g, b } => Color::Rgb {
+            r: (r as u16 * 180 / 255) as u8,
+            g: (g as u16 * 180 / 255) as u8,
+            b: (b as u16 * 180 / 255) as u8,
+        },
+        other => other,
     }
 }
 
@@ -473,11 +505,34 @@ mod tests {
                 selection: None,
                 scroll_offset: 0,
                 badge: None,
+                dimmed: false,
             },
         )
         .unwrap();
         let out = String::from_utf8_lossy(&buf);
         assert!(out.contains('A'));
+    }
+
+    #[test]
+    fn test_draw_pane_content_dimmed() {
+        let mut buf = Vec::new();
+        let mut grid = Grid::new(10, 5);
+        grid.put_char('Z');
+        let rect = Rect::new(0, 0, 10, 5);
+        Compositor::draw_pane_content(
+            &mut buf,
+            RenderPaneContext {
+                rect,
+                grid: &grid,
+                selection: None,
+                scroll_offset: 0,
+                badge: None,
+                dimmed: true,
+            },
+        )
+        .unwrap();
+        let out = String::from_utf8_lossy(&buf);
+        assert!(out.contains('Z'));
     }
 
 
