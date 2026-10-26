@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.1.2](https://github.com/casonadams/mpx/compare/v0.1.1...v0.1.2) (2026-10-26)
+
+
+### Features
+
+* **mcp,layout:** support detached pane split, explicit focus, and non-blocking status tools ([6582055](https://github.com/casonadams/mpx/commit/65820551fd89a2f4c0275f1aff0bfcda74a4692d))
+* **tui,pty:** inherit pane cwd on split/new-window, format 12h time with seconds, and eliminate copy mode badge flicker ([58aae49](https://github.com/casonadams/mpx/commit/58aae49bcaff908d685ab74621c257ae808e1bd0))
+* **tui:** add 1-second status bar clock update and subtle tasteful pane dimming ([9f62549](https://github.com/casonadams/mpx/commit/9f625493fdcca9dbac09a2a635141c521376cd10))
+* **tui:** add green active pane outline, box-drawing junction connectors, and subtle bg dimming ([3cbe4f7](https://github.com/casonadams/mpx/commit/3cbe4f7d3d0b84f47bb231a51f4ef2d33707a816))
+
+
+### Bug Fixes
+
+* **tests:** use Windows Named Pipe path format for test daemon listener ([290e1d6](https://github.com/casonadams/mpx/commit/290e1d6f1d2c683d00091a0d737e90e5271b7f54))
+* **tui,ci:** ensure clean terminal exit and fix Windows Named Pipe connection retry ([c68b7c7](https://github.com/casonadams/mpx/commit/c68b7c791c02093d8ea5d7d79406beb67b150e09))
+* **tui:** disable autowrap to eliminate bottom row scrolling trails and join task stdout ([c524e8e](https://github.com/casonadams/mpx/commit/c524e8e4f73c3f8a8907f920ce55c8ad53206721))
+* **tui:** eliminate cursor flickering with DEC 2026 sync updates and frame pacing ([f1ab3ae](https://github.com/casonadams/mpx/commit/f1ab3ae73747be89e7f668905126a9c68462f628))
+* **tui:** eliminate mouse drag latency, restore clean HUD popup dismissal, and fix Windows CI ([6eda165](https://github.com/casonadams/mpx/commit/6eda16542bb98402cd8d5a4bda74e088726b6443))
+* **tui:** eliminate mouse move redraws to stop cursor flicker, enable mouse drag selection, and fix scrollback navigation ([1bc51a8](https://github.com/casonadams/mpx/commit/1bc51a845f05aae7eae43b44c603a3a95ecade4a))
+* **tui:** ensure clean exit when last pane exits or user detaches/quits ([5564a6d](https://github.com/casonadams/mpx/commit/5564a6d9037362e485e85b562c3bacc3c97db062))
+* **tui:** preserve native terminal background untouched and dim only text ([4dbe13c](https://github.com/casonadams/mpx/commit/4dbe13c2b62fb6d641a2d6a0cce9740d0ae5e382))
+* **vt:** implement DECSTBM margins, SU, SD, DL, IL, and RI for perfect Neovim scrolling ([352cbdc](https://github.com/casonadams/mpx/commit/352cbdc5a8803141308e144fe8576fa339d42735))
+
+
+### Performance Improvements
+
+* **tui,vt:** optimize grid scrolling, layout caching, diff rendering, and tail scan ([917fbe0](https://github.com/casonadams/mpx/commit/917fbe05065205e79f54ae59e5385af8eee784a8))
+
 ## [0.1.1](https://github.com/casonadams/mpx/compare/v0.1.0...v0.1.1) (2026-10-26)
 
 
