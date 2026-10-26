@@ -4,12 +4,14 @@ use super::grid::{CellStyle, Color, Grid};
 
 pub struct VtHandler {
     pub grid: Grid,
+    pub responses: Vec<Vec<u8>>,
 }
 
 impl VtHandler {
     pub fn new(cols: usize, rows: usize) -> Self {
         Self {
             grid: Grid::new(cols, rows),
+            responses: Vec::new(),
         }
     }
 
@@ -160,7 +162,63 @@ impl Perform for VtHandler {
                     self.grid.cursor = c;
                 }
             }
+            'n' => {
+                let code = params.iter().next().map(|p| p[0]).unwrap_or(0);
+                if code == 6 {
+                    // Cursor Position Report (DSR): ESC [ row ; col R
+                    let r = self.grid.cursor.y + 1;
+                    let c = self.grid.cursor.x + 1;
+                    self.responses.push(format!("\x1b[{};{}R", r, c).into_bytes());
+                } else if code == 5 {
+                    // Terminal status OK
+                    self.responses.push(b"\x1b[0n".to_vec());
+                }
+            }
+            'c' => {
+                if _intermediates == [b'>'] {
+                    // Secondary Device Attributes
+                    self.responses.push(b"\x1b[>0;10;0c".to_vec());
+                } else {
+                    // Primary Device Attributes (VT220 compatible)
+                    self.responses.push(b"\x1b[?62;c".to_vec());
+                }
+            }
+            'h' => {
+                if _intermediates == [b'?'] {
+                    for param in params.iter() {
+                        match param[0] {
+                            25 => self.grid.cursor.visible = true,
+                            1049 | 1047 | 47 => {
+                                self.grid.clear_screen(2);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            'l' => {
+                if _intermediates == [b'?'] {
+                    for param in params.iter() {
+                        match param[0] {
+                            25 => self.grid.cursor.visible = false,
+                            1049 | 1047 | 47 => {
+                                self.grid.clear_screen(2);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
             _ => {}
+        }
+    }
+
+    fn osc_dispatch(&mut self, params: &[&[u8]], _bell_terminated: bool) {
+        if !params.is_empty() && params[0] == b"11" {
+            if params.get(1).map_or(false, |p| *p == b"?") {
+                // Respond to background color query with default dark background
+                self.responses.push(b"\x1b]11;rgb:0000/0000/0000\x1b\\".to_vec());
+            }
         }
     }
 }
@@ -180,6 +238,10 @@ impl VtScreen {
 
     pub fn feed(&mut self, bytes: &[u8]) {
         self.parser.advance(&mut self.handler, bytes);
+    }
+
+    pub fn take_responses(&mut self) -> Vec<Vec<u8>> {
+        std::mem::take(&mut self.handler.responses)
     }
 
     pub fn snapshot(&self) -> String {
@@ -230,5 +292,21 @@ mod tests {
 
         // Reset style
         assert_eq!(vt.grid().current_style, CellStyle::default());
+    }
+
+    #[test]
+    fn test_vt_terminal_queries() {
+        let mut vt = VtScreen::new(20, 5);
+        // Move to row 3, col 7 and query DSR (ESC[6n)
+        vt.feed(b"\x1b[3;7H\x1b[6n");
+        let resps = vt.take_responses();
+        assert_eq!(resps.len(), 1);
+        assert_eq!(resps[0], b"\x1b[3;7R");
+
+        // Query primary Device Attributes (ESC[c)
+        vt.feed(b"\x1b[c");
+        let resps2 = vt.take_responses();
+        assert_eq!(resps2.len(), 1);
+        assert_eq!(resps2[0], b"\x1b[?62;c");
     }
 }

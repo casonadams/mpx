@@ -98,6 +98,7 @@ impl PtyNode {
         let tx_clone = event_tx.clone();
         let node_name = name.clone();
         let running_read = Arc::clone(&running);
+        let stdin_tx_reply = stdin_tx.clone();
 
         std::thread::spawn(move || {
             let mut chunk = [0u8; 4096];
@@ -111,6 +112,9 @@ impl PtyNode {
                         }
                         if let Ok(mut sc) = screen_clone.write() {
                             sc.feed(bytes);
+                            for resp in sc.take_responses() {
+                                let _ = stdin_tx_reply.send(resp);
+                            }
                         }
                         let text = String::from_utf8_lossy(bytes).into_owned();
                         let _ = tx_clone.send(StreamEvent::Output {
