@@ -201,29 +201,30 @@ impl Perform for VtHandler {
             }
             'h' => {
                 if _intermediates == [b'?'] {
-                    for param in params.iter() {
-                        match param[0] {
-                            25 => self.grid.cursor.visible = true,
-                            1049 | 1047 | 47 => {
-                                self.grid.clear_screen(2);
-                            }
-                            _ => {}
-                        }
-                    }
+                    handle_mode(&mut self.grid, params, true);
                 }
             }
             'l' => {
                 if _intermediates == [b'?'] {
-                    for param in params.iter() {
-                        match param[0] {
-                            25 => self.grid.cursor.visible = false,
-                            1049 | 1047 | 47 => {
-                                self.grid.clear_screen(2);
-                            }
-                            _ => {}
-                        }
-                    }
+                    handle_mode(&mut self.grid, params, false);
                 }
+            }
+            'r' => handle_set_margins(&mut self.grid, params),
+            'S' => {
+                let count = params.iter().next().map(|p| p[0] as usize).unwrap_or(1).max(1);
+                self.grid.scroll_up(count);
+            }
+            'T' => {
+                let count = params.iter().next().map(|p| p[0] as usize).unwrap_or(1).max(1);
+                self.grid.scroll_down(count);
+            }
+            'M' => {
+                let count = params.iter().next().map(|p| p[0] as usize).unwrap_or(1).max(1);
+                self.grid.delete_lines(count);
+            }
+            'L' => {
+                let count = params.iter().next().map(|p| p[0] as usize).unwrap_or(1).max(1);
+                self.grid.insert_lines(count);
             }
             _ => {}
         }
@@ -235,6 +236,38 @@ impl Perform for VtHandler {
                 // Respond to background color query with default dark background
                 self.responses.push(b"\x1b]11;rgb:0000/0000/0000\x1b\\".to_vec());
             }
+        }
+    }
+
+    fn esc_dispatch(&mut self, _intermediates: &[u8], _ignore: bool, byte: u8) {
+        if byte == b'M' {
+            if self.grid.cursor.y <= self.grid.scroll_top {
+                self.grid.scroll_down(1);
+            } else {
+                self.grid.cursor.y = self.grid.cursor.y.saturating_sub(1);
+            }
+        }
+    }
+}
+
+fn handle_set_margins(grid: &mut Grid, params: &Params) {
+    let top = params.iter().next().map(|p| p[0] as usize).unwrap_or(1).max(1);
+    let bottom = params.iter().nth(1).map(|p| p[0] as usize).unwrap_or(grid.rows);
+    let top = top.saturating_sub(1);
+    let bottom = bottom.saturating_sub(1).min(grid.rows.saturating_sub(1));
+    if top < bottom {
+        grid.scroll_top = top;
+        grid.scroll_bottom = bottom;
+    }
+    grid.move_cursor(0, 0);
+}
+
+fn handle_mode(grid: &mut Grid, params: &Params, set: bool) {
+    for param in params.iter() {
+        match param[0] {
+            25 => grid.cursor.visible = set,
+            1049 | 1047 | 47 => grid.clear_screen(2),
+            _ => {}
         }
     }
 }
@@ -324,5 +357,19 @@ mod tests {
         let resps2 = vt.take_responses();
         assert_eq!(resps2.len(), 1);
         assert_eq!(resps2[0], b"\x1b[?62;c");
+    }
+
+    #[test]
+    fn test_vt_scrolling_region_and_commands() {
+        let mut vt = VtScreen::new(20, 5);
+        vt.feed(b"\x1b[2;4r");
+        assert_eq!(vt.grid().scroll_top, 1);
+        assert_eq!(vt.grid().scroll_bottom, 3);
+
+        vt.feed(b"\x1b[2;1Hline2");
+        assert_eq!(vt.grid().get_cell(0, 1).unwrap().c, 'l');
+
+        vt.feed(b"\x1b[1T");
+        assert_eq!(vt.grid().get_cell(0, 2).unwrap().c, 'l');
     }
 }

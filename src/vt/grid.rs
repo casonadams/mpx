@@ -264,6 +264,49 @@ impl Grid {
         self.cells[clear_start..clear_end].fill(Cell::default());
     }
 
+    pub fn scroll_down(&mut self, count: usize) {
+        if count == 0 || self.scroll_top >= self.scroll_bottom {
+            return;
+        }
+
+        let top = self.scroll_top;
+        let bottom = self.scroll_bottom;
+        let cols = self.cols;
+        let window_height = bottom - top + 1;
+        let actual_count = count.min(window_height);
+
+        if actual_count < window_height {
+            let src_start = top * cols;
+            let src_end = (bottom + 1 - actual_count) * cols;
+            let dst_start = (top + actual_count) * cols;
+            self.cells.copy_within(src_start..src_end, dst_start);
+        }
+
+        let clear_start = top * cols;
+        let clear_end = (top + actual_count) * cols;
+        self.cells[clear_start..clear_end].fill(Cell::default());
+    }
+
+    pub fn delete_lines(&mut self, count: usize) {
+        if self.cursor.y < self.scroll_top || self.cursor.y > self.scroll_bottom {
+            return;
+        }
+        let saved_top = self.scroll_top;
+        self.scroll_top = self.cursor.y;
+        self.scroll_up(count);
+        self.scroll_top = saved_top;
+    }
+
+    pub fn insert_lines(&mut self, count: usize) {
+        if self.cursor.y < self.scroll_top || self.cursor.y > self.scroll_bottom {
+            return;
+        }
+        let saved_top = self.scroll_top;
+        self.scroll_top = self.cursor.y;
+        self.scroll_down(count);
+        self.scroll_top = saved_top;
+    }
+
     pub fn clear_line(&mut self, mode: usize) {
         let y = self.cursor.y;
         let cols = self.cols;
