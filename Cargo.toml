@@ -10,7 +10,7 @@ homepage = "https://casonadams.github.io/mpx/"
 documentation = "https://docs.rs/mpx"
 readme = "README.md"
 keywords = ["terminal", "multiplexer", "tmux", "tui", "mcp"]
-categories = ["command-line-utilities", "development-tools"]
+categories = ["command-line-utilities", "development-tools", "asynchronous"]
 
 [lib]
 name = "mpx"
