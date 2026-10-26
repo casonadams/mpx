@@ -238,7 +238,7 @@ impl Compositor {
         let right = format!("{}{}", prefix_badge, get_current_time());
 
         let total_chars = left.chars().count() + right.chars().count();
-        let pad_len = (width as usize).saturating_sub(total_chars);
+        let pad_len = (width as usize).saturating_sub(total_chars + 1);
 
         execute!(
             w,

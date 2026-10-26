@@ -64,7 +64,7 @@ impl TaskNode {
         };
 
         // Pipe reader for stdout
-        if let Some(mut out) = stdout {
+        let stdout_handle = stdout.map(|mut out| {
             let buf_clone = Arc::clone(&buffer);
             let tx_clone = event_tx.clone();
             let screen_clone = Arc::clone(&screen);
@@ -93,11 +93,11 @@ impl TaskNode {
                         Err(_) => break,
                     }
                 }
-            });
-        }
+            })
+        });
 
         // Pipe reader for stderr
-        if let Some(mut err) = stderr {
+        let stderr_handle = stderr.map(|mut err| {
             let buf_clone = Arc::clone(&buffer);
             let tx_clone = event_tx.clone();
             let node_name = name.clone();
@@ -126,8 +126,8 @@ impl TaskNode {
                         Err(_) => break,
                     }
                 }
-            });
-        }
+            })
+        });
 
         // Wait on process exit
         let child_arc = Arc::new(Mutex::new(child));
@@ -142,6 +142,12 @@ impl TaskNode {
             let mut child = child_for_wait.lock().await;
             let status = child.wait().await;
             let code = status.ok().and_then(|s| s.code());
+            if let Some(h) = stdout_handle {
+                let _ = h.await;
+            }
+            if let Some(h) = stderr_handle {
+                let _ = h.await;
+            }
             {
                 let mut ec = exit_clone.write().await;
                 *ec = code;
