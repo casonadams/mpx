@@ -408,9 +408,16 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
                             }
                         }
                     } else {
-                            // Forward key input directly to active pane
+                            // Forward key input directly to active pane with instant batching
                             if !active_pane.is_empty() {
-                                let payload = key_to_bytes(key.code, key.modifiers);
+                                let mut payload = key_to_bytes(key.code, key.modifiers);
+                                while crossterm::event::poll(Duration::from_millis(0)).unwrap_or(false) {
+                                    if let Ok(Event::Key(next_key)) = crossterm::event::read() {
+                                        payload.extend(key_to_bytes(next_key.code, next_key.modifiers));
+                                    } else {
+                                        break;
+                                    }
+                                }
                                 if !payload.is_empty() {
                                     let text = String::from_utf8_lossy(&payload).into_owned();
                                     let _ = client.send_input(&active_pane, &text).await;
@@ -454,26 +461,37 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
                             _ => {}
                         }
                     }
+                    Event::Paste(pasted) => {
+                        if !active_pane.is_empty() {
+                            let _ = client.send_input(&active_pane, &pasted).await;
+                        }
+                    }
                     Event::Resize(..) => {}
                     _ => {}
                 }
             }
 
             Some(stream_event) = rx_events.recv() => {
-                match stream_event {
-                    StreamEvent::Output { name, data } => {
-                        let vt = vt_screens
-                            .entry(name)
-                            .or_insert_with(|| VtScreen::new(80, 24));
-                        vt.feed(data.as_bytes());
+                let mut events = vec![stream_event];
+                while let Ok(ev) = rx_events.try_recv() {
+                    events.push(ev);
+                }
+
+                for ev in events {
+                    match ev {
+                        StreamEvent::Output { name, data } => {
+                            let vt = vt_screens
+                                .entry(name)
+                                .or_insert_with(|| VtScreen::new(80, 24));
+                            vt.feed(data.as_bytes());
+                        }
+                        StreamEvent::Exit { name, .. } => {
+                            vt_screens.remove(&name);
+                        }
+                        _ => {}
                     }
-                    StreamEvent::Exit { name, .. } => {
-                        vt_screens.remove(&name);
-                    }
-                    _ => {}
                 }
             }
-
             else => {
                 sleep(Duration::from_millis(10)).await;
             }
