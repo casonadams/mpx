@@ -6,6 +6,7 @@ use tokio::time::sleep;
 use mpx::client::Client;
 use mpx::daemon::{handle_client, DaemonState};
 use mpx::ipc::IpcListener;
+use mpx::layout::Direction;
 use mpx::protocol::{SplitOpts, StreamEvent};
 
 async fn start_test_daemon() -> (String, tempfile::TempDir) {
@@ -259,6 +260,7 @@ async fn test_split_and_layout() {
             pty: false,
             direction: Direction::Horizontal,
             cwd: None,
+            focus: true,
         })
         .await
         .unwrap();
@@ -318,6 +320,7 @@ async fn test_pane_auto_removed_on_exit() {
             pty: false,
             direction: Direction::Horizontal,
             cwd: None,
+            focus: true,
         })
         .await
         .unwrap();
@@ -383,6 +386,7 @@ async fn test_cwd_propagation_e2e() {
             pty: false,
             direction: Direction::Horizontal,
             cwd: Some(custom_dir.clone()),
+            focus: true,
         })
         .await
         .unwrap();
@@ -392,4 +396,92 @@ async fn test_cwd_propagation_e2e() {
 
     client.kill(&win_info.name).await.unwrap();
     client.kill(&split_info.name).await.unwrap();
+}
+
+#[tokio::test]
+async fn test_split_detach_focus_and_status() {
+    let (endpoint, _dir) = start_test_daemon().await;
+    let mut client = Client::connect(&endpoint).await.expect("Failed to connect");
+
+    // Spawn primary pane
+    client
+        .spawn("pane-main".into(), "cat".into(), vec![], false, None)
+        .await
+        .unwrap();
+
+    let (layout, _, _) = client.layout(80, 24).await.unwrap();
+    assert_eq!(layout[0].0, "pane-main");
+    assert!(layout[0].2, "pane-main should initially be focused");
+
+    // Split secondary pane in background without stealing focus (focus: false)
+    client
+        .split(SplitOpts {
+            target: Some("pane-main".into()),
+            name: "pane-bg".into(),
+            command: "cat".into(),
+            args: vec![],
+            pty: false,
+            direction: Direction::Horizontal,
+            cwd: None,
+            focus: false,
+        })
+        .await
+        .unwrap();
+
+    // Verify layout: pane-main MUST STILL be focused!
+    let (layout2, _, _) = client.layout(80, 24).await.unwrap();
+    let main = layout2.iter().find(|(n, ..)| n == "pane-main").unwrap();
+    let bg = layout2.iter().find(|(n, ..)| n == "pane-bg").unwrap();
+    assert!(main.2, "pane-main must keep focus when split has focus: false");
+    assert!(!bg.2, "pane-bg must NOT have stolen focus");
+
+    // Test client.status() on running node
+    let status_bg = client.status("pane-bg").await.unwrap();
+    assert_eq!(status_bg.name, "pane-bg");
+    assert_eq!(status_bg.status, "running");
+
+    // Explicitly focus pane-bg via client.focus()
+    client.focus("pane-bg").await.unwrap();
+    let (layout3, _, _) = client.layout(80, 24).await.unwrap();
+    let main3 = layout3.iter().find(|(n, ..)| n == "pane-main").unwrap();
+    let bg3 = layout3.iter().find(|(n, ..)| n == "pane-bg").unwrap();
+    assert!(!main3.2, "pane-main should no longer be focused");
+    assert!(bg3.2, "pane-bg should now be focused");
+
+    // Kill pane-bg and verify exited status
+    client.kill("pane-bg").await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let list = client.list().await.unwrap();
+    let bg_entry = list.iter().find(|n| n.name == "pane-bg");
+    assert!(bg_entry.is_some(), "Exited node should be preserved in list history");
+
+    let status_exited = client.status("pane-bg").await.unwrap();
+    assert!(status_exited.status.starts_with("exited"));
+
+    client.kill("pane-main").await.unwrap();
+}
+
+#[tokio::test]
+async fn test_task_node_direct_and_clipboard() {
+    use mpx::node::task::TaskNode;
+    use mpx::node::Node;
+    use mpx::tui::render::copy_to_clipboard;
+    use tokio::sync::broadcast;
+
+    let (event_tx, _) = broadcast::channel(16);
+    let task = TaskNode::spawn(
+        "test-task-direct".into(),
+        "cat".into(),
+        &[],
+        None,
+        event_tx,
+    )
+    .unwrap();
+
+    assert!(task.is_running());
+    task.send_input(b"hello direct\n").unwrap();
+    task.kill().unwrap();
+
+    copy_to_clipboard("test clipboard");
 }

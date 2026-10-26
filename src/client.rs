@@ -226,6 +226,13 @@ impl Client {
             _ => Err("Invalid response to Focus".into()),
         }
     }
+    pub async fn status(&mut self, name: &str) -> Result<NodeInfo, String> {
+        match self.call(Request::Status { name: name.to_string() }).await? {
+            Response::Node(info) => Ok(info),
+            Response::Error(e) => Err(e),
+            _ => Err("Invalid response to Status".into()),
+        }
+    }
     pub async fn resize_pane(&mut self, name: &str, cols: u16, rows: u16) -> Result<(), String> {
         match self.call(Request::ResizePane { name: name.to_string(), cols, rows }).await? {
             Response::Ok => Ok(()),

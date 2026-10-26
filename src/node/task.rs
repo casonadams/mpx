@@ -281,3 +281,17 @@ impl Node for TaskNode {
         self.running.load(Ordering::SeqCst)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_task_node_send_input_and_kill() {
+        let (tx, _) = broadcast::channel(16);
+        let node = TaskNode::spawn("test-task".into(), "cat".into(), &[], None, tx).unwrap();
+        assert!(node.is_running());
+        let _ = node.send_input(b"ping\n");
+        let _ = node.kill();
+    }
+}

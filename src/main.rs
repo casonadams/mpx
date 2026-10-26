@@ -192,60 +192,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             name,
             direction,
             pty,
+            detach,
             command,
             args,
         } => {
-            let mut client = ensure_client(&endpoint, &cli.session).await?;
-            let node_name = name.unwrap_or_else(|| {
-                std::path::Path::new(&command)
-                    .file_name()
-                    .map(|f| f.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| "task".to_string())
-            });
-
-            let dir = if direction.to_lowercase().starts_with('v') {
-                Direction::Vertical
-            } else {
-                Direction::Horizontal
-            };
-
-            let current_dir = std::env::current_dir().ok().map(|p| p.to_string_lossy().into_owned());
-            let info = client
-                .split(SplitOpts {
-                    target,
-                    name: node_name,
-                    command,
-                    args,
-                    pty,
-                    direction: dir,
-                    cwd: current_dir,
-                })
-                .await
-                .map_err(|e| format!("Split error: {}", e))?;
-
-            println!(
-                "Split pane created: '{}' (pid: {}, pty: {})",
-                info.name,
-                info.pid.map(|p| p.to_string()).unwrap_or("-".into()),
-                info.pty
-            );
+            cmd_split(&endpoint, &cli.session, target, name, direction, pty, detach, command, args).await?;
+        }
+        Commands::Focus { name } => {
+            cmd_focus(&endpoint, &cli.session, name).await?;
+        }
+        Commands::Status { name } => {
+            cmd_status(&endpoint, &cli.session, name).await?;
         }
         Commands::Layout { width, height } => {
-            let mut client = ensure_client(&endpoint, &cli.session).await?;
-            let (term_w, term_h) = crossterm::terminal::size().unwrap_or((80, 24));
-            let w = width.unwrap_or(term_w);
-            let h = height.unwrap_or(term_h);
-
-            let (rects, _dividers, _tabs) = client.layout(w, h).await.map_err(|e| format!("Layout error: {}", e))?;
-            println!("Workspace Layout ({}x{}):", w, h);
-            println!("{:<16} {:<10} {:<10} {:<10}", "PANE", "RECT (x,y)", "SIZE (wxh)", "FOCUSED");
-            println!("{}", "-".repeat(50));
-            for (name, rect, focused) in rects {
-                let pos = format!("{},{}", rect.x, rect.y);
-                let size = format!("{}x{}", rect.width, rect.height);
-                let foc = if focused { "yes" } else { "no" };
-                println!("{:<16} {:<10} {:<10} {:<10}", name, pos, size, foc);
-            }
+            cmd_layout(&endpoint, &cli.session, width, height).await?;
         }
         Commands::Pipe { command: pipe_cmd } => {
             let mut client = ensure_client(&endpoint, &cli.session).await?;
@@ -282,5 +242,94 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn cmd_split(
+    endpoint: &str,
+    session: &str,
+    target: Option<String>,
+    name: Option<String>,
+    direction: String,
+    pty: bool,
+    detach: bool,
+    command: String,
+    args: Vec<String>,
+) -> Result<(), String> {
+    let mut client = ensure_client(endpoint, session).await?;
+    let node_name = name.unwrap_or_else(|| {
+        std::path::Path::new(&command)
+            .file_name()
+            .map(|f| f.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "task".to_string())
+    });
+
+    let dir = if direction.to_lowercase().starts_with('v') {
+        Direction::Vertical
+    } else {
+        Direction::Horizontal
+    };
+
+    let current_dir = std::env::current_dir().ok().map(|p| p.to_string_lossy().into_owned());
+    let info = client
+        .split(SplitOpts {
+            target,
+            name: node_name,
+            command,
+            args,
+            pty,
+            direction: dir,
+            cwd: current_dir,
+            focus: !detach,
+        })
+        .await
+        .map_err(|e| format!("Split error: {}", e))?;
+
+    println!(
+        "Split pane created: '{}' (pid: {}, pty: {})",
+        info.name,
+        info.pid.map(|p| p.to_string()).unwrap_or("-".into()),
+        info.pty
+    );
+    Ok(())
+}
+
+async fn cmd_focus(endpoint: &str, session: &str, name: String) -> Result<(), String> {
+    let mut client = ensure_client(endpoint, session).await?;
+    client.focus(&name).await.map_err(|e| format!("Focus error: {}", e))?;
+    println!("Focused pane '{}'", name);
+    Ok(())
+}
+
+async fn cmd_status(endpoint: &str, session: &str, name: String) -> Result<(), String> {
+    let mut client = ensure_client(endpoint, session).await?;
+    let info = client.status(&name).await.map_err(|e| format!("Status error: {}", e))?;
+    println!("Node: {}", info.name);
+    println!("PID: {}", info.pid.map(|p| p.to_string()).unwrap_or("-".into()));
+    println!("PTY: {}", info.pty);
+    println!("Status: {}", info.status);
+    if !info.command.is_empty() {
+        println!("Command: {}", info.command);
+    }
+    Ok(())
+}
+
+async fn cmd_layout(endpoint: &str, session: &str, width: Option<u16>, height: Option<u16>) -> Result<(), String> {
+    let mut client = ensure_client(endpoint, session).await?;
+    let (term_w, term_h) = crossterm::terminal::size().unwrap_or((80, 24));
+    let w = width.unwrap_or(term_w);
+    let h = height.unwrap_or(term_h);
+
+    let (rects, _dividers, _tabs) = client.layout(w, h).await.map_err(|e| format!("Layout error: {}", e))?;
+    println!("Workspace Layout ({}x{}):", w, h);
+    println!("{:<16} {:<10} {:<10} {:<10}", "PANE", "RECT (x,y)", "SIZE (wxh)", "FOCUSED");
+    println!("{}", "-".repeat(50));
+    for (name, rect, focused) in rects {
+        let pos = format!("{},{}", rect.x, rect.y);
+        let size = format!("{}x{}", rect.width, rect.height);
+        let foc = if focused { "yes" } else { "no" };
+        println!("{:<16} {:<10} {:<10} {:<10}", name, pos, size, foc);
+    }
     Ok(())
 }

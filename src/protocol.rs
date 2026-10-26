@@ -9,6 +9,10 @@ pub struct NodeInfo {
     pub command: String,
     pub status: String,
 }
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SplitOpts {
     pub target: Option<String>,
@@ -18,6 +22,8 @@ pub struct SplitOpts {
     pub pty: bool,
     pub direction: Direction,
     pub cwd: Option<String>,
+    #[serde(default = "default_true")]
+    pub focus: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -98,6 +104,9 @@ pub enum Request {
         name: String,
     },
     ListPipes,
+    Status {
+        name: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

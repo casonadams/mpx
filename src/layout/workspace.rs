@@ -29,6 +29,10 @@ impl Window {
     }
 
     pub fn add_or_split(&mut self, node_name: String, dir: Direction) {
+        self.add_or_split_with_focus(node_name, dir, true);
+    }
+
+    pub fn add_or_split_with_focus(&mut self, node_name: String, dir: Direction, focus: bool) {
         if self.root.is_none() {
             self.root = Some(LayoutNode::leaf(node_name.clone()));
             self.focused = Some(node_name);
@@ -36,9 +40,11 @@ impl Window {
         }
 
         let target = self.focused.clone();
-        if let (Some(root), Some(focus)) = (&mut self.root, target) {
-            if root.split_leaf(&focus, node_name.clone(), dir) {
-                self.focused = Some(node_name);
+        if let (Some(root), Some(focus_target)) = (&mut self.root, target) {
+            if root.split_leaf(&focus_target, node_name.clone(), dir) {
+                if focus {
+                    self.focused = Some(node_name);
+                }
                 return;
             }
         }
@@ -47,7 +53,9 @@ impl Window {
             let leaves = root.all_leaves();
             if let Some(first) = leaves.first() {
                 root.split_leaf(first, node_name.clone(), dir);
-                self.focused = Some(node_name);
+                if focus {
+                    self.focused = Some(node_name);
+                }
             }
         }
     }
@@ -204,6 +212,10 @@ impl Workspace {
     }
 
     pub fn add_or_split(&mut self, node_name: String, dir: Direction) {
+        self.add_or_split_with_focus(node_name, dir, true);
+    }
+
+    pub fn add_or_split_with_focus(&mut self, node_name: String, dir: Direction, focus: bool) {
         if self.windows.is_empty() {
             let win_name = node_name.clone();
             self.new_window(win_name, node_name);
@@ -211,7 +223,7 @@ impl Workspace {
         }
 
         if let Some(win) = self.windows.get_mut(self.active_idx) {
-            win.add_or_split(node_name, dir);
+            win.add_or_split_with_focus(node_name, dir, focus);
         }
     }
 

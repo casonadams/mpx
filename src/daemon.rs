@@ -112,7 +112,45 @@ impl DaemonState {
 
     pub async fn list_nodes(&self) -> Vec<NodeInfo> {
         let nodes = self.nodes.read().await;
-        nodes.values().map(|n| n.info()).collect()
+        let mut list: Vec<NodeInfo> = nodes.values().map(|n| n.info()).collect();
+        let hist = self.exited_history.read().await;
+        for (name, (_, code)) in hist.iter() {
+            if !nodes.contains_key(name) {
+                list.push(NodeInfo {
+                    name: name.clone(),
+                    pid: None,
+                    pty: false,
+                    command: String::new(),
+                    status: match code {
+                        Some(c) => format!("exited ({})", c),
+                        None => "exited".to_string(),
+                    },
+                });
+            }
+        }
+        list
+    }
+
+    pub async fn get_status(&self, name: &str) -> Result<NodeInfo, String> {
+        let nodes = self.nodes.read().await;
+        if let Some(node) = nodes.get(name) {
+            return Ok(node.info());
+        }
+        drop(nodes);
+        let hist = self.exited_history.read().await;
+        if let Some((_, code)) = hist.get(name) {
+            return Ok(NodeInfo {
+                name: name.to_string(),
+                pid: None,
+                pty: false,
+                command: String::new(),
+                status: match code {
+                    Some(c) => format!("exited ({})", c),
+                    None => "exited".to_string(),
+                },
+            });
+        }
+        Err(format!("Node '{}' not found", name))
     }
 
     pub async fn get_logs(&self, name: &str, tail: Option<usize>) -> Result<String, String> {
@@ -224,7 +262,7 @@ impl DaemonState {
             if let Some(ref t) = opts.target {
                 ws.focus(t);
             }
-            ws.add_or_split(opts.name, opts.direction);
+            ws.add_or_split_with_focus(opts.name, opts.direction, opts.focus);
         }
 
         Ok(info)
@@ -393,210 +431,12 @@ pub async fn handle_client<S: AsyncStream>(state: Arc<DaemonState>, stream: S) {
         };
 
         match req {
-            Request::Ping => {
-                let msg = DaemonMessage::Response(Response::Pong);
-                let _ = framed.send(serde_json::to_string(&msg).unwrap()).await;
-            }
-            Request::Spawn {
-                name,
-                command,
-                args,
-                pty,
-                cwd,
-            } => {
-                let res = state.spawn_node(name, command, args, pty, cwd).await;
-                let resp = match res {
-                    Ok(info) => Response::Node(info),
-                    Err(e) => Response::Error(e),
-                };
-                let _ = framed
-                    .send(serde_json::to_string(&DaemonMessage::Response(resp)).unwrap())
-                    .await;
-            }
-            Request::List => {
-                let list = state.list_nodes().await;
-                let msg = DaemonMessage::Response(Response::NodeList(list));
-                let _ = framed.send(serde_json::to_string(&msg).unwrap()).await;
-            }
-            Request::Logs { name, tail } => {
-                let res = state.get_logs(&name, tail).await;
-                let resp = match res {
-                    Ok(logs) => Response::Logs(logs),
-                    Err(e) => Response::Error(e),
-                };
-                let _ = framed
-                    .send(serde_json::to_string(&DaemonMessage::Response(resp)).unwrap())
-                    .await;
-            }
-            Request::Send { name, data } => {
-                let res = state.send_input(&name, &data).await;
-                let resp = match res {
-                    Ok(_) => Response::Ok,
-                    Err(e) => Response::Error(e),
-                };
-                let _ = framed
-                    .send(serde_json::to_string(&DaemonMessage::Response(resp)).unwrap())
-                    .await;
-            }
-            Request::Kill { name } => {
-                let res = state.kill_node(&name).await;
-                let resp = match res {
-                    Ok(_) => Response::Ok,
-                    Err(e) => Response::Error(e),
-                };
-                let _ = framed
-                    .send(serde_json::to_string(&DaemonMessage::Response(resp)).unwrap())
-                    .await;
-            }
-            Request::Wait { name } => {
-                let res = state.wait_node(&name).await;
-                let resp = match res {
-                    Ok(code) => Response::Exit { code },
-                    Err(e) => Response::Error(e),
-                };
-                let _ = framed
-                    .send(serde_json::to_string(&DaemonMessage::Response(resp)).unwrap())
-                    .await;
-            }
-            Request::Screen { name } => {
-                let res = state.get_screen(&name).await;
-                let resp = match res {
-                    Ok(text) => Response::Screen(text),
-                    Err(e) => Response::Error(e),
-                };
-                let _ = framed
-                    .send(serde_json::to_string(&DaemonMessage::Response(resp)).unwrap())
-                    .await;
-            }
-            Request::Split(opts) => {
-                let res = state.split_node(opts).await;
-                let resp = match res {
-                    Ok(info) => Response::Node(info),
-                    Err(e) => Response::Error(e),
-                };
-                let _ = framed
-                    .send(serde_json::to_string(&DaemonMessage::Response(resp)).unwrap())
-                    .await;
-            }
-            Request::Layout { width, height } => {
-                let (rects, dividers, tabs) = state.compute_layout(width, height).await;
-                let resp = Response::Layout(rects, dividers, tabs);
-                let _ = framed
-                    .send(serde_json::to_string(&DaemonMessage::Response(resp)).unwrap())
-                    .await;
-            }
-            Request::FocusNext => {
-                state.workspace.write().await.focus_next();
-                let _ = framed
-                    .send(serde_json::to_string(&DaemonMessage::Response(Response::Ok)).unwrap())
-                    .await;
-            }
-            Request::FocusPrev => {
-                state.workspace.write().await.focus_prev();
-                let _ = framed
-                    .send(serde_json::to_string(&DaemonMessage::Response(Response::Ok)).unwrap())
-                    .await;
-            }
-            Request::Focus { name } => {
-                state.workspace.write().await.focus(&name);
-                let _ = framed
-                    .send(serde_json::to_string(&DaemonMessage::Response(Response::Ok)).unwrap())
-                    .await;
-            }
-            Request::ResizePane { name, cols, rows } => {
-                let res = state.resize_node(&name, cols, rows).await;
-                let resp = match res {
-                    Ok(_) => Response::Ok,
-                    Err(e) => Response::Error(e),
-                };
-                let _ = framed
-                    .send(serde_json::to_string(&DaemonMessage::Response(resp)).unwrap())
-                    .await;
-            }
-            Request::NewWindow(opts) => {
-                let res = state.new_window(opts).await;
-                let resp = match res {
-                    Ok(info) => Response::Node(info),
-                    Err(e) => Response::Error(e),
-                };
-                let _ = framed
-                    .send(serde_json::to_string(&DaemonMessage::Response(resp)).unwrap())
-                    .await;
-            }
-            Request::GetCwd { name } => {
-                let cwd = state.get_cwd(&name).await;
-                let resp = Response::Cwd(cwd);
-                let _ = framed
-                    .send(serde_json::to_string(&DaemonMessage::Response(resp)).unwrap())
-                    .await;
-            }
-            Request::NextWindow => {
-                state.next_window().await;
-                let _ = framed
-                    .send(serde_json::to_string(&DaemonMessage::Response(Response::Ok)).unwrap())
-                    .await;
-            }
-            Request::PrevWindow => {
-                state.prev_window().await;
-                let _ = framed
-                    .send(serde_json::to_string(&DaemonMessage::Response(Response::Ok)).unwrap())
-                    .await;
-            }
-            Request::SelectWindow { index } => {
-                let ok = state.select_window(index).await;
-                let resp = if ok {
-                    Response::Ok
-                } else {
-                    Response::Error("Window index out of bounds".into())
-                };
-                let _ = framed
-                    .send(serde_json::to_string(&DaemonMessage::Response(resp)).unwrap())
-                    .await;
-            }
-            Request::CreatePipe { name, capacity } => {
-                let res = state.create_pipe(name, capacity).await;
-                let resp = match res {
-                    Ok(_) => Response::Ok,
-                    Err(e) => Response::Error(e),
-                };
-                let _ = framed
-                    .send(serde_json::to_string(&DaemonMessage::Response(resp)).unwrap())
-                    .await;
-            }
-            Request::WritePipe { name, data } => {
-                let res = state.write_pipe(&name, &data).await;
-                let resp = match res {
-                    Ok(_) => Response::Ok,
-                    Err(e) => Response::Error(e),
-                };
-                let _ = framed
-                    .send(serde_json::to_string(&DaemonMessage::Response(resp)).unwrap())
-                    .await;
-            }
-            Request::ReadPipe { name } => {
-                let res = state.read_pipe(&name).await;
-                let resp = match res {
-                    Ok(text) => Response::PipeData(text),
-                    Err(e) => Response::Error(e),
-                };
-                let _ = framed
-                    .send(serde_json::to_string(&DaemonMessage::Response(resp)).unwrap())
-                    .await;
-            }
-            Request::ListPipes => {
-                let pipes = state.list_pipes().await;
-                let resp = Response::PipeList(pipes);
-                let _ = framed
-                    .send(serde_json::to_string(&DaemonMessage::Response(resp)).unwrap())
-                    .await;
-            }
             Request::Subscribe { name: filter_name } => {
                 let mut rx = state.subscribe();
                 let _ = framed
                     .send(serde_json::to_string(&DaemonMessage::Response(Response::Ok)).unwrap())
                     .await;
 
-                // Stream events until client disconnects
                 while let Ok(event) = rx.recv().await {
                     let should_send = match (&filter_name, &event) {
                         (Some(filter), StreamEvent::Output { name, .. }) => filter == name,
@@ -618,7 +458,112 @@ pub async fn handle_client<S: AsyncStream>(state: Arc<DaemonState>, stream: S) {
                 }
                 break;
             }
+            other => {
+                let resp = dispatch_request(&state, other).await;
+                let _ = framed
+                    .send(serde_json::to_string(&DaemonMessage::Response(resp)).unwrap())
+                    .await;
+            }
         }
+    }
+}
+
+async fn dispatch_request(state: &Arc<DaemonState>, req: Request) -> Response {
+    match req {
+        Request::Ping => Response::Pong,
+        Request::Spawn {
+            name,
+            command,
+            args,
+            pty,
+            cwd,
+        } => match state.spawn_node(name, command, args, pty, cwd).await {
+            Ok(info) => Response::Node(info),
+            Err(e) => Response::Error(e),
+        },
+        Request::List => Response::NodeList(state.list_nodes().await),
+        Request::Logs { name, tail } => match state.get_logs(&name, tail).await {
+            Ok(logs) => Response::Logs(logs),
+            Err(e) => Response::Error(e),
+        },
+        Request::Send { name, data } => match state.send_input(&name, &data).await {
+            Ok(_) => Response::Ok,
+            Err(e) => Response::Error(e),
+        },
+        Request::Kill { name } => match state.kill_node(&name).await {
+            Ok(_) => Response::Ok,
+            Err(e) => Response::Error(e),
+        },
+        Request::Wait { name } => match state.wait_node(&name).await {
+            Ok(code) => Response::Exit { code },
+            Err(e) => Response::Error(e),
+        },
+        Request::Screen { name } => match state.get_screen(&name).await {
+            Ok(screen) => Response::Screen(screen),
+            Err(e) => Response::Error(e),
+        },
+        Request::Split(opts) => match state.split_node(opts).await {
+            Ok(info) => Response::Node(info),
+            Err(e) => Response::Error(e),
+        },
+        Request::Layout { width, height } => {
+            let (rects, dividers, tabs) = state.compute_layout(width, height).await;
+            Response::Layout(rects, dividers, tabs)
+        }
+        Request::FocusNext => {
+            state.workspace.write().await.focus_next();
+            Response::Ok
+        }
+        Request::FocusPrev => {
+            state.workspace.write().await.focus_prev();
+            Response::Ok
+        }
+        Request::Focus { name } => {
+            state.workspace.write().await.focus(&name);
+            Response::Ok
+        }
+        Request::ResizePane { name, cols, rows } => match state.resize_node(&name, cols, rows).await {
+            Ok(_) => Response::Ok,
+            Err(e) => Response::Error(e),
+        },
+        Request::NewWindow(opts) => match state.new_window(opts).await {
+            Ok(info) => Response::Node(info),
+            Err(e) => Response::Error(e),
+        },
+        Request::GetCwd { name } => Response::Cwd(state.get_cwd(&name).await),
+        Request::NextWindow => {
+            state.next_window().await;
+            Response::Ok
+        }
+        Request::PrevWindow => {
+            state.prev_window().await;
+            Response::Ok
+        }
+        Request::SelectWindow { index } => {
+            if state.select_window(index).await {
+                Response::Ok
+            } else {
+                Response::Error("Window index out of bounds".into())
+            }
+        }
+        Request::CreatePipe { name, capacity } => match state.create_pipe(name, capacity).await {
+            Ok(_) => Response::Ok,
+            Err(e) => Response::Error(e),
+        },
+        Request::WritePipe { name, data } => match state.write_pipe(&name, &data).await {
+            Ok(_) => Response::Ok,
+            Err(e) => Response::Error(e),
+        },
+        Request::ReadPipe { name } => match state.read_pipe(&name).await {
+            Ok(text) => Response::PipeData(text),
+            Err(e) => Response::Error(e),
+        },
+        Request::ListPipes => Response::PipeList(state.list_pipes().await),
+        Request::Status { name } => match state.get_status(&name).await {
+            Ok(info) => Response::Node(info),
+            Err(e) => Response::Error(e),
+        },
+        Request::Subscribe { .. } => unreachable!(),
     }
 }
 

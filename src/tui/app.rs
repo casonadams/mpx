@@ -342,6 +342,7 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
                                         pty: true,
                                         direction: Direction::Horizontal,
                                         cwd: cur_cwd,
+                                        focus: true,
                                     })
                                     .await;
                             } else if is_split_horz {
@@ -359,6 +360,7 @@ pub async fn run_tui(endpoint: &str, session: &str) -> Result<(), String> {
                                         pty: true,
                                         direction: Direction::Vertical,
                                         cwd: cur_cwd,
+                                        focus: true,
                                     })
                                     .await;
                             } else {

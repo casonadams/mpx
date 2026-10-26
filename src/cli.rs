@@ -109,6 +109,9 @@ pub enum Commands {
         /// Run inside an interactive PTY
         #[arg(long)]
         pty: bool,
+        /// Do not focus the new pane (detached split, like tmux -d)
+        #[arg(short = 'd', long = "detach", alias = "no-focus", default_value_t = false)]
+        detach: bool,
 
         /// Command to execute
         #[arg(required = true)]
@@ -117,6 +120,17 @@ pub enum Commands {
         /// Arguments for the command
         #[arg(trailing_var_arg = true)]
         args: Vec<String>,
+    },
+    /// Focus a specific pane
+    Focus {
+        /// Name of the pane to focus
+        name: String,
+    },
+
+    /// Get status and metadata for a specific node
+    Status {
+        /// Name of the node
+        name: String,
     },
 
     /// Show calculated layout geometry for current terminal dimensions

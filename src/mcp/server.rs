@@ -128,9 +128,32 @@ impl McpServer {
                                 "args": { "type": "array", "items": { "type": "string" } },
                                 "name": { "type": "string", "description": "Name for the stream node" },
                                 "direction": { "type": "string", "enum": ["h", "v"], "description": "Split direction: horizontal (h) or vertical (v)" },
-                                "pty": { "type": "boolean", "description": "Allocate interactive PTY" }
+                                "pty": { "type": "boolean", "description": "Allocate interactive PTY" },
+                                "focus": { "type": "boolean", "description": "Whether to focus the newly created pane (default false in MCP to avoid stealing user keyboard focus)" }
                             },
                             "required": ["command"]
+                        }
+                    },
+                    {
+                        "name": "mpx_focus",
+                        "description": "Shift user keyboard and visual focus to a specific pane",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "name": { "type": "string", "description": "Name of the pane to focus" }
+                            },
+                            "required": ["name"]
+                        }
+                    },
+                    {
+                        "name": "mpx_status",
+                        "description": "Get current status, PID, and exit code for a node",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "name": { "type": "string", "description": "Name of the node" }
+                            },
+                            "required": ["name"]
                         }
                     },
                     {
@@ -154,11 +177,10 @@ impl McpServer {
                         "name": "mpx_screen",
                         "description": "Snapshot the 2D virtual terminal screen buffer of a node",
                         "inputSchema": {
-                            "type": "object",
                             "properties": {
-                                "name": { "type": "string", "description": "Name of the node" }
+                                "name": { "type": "string", "description": "Name of the node" },
+                                "trim": { "type": "boolean", "description": "Trim trailing blank lines and whitespace to reduce tokens (default true)" }
                             },
-                            "required": ["name"]
                         }
                     },
                     {
@@ -177,11 +199,10 @@ impl McpServer {
                         "name": "mpx_wait",
                         "description": "Wait for a node to exit and return its exit code",
                         "inputSchema": {
-                            "type": "object",
                             "properties": {
-                                "name": { "type": "string", "description": "Name of the node" }
+                                "name": { "type": "string", "description": "Name of the node" },
+                                "timeout": { "type": "integer", "description": "Optional timeout in seconds (default 25)" }
                             },
-                            "required": ["name"]
                         }
                     },
                     {
@@ -235,137 +256,194 @@ impl McpServer {
         let mut client = Client::connect(&self.endpoint).await?;
 
         match tool {
-            "mpx_run" => {
-                let command = args.get("command").and_then(|v| v.as_str()).ok_or("Missing command")?;
-                let node_args: Vec<String> = args
-                    .get("args")
-                    .and_then(|v| v.as_array())
-                    .map(|arr| arr.iter().filter_map(|s| s.as_str().map(String::from)).collect())
-                    .unwrap_or_default();
-                let name = args
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .map(String::from)
-                    .unwrap_or_else(|| {
-                        std::path::Path::new(command)
-                            .file_name()
-                            .map(|f| f.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| "task".into())
-                    });
-                let pty = args.get("pty").and_then(|v| v.as_bool()).unwrap_or(false);
-
-                let info = client.spawn(name, command.to_string(), node_args, pty, None).await?;
-                Ok(json!({
-                    "content": [{ "type": "text", "text": format!("Node '{}' started (pid: {:?}, pty: {})", info.name, info.pid, info.pty) }]
-                }))
-            }
-
-            "mpx_split" => {
-                let command = args.get("command").and_then(|v| v.as_str()).ok_or("Missing command")?;
-                let node_args: Vec<String> = args
-                    .get("args")
-                    .and_then(|v| v.as_array())
-                    .map(|arr| arr.iter().filter_map(|s| s.as_str().map(String::from)).collect())
-                    .unwrap_or_default();
-                let name = args
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .map(String::from)
-                    .unwrap_or_else(|| "split_pane".into());
-                let dir_str = args.get("direction").and_then(|v| v.as_str()).unwrap_or("h");
-                let dir = if dir_str.starts_with('v') {
-                    Direction::Vertical
-                } else {
-                    Direction::Horizontal
-                };
-                let pty = args.get("pty").and_then(|v| v.as_bool()).unwrap_or(false);
-
-                let info = client
-                    .split(SplitOpts {
-                        target: None,
-                        name,
-                        command: command.to_string(),
-                        args: node_args,
-                        pty,
-                        direction: dir,
-                        cwd: None,
-                    })
-                    .await?;
-                Ok(json!({
-                    "content": [{ "type": "text", "text": format!("Split pane '{}' created (pid: {:?})", info.name, info.pid) }]
-                }))
-            }
-
-            "mpx_list" => {
-                let list = client.list().await?;
-                let formatted = serde_json::to_string_pretty(&list).unwrap();
-                Ok(json!({
-                    "content": [{ "type": "text", "text": formatted }]
-                }))
-            }
-
-            "mpx_read" => {
-                let name = args.get("name").and_then(|v| v.as_str()).ok_or("Missing name")?;
-                let tail = args.get("tail").and_then(|v| v.as_u64()).map(|u| u as usize);
-                let logs = client.logs(name, tail).await?;
-                Ok(json!({
-                    "content": [{ "type": "text", "text": logs }]
-                }))
-            }
-
-            "mpx_screen" => {
-                let name = args.get("name").and_then(|v| v.as_str()).ok_or("Missing name")?;
-                let screen = client.screen(name).await?;
-                Ok(json!({
-                    "content": [{ "type": "text", "text": screen }]
-                }))
-            }
-
-            "mpx_send" => {
-                let name = args.get("name").and_then(|v| v.as_str()).ok_or("Missing name")?;
-                let data = args.get("data").and_then(|v| v.as_str()).ok_or("Missing data")?;
-                let payload = if data.ends_with('\n') { data.to_string() } else { format!("{}\n", data) };
-                client.send_input(name, &payload).await?;
-                Ok(json!({
-                    "content": [{ "type": "text", "text": format!("Input sent to '{}'", name) }]
-                }))
-            }
-
-            "mpx_wait" => {
-                let name = args.get("name").and_then(|v| v.as_str()).ok_or("Missing name")?;
-                let code = client.wait(name).await?;
-                Ok(json!({
-                    "content": [{ "type": "text", "text": format!("Node '{}' exited with code {:?}", name, code) }]
-                }))
-            }
-
-            "mpx_kill" => {
-                let name = args.get("name").and_then(|v| v.as_str()).ok_or("Missing name")?;
-                client.kill(name).await?;
-                Ok(json!({
-                    "content": [{ "type": "text", "text": format!("Node '{}' terminated", name) }]
-                }))
-            }
-
-            "mpx_pipe_write" => {
-                let name = args.get("name").and_then(|v| v.as_str()).ok_or("Missing name")?;
-                let data = args.get("data").and_then(|v| v.as_str()).ok_or("Missing data")?;
-                let _ = client.create_pipe(name, None).await; // idempotent
-                client.write_pipe(name, data).await?;
-                Ok(json!({
-                    "content": [{ "type": "text", "text": format!("Wrote {} bytes to pipe '{}'", data.len(), name) }]
-                }))
-            }
-
-            "mpx_pipe_read" => {
-                let name = args.get("name").and_then(|v| v.as_str()).ok_or("Missing name")?;
-                let text = client.read_pipe(name).await?;
-                Ok(json!({
-                    "content": [{ "type": "text", "text": text }]
-                }))
-            }
-
+            "mpx_run" => tool_run(&mut client, &args).await,
+            "mpx_split" => tool_split(&mut client, &args).await,
+            "mpx_list" => tool_list(&mut client).await,
+            "mpx_focus" => tool_focus(&mut client, &args).await,
+            "mpx_status" => tool_status(&mut client, &args).await,
+            "mpx_read" => tool_read(&mut client, &args).await,
+            "mpx_screen" => tool_screen(&mut client, &args).await,
+            "mpx_send" => tool_send(&mut client, &args).await,
+            "mpx_wait" => tool_wait(&mut client, &args).await,
+            "mpx_kill" => tool_kill(&mut client, &args).await,
+            "mpx_pipe_write" => tool_pipe_write(&mut client, &args).await,
+            "mpx_pipe_read" => tool_pipe_read(&mut client, &args).await,
             _ => Err(format!("Unknown tool: {}", tool)),
         }
     }
+}
+
+async fn tool_run(client: &mut Client, args: &Value) -> Result<Value, String> {
+    let command = args.get("command").and_then(|v| v.as_str()).ok_or("Missing command")?;
+    let node_args: Vec<String> = args
+        .get("args")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|s| s.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+    let name = args
+        .get("name")
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .unwrap_or_else(|| {
+            std::path::Path::new(command)
+                .file_name()
+                .map(|f| f.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "task".into())
+        });
+    let pty = args.get("pty").and_then(|v| v.as_bool()).unwrap_or(false);
+
+    let info = client.spawn(name, command.to_string(), node_args, pty, None).await?;
+    Ok(json!({
+        "content": [{ "type": "text", "text": format!("Node '{}' started (pid: {:?}, pty: {})", info.name, info.pid, info.pty) }]
+    }))
+}
+
+async fn tool_split(client: &mut Client, args: &Value) -> Result<Value, String> {
+    let command = args.get("command").and_then(|v| v.as_str()).ok_or("Missing command")?;
+    let node_args: Vec<String> = args
+        .get("args")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|s| s.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+    let name = args
+        .get("name")
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .unwrap_or_else(|| "split_pane".into());
+    let dir_str = args.get("direction").and_then(|v| v.as_str()).unwrap_or("h");
+    let dir = if dir_str.starts_with('v') {
+        Direction::Vertical
+    } else {
+        Direction::Horizontal
+    };
+    let pty = args.get("pty").and_then(|v| v.as_bool()).unwrap_or(false);
+    let focus = args.get("focus").and_then(|v| v.as_bool()).unwrap_or(false);
+
+    let info = client
+        .split(SplitOpts {
+            target: None,
+            name,
+            command: command.to_string(),
+            args: node_args,
+            pty,
+            direction: dir,
+            cwd: None,
+            focus,
+        })
+        .await?;
+    Ok(json!({
+        "content": [{ "type": "text", "text": format!("Split pane '{}' created (pid: {:?})", info.name, info.pid) }]
+    }))
+}
+
+async fn tool_list(client: &mut Client) -> Result<Value, String> {
+    let list = client.list().await?;
+    let formatted = serde_json::to_string_pretty(&list).unwrap();
+    Ok(json!({
+        "content": [{ "type": "text", "text": formatted }]
+    }))
+}
+
+async fn tool_focus(client: &mut Client, args: &Value) -> Result<Value, String> {
+    let name = args.get("name").and_then(|v| v.as_str()).ok_or("Missing name")?;
+    client.focus(name).await?;
+    Ok(json!({
+        "content": [{ "type": "text", "text": format!("Focused pane '{}'", name) }]
+    }))
+}
+
+async fn tool_status(client: &mut Client, args: &Value) -> Result<Value, String> {
+    let name = args.get("name").and_then(|v| v.as_str()).ok_or("Missing name")?;
+    let info = client.status(name).await?;
+    let formatted = serde_json::to_string_pretty(&info).unwrap();
+    Ok(json!({
+        "content": [{ "type": "text", "text": formatted }]
+    }))
+}
+
+async fn tool_read(client: &mut Client, args: &Value) -> Result<Value, String> {
+    let name = args.get("name").and_then(|v| v.as_str()).ok_or("Missing name")?;
+    let tail = args.get("tail").and_then(|v| v.as_u64()).map(|u| u as usize);
+    let logs = client.logs(name, tail).await?;
+    Ok(json!({
+        "content": [{ "type": "text", "text": logs }]
+    }))
+}
+
+async fn tool_screen(client: &mut Client, args: &Value) -> Result<Value, String> {
+    let name = args.get("name").and_then(|v| v.as_str()).ok_or("Missing name")?;
+    let trim = args.get("trim").and_then(|v| v.as_bool()).unwrap_or(true);
+    let screen = client.screen(name).await?;
+    let text = if trim {
+        let mut lines: Vec<&str> = screen.lines().map(|l| l.trim_end()).collect();
+        while let Some(last) = lines.last() {
+            if last.is_empty() {
+                lines.pop();
+            } else {
+                break;
+            }
+        }
+        lines.join("\n")
+    } else {
+        screen
+    };
+    Ok(json!({
+        "content": [{ "type": "text", "text": text }]
+    }))
+}
+
+async fn tool_send(client: &mut Client, args: &Value) -> Result<Value, String> {
+    let name = args.get("name").and_then(|v| v.as_str()).ok_or("Missing name")?;
+    let data = args.get("data").and_then(|v| v.as_str()).ok_or("Missing data")?;
+    let payload = if data.ends_with('\n') { data.to_string() } else { format!("{}\n", data) };
+    client.send_input(name, &payload).await?;
+    Ok(json!({
+        "content": [{ "type": "text", "text": format!("Input sent to '{}'", name) }]
+    }))
+}
+
+async fn tool_wait(client: &mut Client, args: &Value) -> Result<Value, String> {
+    let name = args.get("name").and_then(|v| v.as_str()).ok_or("Missing name")?;
+    let timeout_secs = args.get("timeout").and_then(|v| v.as_u64()).unwrap_or(25);
+    match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), client.wait(name)).await {
+        Ok(res) => {
+            let code = res?;
+            Ok(json!({
+                "content": [{ "type": "text", "text": format!("Node '{}' exited with code {:?}", name, code) }]
+            }))
+        }
+        Err(_) => {
+            let status_info = client.status(name).await.ok();
+            let status_str = status_info.map(|s| s.status).unwrap_or_else(|| "running".to_string());
+            Ok(json!({
+                "content": [{ "type": "text", "text": format!("Node '{}' still {} after {}s (timed out waiting for exit)", name, status_str, timeout_secs) }]
+            }))
+        }
+    }
+}
+
+async fn tool_kill(client: &mut Client, args: &Value) -> Result<Value, String> {
+    let name = args.get("name").and_then(|v| v.as_str()).ok_or("Missing name")?;
+    client.kill(name).await?;
+    Ok(json!({
+        "content": [{ "type": "text", "text": format!("Node '{}' terminated", name) }]
+    }))
+}
+
+async fn tool_pipe_write(client: &mut Client, args: &Value) -> Result<Value, String> {
+    let name = args.get("name").and_then(|v| v.as_str()).ok_or("Missing name")?;
+    let data = args.get("data").and_then(|v| v.as_str()).ok_or("Missing data")?;
+    let _ = client.create_pipe(name, None).await; // idempotent
+    client.write_pipe(name, data).await?;
+    Ok(json!({
+        "content": [{ "type": "text", "text": format!("Wrote {} bytes to pipe '{}'", data.len(), name) }]
+    }))
+}
+
+async fn tool_pipe_read(client: &mut Client, args: &Value) -> Result<Value, String> {
+    let name = args.get("name").and_then(|v| v.as_str()).ok_or("Missing name")?;
+    let text = client.read_pipe(name).await?;
+    Ok(json!({
+        "content": [{ "type": "text", "text": text }]
+    }))
 }
