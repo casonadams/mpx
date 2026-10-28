@@ -15,6 +15,7 @@ const TITLE_CHARS: usize = 80;
 /// Directory depth of session files below each store root (`<slug>/<file>` or `YYYY/MM/DD/<file>`).
 const CLAUDE_OMP_DEPTH: usize = 1;
 const CODEX_DEPTH: usize = 3;
+const RHO_DEPTH: usize = 0;
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SessionMeta {
@@ -43,15 +44,38 @@ fn message_of(v: &Value) -> Option<(String, String)> {
         let role = msg.get("role")?.as_str()?.to_string();
         return Some((role, content_text(msg.get("content")?)));
     }
-    let payload = v.get("payload")?;
-    match (v.get("type")?.as_str()?, payload.get("type")?.as_str()?) {
-        ("response_item", "message") => {
-            let role = payload.get("role")?.as_str()?.to_string();
-            Some((role, content_text(payload.get("content")?)))
+    if let Some(payload) = v.get("payload") {
+        let t = v.get("type").and_then(Value::as_str);
+        let pt = payload.get("type").and_then(Value::as_str);
+        match (t, pt) {
+            (Some("response_item"), Some("message")) => {
+                let role = payload.get("role")?.as_str()?.to_string();
+                return Some((role, content_text(payload.get("content")?)));
+            }
+            (Some("event_msg"), Some("user_message")) => {
+                let text = payload.get("message")?.as_str()?.to_string();
+                return Some(("user".to_string(), text));
+            }
+            _ => {}
         }
-        ("event_msg", "user_message") => {
-            let text = payload.get("message")?.as_str()?.to_string();
-            Some(("user".to_string(), text))
+    }
+    rho_message_of(v)
+}
+
+fn rho_message_of(v: &Value) -> Option<(String, String)> {
+    if v.get("record_type").and_then(Value::as_str) != Some("audit_event") {
+        return None;
+    }
+    let event = v.get("event")?;
+    let payload = event.get("payload")?;
+    match event.get("kind").and_then(Value::as_str)? {
+        "user_message" => {
+            let prompt = payload.get("prompt").and_then(Value::as_str)?;
+            Some(("user".to_string(), prompt.to_string()))
+        }
+        "assistant_response" => {
+            let content = payload.get("content").and_then(Value::as_str)?;
+            Some(("assistant".to_string(), content.to_string()))
         }
         _ => None,
     }
@@ -144,6 +168,41 @@ pub fn parse_codex_meta(head: &str) -> Option<SessionMeta> {
             .and_then(Value::as_str)
             .map(str::to_string),
     })
+}
+
+/// rho session: header carries session_id (and optional cwd); title from session_named or first prompt.
+pub fn parse_rho_meta(head: &str, file_stem: &str) -> Option<SessionMeta> {
+    let mut id = None;
+    let mut title = None;
+    let mut cwd = None;
+    let mut is_rho = false;
+    for v in json_values(head) {
+        if v.get("record_type").is_some() {
+            is_rho = true;
+        }
+        if id.is_none() {
+            id = v
+                .get("session_id")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+        }
+        if cwd.is_none() {
+            cwd = v.get("cwd").and_then(Value::as_str).map(str::to_string);
+        }
+        if title.is_none() && v.get("record_type").and_then(Value::as_str) == Some("session_named")
+        {
+            title = v.get("name").and_then(Value::as_str).map(truncate_title);
+        }
+    }
+    if !is_rho && id.is_none() {
+        return None;
+    }
+    let id = id.unwrap_or_else(|| file_stem.to_string());
+    let title = title
+        .filter(|t| !t.is_empty())
+        .or_else(|| first_user_prompt(head))
+        .unwrap_or_else(|| id.clone());
+    Some(SessionMeta { id, title, cwd })
 }
 
 fn format_message(role: &str, body: &str) -> Vec<String> {
@@ -249,7 +308,23 @@ fn store_root(store: SessionStore) -> Option<(PathBuf, usize)> {
             CLAUDE_OMP_DEPTH,
         ),
         SessionStore::Codex => (home.join(".codex").join("sessions"), CODEX_DEPTH),
+        SessionStore::Rho => {
+            let config_dir = std::env::var_os("XDG_CONFIG_HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| home.join(".config"));
+            (config_dir.join("rho").join("sessions"), RHO_DEPTH)
+        }
     })
+}
+
+pub fn lookup_rho_cwd(path: &Path, session_id: &str) -> Option<String> {
+    let parent = path.parent()?;
+    let index = parent.join(".last_sessions.json");
+    let content = std::fs::read_to_string(index).ok()?;
+    let map: std::collections::BTreeMap<String, String> = serde_json::from_str(&content).ok()?;
+    map.into_iter()
+        .find(|(_, id)| id == session_id)
+        .map(|(cwd, _)| cwd)
 }
 
 struct Candidate {
@@ -279,11 +354,15 @@ fn candidates(harness: &Harness, store: SessionStore) -> Vec<Candidate> {
 fn session_from(c: &Candidate) -> Option<ResumableSession> {
     let head = read_window(&c.path, None)?;
     let stem = c.path.file_stem()?.to_string_lossy().into_owned();
-    let meta = match c.store {
+    let mut meta = match c.store {
         SessionStore::Claude => parse_claude_meta(&head, &stem),
         SessionStore::Omp => parse_omp_meta(&head)?,
         SessionStore::Codex => parse_codex_meta(&head)?,
+        SessionStore::Rho => parse_rho_meta(&head, &stem)?,
     };
+    if meta.cwd.is_none() && c.store == SessionStore::Rho {
+        meta.cwd = lookup_rho_cwd(&c.path, &meta.id);
+    }
     Some(ResumableSession {
         harness: c.harness.clone(),
         id: meta.id,

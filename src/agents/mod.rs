@@ -19,8 +19,8 @@ pub use hooks::{
     omp_hook_report, send_hook_report,
 };
 pub use sessions::{
-    SessionMeta, Visit, parse_claude_meta, parse_codex_meta, parse_omp_meta, parse_preview,
-    scan_resumable, transcript_preview, visit_entry,
+    SessionMeta, Visit, lookup_rho_cwd, parse_claude_meta, parse_codex_meta, parse_omp_meta,
+    parse_preview, parse_rho_meta, scan_resumable, transcript_preview, visit_entry,
 };
 
 const PROBE_TIMEOUT: Duration = Duration::from_millis(300);
@@ -34,6 +34,8 @@ pub enum SessionStore {
     Omp,
     /// `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`
     Codex,
+    /// `~/.config/rho/sessions/<id>.jsonl`
+    Rho,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -162,25 +164,27 @@ pub async fn inventory_json(registry: &[Harness], limit: usize, socket_dir: &Pat
 
 /// Nodes with agent info from every reachable mpx session whose socket is in `socket_dir`.
 pub async fn list_live(socket_dir: &Path) -> Vec<LiveAgent> {
-    let probes = crate::ipc::list_sessions(socket_dir).into_iter().map(|ep| async move {
-        let Ok(Ok(mut client)) =
-            tokio::time::timeout(PROBE_TIMEOUT, Client::connect(&ep.endpoint)).await
-        else {
-            return Vec::new();
-        };
-        let Ok(Ok(nodes)) = tokio::time::timeout(PROBE_TIMEOUT, client.list()).await else {
-            return Vec::new();
-        };
-        nodes
-            .into_iter()
-            .filter(|n| n.agent.is_some())
-            .map(|node| LiveAgent {
-                session: ep.name.clone(),
-                endpoint: ep.endpoint.clone(),
-                node,
-            })
-            .collect::<Vec<_>>()
-    });
+    let probes = crate::ipc::list_sessions(socket_dir)
+        .into_iter()
+        .map(|ep| async move {
+            let Ok(Ok(mut client)) =
+                tokio::time::timeout(PROBE_TIMEOUT, Client::connect(&ep.endpoint)).await
+            else {
+                return Vec::new();
+            };
+            let Ok(Ok(nodes)) = tokio::time::timeout(PROBE_TIMEOUT, client.list()).await else {
+                return Vec::new();
+            };
+            nodes
+                .into_iter()
+                .filter(|n| n.agent.is_some())
+                .map(|node| LiveAgent {
+                    session: ep.name.clone(),
+                    endpoint: ep.endpoint.clone(),
+                    node,
+                })
+                .collect::<Vec<_>>()
+        });
     futures_util::future::join_all(probes)
         .await
         .into_iter()

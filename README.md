@@ -104,11 +104,11 @@ mpx agents new claude --split
 
 ## Agent Manager
 
-`Prefix s` (or `mpx agents`) lists every AI agent running in any session (Claude Code, oh-my-pi, Codex, or your own harness). Agents are grouped by state (**needs you**, working, idle, exited), next to stored sessions you can resume. You can jump to an agent, resume or launch one, message several at once, or kill them, all with vim keys. `Prefix A` jumps to the agent that has waited longest, and the status bar shows `◆N` while agents wait. State comes from harness hooks that mpx installs when it launches an agent, with terminal bells and output activity as fallbacks. See **[Agent Manager](docs/AGENT-MANAGER.md)**.
+`Prefix s` (or `mpx agents`) lists every AI agent running in any session (Claude Code, oh-my-pi, Codex, rho, or your own harness). Agents are grouped by state (**needs you**, working, idle, exited), next to stored sessions you can resume. You can jump to an agent, resume or launch one, message several at once, or kill them, all with vim keys. `Prefix A` jumps to the agent that has waited longest, and the status bar shows `◆N` while agents wait. State comes from harness hooks that mpx installs when it launches an agent, with terminal bells and output activity as fallbacks. See **[Agent Manager](docs/AGENT-MANAGER.md)**.
 
 **tmux compatibility**: invoked as `tmux`, the mpx binary translates `split-window`, `send-keys`, `capture-pane`, `list-panes` and friends. With `mpx agents new claude --teams`, Claude Code agent teams spawn their teammates as mpx panes.
 
-**Survives crashes and reboots**: the daemon snapshots the layout continuously. After a crash or reboot, the session comes back with its windows, splits and working directories, and each agent resumes its own conversation (`claude --resume`, `omp --resume`). Pipe messages persist too. Run `mpx restore` to bring back a session you stopped on purpose. See **[Session restore](docs/CLI.md#session-restore)**.
+**Survives crashes and reboots**: the daemon snapshots the layout continuously. After a crash or reboot, the session comes back with its windows, splits and working directories, and each agent resumes its own conversation (`claude --resume`, `omp --resume`, `rho --resume`). Pipe messages persist too. Run `mpx restore` to bring back a session you stopped on purpose. See **[Session restore](docs/CLI.md#session-restore)**.
 
 ---
 

@@ -63,7 +63,7 @@ Pane arguments accept a node name or a pane id `%N`.
 | Tool | Parameters | Description |
 | :--- | :--- | :--- |
 | `mpx_agents` | | Live agents across all sessions (harness, state, session id, detail) plus resumable stored sessions. |
-| `mpx_agent_launch` | `harness`, `resume`, `cwd`, `split`, `teams`, `name` | Start `claude`, `omp`, `codex`, or a configured harness, optionally resuming a session. |
+| `mpx_agent_launch` | `harness`, `resume`, `cwd`, `split`, `teams`, `name` | Start `claude`, `omp`, `codex`, `rho`, or a configured harness, optionally resuming a session. |
 | `mpx_agent_prompt` | `name`, `text`, `wait` (default true), `timeout` (default 120 s) | Paste and submit a prompt to an agent pane, wait until the agent settles again (idle, needs input or exited, after the prompt; a slow start does not count as done), and return `{text, state, satisfied}`. `satisfied` is false on timeout. |
 
 ---

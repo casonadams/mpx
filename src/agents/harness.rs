@@ -43,6 +43,14 @@ fn builtin() -> Vec<Harness> {
             session_id_args: Vec::new(),
             store: Some(SessionStore::Codex),
         },
+        Harness {
+            name: "rho".into(),
+            detect: strings(&["rho"]),
+            command: strings(&["rho"]),
+            resume: strings(&["rho", "--resume", "{id}"]),
+            session_id_args: Vec::new(),
+            store: Some(SessionStore::Rho),
+        },
     ]
 }
 

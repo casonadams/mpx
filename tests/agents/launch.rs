@@ -86,6 +86,24 @@ fn codex_resume_uses_subcommand_form() {
 }
 
 #[test]
+fn rho_has_no_preassigned_session_id() {
+    let spec = launch_with(&harness("rho"), None, LaunchOptions::default(), &env_none());
+    assert_eq!(spec.argv, ["rho"]);
+    assert_eq!(spec.session_id, None);
+}
+
+#[test]
+fn rho_resume_uses_resume_flag() {
+    let spec = launch_with(
+        &harness("rho"),
+        Some("20261028_065219_78ecbb1d"),
+        LaunchOptions::default(),
+        &env_none(),
+    );
+    assert_eq!(spec.argv, ["rho", "--resume", "20261028_065219_78ecbb1d"]);
+}
+
+#[test]
 fn every_launch_sets_the_harness_env() {
     let spec = launch_with(&harness("omp"), None, LaunchOptions::default(), &env_none());
     assert_eq!(env_value(&spec, "MPX_AGENT_HARNESS"), Some("omp"));

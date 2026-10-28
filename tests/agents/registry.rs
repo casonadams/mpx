@@ -9,10 +9,10 @@ fn with_harness(entry: HarnessConfig) -> Config {
 }
 
 #[test]
-fn builtins_are_claude_omp_and_codex() {
+fn builtins_are_claude_omp_codex_and_rho() {
     let reg = registry(&Config::default());
     let names: Vec<&str> = reg.iter().map(|h| h.name.as_str()).collect();
-    assert_eq!(names, ["claude", "omp", "codex"]);
+    assert_eq!(names, ["claude", "omp", "codex", "rho"]);
 }
 
 #[test]
@@ -40,7 +40,7 @@ fn config_entry_with_new_name_is_appended() {
         ..HarnessConfig::default()
     });
     let reg = registry(&cfg);
-    assert_eq!(reg.len(), 4);
+    assert_eq!(reg.len(), 5);
     assert_eq!(reg.last().map(|h| h.name.as_str()), Some("gemini"));
     assert_eq!(reg.last().and_then(|h| h.store), None);
 }
@@ -64,6 +64,11 @@ fn detect_matches_basename_case_insensitively() {
         detect(&reg, "codex.exe").map(|h| h.name.as_str()),
         Some("codex")
     );
+    assert_eq!(
+        detect(&reg, "/usr/local/bin/rho").map(|h| h.name.as_str()),
+        Some("rho")
+    );
+    assert_eq!(detect(&reg, "rho").map(|h| h.name.as_str()), Some("rho"));
 }
 
 #[test]
