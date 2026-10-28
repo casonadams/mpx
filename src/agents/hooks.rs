@@ -117,7 +117,9 @@ pub fn omp_hook_report(event: &str, input: &str) -> Option<HookReport> {
     let (state, clear) = match event {
         // A run (agent_start..agent_end) spans many turns; only the run boundary means idle.
         "session_start" | "agent_end" => (Some(AgentState::Idle), false),
-        "agent_start" | "turn_start" | "tool_approval_resolved" => (Some(AgentState::Working), false),
+        "agent_start" | "turn_start" | "tool_approval_resolved" => {
+            (Some(AgentState::Working), false)
+        }
         "tool_approval_requested" => (Some(AgentState::NeedsInput), false),
         "session_shutdown" => (None, true),
         _ => return None,

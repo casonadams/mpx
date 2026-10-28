@@ -1,11 +1,12 @@
 use futures_util::{SinkExt, StreamExt};
 use tokio_util::codec::{Framed, LinesCodec};
 
-use crate::ipc::{connect_stream, IpcStream};
+use crate::ipc::{IpcStream, connect_stream};
 use crate::layout::{Divider, Rect, WindowTab};
 use crate::protocol::{
-    AgentState, DaemonMessage, LayoutPreset, NewWindowOpts, NodeInfo, PipeInfo, PipeMessage, Request, Response,
-    SessionInfo, Side, SpawnOpts, SplitOpts, StreamEvent, WaitCondition, WaitOutcome,
+    AgentState, DaemonMessage, LayoutPreset, NewWindowOpts, NodeInfo, PipeInfo, PipeMessage,
+    Request, Response, SessionInfo, Side, SpawnOpts, SplitOpts, StreamEvent, WaitCondition,
+    WaitOutcome,
 };
 
 pub type LayoutTuple = (Vec<(String, Rect, bool)>, Vec<Divider>, Vec<WindowTab>);
@@ -76,7 +77,9 @@ impl Client {
             .map_err(|e| e.to_string())?;
         match serde_json::from_str(&line).map_err(|e| format!("Failed to parse response: {}", e))? {
             DaemonMessage::Response(resp) => Ok(resp),
-            DaemonMessage::Event(_) => Err("Unexpected stream event in request-response".to_string()),
+            DaemonMessage::Event(_) => {
+                Err("Unexpected stream event in request-response".to_string())
+            }
         }
     }
 
@@ -151,7 +154,12 @@ impl Client {
         self.call_ok("Send", req).await
     }
 
-    pub async fn send_keys(&mut self, name: &str, keys: Vec<String>, literal: bool) -> Result<(), String> {
+    pub async fn send_keys(
+        &mut self,
+        name: &str,
+        keys: Vec<String>,
+        literal: bool,
+    ) -> Result<(), String> {
         let req = Request::SendKeys {
             name: name.to_string(),
             keys,
@@ -170,7 +178,13 @@ impl Client {
     }
 
     pub async fn kill(&mut self, name: &str) -> Result<(), String> {
-        self.call_ok("Kill", Request::Kill { name: name.to_string() }).await
+        self.call_ok(
+            "Kill",
+            Request::Kill {
+                name: name.to_string(),
+            },
+        )
+        .await
     }
 
     pub async fn wait(
@@ -191,7 +205,12 @@ impl Client {
     }
 
     pub async fn screen(&mut self, name: &str) -> Result<String, String> {
-        match self.call(Request::Screen { name: name.to_string() }).await? {
+        match self
+            .call(Request::Screen {
+                name: name.to_string(),
+            })
+            .await?
+        {
             Response::Screen(text) => Ok(text),
             other => Err(unexpected("Screen", other)),
         }
@@ -213,7 +232,12 @@ impl Client {
     }
 
     pub async fn get_cwd(&mut self, name: &str) -> Result<Option<String>, String> {
-        match self.call(Request::GetCwd { name: name.to_string() }).await? {
+        match self
+            .call(Request::GetCwd {
+                name: name.to_string(),
+            })
+            .await?
+        {
             Response::Cwd(cwd) => Ok(cwd),
             other => Err(unexpected("GetCwd", other)),
         }
@@ -232,7 +256,8 @@ impl Client {
     }
 
     pub async fn select_window(&mut self, index: usize) -> Result<(), String> {
-        self.call_ok("SelectWindow", Request::SelectWindow { index }).await
+        self.call_ok("SelectWindow", Request::SelectWindow { index })
+            .await
     }
 
     pub async fn rename_window(&mut self, index: Option<usize>, name: &str) -> Result<(), String> {
@@ -244,7 +269,8 @@ impl Client {
     }
 
     pub async fn kill_window(&mut self, index: Option<usize>) -> Result<(), String> {
-        self.call_ok("KillWindow", Request::KillWindow { index }).await
+        self.call_ok("KillWindow", Request::KillWindow { index })
+            .await
     }
 
     pub async fn next_pane(&mut self) -> Result<(), String> {
@@ -256,11 +282,23 @@ impl Client {
     }
 
     pub async fn focus(&mut self, name: &str) -> Result<(), String> {
-        self.call_ok("Focus", Request::Focus { name: name.to_string() }).await
+        self.call_ok(
+            "Focus",
+            Request::Focus {
+                name: name.to_string(),
+            },
+        )
+        .await
     }
 
     pub async fn status(&mut self, name: &str) -> Result<NodeInfo, String> {
-        self.call_node("Status", Request::Status { name: name.to_string() }).await
+        self.call_node(
+            "Status",
+            Request::Status {
+                name: name.to_string(),
+            },
+        )
+        .await
     }
 
     pub async fn resize_pane(&mut self, name: &str, cols: u16, rows: u16) -> Result<(), String> {
@@ -272,7 +310,13 @@ impl Client {
         self.call_ok("ResizePane", req).await
     }
 
-    pub async fn resize_split(&mut self, name: &str, side: Side, cells: u16, viewport: (u16, u16)) -> Result<(), String> {
+    pub async fn resize_split(
+        &mut self,
+        name: &str,
+        side: Side,
+        cells: u16,
+        viewport: (u16, u16),
+    ) -> Result<(), String> {
         let req = Request::ResizeSplit {
             name: name.to_string(),
             side,
@@ -292,11 +336,18 @@ impl Client {
     }
 
     pub async fn break_pane(&mut self, name: &str) -> Result<(), String> {
-        self.call_ok("BreakPane", Request::BreakPane { name: name.to_string() }).await
+        self.call_ok(
+            "BreakPane",
+            Request::BreakPane {
+                name: name.to_string(),
+            },
+        )
+        .await
     }
 
     pub async fn select_layout(&mut self, preset: Option<LayoutPreset>) -> Result<(), String> {
-        self.call_ok("SelectLayout", Request::SelectLayout { preset }).await
+        self.call_ok("SelectLayout", Request::SelectLayout { preset })
+            .await
     }
 
     pub async fn create_pipe(&mut self, name: &str, capacity: Option<usize>) -> Result<(), String> {
@@ -320,7 +371,11 @@ impl Client {
     }
 
     /// Returns `(messages, next_seq)`.
-    pub async fn read_pipe(&mut self, name: &str, args: PipeReadArgs) -> Result<(Vec<PipeMessage>, u64), String> {
+    pub async fn read_pipe(
+        &mut self,
+        name: &str,
+        args: PipeReadArgs,
+    ) -> Result<(Vec<PipeMessage>, u64), String> {
         let req = Request::ReadPipe {
             name: name.to_string(),
             since: args.since,
@@ -360,11 +415,17 @@ impl Client {
 
     /// Streams node events; the handler returns false to stop. With `name` and `since`, output from
     /// that byte offset is replayed first without a gap.
-    pub async fn stream_logs<F>(&mut self, name: Option<String>, since: Option<u64>, handler: F) -> Result<(), String>
+    pub async fn stream_logs<F>(
+        &mut self,
+        name: Option<String>,
+        since: Option<u64>,
+        handler: F,
+    ) -> Result<(), String>
     where
         F: FnMut(StreamEvent) -> bool,
     {
-        self.stream(Request::Subscribe { name, since }, handler).await
+        self.stream(Request::Subscribe { name, since }, handler)
+            .await
     }
 
     /// Streams `StreamEvent::Pipe` messages for one pipe; the handler returns false to stop.
@@ -372,7 +433,13 @@ impl Client {
     where
         F: FnMut(StreamEvent) -> bool,
     {
-        self.stream(Request::SubscribePipe { name: name.to_string() }, handler).await
+        self.stream(
+            Request::SubscribePipe {
+                name: name.to_string(),
+            },
+            handler,
+        )
+        .await
     }
 
     async fn stream<F>(&mut self, req: Request, mut handler: F) -> Result<(), String>

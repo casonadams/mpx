@@ -76,7 +76,8 @@ impl App {
     pub async fn refresh_agents(&mut self) {
         self.watch.ticks += 1;
         if self.watch.ticks % 2 == 1 {
-            self.watch.others = waiting_elsewhere(agents::list_live(&self.socket_dir).await, &self.session);
+            self.watch.others =
+                waiting_elsewhere(agents::list_live(&self.socket_dir).await, &self.session);
         }
         self.update_waiting();
     }
@@ -148,7 +149,12 @@ impl App {
             .iter()
             .find(|h| h.name == harness)
             .ok_or_else(|| format!("unknown harness '{harness}'"))?;
-        let spec = agents::launch(spec_harness, resume, LaunchOptions::default(), &self.socket_dir);
+        let spec = agents::launch(
+            spec_harness,
+            resume,
+            LaunchOptions::default(),
+            &self.socket_dir,
+        );
         let (command, args) = spec
             .argv
             .split_first()

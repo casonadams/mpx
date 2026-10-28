@@ -27,6 +27,9 @@ command = ["codex"]
 resume = ["codex", "resume", "{id}"]
 "#;
     let cfg = Config::parse(text).unwrap();
-    assert_eq!(cfg.bind.get("M-h").map(String::as_str), Some("select-pane -L"));
+    assert_eq!(
+        cfg.bind.get("M-h").map(String::as_str),
+        Some("select-pane -L")
+    );
     assert_eq!(cfg.harness[0].resume, vec!["codex", "resume", "{id}"]);
 }

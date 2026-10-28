@@ -7,7 +7,11 @@ use crate::store::{PaneSnapshot, RestorePlan, SessionSnapshot, WindowPlan, Windo
 /// Restores PTY panes with their original command in their last cwd; agents with a known session id
 /// are resumed through their harness, other agents start fresh; non-PTY task panes are not restored.
 /// Windows left without panes are dropped. Harness runtime files are written under `runtime_dir`.
-pub fn plan_restore(snapshot: &SessionSnapshot, harnesses: &[Harness], runtime_dir: &Path) -> RestorePlan {
+pub fn plan_restore(
+    snapshot: &SessionSnapshot,
+    harnesses: &[Harness],
+    runtime_dir: &Path,
+) -> RestorePlan {
     plan_restore_with(snapshot, harnesses, |h, resume, opts| {
         agents::launch(h, resume, opts, runtime_dir)
     })

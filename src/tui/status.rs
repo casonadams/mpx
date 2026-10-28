@@ -65,5 +65,8 @@ pub fn clock_12h(unix_ms: u64, utc_offset_secs: i64) -> String {
 
 /// Status-row notice shown when a session was restored from a snapshot at `restored_ms`.
 pub fn restored_notice(restored_ms: u64, utc_offset_secs: i64) -> String {
-    format!("restored session from {}", clock_hms(restored_ms, utc_offset_secs))
+    format!(
+        "restored session from {}",
+        clock_hms(restored_ms, utc_offset_secs)
+    )
 }

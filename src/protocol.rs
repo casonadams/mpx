@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::layout::{Direction, Divider, Rect, WindowTab};
+use serde::{Deserialize, Serialize};
 
 /// Stable numeric pane identifier, rendered as `%N` (tmux-compatible).
 pub type PaneId = u32;
@@ -396,13 +396,19 @@ pub enum Response {
     Session(SessionInfo),
     Node(NodeInfo),
     NodeList(Vec<NodeInfo>),
-    LogChunk { data: String, next: u64 },
+    LogChunk {
+        data: String,
+        next: u64,
+    },
     WaitResult(WaitOutcome),
     Error(String),
     Screen(String),
     Layout(Vec<(String, Rect, bool)>, Vec<Divider>, Vec<WindowTab>),
     PipeSeq(u64),
-    PipeMessages { messages: Vec<PipeMessage>, next: u64 },
+    PipeMessages {
+        messages: Vec<PipeMessage>,
+        next: u64,
+    },
     PipeList(Vec<PipeInfo>),
     Cwd(Option<String>),
 }
@@ -418,11 +424,23 @@ pub enum StreamEvent {
         offset: u64,
         next: u64,
     },
-    Exit { name: String, code: Option<i32> },
-    Spawned { name: String, pid: Option<u32> },
-    Pipe { name: String, message: PipeMessage },
+    Exit {
+        name: String,
+        code: Option<i32>,
+    },
+    Spawned {
+        name: String,
+        pid: Option<u32>,
+    },
+    Pipe {
+        name: String,
+        message: PipeMessage,
+    },
     /// Agent state transition (`None`: agent tracking ended).
-    Agent { name: String, agent: Option<AgentInfo> },
+    Agent {
+        name: String,
+        agent: Option<AgentInfo>,
+    },
     /// This subscriber fell behind and events were dropped; re-read state before trusting the stream.
     Lagged,
 }

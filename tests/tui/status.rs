@@ -14,8 +14,16 @@ fn clock_wraps_at_midnight() {
 #[test]
 fn clock_applies_the_local_offset_across_midnight() {
     let pdt = -7 * 3600;
-    assert_eq!(clock_hms(3_723_000, pdt), "18:02:03", "01:02 UTC is the previous evening in PDT");
-    assert_eq!(clock_hms(82_800_000, 2 * 3600), "01:00:00", "23:00 UTC is past midnight at UTC+2");
+    assert_eq!(
+        clock_hms(3_723_000, pdt),
+        "18:02:03",
+        "01:02 UTC is the previous evening in PDT"
+    );
+    assert_eq!(
+        clock_hms(82_800_000, 2 * 3600),
+        "01:00:00",
+        "23:00 UTC is past midnight at UTC+2"
+    );
 }
 
 #[test]

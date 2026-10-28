@@ -76,7 +76,10 @@ fn new_consumer_starts_after_since_and_keeps_its_cursor() {
         p.write(m, 0);
     }
     let first = p.read_consumer("late", 2, None);
-    assert_eq!(first.iter().map(|m| m.data.as_str()).collect::<Vec<_>>(), ["three"]);
+    assert_eq!(
+        first.iter().map(|m| m.data.as_str()).collect::<Vec<_>>(),
+        ["three"]
+    );
     assert!(p.read_consumer("late", 0, None).is_empty());
     assert!(p.read_consumer("empty", 3, None).is_empty());
     assert_eq!(p.cursor("empty"), Some(3));

@@ -227,10 +227,21 @@ fn pane_view_takes_its_window_name_from_the_layout_tabs() {
     let mut node = NodeInfo::new("build".into(), true, "sh".into());
     node.window = Some(1);
     let tabs = vec![
-        WindowTab { index: 0, name: "editor".into(), is_active: true },
-        WindowTab { index: 1, name: "logs".into(), is_active: false },
+        WindowTab {
+            index: 0,
+            name: "editor".into(),
+            is_active: true,
+        },
+        WindowTab {
+            index: 1,
+            name: "logs".into(),
+            is_active: false,
+        },
     ];
     let view = pane_view("dev", 0, &node, &[], &tabs);
-    assert_eq!(expand("#{window_index}:#{window_name}", &pane_vars(&view)), "1:logs");
+    assert_eq!(
+        expand("#{window_index}:#{window_name}", &pane_vars(&view)),
+        "1:logs"
+    );
     assert_eq!(pane_view("dev", 0, &node, &[], &[]).window_name, "");
 }
