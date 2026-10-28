@@ -27,14 +27,20 @@ async fn vsplit_prompt_creates_a_side_by_side_pane() {
 }
 
 #[tokio::test]
-async fn rename_and_send_keys_prompts_act_on_the_daemon() {
+async fn rename_prompt_acts_on_the_daemon() {
     let mut h = start().await;
     h.frame().await;
     h.prefixed_char(':').await;
     h.type_str("rename-window logs").await;
     h.key(KeyCode::Enter).await;
     assert_eq!(h.windows().await, ["logs"]);
+}
 
+#[tokio::test]
+#[cfg(unix)]
+async fn send_keys_prompt_acts_on_the_daemon() {
+    let mut h = start().await;
+    h.frame().await;
     h.prefixed_char(':').await;
     h.type_str("send-keys hello Enter").await;
     h.key(KeyCode::Enter).await;
