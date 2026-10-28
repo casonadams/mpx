@@ -29,7 +29,7 @@ pub fn overlay_next(action: OverlayAction) -> OverlayNext {
 impl App {
     pub async fn normal_key(&mut self, key: KeyEvent) -> Flow {
         if self.keymap.is_prefix(&key) {
-            self.mode = Mode::Prefix;
+            self.enter_prefix();
             return Flow::Continue;
         }
         if self.repeating()
@@ -57,7 +57,7 @@ impl App {
 
     pub async fn copy_key(&mut self, mut cs: CopyState, key: KeyEvent) -> Flow {
         if self.keymap.is_prefix(&key) {
-            self.mode = Mode::Prefix;
+            self.enter_prefix();
             return Flow::Continue;
         }
         let pane = self.active_rect.map_or((80, 24), |r| (r.width, r.height));

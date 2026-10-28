@@ -168,6 +168,9 @@ pub fn write_sgr<W: Write>(out: &mut W, style: &CellStyle) -> io::Result<()> {
     if style.underline {
         out.write_all(b";4")?;
     }
+    if style.reverse {
+        out.write_all(b";7")?;
+    }
     if let Some(fg) = style.fg {
         write_color(out, fg, 30)?;
     }

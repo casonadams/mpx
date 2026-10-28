@@ -69,7 +69,7 @@ fn numbered_lines(prefix: &str, n: usize) -> String {
 
 const VIM_LIKE: &str = concat!(
     "\x1b[?1049h\x1b[2J\x1b[H",
-    "\x1b[44;3m status \x1b[0m\r\n",
+    "\x1b[44;3m status \x1b[0m \x1b[7m reverse fill \x1b[K\x1b[0m\r\n",
     "alpha\r\nbeta\r\ngamma\r\ndelta\r\nepsilon\r\nzeta\r\neta\r\ntheta\r\n",
     "\x1b[3;12r\x1b[12;1H",
     "\r\nscrolled-1\r\nscrolled-2\r\nscrolled-3",
@@ -81,7 +81,11 @@ const VIM_LIKE: &str = concat!(
 
 #[tokio::test]
 async fn frames_keep_the_terminal_identical_to_the_panes() {
-    let mut h = Harness::start(Config::default(), ECHO).await;
+    let config = Config {
+        which_key_delay_ms: 0,
+        ..Config::default()
+    };
+    let mut h = Harness::start(config, ECHO).await;
     check(&mut h, "attach").await;
 
     let fill = format!("{}FILL-DONE", numbered_lines("main", 40));

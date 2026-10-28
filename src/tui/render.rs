@@ -6,6 +6,7 @@ use crossterm::{
 use std::io::{self, Write};
 
 use super::canvas::Canvas;
+use super::keymap::Shortcut;
 use super::status::agent_badge;
 use crate::layout::{Divider, WindowTab, geometry::Rect};
 use crate::vt::grid::Grid;
@@ -207,7 +208,8 @@ impl Compositor {
         Ok(())
     }
 
-    /// Renders the bottom status row: window tabs (or pane names), agent badge, prefix badge, clock.
+    /// Renders the bottom status row across its full width: window tabs (or pane names), agent
+    /// badge, prefix badge, clock. Autowrap is off, so the last column can be painted safely.
     pub fn draw_status_bar<W: Write>(w: &mut W, bar: &StatusBar<'_>) -> io::Result<()> {
         let left = status_left(bar);
         let right = status_right(bar, &get_current_time());
@@ -221,6 +223,7 @@ impl Compositor {
             Print(&left),
             Print(" ".repeat(pad_len)),
             Print(&right),
+            Print(" "),
             ResetColor
         )
     }
@@ -244,17 +247,33 @@ impl Compositor {
             ResetColor
         )
     }
-    /// Floating popup listing the prefix shortcuts, anchored bottom-right above the status row.
-    pub fn draw_shortcut_hud<W: Write>(w: &mut W, screen_w: u16, screen_h: u16) -> io::Result<()> {
-        let Some(area) = hud_rect(screen_w, screen_h) else {
-            return Ok(());
-        };
-        let (box_x, box_y, box_w, box_h) = (area.x, area.y, area.width, area.height);
-        draw_hud_header(w, box_x, box_y, box_w)?;
-        for (i, (key, desc)) in HUD_ITEMS.iter().take((box_h - 2) as usize).enumerate() {
-            draw_hud_row(w, (box_x, box_y + 1 + i as u16), box_w, key, desc)?;
+    /// The shortcut popup: every prefix binding in columns, titled with the prefix key.
+    pub fn draw_shortcut_hud<W: Write>(
+        w: &mut W,
+        layout: &ShortcutLayout,
+        shortcuts: &[Shortcut],
+        prefix: &str,
+    ) -> io::Result<()> {
+        let ShortcutLayout { rect, rows, .. } = *layout;
+        let inner = rect.width.saturating_sub(2) as usize;
+        draw_hud_border(
+            w,
+            (rect.x, rect.y),
+            inner,
+            ("╭", "╮"),
+            &format!(" {prefix} "),
+        )?;
+        for row in 0..rows {
+            draw_hud_row(w, layout, shortcuts, row)?;
         }
-        draw_hud_footer(w, box_x, box_y + box_h - 1, box_w)
+        let bottom = rect.y + rect.height - 1;
+        draw_hud_border(
+            w,
+            (rect.x, bottom),
+            inner,
+            ("╰", "╯"),
+            " ESC close · ? all keys ",
+        )
     }
 
     pub fn draw_copy_mode_badge<W: Write>(
@@ -357,96 +376,120 @@ pub fn status_right(bar: &StatusBar<'_>, clock: &str) -> String {
     right
 }
 
-/// Where the prefix HUD sits: bottom-right above the status row; `None` when the screen is too small.
-pub fn hud_rect(screen_w: u16, screen_h: u16) -> Option<Rect> {
-    let box_w: u16 = 30;
-    let box_h: u16 = (HUD_ITEMS.len() as u16 + 2).min(screen_h.saturating_sub(2));
-    if box_w >= screen_w || box_h < 4 {
-        return None;
-    }
-    let box_x = screen_w.saturating_sub(box_w + 2);
-    let box_y = screen_h.saturating_sub(box_h + 1);
-    Some(Rect::new(box_x, box_y, box_w, box_h))
+/// Longest label the shortcut popup shows before cutting it with `…`.
+const LABEL_MAX: usize = 24;
+
+/// Where the shortcut popup goes: a full-width panel above the status row, its entries filled
+/// column by column. `rows` may be fewer than needed on a short screen; the rest is in `?`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShortcutLayout {
+    pub rect: Rect,
+    pub columns: usize,
+    pub rows: usize,
+    pub key_w: usize,
 }
 
-const HUD_ITEMS: &[(&str, &str)] = &[
-    ("c", "new window"),
-    ("p", "previous window"),
-    ("n", "next window"),
-    ("%", "split vertical"),
-    ("\"", "split horizontal"),
-    ("h", "focus left"),
-    ("j", "focus down"),
-    ("k", "focus up"),
-    ("l", "focus right"),
-    ("o", "next pane"),
-    ("z", "toggle zoom"),
-    ("[", "copy mode"),
-    ("x", "kill pane"),
-    ("d", "detach"),
-    ("?", "help"),
-];
+/// Fits `shortcuts` above the status row; `None` when not even one column or row fits.
+pub fn shortcut_layout(
+    shortcuts: &[Shortcut],
+    screen_w: u16,
+    screen_h: u16,
+) -> Option<ShortcutLayout> {
+    let key_w = shortcuts.iter().map(|s| s.keys.chars().count()).max()?;
+    let label_w = shortcuts
+        .iter()
+        .map(|s| s.label.chars().count())
+        .max()?
+        .min(LABEL_MAX);
+    let inner_w = (screen_w as usize).checked_sub(4)?;
+    let columns = inner_w / (key_w + label_w + 4);
+    let max_rows = (screen_h as usize).checked_sub(4)?;
+    if columns == 0 || max_rows == 0 {
+        return None;
+    }
+    let rows = shortcuts.len().div_ceil(columns).min(max_rows);
+    let height = rows as u16 + 2;
+    let rect = Rect::new(1, screen_h - 1 - height, screen_w - 2, height);
+    Some(ShortcutLayout {
+        rect,
+        columns,
+        rows,
+        key_w,
+    })
+}
 
-fn draw_hud_header<W: Write>(w: &mut W, x: u16, y: u16, box_w: u16) -> io::Result<()> {
+/// `text` cut to `width` characters (ending in `…` when cut) and padded to exactly `width`.
+fn fit(text: &str, width: usize) -> String {
+    let len = text.chars().count();
+    if len <= width {
+        return format!("{text}{}", " ".repeat(width - len));
+    }
+    let mut cut: String = text.chars().take(width.saturating_sub(1)).collect();
+    cut.push('…');
+    cut
+}
+
+fn draw_hud_border<W: Write>(
+    w: &mut W,
+    (x, y): (u16, u16),
+    inner: usize,
+    (left, right): (&str, &str),
+    label: &str,
+) -> io::Result<()> {
+    let label = fit(label, inner.saturating_sub(2)).trim_end().to_string();
+    let dashes = inner.saturating_sub(label.chars().count() + 1);
     queue!(
         w,
         MoveTo(x, y),
         SetBackgroundColor(Color::Black),
         SetForegroundColor(Color::DarkCyan),
-        Print("╭"),
-        Print("─".repeat(box_w.saturating_sub(2) as usize)),
-        Print("╮"),
+        Print(left),
+        Print("─"),
+        SetForegroundColor(Color::Yellow),
+        Print(&label),
+        SetForegroundColor(Color::DarkCyan),
+        Print("─".repeat(dashes)),
+        Print(right),
         ResetColor
     )
 }
 
 fn draw_hud_row<W: Write>(
     w: &mut W,
-    (x, y): (u16, u16),
-    box_w: u16,
-    key: &str,
-    desc: &str,
+    layout: &ShortcutLayout,
+    shortcuts: &[Shortcut],
+    row: usize,
 ) -> io::Result<()> {
+    let inner = layout.rect.width.saturating_sub(2) as usize;
+    let cell_w = inner / layout.columns;
+    let label_w = cell_w.saturating_sub(layout.key_w + 3);
     queue!(
         w,
-        MoveTo(x, y),
+        MoveTo(layout.rect.x, layout.rect.y + 1 + row as u16),
         SetBackgroundColor(Color::Black),
-        SetForegroundColor(Color::DarkCyan),
-        Print("│ "),
-        SetForegroundColor(Color::Yellow),
-        Print(format!("{:<2}", key)),
-        SetForegroundColor(Color::DarkGrey),
-        Print(" → "),
-        SetForegroundColor(Color::Cyan),
-        Print(format!("{:<18}", desc)),
-    )?;
-    let used = 2 + 2 + 3 + 18;
-    let pad = (box_w as usize).saturating_sub(used + 1);
-    queue!(
-        w,
-        Print(" ".repeat(pad)),
         SetForegroundColor(Color::DarkCyan),
         Print("│"),
-        ResetColor
-    )
-}
-
-fn draw_hud_footer<W: Write>(w: &mut W, x: u16, y: u16, box_w: u16) -> io::Result<()> {
-    let footer_text = " ESC close ";
-    let dash_count = (box_w as usize).saturating_sub(footer_text.len() + 2);
+    )?;
+    for column in 0..layout.columns {
+        let (keys, label) = match shortcuts.get(column * layout.rows + row) {
+            Some(s) => (s.keys.as_str(), s.label.as_str()),
+            None => ("", ""),
+        };
+        queue!(
+            w,
+            Print(" "),
+            SetForegroundColor(Color::Yellow),
+            Print(fit(keys, layout.key_w)),
+            Print("  "),
+            SetForegroundColor(Color::Cyan),
+            Print(fit(label, label_w)),
+        )?;
+    }
     queue!(
         w,
-        MoveTo(x, y),
-        SetBackgroundColor(Color::Black),
+        Print(" ".repeat(inner - layout.columns * cell_w)),
         SetForegroundColor(Color::DarkCyan),
-        Print("╰"),
-        Print("─".repeat(dash_count)),
-        SetForegroundColor(Color::Yellow),
-        Print(" ESC "),
-        SetForegroundColor(Color::DarkGrey),
-        Print("close"),
-        SetForegroundColor(Color::DarkCyan),
-        Print(" ╯"),
+        Print("│"),
         ResetColor
     )
 }

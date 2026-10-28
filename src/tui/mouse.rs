@@ -1,4 +1,4 @@
-//! Mouse: click focuses a pane and starts a selection; drag extends it; release yanks; wheel scrolls.
+//! Mouse: click focuses a pane; dragging from the click starts a selection; release yanks; wheel scrolls.
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
 use super::app::{App, Flow, Mode};
@@ -31,6 +31,8 @@ impl App {
         Flow::Continue
     }
 
+    /// Focuses the pane under the pointer. A click inside the pane being copied moves the selection
+    /// start; anywhere else it only remembers the point, so a later drag can select from it.
     async fn mouse_press(&mut self, col: u16, row: u16) {
         let Some((name, rect)) = self
             .panes
@@ -40,18 +42,30 @@ impl App {
         else {
             return;
         };
+        let (x, y) = local_point(rect, col, row);
         if name != self.active_pane {
             let _ = self.client.focus(&name).await;
             self.layout.dirty = true;
+            if matches!(self.mode, Mode::Copy(_)) {
+                self.mode = Mode::Normal;
+            }
+        } else if matches!(self.mode, Mode::Copy(_)) {
+            let grid = self.vt.get(&name).map(|vt| vt.grid());
+            self.mode = Mode::Copy(CopyState::at_point(x, y, grid));
         }
-        let (x, y) = local_point(rect, col, row);
-        let grid = self.vt.get(&name).map(|vt| vt.grid());
-        let cs = CopyState::at_point(x, y, grid);
-        self.mode = Mode::Copy(cs);
+        self.press = Some((name, x, y));
     }
 
+    /// Extends the selection, entering copy mode at the press point on the first drag.
     fn mouse_drag(&mut self, col: u16, row: u16) {
         let Some(rect) = self.active_rect else { return };
+        if !matches!(self.mode, Mode::Copy(_)) {
+            let Some((name, x, y)) = self.press.clone() else {
+                return;
+            };
+            let grid = self.vt.get(&name).map(|vt| vt.grid());
+            self.mode = Mode::Copy(CopyState::at_point(x, y, grid));
+        }
         if let Mode::Copy(cs) = &mut self.mode {
             let (x, y) = local_point(rect, col, row);
             cs.cursor_x = x;
@@ -61,6 +75,7 @@ impl App {
 
     /// Copies the selection when it covers something; the selection stays on screen.
     fn mouse_release(&mut self) {
+        self.press = None;
         let (Mode::Copy(cs), Some(vt)) = (&self.mode, self.active_vt()) else {
             return;
         };

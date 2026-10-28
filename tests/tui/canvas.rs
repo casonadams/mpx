@@ -68,6 +68,11 @@ fn colors_keep_their_palette_slot_and_attributes_are_sent() {
         ..CellStyle::default()
     };
     assert_eq!(sgr(attrs), "\x1b[0;1;3;4m");
+    let reverse = CellStyle {
+        reverse: true,
+        ..CellStyle::default()
+    };
+    assert_eq!(sgr(reverse), "\x1b[0;7m");
 }
 
 #[test]

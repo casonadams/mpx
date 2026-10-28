@@ -8,6 +8,8 @@ Bindings follow tmux muscle memory. Where tmux is silent or ambiguous, they foll
 
 The prefix defaults to **`Ctrl-b`**. Change it with `prefix = "C-a"` in the [config file](CONFIG.md). Press the prefix, release, then an action key. Pressing the prefix twice sends it to the program in the pane (for example, `Ctrl-b Ctrl-b` reaches Claude Code's "run in background").
 
+If you pause after the prefix, a shortcut popup lists the common action keys. It appears after `which_key_delay_ms` (300 ms by default, `0` shows it at once), so fast sequences never flash it; the status row shows `[PREFIX]` right away.
+
 Only the configured prefix is intercepted. `Ctrl-a` reaches your shell unless you make it the prefix.
 
 ### Windows
@@ -111,7 +113,7 @@ All overlays use the same motions: `j`/`k` (or arrows), `gg`/`G`, `Ctrl-d`/`Ctrl
 
 ## Mouse
 
-- **Click** focuses a pane. **Drag** selects text, and releasing copies it (`pbcopy` on macOS, OSC 52 elsewhere).
+- **Click** focuses a pane and nothing else. **Drag** selects text (entering copy mode from where the press started), and releasing copies it (`pbcopy` on macOS, OSC 52 elsewhere).
 - **Wheel up** enters copy mode and scrolls history; **wheel down** scrolls back toward the prompt.
 
 ---

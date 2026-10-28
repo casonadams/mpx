@@ -18,6 +18,7 @@ history_limit = 64      # exited, removed panes whose logs stay readable
 tmux_compat = false     # export TMUX/TMUX_PANE + the tmux shim in every pane
 restore = true          # after a crash or reboot, recreate the last layout and resume agents
 persist_pipes = true    # keep pipe messages and consumer cursors across daemon restarts
+which_key_delay_ms = 300  # wait after the prefix key before showing the shortcut popup (0 = at once)
 
 [agent]
 idle_ms = 1500          # quiet period before a hook-less agent counts as idle

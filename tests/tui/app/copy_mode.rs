@@ -84,26 +84,44 @@ async fn mouse_wheel_scrolls_into_history() {
 }
 
 #[tokio::test]
-async fn mouse_click_focuses_the_clicked_pane() {
+async fn mouse_click_focuses_the_clicked_pane_without_copy_mode() {
     let mut h = started(ECHO).await;
     split(&mut h.probe, MAIN, "plain", Direction::Horizontal).await;
     h.frame().await;
     let target = h.rect_of("plain");
     assert_eq!(h.app.active_pane, MAIN);
 
-    h.mouse(
-        MouseEventKind::Down(MouseButton::Left),
-        target.x + 1,
-        target.y + 1,
-    )
-    .await;
+    let (col, row) = (target.x + 1, target.y + 1);
+    h.mouse(MouseEventKind::Down(MouseButton::Left), col, row)
+        .await;
+    h.mouse(MouseEventKind::Up(MouseButton::Left), col, row)
+        .await;
     h.frame().await;
     assert_eq!(h.app.active_pane, "plain");
+    assert!(h.mode_is_normal(), "a click only focuses");
+    assert!(h.clipboard().is_empty());
+}
+
+#[tokio::test]
+async fn clicking_another_pane_leaves_copy_mode() {
+    let mut h = started(ECHO).await;
+    split(&mut h.probe, MAIN, "plain", Direction::Horizontal).await;
+    h.frame().await;
+    h.prefixed_char('[').await;
+    assert!(matches!(h.app.mode, Mode::Copy(_)));
+
+    let target = h.rect_of("plain");
+    h.mouse(MouseEventKind::Down(MouseButton::Left), target.x, target.y)
+        .await;
+    h.frame().await;
+    assert_eq!(h.app.active_pane, "plain");
+    assert!(h.mode_is_normal());
 }
 
 #[tokio::test]
 async fn copy_mode_prefix_opens_the_prefix_menu() {
     let mut h = started(ECHO).await;
+    h.app.config.which_key_delay_ms = 0;
     h.prefixed_char('[').await;
     h.ctrl('b').await;
     assert!(h.frame().await.contains("new window"));

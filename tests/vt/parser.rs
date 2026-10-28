@@ -393,3 +393,61 @@ fn accessing_workspace_fragment_places_text_at_absolute_columns() {
     assert_eq!(vt.grid().get_cell(11, 0).unwrap().c, 'w');
     assert_eq!(row(&vt, 0), " Accessing workspace:");
 }
+
+fn bg_at(vt: &VtScreen, x: usize, y: usize) -> Option<Color> {
+    vt.grid().get_cell(x, y).and_then(|c| c.style.bg)
+}
+
+#[test]
+fn erasing_paints_the_current_background_but_no_attributes() {
+    let mut vt = VtScreen::new(20, 4);
+    feed(&mut vt, "\x1b[1;44mtab\x1b[K");
+    let erased = vt.grid().get_cell(10, 0).copied().expect("cell");
+    assert_eq!(erased.c, ' ');
+    assert_eq!(
+        erased.style,
+        CellStyle {
+            bg: Some(Color::Blue),
+            ..CellStyle::default()
+        },
+        "only the background carries over"
+    );
+    assert_eq!(
+        bg_at(&vt, 19, 0),
+        Some(Color::Blue),
+        "to the end of the line"
+    );
+    assert_eq!(bg_at(&vt, 0, 1), None, "other lines untouched");
+
+    feed(&mut vt, "\x1b[0m\r\x1b[K");
+    assert_eq!(
+        bg_at(&vt, 10, 0),
+        None,
+        "after a reset, erase is default again"
+    );
+}
+
+#[test]
+fn cleared_screens_and_scrolled_in_lines_take_the_current_background() {
+    let mut vt = VtScreen::new(10, 3);
+    feed(&mut vt, "\x1b[41m\x1b[2J");
+    assert!((0..3).all(|y| bg_at(&vt, 9, y) == Some(Color::Red)));
+
+    feed(&mut vt, "\x1b[42m\x1b[3;1H\n");
+    assert_eq!(bg_at(&vt, 5, 2), Some(Color::Green), "the new bottom line");
+    assert_eq!(
+        bg_at(&vt, 5, 1),
+        Some(Color::Red),
+        "the line above moved up"
+    );
+}
+
+#[test]
+fn reverse_video_is_set_by_sgr_7_and_cleared_by_27_or_reset() {
+    let mut vt = VtScreen::new(10, 1);
+    feed(&mut vt, "\x1b[7ma\x1b[27mb\x1b[7mc\x1b[0md");
+    let reverse: Vec<bool> = (0..4)
+        .map(|x| vt.grid().get_cell(x, 0).expect("cell").style.reverse)
+        .collect();
+    assert_eq!(reverse, [true, false, true, false]);
+}

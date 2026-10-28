@@ -148,3 +148,67 @@ fn invalid_prefix_is_rejected() {
     };
     assert!(resolve(&config).is_err());
 }
+
+fn shortcut_rows(keymap: &mpx::tui::keymap::Keymap) -> Vec<(String, String)> {
+    keymap
+        .shortcuts()
+        .into_iter()
+        .map(|s| (s.keys, s.label))
+        .collect()
+}
+
+/// Whether a popup row's keys include `key`; `0-9` style rows cover the digits in between.
+fn row_has_key(keys: &str, key: &str) -> bool {
+    let digit = |s: &str| s.len() == 1 && s.chars().all(|c| c.is_ascii_digit());
+    keys.split(' ').any(|k| k == key)
+        || keys
+            .split_once('-')
+            .filter(|(a, b)| digit(a) && digit(b) && digit(key))
+            .is_some_and(|(a, b)| (a..=b).contains(&key))
+}
+
+#[test]
+fn every_bound_key_appears_in_exactly_one_shortcut_row() {
+    let keymap = default_keymap();
+    let rows = shortcut_rows(&keymap);
+    for binding in keymap.bindings() {
+        let key = binding.key.display();
+        let hits = rows
+            .iter()
+            .filter(|(keys, _)| row_has_key(keys, &key))
+            .count();
+        assert_eq!(hits, 1, "{key} in {rows:?}");
+    }
+}
+
+#[test]
+fn shortcuts_merge_keys_of_one_command_and_collapse_window_digits() {
+    let rows = shortcut_rows(&default_keymap());
+    let row = |keys: &str| {
+        rows.iter()
+            .find(|(k, _)| k == keys)
+            .map(|(_, l)| l.as_str())
+    };
+    assert_eq!(row("% |"), Some("split side by side"));
+    assert_eq!(row("h Left"), Some("focus left"));
+    assert_eq!(row("a"), Some("agent manager"));
+    assert_eq!(row("A"), Some("next agent needing you"));
+    assert_eq!(row("0-9"), Some("select window"));
+    assert_eq!(row("C-b"), Some("send prefix to pane"));
+}
+
+#[test]
+fn shortcuts_follow_config_bindings() {
+    let mut config = Config::default();
+    config.bind.insert("a".into(), "split-window".into());
+    config.bind.insert("g".into(), "new-window -n logs".into());
+    let rows = shortcut_rows(&resolve(&config).expect("keymap"));
+    let label_of = |key: &str| {
+        rows.iter()
+            .find(|(keys, _)| row_has_key(keys, key))
+            .map(|(_, l)| l.clone())
+    };
+    assert_eq!(label_of("a").as_deref(), Some("split stacked"));
+    assert_eq!(label_of("g").as_deref(), Some("new-window -n logs"));
+    assert!(rows.iter().all(|(_, label)| label != "agent manager"));
+}

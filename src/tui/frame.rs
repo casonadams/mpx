@@ -3,8 +3,11 @@ use std::io::{self, Write};
 
 use super::app::{App, Mode};
 use super::copy::{CopyState, SelectionKind};
+use super::keymap::Shortcut;
 use super::panes::PaneRect;
-use super::render::{Compositor, RenderPaneContext, SelectionRange, StatusBar, hud_rect};
+use super::render::{
+    Compositor, RenderPaneContext, SelectionRange, ShortcutLayout, StatusBar, shortcut_layout,
+};
 use super::status::exit_badge;
 use crate::layout::geometry::Rect;
 use crate::protocol::NodeInfo;
@@ -24,16 +27,21 @@ pub fn draw<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
     Compositor::begin_sync(out)?;
     let (screen_w, layout_h) = app.viewport;
     let screen_h = layout_h + 1;
-    app.canvas
-        .begin(screen_w, layout_h, occluded(&app.mode, screen_w, screen_h));
+    let hud = shortcut_popup(app, screen_w, screen_h);
+    let covered = match &app.mode {
+        Mode::Overlay(_) => Some(overlay_area(screen_w, screen_h)),
+        _ => hud.as_ref().map(|(_, layout)| layout.rect),
+    };
+    app.canvas.begin(screen_w, layout_h, covered);
     draw_panes(app, out)?;
     if app.zoomed.is_none() && !app.layout.dividers.is_empty() {
         Compositor::draw_dividers(&mut app.canvas, out, &app.layout.dividers, app.active_rect)?;
     }
     app.canvas.finish(out)?;
     draw_status_row(app, out)?;
-    if matches!(app.mode, Mode::Prefix) {
-        Compositor::draw_shortcut_hud(out, screen_w, screen_h)?;
+    if let Some((shortcuts, layout)) = &hud {
+        let prefix = app.keymap.prefix().display();
+        Compositor::draw_shortcut_hud(out, layout, shortcuts, &prefix)?;
     }
     if let Mode::Overlay(overlay) = &app.mode {
         overlay.render(out, overlay_area(screen_w, screen_h))?;
@@ -43,13 +51,18 @@ pub fn draw<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
     out.flush()
 }
 
-/// Screen area chrome covers this frame; pane cells under it are left to the chrome.
-fn occluded(mode: &Mode, screen_w: u16, screen_h: u16) -> Option<Rect> {
-    match mode {
-        Mode::Prefix => hud_rect(screen_w, screen_h),
-        Mode::Overlay(_) => Some(overlay_area(screen_w, screen_h)),
-        _ => None,
+/// The keymap's shortcuts and where they go, once the popup is due and fits on screen.
+fn shortcut_popup(
+    app: &App,
+    screen_w: u16,
+    screen_h: u16,
+) -> Option<(Vec<Shortcut>, ShortcutLayout)> {
+    if !app.hud_visible() {
+        return None;
     }
+    let shortcuts = app.keymap.shortcuts();
+    let layout = shortcut_layout(&shortcuts, screen_w, screen_h)?;
+    Some((shortcuts, layout))
 }
 
 /// Panes with cells to paint; zero-sized panes are skipped.

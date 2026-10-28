@@ -24,6 +24,8 @@ pub enum Color {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct CellStyle {
+    /// Reverse video (SGR 7): the terminal swaps foreground and background when drawing.
+    pub reverse: bool,
     pub fg: Option<Color>,
     pub bg: Option<Color>,
     pub bold: bool,
@@ -212,26 +214,40 @@ impl Grid {
         let (top, bottom) = (self.scroll_top, self.scroll_bottom);
         let n = count.min(bottom - top + 1);
         self.lines[top..=bottom].rotate_left(n);
+        let blank = self.blank();
         for y in bottom + 1 - n..=bottom {
             if top == 0 {
-                let blank = self.blank_line();
-                let gone = std::mem::replace(&mut self.lines[y], blank);
+                let fresh = self.blank_line();
+                let gone = std::mem::replace(&mut self.lines[y], fresh);
                 self.history.push_back(gone);
             } else {
-                self.lines[y].fill(Cell::default());
+                self.lines[y].fill(blank);
             }
+        }
+    }
+
+    /// An erased cell: blank, in the current background color (BCE, as xterm and tmux do), so
+    /// programs can paint a line's remainder by erasing it.
+    fn blank(&self) -> Cell {
+        Cell {
+            c: ' ',
+            style: CellStyle {
+                bg: self.current_style.bg,
+                ..CellStyle::default()
+            },
         }
     }
 
     /// A blank row for the screen, reusing the oldest history row once history is full.
     fn blank_line(&mut self) -> Vec<Cell> {
+        let blank = self.blank();
         let mut line = if self.history.len() >= self.history_limit {
             self.history.pop_front().unwrap_or_default()
         } else {
             Vec::with_capacity(self.cols)
         };
         line.clear();
-        line.resize(self.cols, Cell::default());
+        line.resize(self.cols, blank);
         line
     }
 
@@ -241,9 +257,10 @@ impl Grid {
         }
         let (top, bottom) = (self.scroll_top, self.scroll_bottom);
         let n = count.min(bottom - top + 1);
+        let blank = self.blank();
         self.lines[top..=bottom].rotate_right(n);
         for line in &mut self.lines[top..top + n] {
-            line.fill(Cell::default());
+            line.fill(blank);
         }
     }
 
@@ -285,56 +302,61 @@ impl Grid {
         let cols = self.cols;
         let start = self.cursor.x.min(cols);
         let end = start.saturating_add(count).min(cols);
-        self.cursor_row_mut()[start..end].fill(Cell::default());
+        let blank = self.blank();
+        self.cursor_row_mut()[start..end].fill(blank);
     }
 
     pub fn insert_blanks(&mut self, count: usize) {
         let cols = self.cols;
         let x = self.cursor.x.min(cols - 1);
         let n = count.min(cols - x);
+        let blank = self.blank();
         let row = self.cursor_row_mut();
         row.copy_within(x..cols - n, x + n);
-        row[x..x + n].fill(Cell::default());
+        row[x..x + n].fill(blank);
     }
 
     pub fn delete_chars(&mut self, count: usize) {
         let cols = self.cols;
         let x = self.cursor.x.min(cols - 1);
         let n = count.min(cols - x);
+        let blank = self.blank();
         let row = self.cursor_row_mut();
         row.copy_within(x + n..cols, x);
-        row[cols - n..].fill(Cell::default());
+        row[cols - n..].fill(blank);
     }
 
     pub fn clear_line(&mut self, mode: usize) {
         let cols = self.cols;
         let x = self.cursor.x;
+        let blank = self.blank();
         let row = self.cursor_row_mut();
         match mode {
-            0 => row[x.min(cols)..].fill(Cell::default()),
-            1 => row[..(x + 1).min(cols)].fill(Cell::default()),
-            2 => row.fill(Cell::default()),
+            0 => row[x.min(cols)..].fill(blank),
+            1 => row[..(x + 1).min(cols)].fill(blank),
+            2 => row.fill(blank),
             _ => {}
         }
     }
 
     pub fn clear_screen(&mut self, mode: usize) {
+        let blank = self.blank();
         match mode {
             0 => {
                 self.clear_line(0);
                 for line in &mut self.lines[self.cursor.y + 1..] {
-                    line.fill(Cell::default());
+                    line.fill(blank);
                 }
             }
             1 => {
                 for line in &mut self.lines[..self.cursor.y] {
-                    line.fill(Cell::default());
+                    line.fill(blank);
                 }
                 self.clear_line(1);
             }
             2 | 3 => {
                 for line in &mut self.lines {
-                    line.fill(Cell::default());
+                    line.fill(blank);
                 }
                 self.cursor.x = 0;
                 self.cursor.y = 0;

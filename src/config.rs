@@ -17,6 +17,8 @@ pub struct Config {
     pub restore: bool,
     /// Keep pipe messages and consumer cursors on disk across daemon restarts.
     pub persist_pipes: bool,
+    /// Milliseconds after the prefix key before the shortcut popup appears; 0 shows it at once.
+    pub which_key_delay_ms: u64,
     pub agent: AgentConfig,
     /// Extra or overriding key bindings: key (tmux notation) -> command line.
     pub bind: BTreeMap<String, String>,
@@ -56,6 +58,7 @@ impl Default for Config {
             tmux_compat: false,
             restore: true,
             persist_pipes: true,
+            which_key_delay_ms: 300,
             agent: AgentConfig::default(),
             bind: BTreeMap::new(),
             harness: Vec::new(),

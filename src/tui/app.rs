@@ -78,6 +78,10 @@ pub struct App {
     pub history: Vec<String>,
     pub message: Option<(String, Instant)>,
     pub repeat_until: Option<Instant>,
+    /// When the prefix key was pressed; the shortcut popup waits `which_key_delay_ms` after it.
+    pub prefix_at: Option<Instant>,
+    /// Pane and cell of a left-button press; a drag from it starts a copy-mode selection.
+    pub press: Option<(String, usize, usize)>,
     pub vt: HashMap<String, VtScreen>,
     pub pane_dims: HashMap<String, (u16, u16)>,
     /// Byte offset each pane's screen has absorbed; the next output chunk must start there.
@@ -163,6 +167,8 @@ impl App {
             history: Vec::new(),
             message: None,
             repeat_until: None,
+            prefix_at: None,
+            press: None,
             vt: HashMap::new(),
             pane_dims: HashMap::new(),
             expected: HashMap::new(),
@@ -370,6 +376,26 @@ impl App {
         self.repeat_until = Some(Instant::now() + REPEAT_WINDOW);
     }
 
+    /// Enters prefix mode; the shortcut popup follows after the configured delay.
+    pub fn enter_prefix(&mut self) {
+        self.mode = Mode::Prefix;
+        self.prefix_at = Some(Instant::now());
+    }
+
+    /// When the pending shortcut popup is due, while prefix mode waits for its next key.
+    pub fn hud_deadline(&self) -> Option<Instant> {
+        let delay = Duration::from_millis(self.config.which_key_delay_ms);
+        match self.mode {
+            Mode::Prefix => self.prefix_at.map(|at| at + delay),
+            _ => None,
+        }
+    }
+
+    /// Whether the shortcut popup shows: prefix mode has lasted at least the configured delay.
+    pub fn hud_visible(&self) -> bool {
+        self.hud_deadline().is_some_and(|due| Instant::now() >= due)
+    }
+
     pub async fn on_key(&mut self, key: KeyEvent) -> Flow {
         match std::mem::replace(&mut self.mode, Mode::Normal) {
             Mode::Normal => self.normal_key(key).await,
@@ -423,6 +449,16 @@ enum Wake {
     Input(Event),
     Stream(Option<(u64, StreamEvent)>),
     Tick,
+    /// A delayed element (the shortcut popup) is due; only a redraw is needed.
+    Redraw,
+}
+
+/// Resolves at `deadline`, or never without one.
+async fn until(deadline: Option<Instant>) {
+    match deadline {
+        Some(at) => tokio::time::sleep_until(tokio::time::Instant::from_std(at)).await,
+        None => std::future::pending().await,
+    }
 }
 
 /// Runs the attached TUI until detach, session end or no panes left.
@@ -442,15 +478,18 @@ pub async fn run_tui(
             return Ok(());
         }
         let _ = frame::draw(&mut app, &mut out);
+        let popup = app.hud_deadline().filter(|_| !app.hud_visible());
         let wake = tokio::select! {
             Some(Ok(event)) = keys.next() => Wake::Input(event),
             item = stream.recv() => Wake::Stream(item),
             _ = tick.tick() => Wake::Tick,
+            _ = until(popup) => Wake::Redraw,
         };
         let flow = match wake {
             Wake::Input(event) => app.on_event(event).await,
             Wake::Stream(item) => app.on_stream(item, &mut stream).await,
             Wake::Tick => app.on_tick().await,
+            Wake::Redraw => Flow::Continue,
         };
         if flow == Flow::Quit {
             return Ok(());
