@@ -137,6 +137,11 @@ fn status_row(app: &App, out: &mut Vec<u8>) -> io::Result<()> {
             Compositor::draw_command_line(out, &format!(":{}", prompt.text()), y, width)
         }
         Mode::Confirm(question, _) => Compositor::draw_command_line(out, question, y, width),
+        Mode::Copy(cs) if cs.search_prompt.is_some() => {
+            let search = cs.search_prompt.as_ref().unwrap();
+            let prefix = search.direction.prompt_char();
+            Compositor::draw_command_line(out, &format!("{prefix}{}", search.prompt.text()), y, width)
+        }
         _ => match app.live_message() {
             Some(text) => Compositor::draw_command_line(out, text, y, width),
             None => Compositor::draw_status_bar(
@@ -165,6 +170,16 @@ fn place_cursor<W: Write>(app: &App, out: &mut W) -> io::Result<()> {
             0,
             true,
         ),
+        Mode::Copy(cs) if cs.search_prompt.is_some() => {
+            let search = cs.search_prompt.as_ref().unwrap();
+            Compositor::position_cursor(
+                out,
+                Rect::new(0, y, width, 1),
+                1 + search.prompt.cursor(),
+                0,
+                true,
+            )
+        }
         Mode::Overlay(_) | Mode::Confirm(..) => {
             Compositor::position_cursor(out, Rect::new(0, 0, 1, 1), 0, 0, false)
         }

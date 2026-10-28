@@ -28,6 +28,7 @@
         <ul class="nav-links">
           <li><a href="./" class="nav-link">Home</a></li>
           <li><a href="#shortcuts" class="nav-link">Shortcuts</a></li>
+          <li><a href="#config" class="nav-link">Configuration</a></li>
           <li><a href="#mcp" class="nav-link">MCP Server</a></li>
           <li><a href="#pipes" class="nav-link">Pipes</a></li>
           <li><a href="https://github.com/casonadams/mpx" target="_blank" class="btn btn-secondary">GitHub</a></li>
@@ -148,11 +149,78 @@ mpx -s dev</code></pre>
             <tr><td><code>Ctrl-d</code> / <code>PageDown</code></td><td>Scroll down half page (15 lines)</td></tr>
             <tr><td><code>g</code></td><td>Jump to the very beginning of the 100,000 line scrollback history</td></tr>
             <tr><td><code>G</code></td><td>Jump to bottom live prompt</td></tr>
+            <tr><td><code>?</code> / <code>/</code></td><td><strong>Search history</strong>: <code>?</code> searches backward (up into history); <code>/</code> searches forward (down)</td></tr>
+            <tr><td><code>n</code> / <code>N</code></td><td>Repeat search forward (<code>n</code>) or backward (<code>N</code>) across matches</td></tr>
             <tr><td><code>v</code></td><td>Begin character-wise visual selection (<code>[VISUAL]</code>)</td></tr>
             <tr><td><code>V</code> (Shift-V)</td><td><strong>Full-row visual line selection</strong> (<code>[VISUAL LINE]</code>, highlights entire row across history)</td></tr>
             <tr><td><code>y</code> / <code>Enter</code></td><td><strong>Yank selection</strong> to system clipboard (via <code>pbcopy</code> / OSC 52) and exit copy mode</td></tr>
             <tr><td><code>Esc</code></td><td>Clear visual selection; second Esc exits copy mode</td></tr>
             <tr><td><code>q</code></td><td>Exit copy mode</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <hr>
+
+    <section id="config">
+      <h2>Configuration (<code>config.toml</code>)</h2>
+      <p>
+        <code>mpx</code> reads configuration in TOML format at startup from the first discovered location:
+      </p>
+      <ol>
+        <li><code>$MPX_CONFIG</code></li>
+        <li><code>$XDG_CONFIG_HOME/mpx/config.toml</code></li>
+        <li><code>%APPDATA%\mpx\config.toml</code> (Windows)</li>
+        <li><code>~/.config/mpx/config.toml</code></li>
+      </ol>
+      <p>
+        A missing file loads safe defaults. Unknown keys are strictly rejected to surface typos immediately. Pass <code>-f &lt;FILE&gt;</code> or <code>--config &lt;FILE&gt;</code> before any command to supply an explicit path.
+      </p>
+
+      <h3>Sample <code>config.toml</code></h3>
+      <pre><code>prefix = "C-b"          # tmux notation: C-a, C-Space, M-b ...
+remain_on_exit = false  # keep panes on screen after their process exits
+history_limit = 64      # exited, removed panes whose logs stay readable
+tmux_compat = false     # export TMUX/TMUX_PANE + the tmux shim in every pane
+restore = true          # after a crash or reboot, recreate layout and resume agents
+persist_pipes = true    # keep pipe messages and consumer cursors across restarts
+which_key_delay_ms = 300  # delay before showing the shortcut HUD popup (0 = at once)
+
+[agent]
+idle_ms = 1500          # quiet period before a hook-less agent counts as idle
+notify = true           # OSC 9 desktop notification when an off-screen agent needs input
+
+[bind]                  # custom prefix key bindings -&gt; command line
+"M-h" = "select-pane -L"
+"g" = "launch-agent claude --split"
+"r" = "command-prompt -I 'rename-window '"
+
+[[harness]]             # custom or overriding agent harnesses
+name = "aider"
+detect = ["aider"]
+command = ["aider"]
+resume = []
+session_id_args = []</code></pre>
+
+      <h3>Configuration Reference</h3>
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr><th>Option</th><th>Type</th><th>Default</th><th>Scope</th><th>Description</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>prefix</code></td><td>string</td><td><code>"C-b"</code></td><td>TUI</td><td>Prefix key in tmux notation. Press twice to send literal prefix key to pane.</td></tr>
+            <tr><td><code>remain_on_exit</code></td><td>bool</td><td><code>false</code></td><td>Daemon</td><td>Keep panes open after their child process terminates.</td></tr>
+            <tr><td><code>history_limit</code></td><td>integer</td><td><code>64</code></td><td>Daemon</td><td>Number of dead/removed panes retained in log buffer for CLI/MCP queries.</td></tr>
+            <tr><td><code>tmux_compat</code></td><td>bool</td><td><code>false</code></td><td>Daemon</td><td>Inject <code>TMUX</code>/<code>TMUX_PANE</code> env and the <code>mpx</code> tmux compatibility shim.</td></tr>
+            <tr><td><code>restore</code></td><td>bool</td><td><code>true</code></td><td>Daemon</td><td>Automatically restore saved session layout and resume agent harnesses on startup.</td></tr>
+            <tr><td><code>persist_pipes</code></td><td>bool</td><td><code>true</code></td><td>Daemon</td><td>Persist virtual pipe messages and consumer cursors to disk across daemon restarts.</td></tr>
+            <tr><td><code>which_key_delay_ms</code></td><td>integer</td><td><code>300</code></td><td>TUI</td><td>Milliseconds to wait after prefix before showing shortcut HUD popup (0 = instant).</td></tr>
+            <tr><td><code>agent.idle_ms</code></td><td>integer</td><td><code>1500</code></td><td>Daemon</td><td>Inactivity quiet period in milliseconds before classifying an agent as idle.</td></tr>
+            <tr><td><code>agent.notify</code></td><td>bool</td><td><code>true</code></td><td>TUI</td><td>Send OSC 9 desktop notification when an off-screen agent needs user input.</td></tr>
+            <tr><td><code>bind</code></td><td>table</td><td><code>{}</code></td><td>TUI</td><td>Custom key bindings mapping tmux key notation to mpx command lines.</td></tr>
+            <tr><td><code>harness</code></td><td>array</td><td><code>[]</code></td><td>Daemon</td><td>Custom agent harness definitions (<code>name</code>, <code>detect</code>, <code>command</code>, <code>resume</code>).</td></tr>
           </tbody>
         </table>
       </div>

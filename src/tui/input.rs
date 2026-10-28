@@ -66,6 +66,10 @@ impl App {
             CopyOutcome::Stay => self.mode = Mode::Copy(cs),
             CopyOutcome::Exit => {}
             CopyOutcome::Yank(text) => self.clipboard.copy(&text),
+            CopyOutcome::SearchFailed(query) => {
+                self.say(format!("Pattern not found: {query}"));
+                self.mode = Mode::Copy(cs);
+            }
         }
         Flow::Continue
     }

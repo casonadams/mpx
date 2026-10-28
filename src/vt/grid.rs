@@ -169,6 +169,17 @@ impl Grid {
         }
     }
 
+    /// Returns the text of line `abs_line` (history or live screen), trailing blanks trimmed.
+    pub fn line_text(&self, abs_line: usize) -> Option<String> {
+        let total_hist = self.history.len();
+        let cells = if abs_line < total_hist {
+            self.history.get(abs_line)?
+        } else {
+            self.lines.get(abs_line - total_hist)?
+        };
+        Some(cells.iter().map(|c| c.c).collect::<String>().trim_end().to_string())
+    }
+
     pub fn put_char(&mut self, c: char) {
         if self.cursor.x >= self.cols {
             self.cursor.x = 0;

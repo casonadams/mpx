@@ -127,6 +127,8 @@ All overlays use the same motions: `j`/`k` (or arrows), `gg`/`G`, `Ctrl-d`/`Ctrl
 | `0` / `^` / `$` | Line start / end |
 | `Ctrl-u` / `Ctrl-d`, `PageUp` / `PageDown` | Half page |
 | `g` / `G` | Top / bottom of history |
+| `?` / `/` | Search backward (up) / forward (down) |
+| `n` / `N` | Repeat search next / previous |
 | `v` / `V` | Character / line selection |
 | `y` / `Enter` | Yank to clipboard and exit |
 | `Esc` | Clear selection, or exit |

@@ -126,3 +126,45 @@ async fn copy_mode_prefix_opens_the_prefix_menu() {
     h.ctrl('b').await;
     assert!(h.frame().await.contains("new window"));
 }
+
+#[tokio::test]
+async fn copy_mode_search_up_and_down_moves_cursor_and_scrolls() {
+    let mut h = started(&long_output()).await;
+    h.until("scrollback filled", |app| {
+        app.active_vt()
+            .is_some_and(|vt| vt.grid().history_len() > 0)
+    })
+    .await;
+    h.frame().await;
+    h.prefixed_char('[').await;
+    assert!(h.frame().await.contains("COPY -0/"));
+
+    // Press '?' to start search up
+    h.key(KeyCode::Char('?')).await;
+    let prompt_frame = h.frame().await;
+    assert!(prompt_frame.contains('?'), "shows ? prompt on status row");
+
+    // Type "line 5" and press Enter
+    for c in "line 5".chars() {
+        h.key(KeyCode::Char(c)).await;
+    }
+    h.key(KeyCode::Enter).await;
+
+    let match_frame = h.frame().await;
+    assert!(
+        matches!(h.app.mode, Mode::Copy(_)),
+        "still in copy mode after search"
+    );
+    if let Mode::Copy(cs) = &h.app.mode {
+        assert!(cs.scroll_offset > 0, "scrolled back to match: {match_frame}");
+        assert_eq!(cs.cursor_x, 0, "cursor at start of 'line 5'");
+    }
+
+    // Press 'n' to find next match
+    h.key(KeyCode::Char('n')).await;
+    assert!(matches!(h.app.mode, Mode::Copy(_)));
+
+    // Press 'q' to leave copy mode
+    h.key(KeyCode::Char('q')).await;
+    assert!(h.mode_is_normal());
+}

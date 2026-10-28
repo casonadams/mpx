@@ -25,6 +25,8 @@ fn copy_at(scroll: usize) -> Mode {
         anchor_x: 0,
         anchor_abs_y: 0,
         mode: SelectionKind::Line,
+        search_prompt: None,
+        last_search: None,
     })
 }
 

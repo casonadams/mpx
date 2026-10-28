@@ -1,6 +1,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use mpx::tui::copy::{
-    CopyOutcome, CopyState, SelectionKind, WHEEL_STEP, apply_key, char_selection_text,
+    CopyOutcome, CopyState, SearchDirection, SelectionKind, WHEEL_STEP, apply_key,
+    char_selection_text, find_next_match, line_matches,
 };
 use mpx::vt::grid::Grid;
 
@@ -24,6 +25,8 @@ fn fresh_at_origin() -> CopyState {
         anchor_x: 0,
         anchor_abs_y: 0,
         mode: SelectionKind::None,
+        search_prompt: None,
+        last_search: None,
     }
 }
 
@@ -186,4 +189,134 @@ fn entering_by_wheel_scrolls_only_when_there_is_history() {
     assert_eq!(with_history.scroll_offset, WHEEL_STEP);
     assert_eq!(with_history.cursor_y, 2);
     assert_eq!(with_history.mode, SelectionKind::None);
+}
+#[test]
+fn find_next_match_finds_forward_and_backward_across_lines() {
+    let mut grid = Grid::new(20, 3);
+    for c in "foo first".chars() {
+        grid.put_char(c);
+    }
+    grid.carriage_return();
+    grid.newline();
+    for c in "second foo".chars() {
+        grid.put_char(c);
+    }
+    let down = find_next_match(&grid, "foo", (0, 0), SearchDirection::Down);
+    assert_eq!(down, Some((7, 1)), "finds next foo on row 1");
+
+    let up = find_next_match(&grid, "foo", (7, 1), SearchDirection::Up);
+    assert_eq!(up, Some((0, 0)), "finds foo on row 0");
+}
+
+
+#[test]
+fn line_matches_supports_smart_case() {
+    assert_eq!(line_matches("Error: syntax error", "error", true), vec![0, 14]);
+    assert_eq!(line_matches("Error: syntax error", "Error", false), vec![0]);
+    assert_eq!(line_matches("no match here", "test", true), Vec::<usize>::new());
+}
+
+#[test]
+fn search_down_finds_forward_match_and_positions_cursor() {
+    let mut grid = Grid::new(25, 5);
+    for c in "alpha beta gamma".chars() {
+        grid.put_char(c);
+    }
+    grid.carriage_return();
+    grid.newline();
+    for c in "delta beta epsilon".chars() {
+        grid.put_char(c);
+    }
+    let mut cs = fresh_at_origin();
+    // Press '/' to start search down
+    assert_eq!(apply_key(&mut cs, &key('/'), Some(&grid), (25, 5)), CopyOutcome::Stay);
+    assert!(cs.search_prompt.is_some());
+    for c in "beta".chars() {
+        apply_key(&mut cs, &key(c), Some(&grid), (20, 5));
+    }
+    // Press Enter to submit
+    assert_eq!(apply_key(&mut cs, &code(KeyCode::Enter), Some(&grid), (20, 5)), CopyOutcome::Stay);
+    assert!(cs.search_prompt.is_none());
+    assert_eq!(cs.cursor_y, 0);
+    assert_eq!(cs.cursor_x, 6, "first 'beta' starts at column 6");
+
+    // Press 'n' to find next
+    assert_eq!(apply_key(&mut cs, &key('n'), Some(&grid), (25, 5)), CopyOutcome::Stay);
+    assert_eq!(cs.cursor_y, 1);
+    assert_eq!(cs.cursor_x, 6, "second 'beta' starts on row 1 at column 6");
+
+    // Press 'N' to search in reverse (up)
+    assert_eq!(apply_key(&mut cs, &key('N'), Some(&grid), (25, 5)), CopyOutcome::Stay);
+    assert_eq!(cs.cursor_y, 0);
+    assert_eq!(cs.cursor_x, 6, "returns to first 'beta'");
+}
+
+#[test]
+fn search_up_finds_backward_match_in_scrollback() {
+    let mut grid = Grid::new(20, 3);
+    for c in "target_in_history".chars() {
+        grid.put_char(c);
+    }
+    grid.newline(); // pushes to history
+    grid.newline(); // pushes to history
+    grid.newline(); // pushes to history
+    for c in "bottom prompt".chars() {
+        grid.put_char(c);
+    }
+    let mut cs = CopyState::enter(Some(&grid));
+    assert_eq!(apply_key(&mut cs, &key('?'), Some(&grid), (20, 3)), CopyOutcome::Stay);
+    for c in "target".chars() {
+        apply_key(&mut cs, &key(c), Some(&grid), (20, 3));
+    }
+    assert_eq!(apply_key(&mut cs, &code(KeyCode::Enter), Some(&grid), (20, 3)), CopyOutcome::Stay);
+    assert_eq!(cs.cursor_x, 0);
+    assert!(cs.scroll_offset > 0, "view scrolled back into history");
+    assert_eq!(cs.cursor_abs_y(&grid), 0, "match is on history line 0");
+}
+
+#[test]
+fn search_cancel_with_escape_leaves_position_intact() {
+    let grid = grid_with("hello world");
+    let mut cs = fresh_at_origin();
+    cs.cursor_x = 3;
+    apply_key(&mut cs, &key('/'), Some(&grid), (10, 3));
+    apply_key(&mut cs, &key('w'), Some(&grid), (10, 3));
+    apply_key(&mut cs, &code(KeyCode::Esc), Some(&grid), (10, 3));
+    assert!(cs.search_prompt.is_none());
+    assert_eq!(cs.cursor_x, 3, "cursor did not jump on cancel");
+}
+
+#[test]
+fn search_failed_returns_search_failed_outcome() {
+    let grid = grid_with("hello world");
+    let mut cs = fresh_at_origin();
+    apply_key(&mut cs, &key('/'), Some(&grid), (10, 3));
+    for c in "nonexistent".chars() {
+        apply_key(&mut cs, &key(c), Some(&grid), (10, 3));
+    }
+    assert_eq!(
+        apply_key(&mut cs, &code(KeyCode::Enter), Some(&grid), (10, 3)),
+        CopyOutcome::SearchFailed("nonexistent".to_string())
+    );
+}
+
+#[test]
+fn empty_search_reuses_last_search_pattern() {
+    let mut grid = Grid::new(20, 3);
+    for c in "abc two one".chars() {
+        grid.put_char(c);
+    }
+    let mut cs = fresh_at_origin();
+    apply_key(&mut cs, &key('/'), Some(&grid), (20, 3));
+    for c in "one".chars() {
+        apply_key(&mut cs, &key(c), Some(&grid), (20, 3));
+    }
+    apply_key(&mut cs, &code(KeyCode::Enter), Some(&grid), (20, 3));
+    assert_eq!(cs.cursor_x, 8);
+
+    // Move cursor back to start and search with empty input
+    cs.cursor_x = 0;
+    apply_key(&mut cs, &key('/'), Some(&grid), (20, 3));
+    apply_key(&mut cs, &code(KeyCode::Enter), Some(&grid), (20, 3));
+    assert_eq!(cs.cursor_x, 8, "reused 'one' and jumped to next match");
 }
