@@ -235,6 +235,110 @@ fn hook_reports_agent_state_for_the_pane() {
     );
 }
 
+/// Runs `mpx hook claude` as pane `pane` with `payload` on stdin; returns its stdout.
+fn hook_as(s: &Session, pane: &str, payload: &serde_json::Value) -> String {
+    let mut child = s
+        .base()
+        .args(["hook", "claude"])
+        .env("MPX_PANE", pane)
+        .env("MPX_ENDPOINT", s.endpoint())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(payload.to_string().as_bytes())
+        .expect("write");
+    let out = child.wait_with_output().expect("wait");
+    assert_eq!(out.status.code(), Some(0));
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+#[test]
+fn hooks_share_an_agents_task_and_edits_with_its_peers() {
+    let s = Session::new("aw");
+    let repo = s.runtime.join("repo");
+    std::fs::create_dir_all(repo.join(".git")).expect("git dir");
+    let cwd = repo.to_string_lossy().into_owned();
+    for pane in ["a", "b"] {
+        let _ = s.run(&["run", "-n", pane, "--pty", "--cwd", &cwd, "cat"]);
+    }
+    let file = repo.join("lib.rs").to_string_lossy().into_owned();
+    let event = |name: &str, sid: &str, extra: serde_json::Value| {
+        let mut v = serde_json::json!({ "hook_event_name": name, "session_id": sid, "cwd": cwd });
+        if let (Some(obj), Some(more)) = (v.as_object_mut(), extra.as_object()) {
+            obj.extend(more.clone());
+        }
+        v
+    };
+    let prompt = event("UserPromptSubmit", "sa", serde_json::json!({ "prompt": "split the parser" }));
+    assert_eq!(hook_as(&s, "a", &prompt), "", "a has no peers yet");
+    let edit = serde_json::json!({ "tool_name": "Write", "tool_input": { "file_path": file } });
+    let _ = hook_as(&s, "a", &event("PostToolUse", "sa", edit));
+    let roster = hook_as(&s, "b", &event("SessionStart", "sb", serde_json::json!({})));
+    assert!(roster.contains("split the parser"), "b learns what a works on: {roster}");
+
+    let read = serde_json::json!({ "tool_name": "Read", "tool_input": { "file_path": file } });
+    let out: serde_json::Value =
+        serde_json::from_str(&hook_as(&s, "b", &event("PostToolUse", "sb", read))).expect("json");
+    let context = out["hookSpecificOutput"]["additionalContext"].as_str().unwrap_or("");
+    assert!(context.contains(&format!("{}:a", s.name)), "{context}");
+    assert!(context.contains("split the parser"), "{context}");
+}
+
+#[test]
+fn mcp_peers_from_an_agent_pane_lists_the_other_agents_in_its_repository() {
+    let s = Session::new("mp");
+    let repo = s.runtime.join("repo");
+    std::fs::create_dir_all(repo.join(".git")).expect("git dir");
+    let cwd = repo.to_string_lossy().into_owned();
+    for pane in ["a", "b"] {
+        let _ = s.run(&["run", "-n", pane, "--pty", "--cwd", &cwd, "cat"]);
+        let prompt = serde_json::json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": format!("s-{pane}"),
+            "cwd": cwd,
+            "prompt": format!("task of {pane}"),
+        });
+        let _ = hook_as(&s, pane, &prompt);
+    }
+    let mut child = s
+        .base()
+        .arg("mcp")
+        .current_dir(&repo)
+        .env("MPX_PANE", "b")
+        .env("MPX_ENDPOINT", s.endpoint())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("spawn mcp");
+    let call = serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": { "name": "mpx_peers", "arguments": {} }
+    });
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(format!("{call}\n").as_bytes())
+        .expect("write");
+    let out = child.wait_with_output().expect("wait");
+    let reply: serde_json::Value = serde_json::from_slice(&out.stdout).expect("reply");
+    let text = reply["result"]["content"][0]["text"].as_str().expect("text");
+    let peers: serde_json::Value = serde_json::from_str(text).expect("peers json");
+    let agents: Vec<&str> = peers["agents"]
+        .as_array()
+        .expect("agents")
+        .iter()
+        .filter_map(|a| a["agent"].as_str())
+        .collect();
+    assert_eq!(agents, vec![format!("{}:a", s.name)], "{peers}");
+    assert_eq!(peers["agents"][0]["task"], "task of a");
+}
+
 #[test]
 fn print_config_emits_claude_hook_settings() {
     let s = Session::new("pc");

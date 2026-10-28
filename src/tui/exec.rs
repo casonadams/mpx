@@ -42,6 +42,7 @@ fn clears_zoom(cmd: &Command) -> bool {
             | Command::OpenAgents
             | Command::OpenTree
             | Command::OpenHelp
+            | Command::ToggleSidebar
             | Command::CommandPrompt { .. }
             | Command::Confirm { .. }
             | Command::SendKeys { .. }
@@ -156,6 +157,7 @@ impl App {
             Command::OpenAgents => self.open_overlay(Overlay::agents()).await,
             Command::OpenTree => self.open_overlay(Overlay::tree()).await,
             Command::OpenHelp => self.open_help().await,
+            Command::ToggleSidebar => self.toggle_sidebar().await,
             Command::CommandPrompt { initial } => self.open_prompt(&initial),
             Command::Confirm { prompt, then } => self.ask(prompt, *then),
             other => self.say(format!("unhandled command: {other:?}")),
@@ -235,6 +237,10 @@ impl App {
             Some(pane) => {
                 let result = self.client.focus(&pane).await;
                 self.settle(result)
+            }
+            None if side == Side::Left && self.sidebar_width() > 0 => {
+                self.focus_sidebar();
+                Flow::Continue
             }
             None => Flow::Continue,
         }
@@ -318,7 +324,7 @@ impl App {
         let pane = self.active_pane.clone();
         let result = self
             .client
-            .resize_split(&pane, side, cells, self.viewport)
+            .resize_split(&pane, side, cells, self.pane_viewport())
             .await;
         self.settle(result)
     }

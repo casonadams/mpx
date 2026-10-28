@@ -64,7 +64,9 @@ async fn dispatch(command: Commands, r: Resolved) -> Result<i32, String> {
         Commands::Restore => restore(&r).await,
         Commands::Mcp => {
             ensure_client(&r).await?;
+            let caller = mcp_caller(&r.endpoint);
             McpServer::new(r.endpoint, r.session, r.socket_dir, r.config)
+                .with_caller(caller)
                 .run_stdio()
                 .await
                 .map_err(|e| format!("MCP error: {e}"))?;
@@ -474,4 +476,13 @@ pub fn tui_options(r: &Resolved) -> AppOptions {
         socket_dir: r.socket_dir.clone(),
         size: None,
     }
+}
+
+/// The agent pane an MCP server was started from (mpx panes export `MPX_PANE`), in this directory.
+fn mcp_caller(endpoint: &str) -> Option<crate::agents::aware::Me> {
+    Some(crate::agents::aware::Me {
+        endpoint: endpoint.to_string(),
+        pane: std::env::var("MPX_PANE").ok()?,
+        cwd: std::env::current_dir().ok()?,
+    })
 }

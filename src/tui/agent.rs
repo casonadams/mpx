@@ -3,6 +3,7 @@ use std::collections::BTreeSet;
 use std::io::{Write, stdout};
 
 use super::app::{App, Flow};
+use super::sidebar;
 use super::status::osc9_needs_input;
 use crate::agents::{self, LaunchOptions, LiveAgent};
 use crate::layout::Direction;
@@ -72,12 +73,16 @@ pub fn newly_waiting(
 }
 
 impl App {
-    /// Polls other sessions' waiting agents every other tick and refreshes the badge.
+    /// Polls every session's agents every other tick (every tick while the sidebar lists them)
+    /// and refreshes the badge.
     pub async fn refresh_agents(&mut self) {
         self.watch.ticks += 1;
-        if self.watch.ticks % 2 == 1 {
-            self.watch.others =
-                waiting_elsewhere(agents::list_live(&self.socket_dir).await, &self.session);
+        if self.sidebar.visible || self.watch.ticks % 2 == 1 {
+            let live = agents::list_live(&self.socket_dir).await;
+            if self.sidebar.visible {
+                self.sidebar.agents = sidebar::ordered(live.clone(), &self.session);
+            }
+            self.watch.others = waiting_elsewhere(live, &self.session);
         }
         self.update_waiting();
     }
@@ -152,7 +157,10 @@ impl App {
         let spec = agents::launch(
             spec_harness,
             resume,
-            LaunchOptions::default(),
+            LaunchOptions {
+                mcp: self.config.agent.mcp,
+                ..LaunchOptions::default()
+            },
             &self.socket_dir,
         );
         let (command, args) = spec

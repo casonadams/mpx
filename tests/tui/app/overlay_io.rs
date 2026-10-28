@@ -98,7 +98,7 @@ async fn start_fleet() -> Fleet {
             state: Some(AgentState::Working),
             session_id: Some("sid-1".to_string()),
             detail: Some("refactoring".to_string()),
-            clear: false,
+            ..AgentReportArgs::default()
         },
     )
     .await

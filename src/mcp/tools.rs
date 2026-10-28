@@ -1,5 +1,6 @@
 use serde_json::{Map, Value, json};
 
+use crate::agents::aware::Me;
 use crate::cli::{parse_agent_state, parse_env_pairs};
 use crate::client::PipeReadArgs;
 use crate::layout::Direction;
@@ -281,10 +282,24 @@ pub const TOOLS: &[Tool] = &[
         required: &["harness"],
     },
     Tool {
+        name: "mpx_peers",
+        desc: "Other agents working in your repository: what each is working on (task, title, last reply), its state and the files it edited recently. Check before large changes, and ask a peer with mpx_agent_prompt to avoid conflicting work.",
+        props: &[prop(
+            "all",
+            Kind::Bool,
+            "Include agents in other repositories",
+        )],
+        required: &[],
+    },
+    Tool {
         name: "mpx_agent_prompt",
         desc: "Send a prompt to an agent pane, wait for it to go idle or need input, and return the screen.",
         props: &[
-            prop("name", Kind::Str, SESSION_NOTE),
+            prop(
+                "name",
+                Kind::Str,
+                "Agent pane name, or session:pane (as mpx_peers lists it) for another session",
+            ),
             prop("text", Kind::Str, "Prompt text"),
             prop(
                 "wait",
@@ -403,6 +418,11 @@ pub enum Call {
     PipeList,
     Sessions,
     Agents,
+    /// `me` is filled in by the server from the agent it runs for.
+    Peers {
+        all: bool,
+        me: Option<Me>,
+    },
     Restore,
     AgentLaunch(AgentLaunch),
     AgentPrompt(PromptCall),
@@ -590,6 +610,10 @@ pub fn parse_call(tool: &str, args: &Value) -> Result<Call, String> {
         "mpx_pipe_list" => Call::PipeList,
         "mpx_sessions" => Call::Sessions,
         "mpx_agents" => Call::Agents,
+        "mpx_peers" => Call::Peers {
+            all: flag(args, "all", false),
+            me: None,
+        },
         "mpx_restore" => Call::Restore,
         "mpx_agent_launch" => Call::AgentLaunch(AgentLaunch {
             harness: required(args, "harness")?,

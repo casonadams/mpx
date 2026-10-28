@@ -34,11 +34,26 @@ pub async fn start_on(state_dir: &Path, config: Config) -> TestDaemon {
 }
 
 async fn serve(dir: TempDir, state_dir: &Path, config: Config) -> TestDaemon {
-    let endpoint = mpx::ipc::endpoint_in(dir.path(), SESSION);
+    let endpoint = serve_session(dir.path(), SESSION, state_dir, config).await;
+    TestDaemon {
+        endpoint,
+        _dir: dir,
+    }
+}
+
+/// Serves `session` from `socket_dir`, so several sessions can share one directory as they do in
+/// real use. Returns its endpoint.
+pub async fn serve_session(
+    socket_dir: &Path,
+    session: &str,
+    state_dir: &Path,
+    config: Config,
+) -> String {
+    let endpoint = mpx::ipc::endpoint_in(socket_dir, session);
     #[allow(unused_mut)]
     let mut listener = IpcListener::bind(&endpoint).expect("bind");
     let state = DaemonState::new(
-        SESSION.to_string(),
+        session.to_string(),
         endpoint.clone(),
         config,
         state_dir.to_path_buf(),
@@ -50,11 +65,7 @@ async fn serve(dir: TempDir, state_dir: &Path, config: Config) -> TestDaemon {
             tokio::spawn(handle_client(Arc::clone(&state), stream));
         }
     });
-
-    TestDaemon {
-        endpoint,
-        _dir: dir,
-    }
+    endpoint
 }
 
 pub async fn connect(endpoint: &str) -> Client {

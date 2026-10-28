@@ -2,6 +2,7 @@ mod daemon {
     #[cfg(unix)]
     mod agent_events;
     mod agents;
+    mod awareness;
     mod basics;
     mod durable;
     mod env;

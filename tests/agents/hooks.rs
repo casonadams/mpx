@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use mpx::agents::{
-    HookReport, claude_hook_report, hook_report, omp_extension_source, omp_hook_report,
+    HookReport, claude_hook_report, clip, hook_report, omp_extension_source, omp_hook_report,
 };
 use mpx::protocol::AgentState;
 
@@ -67,6 +67,7 @@ fn omp_events_map_to_states() {
             session_id: Some("o-1".into()),
             detail: None,
             clear: false,
+            ..HookReport::default()
         })
     );
     for event in ["agent_start", "turn_start", "tool_approval_resolved"] {
@@ -116,4 +117,55 @@ fn hook_report_dispatches_by_harness() {
     assert!(hook_report("omp", None, "{}").is_none());
     assert!(hook_report("omp", Some("agent_start"), "{}").is_some());
     assert!(hook_report("other", Some("agent_start"), "{}").is_none());
+}
+
+#[test]
+fn claude_prompt_becomes_the_task_on_one_clipped_line() {
+    let long = "x".repeat(400);
+    let input = claude(
+        "UserPromptSubmit",
+        &format!(r#","prompt":"fix the\n  auth   bug {long}""#),
+    );
+    let task = claude_hook_report(&input).and_then(|r| r.task).expect("task");
+    assert!(task.starts_with("fix the auth bug x"), "{task}");
+    assert_eq!(task.chars().count(), 240);
+    assert!(task.ends_with('…'));
+}
+
+#[test]
+fn claude_stop_keeps_the_last_reply() {
+    let input = claude("Stop", r#","last_assistant_message":"All tests pass.""#);
+    let report = claude_hook_report(&input).expect("mapped");
+    assert_eq!(report.state, Some(AgentState::Idle));
+    assert_eq!(report.reply.as_deref(), Some("All tests pass."));
+}
+
+#[test]
+fn claude_post_tool_use_records_edited_files_only() {
+    let edit = claude(
+        "PostToolUse",
+        r#","tool_name":"Edit","tool_input":{"file_path":"/work/src/a.rs"}"#,
+    );
+    let report = claude_hook_report(&edit).expect("edit recorded");
+    assert_eq!(report.edited.as_deref(), Some("/work/src/a.rs"));
+    assert_eq!(report.state, None, "an edit does not change the agent state");
+
+    let notebook = claude(
+        "PostToolUse",
+        r#","tool_name":"NotebookEdit","tool_input":{"notebook_path":"/work/n.ipynb"}"#,
+    );
+    let report = claude_hook_report(&notebook).expect("notebook recorded");
+    assert_eq!(report.edited.as_deref(), Some("/work/n.ipynb"));
+
+    let read = claude(
+        "PostToolUse",
+        r#","tool_name":"Read","tool_input":{"file_path":"/work/src/a.rs"}"#,
+    );
+    assert!(claude_hook_report(&read).is_none());
+}
+
+#[test]
+fn clip_flattens_whitespace_and_marks_cuts() {
+    assert_eq!(clip("  a\n\tb  c ", 10), "a b c");
+    assert_eq!(clip("abcdef", 4), "abc…");
 }

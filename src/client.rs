@@ -24,6 +24,9 @@ pub struct AgentReportArgs {
     pub session_id: Option<String>,
     pub detail: Option<String>,
     pub clear: bool,
+    pub task: Option<String>,
+    pub reply: Option<String>,
+    pub edited: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -451,6 +454,9 @@ impl Client {
             session_id: args.session_id,
             detail: args.detail,
             clear: args.clear,
+            task: args.task,
+            reply: args.reply,
+            edited: args.edited,
         };
         self.call_ok("AgentReport", req).await
     }

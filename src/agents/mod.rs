@@ -9,14 +9,15 @@ use uuid::Uuid;
 use crate::client::Client;
 use crate::protocol::{AgentState, NodeInfo};
 
+pub mod aware;
 mod harness;
 mod hooks;
 mod sessions;
 
 pub use harness::{LaunchEnv, detect, launch, launch_with, registry};
 pub use hooks::{
-    HookReport, claude_hook_report, claude_settings_json, omp_extension_source, omp_hook_file,
-    omp_hook_report, send_hook_report,
+    HookReport, claude_hook_report, claude_settings_json, clip, omp_extension_source,
+    omp_hook_file, omp_hook_report, send_hook_report, tool_file,
 };
 pub use sessions::{
     SessionMeta, Visit, lookup_rho_cwd, parse_claude_meta, parse_codex_meta, parse_omp_meta,
@@ -52,6 +53,8 @@ pub struct Harness {
 pub struct LaunchOptions {
     /// Claude Code agent teams: tmux compat + CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS.
     pub teams: bool,
+    /// Give Claude Code the mpx MCP tools (`mpx_peers`, `mpx_agent_prompt`, ...).
+    pub mcp: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -80,6 +83,15 @@ pub struct LiveAgent {
     pub session: String,
     pub endpoint: String,
     pub node: NodeInfo,
+}
+
+/// A pane's terminal title without the status glyphs harnesses put in front, if it has one.
+pub fn title_of(node: &NodeInfo) -> Option<String> {
+    node.title
+        .as_deref()
+        .map(|t| t.trim_start_matches(|c: char| !c.is_alphanumeric()).trim_end())
+        .filter(|t| !t.is_empty())
+        .map(str::to_string)
 }
 
 /// Display label for an agent state.

@@ -11,9 +11,10 @@ pub fn plan_restore(
     snapshot: &SessionSnapshot,
     harnesses: &[Harness],
     runtime_dir: &Path,
+    mcp: bool,
 ) -> RestorePlan {
     plan_restore_with(snapshot, harnesses, |h, resume, opts| {
-        agents::launch(h, resume, opts, runtime_dir)
+        agents::launch(h, resume, LaunchOptions { mcp, ..opts }, runtime_dir)
     })
 }
 
@@ -110,6 +111,7 @@ where
         resume,
         LaunchOptions {
             teams: pane.tmux_compat,
+            ..LaunchOptions::default()
         },
     );
     match spec.argv.split_first() {

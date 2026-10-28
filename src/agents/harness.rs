@@ -120,7 +120,12 @@ fn base_argv(h: &Harness, resume: Option<&str>) -> (Vec<String>, Option<String>)
 fn harness_args(h: &Harness, env: &LaunchEnv, opts: LaunchOptions) -> Vec<String> {
     match h.name.as_str() {
         "claude" => {
-            let mut args = vec!["--settings".to_string(), claude_settings_json(env.exe)];
+            let mut args = Vec::new();
+            if opts.mcp {
+                // `--mcp-config` takes several values; the option after it ends the list.
+                args.extend(["--mcp-config".to_string(), claude_mcp_json(env.exe)]);
+            }
+            args.extend(["--settings".to_string(), claude_settings_json(env.exe)]);
             if opts.teams {
                 args.extend(["--teammate-mode".to_string(), "tmux".to_string()]);
             }
@@ -132,6 +137,15 @@ fn harness_args(h: &Harness, env: &LaunchEnv, opts: LaunchOptions) -> Vec<String
             .unwrap_or_default(),
         _ => Vec::new(),
     }
+}
+
+/// Claude Code `--mcp-config` JSON for an `mpx` server run by `exe`. Named `mpx` so it replaces,
+/// rather than duplicates, an mpx server the user configured.
+pub fn claude_mcp_json(exe: &Path) -> String {
+    serde_json::json!({
+        "mcpServers": { "mpx": { "command": exe.to_string_lossy(), "args": ["mcp"] } }
+    })
+    .to_string()
 }
 
 /// Launch spec built from the running binary and, for omp, the extension file written to

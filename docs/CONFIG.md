@@ -23,6 +23,7 @@ which_key_delay_ms = 300  # wait after the prefix key before showing the shortcu
 [agent]
 idle_ms = 1500          # quiet period before a hook-less agent counts as idle
 notify = true           # OSC 9 desktop notification when an off-screen agent needs input
+mcp = true              # give agents mpx launches the mpx MCP tools (mpx_peers, mpx_agent_prompt, ...)
 
 [style]
 border_active = "bright-green"      # active border color or hex ("#3fb950")
@@ -80,6 +81,7 @@ session_id_args = []
 |---|---|---|---|---|
 | `idle_ms` | integer | `1500` | Daemon | Milliseconds of I/O inactivity before a hook-less agent is classified as `idle`. |
 | `notify` | bool | `true` | TUI | Emit an OSC 9 desktop notification when an off-screen background agent transitions to `needs_input`. |
+| `mcp` | bool | `true` | Launcher | Start Claude Code agents with the mpx MCP server (`--mcp-config`), so they can see and message the other agents. Read by whatever launches the agent: the TUI, the CLI, the MCP server or a daemon restore. |
 
 ### Key Bindings (`[bind]`)
 
@@ -122,6 +124,7 @@ All commands available in `[bind]` can also be run interactively from the comman
 | `agents` | none | none | Open full-screen Agent Manager overlay with status and resume list. |
 | `next-attention` | none | none | Focus the background agent that has waited longest for user input. |
 | `choose-tree` | `tree` | none | Open interactive session / window / pane hierarchy tree. |
+| `sidebar` | none | none | Show and focus the agents sidebar, or hide it. |
 | `list-keys` | `help` | none | Open searchable keybindings cheat sheet overlay. |
 | `copy-mode` | none | none | Enter Vi visual scrollback navigation and copy mode. |
 | `command-prompt` | none | `[-I <initial>] [-p <prompt>]` | Open command line prompt at bottom row. |

@@ -151,7 +151,10 @@ fn claude_settings_quote_paths_with_spaces_and_quotes() {
 
 #[test]
 fn teams_set_env_tmux_compat_and_teammate_mode() {
-    let opts = LaunchOptions { teams: true };
+    let opts = LaunchOptions {
+        teams: true,
+        ..LaunchOptions::default()
+    };
     let spec = launch_with(&harness("claude"), None, opts, &env_none());
     assert_eq!(
         env_value(&spec, "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"),
@@ -305,4 +308,37 @@ fn launches_name_their_harness_in_the_environment() {
     );
     assert_eq!(env_value(&claude, "MPX_AGENT_HARNESS"), Some("claude"));
     assert_eq!(env_value(&omp, "MPX_AGENT_HARNESS"), Some("omp"));
+}
+
+#[test]
+fn claude_mcp_option_adds_the_mpx_server_ahead_of_the_settings() {
+    let opts = LaunchOptions {
+        mcp: true,
+        ..LaunchOptions::default()
+    };
+    let spec = launch_with(&harness("claude"), None, opts, &env_none());
+    let at = spec
+        .argv
+        .iter()
+        .position(|a| a == "--mcp-config")
+        .expect("--mcp-config passed");
+    assert_eq!(spec.argv[at + 2], "--settings", "the next option ends the value list");
+    let config: serde_json::Value = serde_json::from_str(&spec.argv[at + 1]).expect("json");
+    assert_eq!(config["mcpServers"]["mpx"]["command"], EXE);
+    assert_eq!(config["mcpServers"]["mpx"]["args"], serde_json::json!(["mcp"]));
+
+    let plain = launch_with(&harness("claude"), None, LaunchOptions::default(), &env_none());
+    assert!(!plain.argv.iter().any(|a| a == "--mcp-config"));
+}
+
+#[test]
+fn claude_settings_watch_file_tools_after_use() {
+    let settings: serde_json::Value =
+        serde_json::from_str(&claude_settings_json(Path::new(EXE))).expect("json");
+    let post = &settings["hooks"]["PostToolUse"][0];
+    let matcher = post["matcher"].as_str().expect("matcher");
+    for tool in ["Read", "Edit", "Write"] {
+        assert!(matcher.split('|').any(|t| t == tool), "{matcher}");
+    }
+    assert!(settings["hooks"]["Stop"][0].get("matcher").is_none());
 }

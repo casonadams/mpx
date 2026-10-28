@@ -112,6 +112,7 @@ mpx -s dev</code></pre>
           <tbody>
             <tr><td><code>Prefix + s</code></td><td>Agent Manager</td><td>All AI agents across sessions grouped by state, plus resumable sessions</td></tr>
             <tr><td><code>Prefix + A</code></td><td>Next Attention</td><td>Jump to the agent that has waited longest for input</td></tr>
+            <tr><td><code>Prefix + e</code></td><td>Agents Sidebar</td><td>Every agent by session on the left; moving the highlight shows that agent live on the right</td></tr>
             <tr><td><code>Prefix + w</code></td><td>Sessions</td><td>Sessions, windows and panes with program, directory, agent counts and a pane preview</td></tr>
             <tr><td><code>Prefix + ( )</code></td><td>Switch Session</td><td>Previous / next session</td></tr>
             <tr><td><code>Prefix + :</code></td><td>Command Prompt</td><td>tmux commands with vim aliases (<code>:vsplit</code>, <code>:tabnew</code>, <code>:q</code>)</td></tr>
@@ -200,6 +201,7 @@ dim_content_bg = true               # dim explicit app backgrounds (diffs, selec
 [agent]
 idle_ms = 1500          # quiet period before a hook-less agent counts as idle
 notify = true           # OSC 9 desktop notification when an off-screen agent needs input
+mcp = true              # give agents mpx launches the mpx MCP tools (mpx_peers, mpx_agent_prompt, ...)
 
 [bind]                  # custom prefix key bindings -&gt; command line
 "M-h" = "select-pane -L"
@@ -279,6 +281,7 @@ session_id_args = ["--session", "{id}"]</code></pre>
             <tr><td><code>agents</code></td><td>none</td><td>none</td><td>Open full-screen Agent Manager overlay.</td></tr>
             <tr><td><code>next-attention</code></td><td>none</td><td>none</td><td>Jump to agent waiting longest for input.</td></tr>
             <tr><td><code>choose-tree</code></td><td><code>tree</code></td><td>none</td><td>Open session/window/pane tree navigation.</td></tr>
+            <tr><td><code>sidebar</code></td><td>none</td><td>none</td><td>Show and focus the agents sidebar, or hide it.</td></tr>
             <tr><td><code>list-keys</code></td><td><code>help</code></td><td>none</td><td>Open searchable keybindings cheat sheet.</td></tr>
             <tr><td><code>copy-mode</code></td><td>none</td><td>none</td><td>Enter Vi copy / visual scrollback mode.</td></tr>
             <tr><td><code>command-prompt</code></td><td>none</td><td><code>[-I &lt;initial&gt;] [-p &lt;prompt&gt;]</code></td><td>Open interactive command prompt.</td></tr>
@@ -322,7 +325,7 @@ session_id_args = ["--session", "{id}"]</code></pre>
         <li><code>mpx_send</code>, <code>mpx_send_keys</code> (tmux key names), <code>mpx_paste</code> (bracketed, optional submit)</li>
         <li><code>mpx_wait(name, condition)</code>: exit, quiet output, regex match, or agent state, with timeout</li>
         <li><code>mpx_pipe_write</code>, <code>mpx_pipe_read</code> (consumer cursors, long-poll), <code>mpx_pipe_create</code>, <code>mpx_pipe_list</code></li>
-        <li><code>mpx_agents</code>, <code>mpx_agent_launch</code>, <code>mpx_agent_prompt</code>: list, start and prompt other agents; <code>mpx_restore</code>: recreate a session from its snapshot</li>
+        <li><code>mpx_agents</code>, <code>mpx_agent_launch</code>, <code>mpx_agent_prompt</code>: list, start and prompt other agents (<code>session:pane</code> reaches another session); <code>mpx_peers</code>: other agents in your repository with their current task and recent edits; <code>mpx_restore</code>: recreate a session from its snapshot</li>
         <li>Mutating tools accept an optional <code>idempotency_key</code>, so retries never act twice</li>
       </ul>
     </section>

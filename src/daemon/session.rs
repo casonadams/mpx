@@ -381,6 +381,9 @@ impl Session {
                 session_id,
                 detail,
                 clear,
+                task,
+                reply,
+                edited,
             } => unit(
                 self.report(
                     &name,
@@ -390,6 +393,9 @@ impl Session {
                         session_id,
                         detail,
                         clear,
+                        task,
+                        reply,
+                        edited,
                     },
                 )
                 .await,
@@ -916,7 +922,12 @@ impl Session {
             .unwrap_or_else(crate::ipc::socket_dir);
         #[cfg(windows)]
         let runtime_dir = crate::ipc::socket_dir();
-        let plan = plan_restore(snapshot, &self.harnesses, &runtime_dir);
+        let plan = plan_restore(
+            snapshot,
+            &self.harnesses,
+            &runtime_dir,
+            self.config.agent.mcp,
+        );
         for window in plan.windows {
             self.restore_window(window);
         }

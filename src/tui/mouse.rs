@@ -20,6 +20,12 @@ impl App {
         ) {
             return Flow::Continue;
         }
+        if ev.column < self.sidebar_width() && ev.row < self.viewport.1 {
+            if ev.kind == MouseEventKind::Down(MouseButton::Left) {
+                self.sidebar_click(ev.row).await;
+            }
+            return Flow::Continue;
+        }
         match ev.kind {
             MouseEventKind::Down(MouseButton::Left) => self.mouse_press(ev.column, ev.row).await,
             MouseEventKind::Drag(MouseButton::Left) => self.mouse_drag(ev.column, ev.row),
@@ -71,6 +77,9 @@ impl App {
             return;
         };
         let (x, y) = local_point(rect, col, row);
+        if matches!(self.mode, Mode::Sidebar) {
+            self.mode = Mode::Normal;
+        }
         if name != self.active_pane {
             self.park_copy();
             let _ = self.client.focus(&name).await;

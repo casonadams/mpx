@@ -7,10 +7,13 @@ use crate::agents::{
     self, Harness, LaunchOptions, claude_settings_json, find_harness, find_unique_by_prefix,
 };
 use crate::layout::Direction;
+use crate::node::now_ms;
 use crate::protocol::{NewWindowOpts, SpawnOpts, SplitOpts};
 use crate::tui::{StartView, run_tui};
 
 const LIST_LIMIT: usize = 50;
+/// Longest a hook waits on other sessions before giving up on awareness context.
+const AWARENESS_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(800);
 const RESUME_SCAN_LIMIT: usize = 5000;
 
 /// Arguments shared by `agents new` and `agents resume`.
@@ -96,7 +99,10 @@ async fn start(r: &Resolved, harness: &Harness, req: &LaunchRequest) -> Result<i
     let spec = agents::launch(
         harness,
         req.resume.as_deref(),
-        LaunchOptions { teams: req.teams },
+        LaunchOptions {
+            teams: req.teams,
+            mcp: r.config.agent.mcp,
+        },
         &r.socket_dir,
     );
     let (command, args) = spec
@@ -166,7 +172,26 @@ pub async fn hook(harness: &str, event: Option<&str>, key: Option<&str>) -> Resu
     if let Some(report) = agents::hook_report(harness, event, &input) {
         agents::send_hook_report(harness, report, key).await;
     }
+    if harness == "claude"
+        && let Some(context) = awareness(&input).await
+    {
+        println!("{context}");
+    }
     Ok(0)
+}
+
+/// Context about other agents for this hook, bounded so a slow session never stalls the agent.
+async fn awareness(input: &str) -> Option<String> {
+    let (Ok(pane), Ok(endpoint)) = (std::env::var("MPX_PANE"), std::env::var("MPX_ENDPOINT"))
+    else {
+        return None;
+    };
+    let socket_dir = crate::ipc::socket_dir();
+    let context = agents::aware::claude_context(input, &endpoint, &pane, &socket_dir, now_ms());
+    tokio::time::timeout(AWARENESS_TIMEOUT, context)
+        .await
+        .ok()
+        .flatten()
 }
 
 fn print_config(event: Option<&str>) -> Result<i32, String> {

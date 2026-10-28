@@ -104,7 +104,7 @@ mpx agents new claude --split
 
 ## Agent Manager
 
-`Prefix s` (or `mpx agents`) lists every AI agent running in any session (Claude Code, oh-my-pi, Codex, rho, or your own harness). Agents are grouped by state (**needs you**, working, idle, exited), next to stored sessions you can resume. You can jump to an agent, resume or launch one, message several at once, or kill them, all with vim keys. `Prefix A` jumps to the agent that has waited longest, and the status bar shows `◆N` while agents wait. State comes from harness hooks that mpx installs when it launches an agent, with terminal bells and output activity as fallbacks. See **[Agent Manager](docs/AGENT-MANAGER.md)**.
+`Prefix s` (or `mpx agents`) lists every AI agent running in any session (Claude Code, oh-my-pi, Codex, rho, or your own harness). Agents are grouped by state (**needs you**, working, idle, exited), next to stored sessions you can resume. You can jump to an agent, resume or launch one, message several at once, or kill them, all with vim keys. `Prefix e` opens an agents sidebar: every agent by session down the left, with the highlighted agent's pane live on the right. `Prefix A` jumps to the agent that has waited longest, and the status bar shows `◆N` while agents wait. State comes from harness hooks that mpx installs when it launches an agent, with terminal bells and output activity as fallbacks. See **[Agent Manager](docs/AGENT-MANAGER.md)**.
 
 **tmux compatibility**: invoked as `tmux`, the mpx binary translates `split-window`, `send-keys`, `capture-pane`, `list-panes` and friends. With `mpx agents new claude --teams`, Claude Code agent teams spawn their teammates as mpx panes.
 
@@ -127,7 +127,7 @@ mpx agents new claude --split
 }
 ```
 
-Agents gain 22 tools: run and wait for processes (exit, quiet output, regex, agent state), read output incrementally, send tmux key names or bracketed pastes, exchange sequenced messages through durable pipes with per-consumer cursors, launch and prompt other agents (`mpx_agent_launch`, `mpx_agent_prompt`), and restore sessions. Mutating tools accept an `idempotency_key`, so retries never act twice. Every mpx pane exports `MPX_SESSION`/`MPX_ENDPOINT`, so an agent inside mpx manages its own session automatically. See **[MCP Guide](docs/MCP.md)** for full workflows.
+Agents gain 23 tools: run and wait for processes (exit, quiet output, regex, agent state), read output incrementally, send tmux key names or bracketed pastes, exchange sequenced messages through durable pipes with per-consumer cursors, launch and prompt other agents (`mpx_agent_launch`, `mpx_agent_prompt`), see what other agents in the same repository are working on (`mpx_peers`), and restore sessions. Agents mpx launches get these tools automatically and are told when other agents share their repository; see [Agent awareness](docs/AGENT-MANAGER.md#agent-awareness). Mutating tools accept an `idempotency_key`, so retries never act twice. Every mpx pane exports `MPX_SESSION`/`MPX_ENDPOINT`, so an agent inside mpx manages its own session automatically. See **[MCP Guide](docs/MCP.md)** for full workflows.
 
 ---
 

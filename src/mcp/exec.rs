@@ -4,7 +4,9 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 
 use super::tools::{AgentLaunch, Call, PromptCall};
+use crate::agents::aware::{self, Me};
 use crate::agents::{self, LaunchOptions, state_label};
+use crate::node::now_ms;
 use crate::cli::{RestoreOutcome, apply_key, restore_session};
 use crate::client::Client;
 use crate::config::Config;
@@ -42,7 +44,21 @@ pub async fn execute(
         }
         Call::Restore => restore(client).await,
         Call::AgentLaunch(launch) => agent_launch(client, launch, socket_dir, config).await,
-        Call::AgentPrompt(prompt) => agent_prompt(client, prompt).await,
+        Call::Peers { all, me } => Ok(peers(socket_dir, me, all).await),
+        Call::AgentPrompt(prompt) => match prompt.name.split_once(':') {
+            Some((session, pane)) if !session.is_empty() => {
+                let endpoint = ipc::endpoint_in(socket_dir, session);
+                let mut other = Client::connect(&endpoint)
+                    .await
+                    .map_err(|_| format!("session '{session}' is not running"))?;
+                let call = PromptCall {
+                    name: pane.to_string(),
+                    ..prompt
+                };
+                agent_prompt(&mut other, call).await
+            }
+            _ => agent_prompt(client, prompt).await,
+        },
         Call::Split { .. } | Call::NewWindow { .. } | Call::Focus(_) => {
             layout_call(client, call).await
         }
@@ -164,6 +180,18 @@ async fn pipe_call(client: &mut Client, call: Call) -> Result<Value, String> {
     }
 }
 
+/// `mpx_peers`: agents in the caller's repository. Without a known caller, agents in the server's
+/// working directory's repository.
+async fn peers(socket_dir: &Path, me: Option<Me>, all: bool) -> Value {
+    let me = me.unwrap_or_else(|| Me {
+        endpoint: String::new(),
+        pane: String::new(),
+        cwd: std::env::current_dir().unwrap_or_default(),
+    });
+    let live = agents::list_live(socket_dir).await;
+    aware::peers_json(live, &me, all, now_ms())
+}
+
 async fn inventory(socket_dir: &Path, config: &Config) -> Value {
     let registry = agents::registry(config);
     agents::inventory_json(&registry, INVENTORY_LIMIT, socket_dir).await
@@ -205,6 +233,7 @@ async fn agent_launch(
         launch.resume.as_deref(),
         LaunchOptions {
             teams: launch.teams,
+            mcp: config.agent.mcp,
         },
         socket_dir,
     );

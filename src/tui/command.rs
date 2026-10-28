@@ -75,6 +75,8 @@ pub enum Command {
     NextAttention,
     OpenTree,
     OpenHelp,
+    /// Show and focus the agents sidebar, or hide it.
+    ToggleSidebar,
     CommandPrompt {
         initial: String,
     },
@@ -130,6 +132,7 @@ pub const COMMAND_NAMES: &[&str] = &[
     "send-keys",
     "send-prefix",
     "session",
+    "sidebar",
     "sp",
     "split",
     "split-window",
@@ -256,6 +259,7 @@ fn misc_cmd(name: &str, args: &[String]) -> Option<Result<Command, String>> {
         "next-attention" => bare(name, args, Command::NextAttention),
         "choose-tree" => bare(name, args, Command::OpenTree),
         "list-keys" | "help" => bare(name, args, Command::OpenHelp),
+        "sidebar" => bare(name, args, Command::ToggleSidebar),
         "send-prefix" => bare(name, args, Command::SendPrefix),
         "next-session" => bare(name, args, Command::NextSession),
         "prev-session" => bare(name, args, Command::PrevSession),

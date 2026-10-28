@@ -141,4 +141,27 @@ async fn frames_keep_the_terminal_identical_to_the_panes() {
     )
     .await;
     check(&mut h, "redraw after overlays").await;
+
+    h.prefixed_char('e').await;
+    check(&mut h, "sidebar shown").await;
+    let busy = format!("{}BUSY-DONE", numbered_lines("busy", 30));
+    emit(&mut h, MAIN, &busy, "BUSY-DONE").await;
+    check(&mut h, "output beside the sidebar").await;
+    emit(&mut h, MAIN, VIM_LIKE, "VIM-DONE").await;
+    check(&mut h, "vim-style redraw beside the sidebar").await;
+    h.key(KeyCode::Esc).await;
+    h.prefixed_char('?').await;
+    h.frame().await;
+    h.key(KeyCode::Char('q')).await;
+    check(&mut h, "overlay closed over the sidebar").await;
+    assert!(
+        h.terminal.snapshot().starts_with(" Agents"),
+        "sidebar repainted after the overlay:\n{}",
+        h.terminal.snapshot()
+    );
+    h.prefixed_char('z').await;
+    check(&mut h, "zoomed beside the sidebar").await;
+    h.prefixed_char('z').await;
+    h.prefixed_char('e').await;
+    check(&mut h, "sidebar hidden").await;
 }

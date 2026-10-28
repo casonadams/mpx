@@ -11,6 +11,7 @@ mod tui {
     mod panes;
     mod prompt;
     mod render;
+    mod sidebar;
     mod status;
     mod stream;
 }

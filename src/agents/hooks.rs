@@ -7,14 +7,21 @@ use crate::client::{AgentReportArgs, Client};
 use crate::protocol::AgentState;
 
 /// Claude Code hook events that mpx listens to; each runs `<exe> hook claude`.
-const CLAUDE_EVENTS: [&str; 6] = [
+const CLAUDE_EVENTS: [&str; 7] = [
     "SessionStart",
     "UserPromptSubmit",
     "PreToolUse",
+    "PostToolUse",
     "Notification",
     "Stop",
     "SessionEnd",
 ];
+/// Tools whose use `PostToolUse` reports: file edits are recorded, and file access can surface
+/// another agent's recent edit of the same file.
+const CLAUDE_FILE_TOOLS: &str = "Read|Edit|Write|MultiEdit|NotebookEdit";
+const EDIT_TOOLS: [&str; 4] = ["Edit", "Write", "MultiEdit", "NotebookEdit"];
+/// Longest task or reply text kept for other agents to read.
+const FOCUS_CHARS: usize = 240;
 
 const REPORT_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -52,6 +59,9 @@ pub struct HookReport {
     pub session_id: Option<String>,
     pub detail: Option<String>,
     pub clear: bool,
+    pub task: Option<String>,
+    pub reply: Option<String>,
+    pub edited: Option<String>,
 }
 
 impl HookReport {
@@ -62,12 +72,32 @@ impl HookReport {
             session_id: self.session_id.clone(),
             detail: self.detail.clone(),
             clear: self.clear,
+            task: self.task.clone(),
+            reply: self.reply.clone(),
+            edited: self.edited.clone(),
         }
     }
 }
 
 fn str_field(v: &Value, key: &str) -> Option<String> {
     v.get(key).and_then(Value::as_str).map(str::to_string)
+}
+
+/// `text` on one line with whitespace runs collapsed, cut to `max` characters with `…`.
+pub fn clip(text: &str, max: usize) -> String {
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.chars().count() <= max {
+        return flat;
+    }
+    let mut cut: String = flat.chars().take(max.saturating_sub(1)).collect();
+    cut.push('…');
+    cut
+}
+
+/// The file a Claude Code tool call works on: `file_path`, or `notebook_path` for notebooks.
+pub fn tool_file(v: &Value) -> Option<String> {
+    let input = v.get("tool_input")?;
+    str_field(input, "file_path").or_else(|| str_field(input, "notebook_path"))
 }
 
 fn shell_quote(text: &str) -> String {
@@ -77,10 +107,16 @@ fn shell_quote(text: &str) -> String {
 /// Claude Code `--settings` JSON registering `<exe> hook claude` for every mpx-relevant event.
 pub fn claude_settings_json(exe: &Path) -> String {
     let command = format!("{} hook claude", shell_quote(&exe.to_string_lossy()));
-    let entry = json!([{ "hooks": [{ "type": "command", "command": command }] }]);
+    let hook = json!([{ "type": "command", "command": command }]);
     let hooks: serde_json::Map<String, Value> = CLAUDE_EVENTS
         .iter()
-        .map(|event| (event.to_string(), entry.clone()))
+        .map(|event| {
+            let entry = match *event {
+                "PostToolUse" => json!({ "matcher": CLAUDE_FILE_TOOLS, "hooks": hook }),
+                _ => json!({ "hooks": hook }),
+            };
+            (event.to_string(), json!([entry]))
+        })
         .collect();
     json!({ "hooks": hooks }).to_string()
 }
@@ -90,23 +126,37 @@ pub fn claude_hook_report(input: &str) -> Option<HookReport> {
     let v: Value = serde_json::from_str(input).ok()?;
     let session_id = str_field(&v, "session_id");
     let event = str_field(&v, "hook_event_name")?;
-    let (state, clear, detail) = match event.as_str() {
-        "SessionStart" | "Stop" => (Some(AgentState::Idle), false, None),
-        "UserPromptSubmit" | "PreToolUse" => (Some(AgentState::Working), false, None),
-        "Notification" => (
-            Some(AgentState::NeedsInput),
-            false,
-            str_field(&v, "message"),
-        ),
-        "SessionEnd" => (None, true, None),
-        _ => return None,
-    };
-    Some(HookReport {
-        state,
+    let focus = |key: &str| str_field(&v, key).map(|t| clip(&t, FOCUS_CHARS));
+    let mut report = HookReport {
         session_id,
-        detail,
-        clear,
-    })
+        ..HookReport::default()
+    };
+    match event.as_str() {
+        "SessionStart" => report.state = Some(AgentState::Idle),
+        "Stop" => {
+            report.state = Some(AgentState::Idle);
+            report.reply = focus("last_assistant_message");
+        }
+        "UserPromptSubmit" => {
+            report.state = Some(AgentState::Working);
+            report.task = focus("prompt");
+        }
+        "PreToolUse" => report.state = Some(AgentState::Working),
+        "PostToolUse" => {
+            let tool = str_field(&v, "tool_name").unwrap_or_default();
+            if !EDIT_TOOLS.contains(&tool.as_str()) {
+                return None;
+            }
+            report.edited = Some(tool_file(&v)?);
+        }
+        "Notification" => {
+            report.state = Some(AgentState::NeedsInput);
+            report.detail = str_field(&v, "message");
+        }
+        "SessionEnd" => report.clear = true,
+        _ => return None,
+    }
+    Some(report)
 }
 
 /// Maps an omp extension event (`mpx hook omp <event>`, JSON on stdin) to an agent report.
@@ -129,6 +179,7 @@ pub fn omp_hook_report(event: &str, input: &str) -> Option<HookReport> {
         session_id,
         detail,
         clear,
+        ..HookReport::default()
     })
 }
 

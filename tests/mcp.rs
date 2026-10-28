@@ -9,7 +9,7 @@ use mpx::mcp::{Call, PromptCall, parse_call, restore_outcome_json, tool_list, to
 use mpx::protocol::{AgentState, WaitCondition};
 use serde_json::{Value, json};
 
-const EXPECTED: [&str; 22] = [
+const EXPECTED: [&str; 23] = [
     "mpx_run",
     "mpx_list",
     "mpx_status",
@@ -29,6 +29,7 @@ const EXPECTED: [&str; 22] = [
     "mpx_pipe_list",
     "mpx_sessions",
     "mpx_agents",
+    "mpx_peers",
     "mpx_agent_launch",
     "mpx_agent_prompt",
     "mpx_restore",
@@ -332,4 +333,16 @@ fn restore_tool_parses_and_reports_the_outcome() {
         }),
         json!({"restored": true, "windows": 2, "panes": 3})
     );
+}
+
+#[test]
+fn mpx_peers_parses_its_scope_and_leaves_the_caller_to_the_server() {
+    assert!(matches!(
+        parse_call("mpx_peers", &json!({})).unwrap(),
+        Call::Peers { all: false, me: None }
+    ));
+    assert!(matches!(
+        parse_call("mpx_peers", &json!({ "all": true })).unwrap(),
+        Call::Peers { all: true, me: None }
+    ));
 }

@@ -4,7 +4,8 @@ use std::path::PathBuf;
 use serde_json::{Value, json};
 
 use super::exec::execute;
-use super::tools::{parse_call, tool_list};
+use super::tools::{Call, parse_call, tool_list};
+use crate::agents::aware::Me;
 use crate::client::Client;
 use crate::config::Config;
 
@@ -17,6 +18,7 @@ pub struct McpServer {
     session: String,
     socket_dir: PathBuf,
     config: Config,
+    caller: Option<Me>,
 }
 
 impl McpServer {
@@ -28,7 +30,14 @@ impl McpServer {
             session,
             socket_dir,
             config,
+            caller: None,
         }
+    }
+
+    /// The agent this server runs for, so `mpx_peers` can leave it out and find its repository.
+    pub fn with_caller(mut self, caller: Option<Me>) -> Self {
+        self.caller = caller;
+        self
     }
 
     /// Serves JSON-RPC over stdin/stdout until stdin closes.
@@ -108,7 +117,13 @@ impl McpServer {
     }
 
     async fn call_tool(&self, name: &str, args: &Value) -> Result<Value, String> {
-        let call = parse_call(name, args)?;
+        let call = match parse_call(name, args)? {
+            Call::Peers { all, .. } => Call::Peers {
+                all,
+                me: self.caller.clone(),
+            },
+            call => call,
+        };
         let mut client = Client::connect(&self.endpoint).await?;
         execute(&mut client, call, &self.socket_dir, &self.config).await
     }

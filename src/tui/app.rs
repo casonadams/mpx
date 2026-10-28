@@ -18,6 +18,7 @@ use super::overlay::Overlay;
 use super::panes::{LayoutCache, PaneRect, sync_dims};
 use super::prompt::PromptState;
 use super::render::copy_to_clipboard;
+use super::sidebar::{self, Sidebar};
 use super::status::{local_utc_offset, restored_notice};
 use super::terminal::TerminalGuard;
 use crate::agents::{self, Harness};
@@ -50,6 +51,8 @@ pub enum Mode {
     Overlay(Overlay),
     Prompt(PromptState),
     Confirm(String, Command),
+    /// Keys go to the agents sidebar.
+    Sidebar,
 }
 
 /// Event-stream subscription for the attached session. Events tagged with an older
@@ -112,6 +115,7 @@ pub struct App {
     pub clipboard: Clipboard,
     /// What the terminal currently shows, so frames send only changed cells.
     pub canvas: Canvas,
+    pub sidebar: Sidebar,
 }
 
 /// Everything the app reads from its surroundings, so it can run against explicit inputs.
@@ -196,6 +200,7 @@ impl App {
             fixed_size: size,
             clipboard: Clipboard::System,
             canvas: Canvas::default(),
+            sidebar: Sidebar::default(),
         };
         app.subscribe(sub_client);
         app.refresh_nodes().await;
@@ -233,7 +238,11 @@ impl App {
             .unwrap_or_else(|| crossterm::terminal::size().unwrap_or((80, 24)));
         let layout_h = h.saturating_sub(1);
         self.viewport = (w, layout_h);
-        if !self.layout.sync(&mut self.client, w, layout_h).await {
+        let side = sidebar::width(self.sidebar.visible, w);
+        if side == 0 && matches!(self.mode, Mode::Sidebar) {
+            self.mode = Mode::Normal;
+        }
+        if !self.layout.sync(&mut self.client, side, w - side, layout_h).await {
             return false;
         }
         let focused = self
@@ -245,7 +254,7 @@ impl App {
             .unwrap_or_default();
         self.follow_focus(focused);
         self.panes = match &self.zoomed {
-            Some(name) => vec![(name.clone(), Rect::new(0, 0, w, layout_h), true)],
+            Some(name) => vec![(name.clone(), Rect::new(side, 0, w - side, layout_h), true)],
             None => self.layout.raw.clone(),
         };
         self.active_rect = self.panes.iter().find(|(.., f)| *f).map(|(_, r, _)| *r);
@@ -281,6 +290,12 @@ impl App {
             let text = String::from_utf8_lossy(crate::keys::focus_event(focused)).into_owned();
             let _ = self.client.send_input(name, &text).await;
         }
+    }
+
+    /// Width and height of the area the panes are laid out in, right of the sidebar.
+    pub fn pane_viewport(&self) -> (u16, u16) {
+        let (w, h) = self.viewport;
+        (w - self.sidebar_width(), h)
     }
 
     pub fn modes_of(&self, name: &str) -> TermModes {
@@ -436,6 +451,7 @@ impl App {
             Mode::Overlay(ov) => self.overlay_key(ov, key).await,
             Mode::Prompt(p) => self.prompt_key(p, key).await,
             Mode::Confirm(prompt, cmd) => self.confirm_key(prompt, cmd, key).await,
+            Mode::Sidebar => self.sidebar_key(key).await,
         }
     }
 }
@@ -481,8 +497,8 @@ enum Wake {
     Input(Event),
     Stream(Option<(u64, StreamEvent)>),
     Tick,
-    /// A delayed element (the shortcut popup) is due; only a redraw is needed.
-    Redraw,
+    /// A delayed element is due: the shortcut popup, or a sidebar switch to another session.
+    Due,
 }
 
 /// Resolves at `deadline`, or never without one.
@@ -511,17 +527,21 @@ pub async fn run_tui(
         }
         let _ = frame::draw(&mut app, &mut out);
         let popup = app.hud_deadline().filter(|_| !app.hud_visible());
+        let due = match (popup, app.sidebar.due()) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
         let wake = tokio::select! {
             Some(Ok(event)) = keys.next() => Wake::Input(event),
             item = stream.recv() => Wake::Stream(item),
             _ = tick.tick() => Wake::Tick,
-            _ = until(popup) => Wake::Redraw,
+            _ = until(due) => Wake::Due,
         };
         let flow = match wake {
             Wake::Input(event) => app.on_event(event).await,
             Wake::Stream(item) => app.on_stream(item, &mut stream).await,
             Wake::Tick => app.on_tick().await,
-            Wake::Redraw => Flow::Continue,
+            Wake::Due => app.on_due().await,
         };
         if flow == Flow::Quit {
             return Ok(());

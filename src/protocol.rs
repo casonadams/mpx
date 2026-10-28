@@ -28,6 +28,31 @@ pub struct AgentInfo {
     pub detail: Option<String>,
     /// Unix epoch milliseconds of the last state transition.
     pub since_ms: u64,
+    /// Boxed: most responses carry nodes, and few agents report a focus.
+    #[serde(default)]
+    pub focus: Box<AgentFocus>,
+}
+
+/// How long an agent's file edits stay in its focus.
+pub const EDIT_WINDOW_MS: u64 = 30 * 60_000;
+/// Most file edits an agent's focus keeps.
+pub const MAX_EDITS: usize = 50;
+
+/// What an agent is working on, from its harness hooks; other agents read it to coordinate.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AgentFocus {
+    /// The latest prompt the agent was given.
+    pub task: Option<String>,
+    /// The reply the agent ended its latest turn with.
+    pub reply: Option<String>,
+    /// Files the agent edited within `EDIT_WINDOW_MS`, oldest first.
+    pub edits: Vec<FileEdit>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FileEdit {
+    pub path: String,
+    pub at_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -396,6 +421,13 @@ pub enum Request {
         detail: Option<String>,
         #[serde(default)]
         clear: bool,
+        #[serde(default)]
+        task: Option<String>,
+        #[serde(default)]
+        reply: Option<String>,
+        /// Path of a file the agent just edited.
+        #[serde(default)]
+        edited: Option<String>,
     },
 }
 

@@ -33,6 +33,7 @@ pub fn draw<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
         _ => hud,
     };
     app.canvas.begin(screen_w, layout_h, covered);
+    draw_sidebar(app, out)?;
     draw_panes(app, out)?;
     if app.zoomed.is_none() && !app.layout.dividers.is_empty() {
         let style = DividerStyle {
@@ -120,6 +121,24 @@ fn pane_view_with(
             dimmed,
         },
     }
+}
+
+/// The sidebar goes first: a row it reprints forgets the cells to its right, which the panes
+/// drawn next then repaint.
+fn draw_sidebar<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
+    if app.sidebar_width() == 0 {
+        return Ok(());
+    }
+    let style = &app.config.style;
+    let border = if matches!(app.mode, Mode::Sidebar) {
+        parse_color(&style.border_active).unwrap_or(VtColor::BrightGreen)
+    } else {
+        parse_color(&style.border_inactive).unwrap_or(VtColor::BrightBlack)
+    };
+    for (y, row) in app.sidebar_rows(border).iter().enumerate() {
+        app.canvas.put_row(out, 0, y as u16, row)?;
+    }
+    Ok(())
 }
 
 /// Panes are drawn left to right so a row that spills past its pane is repainted over by its neighbor.
@@ -240,7 +259,7 @@ fn place_cursor<W: Write>(app: &App, out: &mut W) -> io::Result<()> {
                 true,
             )
         }
-        Mode::Overlay(_) | Mode::Confirm(..) => {
+        Mode::Overlay(_) | Mode::Confirm(..) | Mode::Sidebar => {
             Compositor::position_cursor(out, Rect::new(0, 0, 1, 1), 0, 0, false)
         }
         Mode::Copy(cs) => place_pane_cursor(app, out, Some(cs)),

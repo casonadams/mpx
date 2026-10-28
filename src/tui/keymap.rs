@@ -46,6 +46,7 @@ const DEFAULT_BINDINGS: &[(&str, &str)] = &[
     ("?", "list-keys"),
     ("s", "agents"),
     ("w", "choose-tree"),
+    ("e", "sidebar"),
     ("(", "prev-session"),
     (")", "next-session"),
     ("A", "next-attention"),

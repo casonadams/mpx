@@ -45,6 +45,7 @@ Only the configured prefix is intercepted. `Ctrl-a` reaches your shell unless yo
 | :--- | :--- | :--- |
 | `s` | `agents` | [Agent manager](AGENT-MANAGER.md) |
 | `w` | `choose-tree` | Sessions: session → window → pane tree with preview |
+| `e` | `sidebar` | Show and focus the [agents sidebar](#agents-sidebar), or hide it |
 | `(` / `)` | `prev-session` / `next-session` | Switch sessions |
 | `A` | `next-attention` | Jump to the agent that has waited longest for input, in any session |
 | `d` / `q` | `detach-client` | Detach (daemon and panes keep running) |
@@ -77,7 +78,7 @@ A vim-style command line on the status row. Editing keys: `Left`/`Right`, `Backs
 | `send-keys [-t TARGET] KEYS...` | | tmux key names |
 | `paste [-t TARGET] [--submit] TEXT...` | | |
 | `launch-agent HARNESS [--resume ID] [--cwd DIR] [--split]` | | |
-| `agents`, `next-attention`, `choose-tree`, `list-keys` | `help` | |
+| `agents`, `next-attention`, `choose-tree`, `sidebar`, `list-keys` | `help` | |
 | `copy-mode`, `send-prefix`, `command-prompt` | | |
 | `detach-client` | `detach`, `q`, `quit` | |
 | `kill-server` | `qa` | Asks y/n |
@@ -93,6 +94,22 @@ All overlays use the same motions: `j`/`k` (or arrows), `gg`/`G`, `Ctrl-d`/`Ctrl
 - **Agent manager** (`Prefix s`): see [AGENT-MANAGER.md](AGENT-MANAGER.md).
 - **Sessions** (`Prefix w`): every session, window and pane, with the current session first. Pane rows show the running program, working directory and time since last output; session and window rows count waiting (`◆`), working (`●`) and exited (`✕`) panes, even when collapsed. `l`/`Right`/`Enter` expands or selects, `h`/`Left` collapses, `/` filters by name, program or directory, `x` kills the selected pane, window or session (asks y/n), `p` toggles a preview of the selected pane. Selecting switches session and window as needed.
 - **Help** (`Prefix ?`): every active binding and its command.
+
+---
+
+## Agents sidebar
+
+`Prefix e` opens a column on the left listing every agent in every session, grouped by session with the attached one first. Each agent shows its state (`◆` waiting, `●` working, `○` idle, `✕` exited), its title and, below it, its latest message and the time since its state changed. The panes take the rest of the screen, so the right side is always the live terminal, not a preview.
+
+While the sidebar has focus:
+
+| Key | Action |
+| :--- | :--- |
+| `j`/`k`, `gg`/`G`, `Ctrl-d`/`Ctrl-u` | Move the highlight; the agent's pane shows at once (another session's after a 150 ms pause) |
+| `Enter` / `l` / `Right` / `Esc` | Hand the keys to the shown pane |
+| `q` | Hide the sidebar |
+
+`Prefix h` from the leftmost pane moves focus back to the sidebar, and clicking a row shows that agent. `Prefix e` again hides it. Screens narrower than 74 columns leave the sidebar hidden.
 
 ---
 

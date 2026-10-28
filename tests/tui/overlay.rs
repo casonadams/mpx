@@ -48,6 +48,7 @@ fn agent(
         session_id: Some(format!("sid-{id}")),
         detail: None,
         since_ms,
+        focus: Default::default(),
     });
     LiveAgent {
         session: session.to_string(),

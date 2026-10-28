@@ -13,6 +13,7 @@ fn agent(state: AgentState, since_ms: u64) -> AgentInfo {
         session_id: None,
         detail: None,
         since_ms,
+        focus: Box::default(),
     }
 }
 

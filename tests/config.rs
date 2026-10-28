@@ -33,3 +33,10 @@ resume = ["codex", "resume", "{id}"]
     );
     assert_eq!(cfg.harness[0].resume, vec!["codex", "resume", "{id}"]);
 }
+
+#[test]
+fn agents_get_mpx_tools_unless_turned_off() {
+    assert!(Config::default().agent.mcp);
+    let cfg = Config::parse("[agent]\nmcp = false\n").unwrap();
+    assert!(!cfg.agent.mcp);
+}

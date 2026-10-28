@@ -91,9 +91,18 @@ mpx wait reviewer --state needs_input     # block until the agent asks for somet
 mpx paste -t reviewer --submit "yes, go ahead"
 ```
 
-MCP clients get the same capabilities through `mpx_agents`, `mpx_agent_launch` and `mpx_agent_prompt` (see [MCP.md](MCP.md)), so one agent can supervise others.
+MCP clients get the same capabilities through `mpx_agents`, `mpx_agent_launch`, `mpx_agent_prompt` and `mpx_peers` (see [MCP.md](MCP.md)), so one agent can supervise or coordinate with others.
 
 ---
+
+## Agent awareness
+
+Agents mpx launches can see each other. Claude Code's hooks report to mpx what each agent works on: its latest prompt (`task`), the reply it ended its last turn with, and the files it edited in the last 30 minutes. Other agents in the same repository (the nearest directory with `.git`, in any session) read that back two ways:
+
+- **Told, sparingly.** When an agent starts or gets a prompt and the set of agents in its repository has changed, it gets one short list of them with their tasks. When it reads or edits a file another agent edited recently, it is told who and why, once per file and agent. Nothing is repeated.
+- **On demand.** `mpx_peers` lists the agents in the repository with their task, last reply and recent edits, and `mpx_agent_prompt` with a `session:pane` name asks one of them something, for example how to split work so their edits do not collide.
+
+Launched agents get the mpx MCP tools for this automatically (`[agent] mcp`). Hooks never block an agent: when a session is slow or unreachable, the hook says nothing. Agents launched before an mpx upgrade pick this up when relaunched.
 
 ## Adding a harness
 

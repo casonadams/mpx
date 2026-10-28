@@ -8,5 +8,6 @@ mod overlay_io;
 mod overlay_keys;
 mod prompt_cmds;
 mod sessions;
+mod sidebar;
 pub mod support;
 mod windows;

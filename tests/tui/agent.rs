@@ -12,6 +12,7 @@ fn node(name: &str, state: Option<AgentState>) -> NodeInfo {
         session_id: None,
         detail: None,
         since_ms: 1,
+        focus: Default::default(),
     });
     node
 }

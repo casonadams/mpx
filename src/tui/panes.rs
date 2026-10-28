@@ -11,6 +11,8 @@ pub type PaneRect = (String, Rect, bool);
 
 pub struct LayoutCache {
     pub dirty: bool,
+    /// Columns left of the pane area; every rectangle and divider is shifted right by it.
+    pub offset: u16,
     pub raw: Vec<PaneRect>,
     pub dividers: Vec<Divider>,
     pub tabs: Vec<WindowTab>,
@@ -20,20 +22,29 @@ impl LayoutCache {
     pub fn new() -> Self {
         Self {
             dirty: true,
+            offset: 0,
             raw: Vec::new(),
             dividers: Vec::new(),
             tabs: Vec::new(),
         }
     }
 
-    /// Refetches the layout when dirty. Returns false when the window has no panes at all.
-    pub async fn sync(&mut self, client: &mut Client, term_w: u16, layout_h: u16) -> bool {
-        if (self.dirty || self.raw.is_empty())
-            && let Ok((panes, dividers, tabs)) = client.layout(term_w, layout_h).await
+    /// Refetches the layout for a `width` x `layout_h` area starting `offset` columns in, when
+    /// dirty or moved. Returns false when the window has no panes at all.
+    pub async fn sync(&mut self, client: &mut Client, offset: u16, width: u16, layout_h: u16) -> bool {
+        if (self.dirty || self.raw.is_empty() || offset != self.offset)
+            && let Ok((panes, dividers, tabs)) = client.layout(width, layout_h).await
         {
-            self.raw = panes;
-            self.dividers = dividers;
+            self.raw = panes
+                .into_iter()
+                .map(|(name, rect, focused)| (name, shift(rect, offset), focused))
+                .collect();
+            self.dividers = dividers
+                .into_iter()
+                .map(|d| Divider { x: d.x + offset, ..d })
+                .collect();
             self.tabs = tabs;
+            self.offset = offset;
             self.dirty = false;
         }
         !self.raw.is_empty()
@@ -44,6 +55,10 @@ impl Default for LayoutCache {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn shift(r: Rect, dx: u16) -> Rect {
+    Rect::new(r.x + dx, r.y, r.width, r.height)
 }
 
 fn center(r: Rect) -> (i32, i32) {

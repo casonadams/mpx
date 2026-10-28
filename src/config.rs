@@ -80,6 +80,8 @@ pub struct AgentConfig {
     pub idle_ms: u64,
     /// Emit an OSC 9 desktop notification when an off-screen agent needs input.
     pub notify: bool,
+    /// Give agents mpx launches the mpx MCP tools, so they can see and message other agents.
+    pub mcp: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Default)]
@@ -119,6 +121,7 @@ impl Default for AgentConfig {
         Self {
             idle_ms: 1500,
             notify: true,
+            mcp: true,
         }
     }
 }

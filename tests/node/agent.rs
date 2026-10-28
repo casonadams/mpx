@@ -1,5 +1,5 @@
-use mpx::node::agent::{AgentTracker, Report, unhooked_state};
-use mpx::protocol::AgentState;
+use mpx::node::agent::{AgentTracker, Report, record_edit, unhooked_state};
+use mpx::protocol::{AgentState, EDIT_WINDOW_MS, FileEdit, MAX_EDITS};
 
 fn report(state: Option<AgentState>) -> Report {
     Report {
@@ -186,4 +186,92 @@ fn report_without_harness_or_state_is_ignored() {
     let mut t = AgentTracker::default();
     t.report(&Report::default(), 0);
     assert!(t.info().is_none());
+}
+
+fn edit(path: &str, at_ms: u64) -> FileEdit {
+    FileEdit {
+        path: path.to_string(),
+        at_ms,
+    }
+}
+
+#[test]
+fn record_edit_moves_a_repeated_path_to_the_newest_end() {
+    let mut edits = vec![edit("a.rs", 1), edit("b.rs", 2)];
+    record_edit(&mut edits, "a.rs", 3);
+    assert_eq!(edits, vec![edit("b.rs", 2), edit("a.rs", 3)]);
+}
+
+#[test]
+fn record_edit_drops_edits_outside_the_window_and_beyond_the_cap() {
+    let mut edits = vec![edit("old.rs", 0)];
+    record_edit(&mut edits, "new.rs", EDIT_WINDOW_MS);
+    assert_eq!(edits, vec![edit("new.rs", EDIT_WINDOW_MS)]);
+
+    let mut many: Vec<FileEdit> = (0..MAX_EDITS as u64)
+        .map(|i| edit(&format!("f{i}.rs"), i))
+        .collect();
+    record_edit(&mut many, "last.rs", 100);
+    assert_eq!(many.len(), MAX_EDITS);
+    assert_eq!(many[0].path, "f1.rs");
+    assert_eq!(many[MAX_EDITS - 1].path, "last.rs");
+}
+
+#[test]
+fn hook_focus_keeps_the_latest_task_and_reply_and_collects_edits() {
+    let mut t = AgentTracker::default();
+    t.report(
+        &Report {
+            task: Some("migrate billing".into()),
+            ..report(Some(AgentState::Working))
+        },
+        10,
+    );
+    t.report(
+        &Report {
+            edited: Some("/repo/src/a.rs".into()),
+            ..report(None)
+        },
+        20,
+    );
+    t.report(
+        &Report {
+            reply: Some("done, tests pass".into()),
+            ..report(Some(AgentState::Idle))
+        },
+        30,
+    );
+    let focus = t.info().expect("agent").focus;
+    assert_eq!(focus.task.as_deref(), Some("migrate billing"));
+    assert_eq!(focus.reply.as_deref(), Some("done, tests pass"));
+    assert_eq!(focus.edits, vec![edit("/repo/src/a.rs", 20)]);
+}
+
+#[test]
+fn focus_without_an_agent_is_ignored_and_clearing_forgets_it() {
+    let mut t = AgentTracker::default();
+    t.report(
+        &Report {
+            task: Some("x".into()),
+            ..Report::default()
+        },
+        0,
+    );
+    assert!(t.info().is_none());
+    t.report(
+        &Report {
+            task: Some("x".into()),
+            ..report(Some(AgentState::Working))
+        },
+        0,
+    );
+    t.report(
+        &Report {
+            clear: true,
+            ..Report::default()
+        },
+        1,
+    );
+    t.report(&report(Some(AgentState::Working)), 2);
+    assert_eq!(t.info().expect("agent").focus.task, None);
 }
