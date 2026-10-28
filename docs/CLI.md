@@ -30,7 +30,7 @@ Commands that take a pane accept its name or its stable id `%N` (tmux style). TU
 | `mpx` / `mpx attach [-t session] [--force]` | Start the daemon if needed and attach the TUI. Refuses to nest inside an mpx pane unless `--force`. |
 | `mpx list-sessions` (`ls`) `[--json]` | List sessions with window and pane counts. |
 | `mpx has-session [-t session]` | Exit 0 if the session's daemon answers, 1 otherwise. |
-| `mpx kill-server` (`stop`, `kill-session`) | Kill every pane and stop the daemon process. The session snapshot is kept but marked clean, so the next start does not restore it automatically. |
+| `mpx kill-server` (`stop`, `kill-session`) | Kill every pane and stop the daemon process. The session snapshot is kept but marked clean, so the next start does not restore it automatically. Also stops a daemon left running by an incompatible (older) mpx version, which other commands refuse to talk to. |
 | `mpx restore` | Recreate the session's windows, panes and agents from its last snapshot (see [Session restore](#session-restore)). Fails if the session already has panes. |
 
 > `mpx ls` lists **sessions** (as in tmux). Use `mpx list-panes` (`list`, `lsp`) for panes.

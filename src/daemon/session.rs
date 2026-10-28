@@ -477,6 +477,7 @@ impl Session {
             windows: self.workspace.windows.len(),
             panes: self.workspace.pane_count(),
             restored_ms: self.restored_ms,
+            protocol: crate::protocol::PROTOCOL,
         }
     }
 

@@ -9,7 +9,7 @@ use super::resolve::{
     Resolved, load_config, nested_attach_refused, resolve, resolve_idempotency_key,
 };
 use super::{Cli, Commands, PipeCommands};
-use crate::client::{Client, PipeReadArgs};
+use crate::client::{Client, Handshake, PipeReadArgs};
 use crate::daemon::run_daemon;
 use crate::ipc;
 use crate::mcp::McpServer;
@@ -79,14 +79,16 @@ async fn dispatch(command: Commands, r: Resolved) -> Result<i32, String> {
 
 /// Connects to the session, starting its daemon when it is not running.
 pub async fn ensure_client(r: &Resolved) -> Result<Client, String> {
-    if let Some(client) = probe(&r.endpoint).await {
-        return Ok(client);
+    match probe(&r.endpoint).await {
+        Probe::Ready(client) => return Ok(client),
+        Probe::Incompatible(pid) => return Err(incompatible(&r.endpoint, pid)),
+        Probe::Down => {}
     }
     clear_stale_socket(&r.endpoint).await;
     spawn_daemon(r)?;
     for _ in 0..SPAWN_RETRIES {
         tokio::time::sleep(Duration::from_millis(100)).await;
-        if let Some(client) = probe(&r.endpoint).await {
+        if let Probe::Ready(client) = probe(&r.endpoint).await {
             return Ok(client);
         }
     }
@@ -98,15 +100,38 @@ pub async fn ensure_client(r: &Resolved) -> Result<Client, String> {
 
 /// Connects to a running daemon without starting one.
 pub async fn connect_running(endpoint: &str) -> Result<Client, String> {
-    probe(endpoint)
-        .await
-        .ok_or_else(|| format!("no server running on {endpoint}"))
+    match probe(endpoint).await {
+        Probe::Ready(client) => Ok(client),
+        Probe::Incompatible(pid) => Err(incompatible(endpoint, pid)),
+        Probe::Down => Err(format!("no server running on {endpoint}")),
+    }
 }
 
-async fn probe(endpoint: &str) -> Option<Client> {
-    let mut client = Client::connect(endpoint).await.ok()?;
-    client.ping().await.ok()?;
-    Some(client)
+/// What answers on a session socket.
+enum Probe {
+    Ready(Client),
+    /// A daemon from another mpx version, with its pid when known.
+    Incompatible(Option<u32>),
+    Down,
+}
+
+async fn probe(endpoint: &str) -> Probe {
+    let Ok(mut client) = Client::connect(endpoint).await else {
+        return Probe::Down;
+    };
+    match client.handshake().await {
+        Handshake::Compatible => Probe::Ready(client),
+        Handshake::Incompatible { pid } => Probe::Incompatible(pid),
+        Handshake::Gone => Probe::Down,
+    }
+}
+
+fn incompatible(endpoint: &str, pid: Option<u32>) -> String {
+    let who = pid.map_or_else(String::new, |pid| format!(" (pid {pid})"));
+    format!(
+        "the mpx daemon on {endpoint}{who} is from an incompatible mpx version; \
+         stop it with `mpx kill-server` for this session (its panes close), then run mpx again"
+    )
 }
 
 /// Removes a socket left behind by a crashed daemon; any other connect error leaves the file alone.
@@ -159,15 +184,45 @@ fn spawn_daemon(r: &Resolved) -> Result<(), String> {
 }
 
 async fn kill_server(r: &Resolved) -> Result<i32, String> {
-    let mut client = connect_running(&r.endpoint).await?;
-    let _ = client.shutdown().await;
+    match probe(&r.endpoint).await {
+        Probe::Ready(mut client) => {
+            let _ = client.shutdown().await;
+        }
+        Probe::Incompatible(Some(pid)) => terminate(pid)?,
+        Probe::Incompatible(None) => return Err(incompatible(&r.endpoint, None)),
+        Probe::Down => return Err(format!("no server running on {}", r.endpoint)),
+    }
     for _ in 0..SHUTDOWN_POLLS {
-        if probe(&r.endpoint).await.is_none() {
+        if matches!(probe(&r.endpoint).await, Probe::Down) {
             break;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     Ok(0)
+}
+
+/// Stops a daemon that cannot be asked to shut down, such as one from another mpx version.
+#[cfg(unix)]
+fn terminate(pid: u32) -> Result<(), String> {
+    if pid == std::process::id() {
+        return Err("refusing to stop this process: it serves the session itself".to_string());
+    }
+    let pid = libc::pid_t::try_from(pid).map_err(|e| e.to_string())?;
+    // SAFETY: kill(2) only signals; the pid is the peer of the session socket we just talked to.
+    if unsafe { libc::kill(pid, libc::SIGTERM) } != 0 {
+        return Err(format!(
+            "could not stop daemon pid {pid}: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn terminate(pid: u32) -> Result<(), String> {
+    Err(format!(
+        "the daemon (pid {pid}) is from an incompatible mpx version; stop that process manually"
+    ))
 }
 
 /// Makes the next request of `client` idempotent under `key`, when a key was given.
@@ -252,13 +307,13 @@ async fn attach(r: &Resolved, target: Option<String>, force: bool) -> Result<i32
         None => r.clone(),
     };
     ensure_client(&target).await?;
-    let _ = run_tui(
+    run_tui(
         &target.endpoint,
         &target.session,
         StartView::Panes,
         tui_options(&target),
     )
-    .await;
+    .await?;
     Ok(0)
 }
 
@@ -267,10 +322,9 @@ pub async fn has_session(r: &Resolved, target: Option<&str>) -> Result<i32, Stri
         Some(t) => target_resolved(r, t.rsplit(':').next().unwrap_or(t)),
         None => r.clone(),
     };
-    Ok(if probe(&target.endpoint).await.is_some() {
-        0
-    } else {
-        1
+    Ok(match probe(&target.endpoint).await {
+        Probe::Down => 1,
+        Probe::Ready(_) | Probe::Incompatible(_) => 0,
     })
 }
 

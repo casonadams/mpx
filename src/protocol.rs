@@ -213,6 +213,14 @@ pub struct PipeInfo {
     pub next_seq: u64,
 }
 
+/// Version of the client-daemon protocol. Bump it on any change an older peer cannot parse, so
+/// clients refuse an incompatible daemon instead of misreading it.
+pub const PROTOCOL: u32 = 1;
+
+fn first_protocol() -> u32 {
+    1
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionInfo {
     pub name: String,
@@ -224,6 +232,9 @@ pub struct SessionInfo {
     /// Unix ms of the snapshot this session was restored from, if any.
     #[serde(default)]
     pub restored_ms: Option<u64>,
+    /// Protocol the daemon speaks; daemons that predate the field speak version 1.
+    #[serde(default = "first_protocol")]
+    pub protocol: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
