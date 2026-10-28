@@ -38,6 +38,11 @@ impl AgentTracker {
         self.harness.is_some()
     }
 
+    /// True while an unhooked agent is working, so its idle transition needs a timer.
+    pub fn ticks(&self) -> bool {
+        !self.hooked && self.is_present() && self.state == Some(AgentState::Working)
+    }
+
     pub fn state(&self) -> Option<AgentState> {
         self.state
     }

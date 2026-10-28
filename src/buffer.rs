@@ -45,6 +45,11 @@ impl RingBuffer {
         self.written
     }
 
+    /// Lowest absolute offset still retained.
+    pub fn oldest_offset(&self) -> u64 {
+        self.written - self.buffer.len() as u64
+    }
+
     /// Bytes at or after `offset` still retained (an offset older than the retained data starts
     /// at the oldest byte), and the offset to resume from (`total_written`).
     pub fn since(&self, offset: u64) -> (Vec<u8>, u64) {
@@ -200,5 +205,50 @@ impl Default for RingBuffer {
     fn default() -> Self {
         // Default 2MB scrollback buffer per stream node
         Self::new(2 * 1024 * 1024)
+    }
+}
+
+/// Incremental UTF-8 decoder for one output stream. An incomplete sequence at the end of a chunk is
+/// held (at most three bytes) until the next chunk; invalid bytes decode to U+FFFD.
+#[derive(Debug, Clone, Default)]
+pub struct Utf8Stream {
+    held: Vec<u8>,
+}
+
+impl Utf8Stream {
+    /// Decodes `bytes` after any held prefix. Returns the text and the number of trailing bytes held.
+    pub fn feed(&mut self, bytes: &[u8]) -> (String, usize) {
+        let mut buf = std::mem::take(&mut self.held);
+        buf.extend_from_slice(bytes);
+        let mut out = String::new();
+        let mut rest = buf.as_slice();
+        while !rest.is_empty() {
+            match std::str::from_utf8(rest) {
+                Ok(text) => {
+                    out.push_str(text);
+                    break;
+                }
+                Err(e) => {
+                    let (valid, after) = rest.split_at(e.valid_up_to());
+                    out.push_str(&String::from_utf8_lossy(valid));
+                    match e.error_len() {
+                        Some(n) => {
+                            out.push(char::REPLACEMENT_CHARACTER);
+                            rest = &after[n..];
+                        }
+                        None => {
+                            self.held = after.to_vec();
+                            return (out, after.len());
+                        }
+                    }
+                }
+            }
+        }
+        (out, 0)
+    }
+
+    /// Bytes waiting for their sequence to complete.
+    pub fn held_len(&self) -> usize {
+        self.held.len()
     }
 }

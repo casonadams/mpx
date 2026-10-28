@@ -108,6 +108,8 @@ mpx agents new claude --split
 
 **tmux compatibility**: invoked as `tmux`, the mpx binary translates `split-window`, `send-keys`, `capture-pane`, `list-panes` and friends. With `mpx agents new claude --teams`, Claude Code agent teams spawn their teammates as mpx panes.
 
+**Survives crashes and reboots**: the daemon snapshots the layout continuously. After a crash or reboot, the session comes back with its windows, splits and working directories, and each agent resumes its own conversation (`claude --resume`, `omp --resume`). Pipe messages persist too. Run `mpx restore` to bring back a session you stopped on purpose. See **[Session restore](docs/CLI.md#session-restore)**.
+
 ---
 
 ## AI Agent Integration (Model Context Protocol)
@@ -125,7 +127,7 @@ mpx agents new claude --split
 }
 ```
 
-Agents gain 21 tools: run and wait for processes (exit, quiet output, regex, agent state), read output incrementally, send tmux key names or bracketed pastes, exchange sequenced messages through pipes with per-consumer cursors, and launch and prompt other agents (`mpx_agent_launch`, `mpx_agent_prompt`). Every mpx pane exports `MPX_SESSION`/`MPX_ENDPOINT`, so an agent inside mpx manages its own session automatically. See **[MCP Guide](docs/MCP.md)** for full workflows.
+Agents gain 22 tools: run and wait for processes (exit, quiet output, regex, agent state), read output incrementally, send tmux key names or bracketed pastes, exchange sequenced messages through durable pipes with per-consumer cursors, launch and prompt other agents (`mpx_agent_launch`, `mpx_agent_prompt`), and restore sessions. Mutating tools accept an `idempotency_key`, so retries never act twice. Every mpx pane exports `MPX_SESSION`/`MPX_ENDPOINT`, so an agent inside mpx manages its own session automatically. See **[MCP Guide](docs/MCP.md)** for full workflows.
 
 ---
 

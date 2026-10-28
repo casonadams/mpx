@@ -1,6 +1,7 @@
 use super::Commands;
+use super::render::{FollowStep, follow_step};
 use super::resolve::{Resolved, parse_env_pairs, wait_condition, wait_exit_code};
-use super::sessions::ensure_client;
+use super::sessions::{apply_key, ensure_client};
 use super::windows;
 use crate::agents::state_label;
 use crate::client::Client;
@@ -111,7 +112,20 @@ pub async fn run(cmd: Commands, r: &Resolved) -> Result<i32, String> {
             plain,
             since,
             json,
-        } => logs(r, &name, follow, lines, plain, since, json).await,
+        } => {
+            logs(
+                r,
+                LogsRequest {
+                    name,
+                    follow,
+                    lines,
+                    plain,
+                    since,
+                    json,
+                },
+            )
+            .await
+        }
         Commands::Send { name, data } => send(r, &name, &data).await,
         Commands::SendKeys {
             target,
@@ -125,6 +139,7 @@ pub async fn run(cmd: Commands, r: &Resolved) -> Result<i32, String> {
         } => paste(r, target.as_deref(), submit, &text).await,
         Commands::Kill { name } => {
             let mut client = ensure_client(r).await?;
+            apply_key(&mut client, r.idempotency_key.as_deref());
             client
                 .kill(&name)
                 .await
@@ -204,6 +219,7 @@ pub async fn run(cmd: Commands, r: &Resolved) -> Result<i32, String> {
 async fn run_node(r: &Resolved, req: RunRequest) -> Result<i32, String> {
     let mut client = ensure_client(r).await?;
     let node_name = req.name.unwrap_or_else(|| default_node_name(&req.command));
+    apply_key(&mut client, r.idempotency_key.as_deref());
     let info = client
         .spawn(SpawnOpts {
             name: node_name,
@@ -226,51 +242,91 @@ async fn run_node(r: &Resolved, req: RunRequest) -> Result<i32, String> {
     Ok(0)
 }
 
-async fn logs(
-    r: &Resolved,
-    name: &str,
-    follow: bool,
-    lines: Option<usize>,
-    plain: bool,
-    since: Option<u64>,
-    json: bool,
-) -> Result<i32, String> {
+/// Arguments of `mpx logs`.
+pub struct LogsRequest {
+    pub name: String,
+    pub follow: bool,
+    pub lines: Option<usize>,
+    pub plain: bool,
+    pub since: Option<u64>,
+    pub json: bool,
+}
+
+async fn logs(r: &Resolved, req: LogsRequest) -> Result<i32, String> {
     let mut client = ensure_client(r).await?;
     let (data, next) = client
-        .logs(name, lines, plain, since)
+        .logs(&req.name, req.lines, req.plain, req.since)
         .await
         .map_err(|e| format!("Logs error: {e}"))?;
-    if json {
+    if req.json {
         println!("{}", serde_json::json!({ "data": data, "next": next }));
         return Ok(0);
     }
-    print!("{data}");
-    if follow {
-        follow_logs(&mut client, name).await;
+    print_flushed(&data);
+    if req.follow {
+        follow_logs(r, &req.name, next).await?;
     }
     Ok(0)
 }
 
-async fn follow_logs(client: &mut Client, name: &str) {
+/// Streams `name` after byte offset `cursor` without gaps. A lag or a gap re-reads the log from the
+/// last byte printed, then streams again from there.
+async fn follow_logs(r: &Resolved, name: &str, mut cursor: u64) -> Result<(), String> {
+    loop {
+        let mut client = Client::connect(&r.endpoint).await?;
+        let mut resync = false;
+        client
+            .stream_logs(Some(name.to_string()), Some(cursor), |event| match event {
+                StreamEvent::Output {
+                    data, offset, next, ..
+                } => match follow_step(cursor, offset, next) {
+                    FollowStep::Print => {
+                        print_flushed(&data);
+                        cursor = next;
+                        true
+                    }
+                    FollowStep::Skip => true,
+                    FollowStep::Resync => {
+                        resync = true;
+                        false
+                    }
+                },
+                StreamEvent::Lagged => {
+                    resync = true;
+                    false
+                }
+                StreamEvent::Exit { code, .. } => {
+                    match code {
+                        Some(c) => eprintln!("\n[process exited with code {c}]"),
+                        None => eprintln!("\n[process exited]"),
+                    }
+                    false
+                }
+                _ => true,
+            })
+            .await?;
+        if !resync {
+            return Ok(());
+        }
+        let mut reader = Client::connect(&r.endpoint).await?;
+        let (data, next) = reader
+            .logs(name, None, false, Some(cursor))
+            .await
+            .map_err(|e| format!("Logs error: {e}"))?;
+        print_flushed(&data);
+        cursor = next;
+    }
+}
+
+fn print_flushed(data: &str) {
     use std::io::Write;
-    let _ = client
-        .stream_logs(Some(name.to_string()), |event| match event {
-            StreamEvent::Output { data, .. } => {
-                print!("{data}");
-                let _ = std::io::stdout().flush();
-                true
-            }
-            StreamEvent::Exit { code, .. } => {
-                eprintln!("\n[Process exited with code {code:?}]");
-                false
-            }
-            _ => true,
-        })
-        .await;
+    print!("{data}");
+    let _ = std::io::stdout().flush();
 }
 
 async fn send(r: &Resolved, name: &str, data: &str) -> Result<i32, String> {
     let mut client = ensure_client(r).await?;
+    apply_key(&mut client, r.idempotency_key.as_deref());
     let payload = if data.ends_with('\n') {
         data.to_string()
     } else {
@@ -292,6 +348,7 @@ async fn send_keys(
 ) -> Result<i32, String> {
     let mut client = ensure_client(r).await?;
     let name = resolve_name(&mut client, target).await?;
+    apply_key(&mut client, r.idempotency_key.as_deref());
     client
         .send_keys(&name, keys, literal)
         .await
@@ -312,6 +369,7 @@ async fn paste(
     };
     let mut client = ensure_client(r).await?;
     let name = resolve_name(&mut client, target).await?;
+    apply_key(&mut client, r.idempotency_key.as_deref());
     client
         .paste(&name, &text, submit)
         .await
@@ -348,6 +406,7 @@ async fn split(r: &Resolved, req: SplitRequest) -> Result<i32, String> {
     } else {
         Direction::Horizontal
     };
+    apply_key(&mut client, r.idempotency_key.as_deref());
     let info = client
         .split(SplitOpts {
             target,

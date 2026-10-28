@@ -218,3 +218,19 @@ fn neighbor_finds_the_adjacent_overlapping_pane() {
     assert_eq!(neighbor(&layout, "left", Side::Left), None);
     assert_eq!(neighbor(&layout, "missing", Side::Right), None);
 }
+
+#[test]
+fn pane_view_takes_its_window_name_from_the_layout_tabs() {
+    use mpx::layout::WindowTab;
+    use mpx::protocol::NodeInfo;
+    use mpx::tmux_shim::pane_view;
+    let mut node = NodeInfo::new("build".into(), true, "sh".into());
+    node.window = Some(1);
+    let tabs = vec![
+        WindowTab { index: 0, name: "editor".into(), is_active: true },
+        WindowTab { index: 1, name: "logs".into(), is_active: false },
+    ];
+    let view = pane_view("dev", 0, &node, &[], &tabs);
+    assert_eq!(expand("#{window_index}:#{window_name}", &pane_vars(&view)), "1:logs");
+    assert_eq!(pane_view("dev", 0, &node, &[], &[]).window_name, "");
+}

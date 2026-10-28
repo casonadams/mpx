@@ -8,9 +8,10 @@ use mpx::protocol::{NodeState, SpawnOpts};
 async fn shutdown_kills_nodes_and_run_daemon_returns() {
     let dir = tempfile::tempdir().unwrap();
     let endpoint = dir.path().join("mpx.sock").to_string_lossy().into_owned();
+    let state_dir = dir.path().join("state");
     let server = tokio::spawn({
         let endpoint = endpoint.clone();
-        async move { mpx::daemon::run_daemon(&endpoint, "shut").await }
+        async move { mpx::daemon::run_daemon_in(&endpoint, "shut", &state_dir).await }
     });
 
     let mut client = loop {

@@ -6,7 +6,7 @@ mod exec;
 mod format;
 
 pub use args::{Invocation, canonical, is_noop, parse as parse_invocation, spec};
-pub use exec::{neighbor, pane_key, run, side_of, spawn_opts, window_key};
+pub use exec::{neighbor, pane_key, pane_view, run, side_of, spawn_opts, window_key};
 pub use format::{PaneView, Vars, expand, pane_vars, session_vars};
 
 /// Endpoint of the mpx server a tmux command should talk to: `$TMUX` (`endpoint,pid,idx`) first, then `$MPX_ENDPOINT`.

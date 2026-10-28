@@ -34,6 +34,9 @@ const fn prop(name: &'static str, kind: Kind, desc: &'static str) -> Prop {
 }
 
 const SESSION_NOTE: &str = "Target node or pane name (or %id).";
+const KEY_NOTE: &str =
+    "Idempotency key: a repeated key returns the first result instead of running again.";
+const KEY_PROP: Prop = prop("idempotency_key", Kind::Str, KEY_NOTE);
 
 pub const TOOLS: &[Tool] = &[
     Tool {
@@ -51,6 +54,7 @@ pub const TOOLS: &[Tool] = &[
             prop("cwd", Kind::Str, "Working directory"),
             prop("env", Kind::StrList, "Extra environment as K=V"),
             prop("remain", Kind::Bool, "Keep the pane after exit"),
+            KEY_PROP,
         ],
         required: &["command"],
     },
@@ -93,6 +97,7 @@ pub const TOOLS: &[Tool] = &[
         props: &[
             prop("name", Kind::Str, SESSION_NOTE),
             prop("data", Kind::Str, "Raw text to write"),
+            KEY_PROP,
         ],
         required: &["name", "data"],
     },
@@ -107,6 +112,7 @@ pub const TOOLS: &[Tool] = &[
                 "Key names, or text when literal is true",
             ),
             prop("literal", Kind::Bool, "Send keys as literal text"),
+            KEY_PROP,
         ],
         required: &["name", "keys"],
     },
@@ -117,6 +123,7 @@ pub const TOOLS: &[Tool] = &[
             prop("name", Kind::Str, SESSION_NOTE),
             prop("text", Kind::Str, "Text to paste"),
             prop("submit", Kind::Bool, "Press Enter after pasting"),
+            KEY_PROP,
         ],
         required: &["name", "text"],
     },
@@ -148,7 +155,7 @@ pub const TOOLS: &[Tool] = &[
     Tool {
         name: "mpx_kill",
         desc: "Terminate a stream node.",
-        props: &[prop("name", Kind::Str, SESSION_NOTE)],
+        props: &[prop("name", Kind::Str, SESSION_NOTE), KEY_PROP],
         required: &["name"],
     },
     Tool {
@@ -168,6 +175,7 @@ pub const TOOLS: &[Tool] = &[
             prop("pty", Kind::Bool, "Allocate an interactive PTY"),
             prop("focus", Kind::Bool, "Focus the new pane (default false)"),
             prop("cwd", Kind::Str, "Working directory"),
+            KEY_PROP,
         ],
         required: &["command"],
     },
@@ -181,6 +189,7 @@ pub const TOOLS: &[Tool] = &[
             prop("pty", Kind::Bool, "Allocate an interactive PTY"),
             prop("focus", Kind::Bool, "Focus the new window (default false)"),
             prop("cwd", Kind::Str, "Working directory"),
+            KEY_PROP,
         ],
         required: &["command"],
     },
@@ -205,6 +214,7 @@ pub const TOOLS: &[Tool] = &[
         props: &[
             prop("name", Kind::Str, "Pipe name"),
             prop("data", Kind::Str, "Message"),
+            KEY_PROP,
         ],
         required: &["name", "data"],
     },
@@ -235,6 +245,12 @@ pub const TOOLS: &[Tool] = &[
         required: &[],
     },
     Tool {
+        name: "mpx_restore",
+        desc: "Recreate the session's windows, panes and agents from its last snapshot. Errors when the session already has panes or no snapshot exists.",
+        props: &[],
+        required: &[],
+    },
+    Tool {
         name: "mpx_sessions",
         desc: "List reachable mpx sessions with window and pane counts.",
         props: &[],
@@ -260,6 +276,7 @@ pub const TOOLS: &[Tool] = &[
             ),
             prop("teams", Kind::Bool, "Enable agent teams"),
             prop("name", Kind::Str, "Node name"),
+            KEY_PROP,
         ],
         required: &["harness"],
     },
@@ -275,6 +292,7 @@ pub const TOOLS: &[Tool] = &[
                 "Wait for the agent to finish (default true)",
             ),
             prop("timeout", Kind::Int, "Seconds to wait (default 120)"),
+            KEY_PROP,
         ],
         required: &["name", "text"],
     },
@@ -313,10 +331,13 @@ pub fn tool_list() -> Value {
     Value::Array(TOOLS.iter().map(tool_schema).collect())
 }
 
-/// Typed operation derived from one `tools/call`.
+/// Typed operation derived from one `tools/call`. `key` is applied to the call's mutating request.
 #[derive(Debug)]
 pub enum Call {
-    Run(SpawnOpts),
+    Run {
+        spawn: SpawnOpts,
+        key: Option<String>,
+    },
     List,
     Status(String),
     Read {
@@ -329,33 +350,41 @@ pub enum Call {
     Send {
         name: String,
         data: String,
+        key: Option<String>,
     },
     SendKeys {
         name: String,
         keys: Vec<String>,
         literal: bool,
+        key: Option<String>,
     },
     Paste {
         name: String,
         text: String,
         submit: bool,
+        key: Option<String>,
     },
     Wait {
         name: String,
         condition: WaitCondition,
         timeout_ms: Option<u64>,
     },
-    Kill(String),
+    Kill {
+        name: String,
+        key: Option<String>,
+    },
     Split {
         target: Option<String>,
         direction: Direction,
         percent: Option<u8>,
         focus: bool,
         spawn: SpawnOpts,
+        key: Option<String>,
     },
     NewWindow {
         focus: bool,
         spawn: SpawnOpts,
+        key: Option<String>,
     },
     Focus(String),
     PipeCreate {
@@ -365,6 +394,7 @@ pub enum Call {
     PipeWrite {
         name: String,
         data: String,
+        key: Option<String>,
     },
     PipeRead {
         name: String,
@@ -373,13 +403,9 @@ pub enum Call {
     PipeList,
     Sessions,
     Agents,
+    Restore,
     AgentLaunch(AgentLaunch),
-    AgentPrompt {
-        name: String,
-        text: String,
-        wait: bool,
-        timeout_secs: u64,
-    },
+    AgentPrompt(PromptCall),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -390,6 +416,16 @@ pub struct AgentLaunch {
     pub split: bool,
     pub teams: bool,
     pub name: Option<String>,
+    pub key: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromptCall {
+    pub name: String,
+    pub text: String,
+    pub wait: bool,
+    pub timeout_secs: u64,
+    pub key: Option<String>,
 }
 
 fn text(args: &Value, key: &str) -> Option<String> {
@@ -467,11 +503,20 @@ fn direction(args: &Value) -> Result<Direction, String> {
     }
 }
 
+/// Idempotency key of a call; an empty string means none.
+fn idempotency_key(args: &Value) -> Option<String> {
+    text(args, "idempotency_key").filter(|key| !key.is_empty())
+}
+
 /// Maps a `tools/call` name and arguments to a typed operation. Pure: no I/O.
 pub fn parse_call(tool: &str, args: &Value) -> Result<Call, String> {
     let name = || required(args, "name");
+    let key = || idempotency_key(args);
     Ok(match tool {
-        "mpx_run" => Call::Run(spawn_opts(args, false)?),
+        "mpx_run" => Call::Run {
+            spawn: spawn_opts(args, false)?,
+            key: key(),
+        },
         "mpx_list" => Call::List,
         "mpx_status" => Call::Status(name()?),
         "mpx_read" => Call::Read {
@@ -484,16 +529,19 @@ pub fn parse_call(tool: &str, args: &Value) -> Result<Call, String> {
         "mpx_send" => Call::Send {
             name: name()?,
             data: required(args, "data")?,
+            key: key(),
         },
         "mpx_send_keys" => Call::SendKeys {
             name: name()?,
             keys: list(args, "keys"),
             literal: flag(args, "literal", false),
+            key: key(),
         },
         "mpx_paste" => Call::Paste {
             name: name()?,
             text: required(args, "text")?,
             submit: flag(args, "submit", false),
+            key: key(),
         },
         "mpx_wait" => {
             let (condition, timeout_ms) = wait_condition(args)?;
@@ -503,17 +551,22 @@ pub fn parse_call(tool: &str, args: &Value) -> Result<Call, String> {
                 timeout_ms,
             }
         }
-        "mpx_kill" => Call::Kill(name()?),
+        "mpx_kill" => Call::Kill {
+            name: name()?,
+            key: key(),
+        },
         "mpx_split" => Call::Split {
             target: text(args, "target"),
             direction: direction(args)?,
             percent: number(args, "percent").and_then(|p| u8::try_from(p).ok()),
             focus: flag(args, "focus", false),
             spawn: spawn_opts(args, false)?,
+            key: key(),
         },
         "mpx_new_window" => Call::NewWindow {
             focus: flag(args, "focus", false),
             spawn: spawn_opts(args, false)?,
+            key: key(),
         },
         "mpx_focus" => Call::Focus(name()?),
         "mpx_pipe_create" => Call::PipeCreate {
@@ -523,6 +576,7 @@ pub fn parse_call(tool: &str, args: &Value) -> Result<Call, String> {
         "mpx_pipe_write" => Call::PipeWrite {
             name: name()?,
             data: required(args, "data")?,
+            key: key(),
         },
         "mpx_pipe_read" => Call::PipeRead {
             name: name()?,
@@ -536,6 +590,7 @@ pub fn parse_call(tool: &str, args: &Value) -> Result<Call, String> {
         "mpx_pipe_list" => Call::PipeList,
         "mpx_sessions" => Call::Sessions,
         "mpx_agents" => Call::Agents,
+        "mpx_restore" => Call::Restore,
         "mpx_agent_launch" => Call::AgentLaunch(AgentLaunch {
             harness: required(args, "harness")?,
             resume: text(args, "resume"),
@@ -543,13 +598,15 @@ pub fn parse_call(tool: &str, args: &Value) -> Result<Call, String> {
             split: flag(args, "split", false),
             teams: flag(args, "teams", false),
             name: text(args, "name"),
+            key: key(),
         }),
-        "mpx_agent_prompt" => Call::AgentPrompt {
+        "mpx_agent_prompt" => Call::AgentPrompt(PromptCall {
             name: name()?,
             text: required(args, "text")?,
             wait: flag(args, "wait", true),
             timeout_secs: number(args, "timeout").unwrap_or(120),
-        },
+            key: key(),
+        }),
         other => return Err(format!("Unknown tool: {other}")),
     })
 }

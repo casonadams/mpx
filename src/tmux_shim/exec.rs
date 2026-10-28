@@ -4,7 +4,7 @@ use super::args::{Invocation, is_noop, parse};
 use super::format::{PaneView, Vars, expand, pane_vars, session_vars};
 use crate::client::Client;
 use crate::ipc;
-use crate::layout::Rect;
+use crate::layout::{Rect, WindowTab};
 use crate::protocol::{LayoutPreset, NewWindowOpts, NodeInfo, Side, SpawnOpts, SplitOpts};
 
 const VERSION: &str = "tmux 3.4\n";
@@ -216,11 +216,12 @@ impl Shim {
 
     async fn panes(&mut self) -> Result<Vec<PaneView>, String> {
         let nodes = self.client.list().await?;
-        let rects = self.layout().await?;
+        let (w, h) = terminal_view();
+        let (rects, _, tabs) = self.client.layout(w, h).await?;
         Ok(nodes
             .iter()
             .enumerate()
-            .map(|(i, n)| pane_view(&self.session, i, n, &rects))
+            .map(|(i, n)| pane_view(&self.session, i, n, &rects, &tabs))
             .collect())
     }
 
@@ -249,7 +250,7 @@ impl Shim {
         Ok(panes
             .into_iter()
             .find(|p| p.id == node.id)
-            .unwrap_or_else(|| pane_view(&self.session, 0, node, &[])))
+            .unwrap_or_else(|| pane_view(&self.session, 0, node, &[], &[])))
     }
 
     async fn pane_command(&mut self, inv: &Invocation) -> Result<String, String> {
@@ -519,13 +520,15 @@ impl Shim {
     }
 }
 
-/// View of one pane from its node position and the current layout rectangles.
+/// View of one pane from its node position, the current layout rectangles and the window tabs.
 pub fn pane_view(
     session: &str,
     index: usize,
     node: &NodeInfo,
     rects: &[(String, Rect, bool)],
+    tabs: &[WindowTab],
 ) -> PaneView {
+    let window = node.window.unwrap_or(0);
     let (width, height, active) = rects
         .iter()
         .find(|(n, _, _)| n == &node.name)
@@ -546,7 +549,11 @@ pub fn pane_view(
         height,
         active,
         dead: !node.is_running(),
-        window: node.window.unwrap_or(0),
-        window_name: String::new(),
+        window,
+        window_name: tabs
+            .iter()
+            .find(|t| t.index == window)
+            .map(|t| t.name.clone())
+            .unwrap_or_default(),
     }
 }

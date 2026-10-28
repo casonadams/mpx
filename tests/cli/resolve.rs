@@ -1,6 +1,6 @@
 use mpx::cli::{
-    nested_attach_refused, parse_agent_state, parse_env_pairs, resolve, wait_condition,
-    wait_exit_code,
+    nested_attach_refused, parse_agent_state, parse_env_pairs, resolve, resolve_idempotency_key,
+    wait_condition, wait_exit_code,
 };
 use mpx::ipc::default_endpoint;
 use mpx::protocol::{AgentState, WaitCondition, WaitOutcome};
@@ -139,4 +139,14 @@ fn nested_attach_is_refused_only_inside_mpx_without_force() {
     assert!(nested_attach_refused(true, false));
     assert!(!nested_attach_refused(true, true));
     assert!(!nested_attach_refused(false, false));
+}
+
+#[test]
+fn idempotency_key_comes_from_the_flag_and_empty_is_unset() {
+    assert_eq!(
+        resolve_idempotency_key(Some("retry-1")).as_deref(),
+        Some("retry-1")
+    );
+    assert_eq!(resolve_idempotency_key(Some("")), None);
+    assert_eq!(resolve_idempotency_key(None), None);
 }

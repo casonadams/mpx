@@ -168,14 +168,15 @@ mpx -s dev</code></pre>
   }
 }</code></pre>
 
-      <h3>Exposed MCP Tools (21)</h3>
+      <h3>Exposed MCP Tools (22)</h3>
       <ul>
         <li><code>mpx_run</code>, <code>mpx_split</code>, <code>mpx_new_window</code>, <code>mpx_list</code>, <code>mpx_status</code>, <code>mpx_kill</code>, <code>mpx_focus</code>, <code>mpx_sessions</code>: processes, panes and sessions</li>
         <li><code>mpx_read(name, tail, plain, since)</code>: incremental output reads returning <code>{text, next}</code>; <code>mpx_screen(name)</code>: rendered screen</li>
         <li><code>mpx_send</code>, <code>mpx_send_keys</code> (tmux key names), <code>mpx_paste</code> (bracketed, optional submit)</li>
         <li><code>mpx_wait(name, condition)</code>: exit, quiet output, regex match, or agent state, with timeout</li>
         <li><code>mpx_pipe_write</code>, <code>mpx_pipe_read</code> (consumer cursors, long-poll), <code>mpx_pipe_create</code>, <code>mpx_pipe_list</code></li>
-        <li><code>mpx_agents</code>, <code>mpx_agent_launch</code>, <code>mpx_agent_prompt</code>: list, start and prompt other agents</li>
+        <li><code>mpx_agents</code>, <code>mpx_agent_launch</code>, <code>mpx_agent_prompt</code>: list, start and prompt other agents; <code>mpx_restore</code>: recreate a session from its snapshot</li>
+        <li>Mutating tools accept an optional <code>idempotency_key</code>, so retries never act twice</li>
       </ul>
     </section>
 
@@ -183,7 +184,7 @@ mpx -s dev</code></pre>
 
     <section id="pipes">
       <h2>Inter-Agent Virtual Pipes</h2>
-      <p>Virtual pipes are in-memory, sequenced message queues. Each message has a sequence number, named consumers keep daemon-side cursors, and readers can long-poll before any writer exists:</p>
+      <p>Virtual pipes are sequenced message queues. Each message has a sequence number, named consumers keep daemon-side cursors, readers can long-poll before any writer exists, and messages and cursors persist across daemon restarts:</p>
       <pre><code># Write messages (the pipe is created on first use)
 mpx pipe write agent_bus '{"action": "test_complete", "code": 0}'
 
@@ -192,6 +193,13 @@ mpx pipe read agent_bus --consumer reviewer --wait 30000
 
 # Stream messages as they arrive
 mpx pipe subscribe agent_bus</code></pre>
+    </section>
+
+    <hr style="border: 0; border-top: 1px solid var(--border); margin: 3rem 0;">
+
+    <section id="restore">
+      <h2>Session Restore</h2>
+      <p>The daemon snapshots each session's layout as it changes. After a crash or reboot, the next start brings back the windows, splits and working directories, and agents resume their conversations through their harness. After a deliberate <code>mpx kill-server</code>, run <code>mpx restore</code> to bring the layout back.</p>
     </section>
 
     <hr style="border: 0; border-top: 1px solid var(--border); margin: 3rem 0;">

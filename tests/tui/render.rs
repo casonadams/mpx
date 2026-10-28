@@ -1,5 +1,7 @@
 use mpx::layout::{Divider, Rect, WindowTab};
-use mpx::tui::render::{status_left, status_right, Compositor, RenderPaneContext, SelectionRange, StatusBar};
+use mpx::tui::render::{
+    Compositor, RenderPaneContext, SelectionRange, StatusBar, status_left, status_right,
+};
 use mpx::vt::grid::Grid;
 
 fn pane_ctx<'a>(grid: &'a Grid, rect: Rect, dimmed: bool) -> RenderPaneContext<'a> {
@@ -72,8 +74,16 @@ fn status_bar_shows_waiting_agent_badge() {
 fn status_text_prefers_window_tabs_and_flags_the_prefix() {
     let panes = vec![("pane".to_string(), Rect::new(0, 0, 80, 23), true)];
     let tabs = vec![
-        WindowTab { index: 0, name: "claude".into(), is_active: false },
-        WindowTab { index: 1, name: "cargo".into(), is_active: true },
+        WindowTab {
+            index: 0,
+            name: "claude".into(),
+            is_active: false,
+        },
+        WindowTab {
+            index: 1,
+            name: "cargo".into(),
+            is_active: true,
+        },
     ];
     let bar = StatusBar {
         session: "dev",

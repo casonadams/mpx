@@ -8,10 +8,10 @@ mod sessions;
 mod windows;
 
 pub use resolve::{
-    Resolved, nested_attach_refused, parse_agent_state, parse_env_pairs, resolve, wait_condition,
-    wait_exit_code,
+    Resolved, nested_attach_refused, parse_agent_state, parse_env_pairs, resolve,
+    resolve_idempotency_key, wait_condition, wait_exit_code,
 };
-pub use sessions::run;
+pub use sessions::{RestoreOutcome, apply_key, restore_session, run};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -28,6 +28,10 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub endpoint: Option<String>,
 
+    /// Run the mutating request of this command at most once per KEY (safe retries)
+    #[arg(long = "idempotency-key", global = true, value_name = "KEY")]
+    pub idempotency_key: Option<String>,
+
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
@@ -36,6 +40,9 @@ pub struct Cli {
 pub enum Commands {
     /// Start the mpx background daemon
     Daemon,
+
+    /// Recreate the session's windows, panes and agents from its last snapshot
+    Restore,
 
     /// Stop the session's daemon (tmux kill-server)
     #[command(name = "kill-server", aliases = ["stop", "kill-session"])]

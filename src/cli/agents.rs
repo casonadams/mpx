@@ -2,7 +2,7 @@ use std::io::Read;
 
 use super::AgentCommands;
 use super::resolve::Resolved;
-use super::sessions::ensure_client;
+use super::sessions::{apply_key, ensure_client};
 use crate::agents::{
     self, Harness, LaunchOptions, claude_settings_json, find_harness, find_unique_by_prefix,
 };
@@ -117,6 +117,7 @@ async fn start(r: &Resolved, harness: &Harness, req: &LaunchRequest) -> Result<i
         tmux_compat: spec.tmux_compat,
     };
     let mut client = ensure_client(r).await?;
+    apply_key(&mut client, r.idempotency_key.as_deref());
     let info = if req.split {
         client
             .split(SplitOpts {
@@ -155,14 +156,14 @@ fn current_dir() -> Option<String> {
 
 /// `mpx hook <harness> [event]`: forwards a harness hook payload (stdin) to the pane's agent state.
 /// Never fails the caller: outside mpx, or on any error, it prints nothing.
-pub async fn hook(harness: &str, event: Option<&str>) -> Result<i32, String> {
+pub async fn hook(harness: &str, event: Option<&str>, key: Option<&str>) -> Result<i32, String> {
     if harness == "print-config" {
         return print_config(event);
     }
     let mut input = String::new();
     let _ = std::io::stdin().read_to_string(&mut input);
     if let Some(report) = agents::hook_report(harness, event, &input) {
-        agents::send_hook_report(harness, report).await;
+        agents::send_hook_report(harness, report, key).await;
     }
     Ok(0)
 }

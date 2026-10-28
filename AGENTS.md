@@ -13,8 +13,11 @@
 - **Fast and in-memory**: Pure-logic tests do no disk, network, or process
   I/O; feed in-memory strings and byte slices (`< 500ms` per test). The only
   exception is end-to-end daemon, PTY, and CLI tests under `tests/daemon/` and
-  `tests/cli/`, which may bind a socket in a temp dir and spawn child processes;
-  bound every wait with a timeout and keep each test under 2s.
+  `tests/cli/`, which may bind a socket in a temp dir and spawn child processes,
+  and on-disk persistence tests under `tests/store/`, which may read and write a
+  temp dir. Never touch the real state or runtime directories in tests: pass
+  temp paths explicitly instead of setting process-wide environment variables.
+  Bound every wait with a timeout and keep each test under 2s.
 - **Behavior, not wiring**: Assert consumer-visible behavior (outputs, state
   transitions, boundaries, errors). No tests of forwarding, copies, or
   incidental defaults.

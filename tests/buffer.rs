@@ -1,4 +1,4 @@
-use mpx::buffer::{RingBuffer, strip_ansi};
+use mpx::buffer::{RingBuffer, Utf8Stream, strip_ansi};
 
 #[test]
 fn writes_append_until_capacity() {
@@ -9,6 +9,54 @@ fn writes_append_until_capacity() {
     assert_eq!(rb.snapshot(), b"helloworld");
     rb.write(b"123");
     assert_eq!(rb.snapshot(), b"loworld123");
+}
+
+#[test]
+fn oldest_offset_tracks_the_retained_window() {
+    let mut rb = RingBuffer::new(4);
+    rb.write(b"abcdef");
+    assert_eq!(rb.total_written(), 6);
+    assert_eq!(rb.oldest_offset(), 2);
+    assert_eq!(rb.since(0).0, b"cdef");
+}
+
+#[test]
+fn utf8_stream_holds_a_split_sequence_until_it_completes() {
+    let mut stream = Utf8Stream::default();
+    let euro = "€".as_bytes();
+    let (text, held) = stream.feed(&euro[..2]);
+    assert_eq!((text.as_str(), held), ("", 2));
+    let (text, held) = stream.feed(&euro[2..]);
+    assert_eq!((text.as_str(), held), ("€", 0));
+}
+
+#[test]
+fn utf8_stream_replaces_invalid_bytes_and_keeps_going() {
+    let mut stream = Utf8Stream::default();
+    let (text, held) = stream.feed(b"a\xffb");
+    assert_eq!((text.as_str(), held), ("a\u{FFFD}b", 0));
+}
+
+#[test]
+fn utf8_stream_decodes_a_four_byte_char_fed_one_byte_at_a_time() {
+    let mut stream = Utf8Stream::default();
+    let bytes = "😀".as_bytes();
+    for (i, byte) in bytes[..3].iter().enumerate() {
+        assert_eq!(
+            stream.feed(std::slice::from_ref(byte)),
+            (String::new(), i + 1)
+        );
+    }
+    assert_eq!(stream.feed(&bytes[3..]), ("😀".to_string(), 0));
+}
+
+#[test]
+fn utf8_stream_holds_at_most_a_sequence_prefix() {
+    let mut stream = Utf8Stream::default();
+    let (text, held) = stream.feed(b"ok\xe2\x82");
+    assert_eq!((text.as_str(), held), ("ok", 2));
+    let (text, held) = stream.feed(b"x");
+    assert_eq!((text.as_str(), held), ("\u{FFFD}x", 0));
 }
 
 #[test]

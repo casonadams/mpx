@@ -10,6 +10,7 @@ mpx [OPTIONS] [COMMAND]
 
 - `-s, --session <NAME>`: Target session. Default: `$MPX_SESSION`, then `main`.
 - `--endpoint <PATH>`: Daemon socket or Named Pipe. Default: `$MPX_ENDPOINT` when `-s` is not given, else the session socket.
+- `--idempotency-key <KEY>`: Run this command's mutating request at most once per key. A retry with the same key returns the first result instead of acting twice. Applies to `run`, `split`, `new-window`, `send`, `send-keys`, `paste`, `kill`, `kill-window`, `rename-window`, `pipe write`, `agents new|resume` and `hook`. Keys are kept for 10 minutes and are never read from the environment.
 - `-h, --help` / `-V, --version`.
 
 Inside an mpx pane, `MPX_SESSION`, `MPX_ENDPOINT`, `MPX_PANE` and `MPX_PANE_ID` are set, so commands run there target their own session without flags.
@@ -27,7 +28,8 @@ Commands that take a pane accept its name or its stable id `%N` (tmux style). TU
 | `mpx` / `mpx attach [-t session] [--force]` | Start the daemon if needed and attach the TUI. Refuses to nest inside an mpx pane unless `--force`. |
 | `mpx list-sessions` (`ls`) `[--json]` | List sessions with window and pane counts. |
 | `mpx has-session [-t session]` | Exit 0 if the session's daemon answers, 1 otherwise. |
-| `mpx kill-server` (`stop`, `kill-session`) | Kill every pane and stop the daemon process. |
+| `mpx kill-server` (`stop`, `kill-session`) | Kill every pane and stop the daemon process. The session snapshot is kept but marked clean, so the next start does not restore it automatically. |
+| `mpx restore` | Recreate the session's windows, panes and agents from its last snapshot (see [Session restore](#session-restore)). Fails if the session already has panes. |
 
 > `mpx ls` lists **sessions** (as in tmux). Use `mpx list-panes` (`list`, `lsp`) for panes.
 
@@ -61,6 +63,7 @@ mpx logs [-n LINES | --tail LINES] [--plain] [--since OFFSET] [--json] [-f] <nam
 ```
 - `--plain`: PTY scrollback rendered as text, without escape sequences.
 - `--since OFFSET` with `--json`: incremental reads. The response is `{"data": ..., "next": N}`, and you pass `N` back as `--since`.
+- `-f`: prints the history, then streams live output from exactly where the history ended, with no gap or duplicate even while the pane is writing. If the stream falls behind, the missing bytes are re-read from the pane's log.
 
 ### Input
 
@@ -106,7 +109,7 @@ Windows are named automatically after the agent harness or foreground process of
 
 ## Pipes (agent-to-agent messaging)
 
-Pipes are in-memory, sequenced message queues. Writing or reading a pipe creates it.
+Pipes are sequenced message queues. Writing or reading a pipe creates it. With `persist_pipes = true` (the default), messages and consumer cursors are written to the state directory and survive daemon restarts, crashes included.
 
 ```bash
 mpx pipe write bus '{"event":"tests_passed"}'          # prints nothing; message gets seq 1, 2, ...
@@ -120,6 +123,22 @@ mpx pipe create bus                                     # optional; idempotent
 - `--consumer NAME`: the daemon keeps a cursor per consumer, so each reader gets every message exactly once. A new consumer starts after `--since` (or at the beginning).
 - Without a consumer, `--since SEQ` is exclusive. Pipes drop the oldest messages beyond their capacity (1 MiB by default).
 
+
+---
+
+## Session restore
+
+The daemon saves a snapshot of the session's layout whenever it changes: windows, splits, focus, renamed window names, and each pane's command, working directory and agent session.
+
+- **After a crash or reboot**, the next start of the session restores it automatically before any client connects (disable with `restore = false`). Attaching shows `restored session from HH:MM:SS`.
+- **After `kill-server`**, nothing is restored automatically; run `mpx restore` to bring the layout back.
+
+What comes back:
+- PTY panes run their original command in their last directory.
+- Agent panes with a known session id are resumed through their harness (`claude --resume <id>`, `omp --resume <id>`); other agents start fresh.
+- Plain `mpx run` task panes (no `--pty`) are not restarted, because they are jobs, not workspace.
+
+Snapshots live in the state directory (see [CONFIG.md](CONFIG.md#state-directory)).
 ---
 
 ## Agents

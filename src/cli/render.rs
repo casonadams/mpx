@@ -75,3 +75,25 @@ pub fn pipe_event(event: &StreamEvent) -> Option<String> {
         _ => None,
     }
 }
+
+/// What `mpx logs -f` does with one output chunk, given the byte offset printed so far.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FollowStep {
+    /// The chunk continues the output: print it.
+    Print,
+    /// Already printed.
+    Skip,
+    /// Bytes were missed (or the chunk overlaps): re-read the log from the cursor.
+    Resync,
+}
+
+/// Decides how a chunk spanning `offset..next` applies after `cursor` bytes were printed.
+pub fn follow_step(cursor: u64, offset: u64, next: u64) -> FollowStep {
+    if next <= cursor {
+        FollowStep::Skip
+    } else if offset == cursor {
+        FollowStep::Print
+    } else {
+        FollowStep::Resync
+    }
+}

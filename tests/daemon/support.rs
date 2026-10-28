@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
@@ -15,20 +16,37 @@ pub struct TestDaemon {
     _dir: TempDir,
 }
 
+/// A daemon with a fresh state directory.
 pub async fn start() -> TestDaemon {
     start_with(Config::default()).await
 }
 
 pub async fn start_with(config: Config) -> TestDaemon {
     let dir = tempfile::tempdir().expect("tempdir");
+    let state_dir = dir.path().join("state");
+    serve(dir, &state_dir, config).await
+}
+
+/// A daemon whose durable state lives in `state_dir`, so it can be restarted on the same state.
+pub async fn start_on(state_dir: &Path, config: Config) -> TestDaemon {
+    let dir = tempfile::tempdir().expect("tempdir");
+    serve(dir, state_dir, config).await
+}
+
+async fn serve(dir: TempDir, state_dir: &Path, config: Config) -> TestDaemon {
     let endpoint = dir.path().join("mpx.sock").to_string_lossy().into_owned();
     let listener = IpcListener::bind(&endpoint).expect("bind");
-    let state = DaemonState::new(SESSION.to_string(), endpoint.clone(), config);
+    let state = DaemonState::new(
+        SESSION.to_string(),
+        endpoint.clone(),
+        config,
+        state_dir.to_path_buf(),
+    )
+    .await;
 
-    let accept_state = Arc::clone(&state);
     tokio::spawn(async move {
         while let Ok(stream) = listener.accept().await {
-            tokio::spawn(handle_client(Arc::clone(&accept_state), stream));
+            tokio::spawn(handle_client(Arc::clone(&state), stream));
         }
     });
 
@@ -68,14 +86,35 @@ pub async fn exit_code(client: &mut Client, name: &str) -> Option<i32> {
     outcome.exit_code
 }
 
-/// Polls logs until `needle` appears (bounded); returns the last logs seen.
+/// Returns the logs once `needle` appears in them; waits on the daemon (bounded) otherwise.
 pub async fn logs_until(client: &mut Client, name: &str, needle: &str) -> String {
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let (data, _) = client.logs(name, None, false, None).await.expect("logs");
+    if data.contains(needle) {
+        return data;
+    }
+    let outcome = client
+        .wait(
+            name,
+            WaitCondition::Match {
+                pattern: regex::escape(needle),
+            },
+            Some(2_000),
+        )
+        .await
+        .expect("wait");
+    assert!(outcome.satisfied, "'{needle}' never appeared in {name}");
+    let (data, _) = client.logs(name, None, false, None).await.expect("logs");
+    data
+}
+
+/// Polls `check` until it yields a value, failing after `timeout`.
+pub async fn eventually<T>(timeout: Duration, mut check: impl FnMut() -> Option<T>) -> T {
+    let deadline = Instant::now() + timeout;
     loop {
-        let (data, _) = client.logs(name, None, false, None).await.expect("logs");
-        if data.contains(needle) || Instant::now() >= deadline {
-            return data;
+        if let Some(value) = check() {
+            return value;
         }
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(Instant::now() < deadline, "condition not met in time");
+        tokio::time::sleep(Duration::from_millis(10)).await;
     }
 }

@@ -72,13 +72,18 @@ pub fn newly_waiting(
 }
 
 impl App {
-    /// Recomputes the waiting-agent badge and notifies once per newly waiting agent that has
-    /// no visible pane.
+    /// Polls other sessions' waiting agents every other tick and refreshes the badge.
     pub async fn refresh_agents(&mut self) {
         self.watch.ticks += 1;
         if self.watch.ticks % 2 == 1 {
             self.watch.others = waiting_elsewhere(agents::list_live().await, &self.session);
         }
+        self.update_waiting();
+    }
+
+    /// Recomputes the waiting-agent badge from this session's nodes and the cached waiting agents
+    /// elsewhere, and notifies once per newly waiting agent that has no visible pane.
+    pub fn update_waiting(&mut self) {
         let waiting = waiting_keys(&self.session, &self.nodes, &self.watch.others);
         let visible: Vec<String> = self.panes.iter().map(|(name, ..)| name.clone()).collect();
         for key in newly_waiting(

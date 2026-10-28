@@ -343,11 +343,21 @@ pub fn status_left(bar: &StatusBar<'_>) -> String {
     let mut left = format!("[{}] ", bar.session);
     if bar.tabs.is_empty() {
         for (i, (name, _, is_focused)) in bar.panes.iter().enumerate() {
-            left.push_str(&format!("{}:{}{} ", i, name, if *is_focused { "*" } else { "-" }));
+            left.push_str(&format!(
+                "{}:{}{} ",
+                i,
+                name,
+                if *is_focused { "*" } else { "-" }
+            ));
         }
     } else {
         for tab in bar.tabs {
-            left.push_str(&format!("{}:{}{} ", tab.index, tab.name, if tab.is_active { "*" } else { "-" }));
+            left.push_str(&format!(
+                "{}:{}{} ",
+                tab.index,
+                tab.name,
+                if tab.is_active { "*" } else { "-" }
+            ));
         }
     }
     left
@@ -565,19 +575,8 @@ fn dim_color(c: Color) -> Color {
 }
 
 fn get_current_time() -> String {
-    // 12-hour %I:%M:%S matching tmux status-right
-    let total_secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    let secs = total_secs % 60;
-    let mins = (total_secs / 60) % 60;
-    let hours_24 = (total_secs / 3600) % 24;
-    let hours_12 = match hours_24 % 12 {
-        0 => 12,
-        h => h,
-    };
-    format!(" {:02}:{:02}:{:02}", hours_12, mins, secs)
+    let now = crate::node::now_ms();
+    format!(" {}", super::status::clock_12h(now, super::status::local_utc_offset(now)))
 }
 
 pub fn copy_to_clipboard(text: &str) {

@@ -1,24 +1,22 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
-use tokio::sync::{broadcast, mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
-use super::{Node, NodeCore, NodeError, SpawnSpec};
-use crate::protocol::StreamEvent;
+use super::pane::PaneMsg;
+use super::{NodeError, Process, SpawnSpec};
 
 pub struct TaskNode {
-    core: Arc<NodeCore>,
     stdin_tx: mpsc::UnboundedSender<Vec<u8>>,
     kill_tx: Mutex<Option<oneshot::Sender<()>>>,
+    pid: Option<u32>,
 }
 
 impl TaskNode {
-    pub fn spawn(
-        spec: SpawnSpec,
-        event_tx: broadcast::Sender<StreamEvent>,
-    ) -> Result<Self, NodeError> {
+    /// Starts the command with piped stdio. Output and its exit are sent to `out`.
+    pub fn spawn(spec: &SpawnSpec, out: mpsc::UnboundedSender<PaneMsg>) -> Result<Self, NodeError> {
         let mut command = Command::new(&spec.command);
         command.args(&spec.args);
         if let Some(dir) = &spec.cwd {
@@ -33,7 +31,6 @@ impl TaskNode {
 
         let mut child = command.spawn()?;
         let pid = child.id();
-        let core = Arc::new(NodeCore::new(&spec, false, pid, 80, 24));
 
         let (stdin_tx, stdin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
         if let Some(stdin) = child.stdin.take() {
@@ -41,20 +38,20 @@ impl TaskNode {
         }
 
         let mut readers = Vec::new();
-        if let Some(out) = child.stdout.take() {
-            readers.push(spawn_reader(out, Arc::clone(&core), event_tx.clone()));
+        if let Some(stdout) = child.stdout.take() {
+            readers.push(spawn_reader(stdout, out.clone()));
         }
-        if let Some(err) = child.stderr.take() {
-            readers.push(spawn_reader(err, Arc::clone(&core), event_tx));
+        if let Some(stderr) = child.stderr.take() {
+            readers.push(spawn_reader(stderr, out.clone()));
         }
 
         let (kill_tx, kill_rx) = oneshot::channel();
-        tokio::spawn(wait_child(child, kill_rx, readers, Arc::clone(&core)));
+        tokio::spawn(wait_child(child, kill_rx, readers, out));
 
         Ok(Self {
-            core,
             stdin_tx,
             kill_tx: Mutex::new(Some(kill_tx)),
+            pid,
         })
     }
 }
@@ -70,11 +67,7 @@ async fn write_stdin(
     }
 }
 
-fn spawn_reader<R>(
-    mut pipe: R,
-    core: Arc<NodeCore>,
-    events: broadcast::Sender<StreamEvent>,
-) -> JoinHandle<()>
+fn spawn_reader<R>(mut pipe: R, out: mpsc::UnboundedSender<PaneMsg>) -> JoinHandle<()>
 where
     R: AsyncRead + Unpin + Send + 'static,
 {
@@ -84,12 +77,9 @@ where
             match pipe.read(&mut chunk).await {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
-                    let bytes = &chunk[..n];
-                    core.ingest(bytes);
-                    let _ = events.send(StreamEvent::Output {
-                        name: core.name.clone(),
-                        data: String::from_utf8_lossy(bytes).into_owned(),
-                    });
+                    if out.send(PaneMsg::Output(chunk[..n].to_vec())).is_err() {
+                        break;
+                    }
                 }
             }
         }
@@ -100,7 +90,7 @@ async fn wait_child(
     mut child: Child,
     kill_rx: oneshot::Receiver<()>,
     readers: Vec<JoinHandle<()>>,
-    core: Arc<NodeCore>,
+    out: mpsc::UnboundedSender<PaneMsg>,
 ) {
     let kill_signal = async move {
         if kill_rx.await.is_err() {
@@ -118,18 +108,15 @@ async fn wait_child(
     for reader in readers {
         let _ = tokio::time::timeout(Duration::from_millis(500), reader).await;
     }
-    core.mark_exited(code);
+    let _ = out.send(PaneMsg::Exited(code));
 }
 
-impl Node for TaskNode {
-    fn core(&self) -> &NodeCore {
-        &self.core
+impl Process for TaskNode {
+    fn pid(&self) -> Option<u32> {
+        self.pid
     }
 
     fn send_input(&self, data: &[u8]) -> Result<(), NodeError> {
-        if !self.is_running() {
-            return Err(NodeError::NotRunning);
-        }
         self.stdin_tx
             .send(data.to_vec())
             .map_err(|_| NodeError::NotRunning)

@@ -22,16 +22,20 @@ impl McpServer {
 
     /// Serves JSON-RPC over stdin/stdout until stdin closes.
     pub async fn run_stdio(&self) -> io::Result<()> {
-        let stdin = io::stdin();
-        let mut stdout = io::stdout();
-        for line in stdin.lock().lines() {
+        self.serve(io::stdin().lock(), io::stdout()).await
+    }
+
+    /// Serves newline-delimited JSON-RPC from `input` to `output` until `input` ends.
+    /// Blank lines are skipped and notifications (no `id`) get no response.
+    pub async fn serve<R: BufRead, W: Write>(&self, input: R, mut output: W) -> io::Result<()> {
+        for line in input.lines() {
             let line = line?;
             if line.trim().is_empty() {
                 continue;
             }
             if let Some(response) = self.handle_line(&line).await {
-                writeln!(stdout, "{response}")?;
-                stdout.flush()?;
+                writeln!(output, "{response}")?;
+                output.flush()?;
             }
         }
         Ok(())

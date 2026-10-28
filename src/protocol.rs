@@ -89,7 +89,7 @@ impl NodeInfo {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SpawnOpts {
     pub name: String,
     pub command: String,
@@ -221,6 +221,9 @@ pub struct SessionInfo {
     pub created_ms: u64,
     pub windows: usize,
     pub panes: usize,
+    /// Unix ms of the snapshot this session was restored from, if any.
+    #[serde(default)]
+    pub restored_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -229,6 +232,15 @@ pub enum Request {
     Ping,
     Info,
     Shutdown,
+    /// Recreate windows, panes and agents from the session's last snapshot. Errors when the
+    /// session already has panes or no snapshot exists.
+    Restore,
+    /// Run `request` at most once per `key`: a repeated key returns the first response (also while
+    /// the first is still running).
+    Idempotent {
+        key: String,
+        request: Box<Request>,
+    },
     Spawn(SpawnOpts),
     List,
     /// Read output. `since` is an absolute byte offset returned as `next` by a previous call.
@@ -268,8 +280,12 @@ pub enum Request {
         condition: WaitCondition,
         timeout_ms: Option<u64>,
     },
+    /// Streams events. With `name` and `since`, output from byte offset `since` is replayed first,
+    /// with no gap before live output.
     Subscribe {
         name: Option<String>,
+        #[serde(default)]
+        since: Option<u64>,
     },
     Screen {
         name: String,
@@ -394,10 +410,21 @@ pub enum Response {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "event", content = "data")]
 pub enum StreamEvent {
-    Output { name: String, data: String },
+    /// `offset`/`next`: absolute byte offsets of this chunk in the pane's output stream. A chunk whose
+    /// `offset` differs from the previous chunk's `next` means bytes were missed (fetch them with Logs `since`).
+    Output {
+        name: String,
+        data: String,
+        offset: u64,
+        next: u64,
+    },
     Exit { name: String, code: Option<i32> },
     Spawned { name: String, pid: Option<u32> },
     Pipe { name: String, message: PipeMessage },
+    /// Agent state transition (`None`: agent tracking ended).
+    Agent { name: String, agent: Option<AgentInfo> },
+    /// This subscriber fell behind and events were dropped; re-read state before trusting the stream.
+    Lagged,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -75,7 +75,7 @@ async fn stream_subscription_receives_output() {
     });
 
     let mut captured = false;
-    sub.stream_logs(Some("streamer".to_string()), |event| match event {
+    sub.stream_logs(Some("streamer".to_string()), None, |event| match event {
         StreamEvent::Output { data, .. } => {
             captured |= data.contains("streaming_event_token");
             true

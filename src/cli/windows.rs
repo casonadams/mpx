@@ -1,7 +1,7 @@
 use super::Commands;
 use super::panes::{default_node_name, pid_label, resolve_name};
 use super::resolve::{Resolved, parse_env_pairs};
-use super::sessions::ensure_client;
+use super::sessions::{apply_key, ensure_client};
 use crate::client::Client;
 use crate::protocol::{LayoutPreset, NewWindowOpts, Side, SpawnOpts};
 
@@ -62,6 +62,7 @@ pub async fn run(cmd: Commands, r: &Resolved) -> Result<i32, String> {
         }
         Commands::KillWindow { index } => {
             let mut client = ensure_client(r).await?;
+            apply_key(&mut client, r.idempotency_key.as_deref());
             client
                 .kill_window(index)
                 .await
@@ -70,6 +71,7 @@ pub async fn run(cmd: Commands, r: &Resolved) -> Result<i32, String> {
         }
         Commands::RenameWindow { index, name } => {
             let mut client = ensure_client(r).await?;
+            apply_key(&mut client, r.idempotency_key.as_deref());
             client
                 .rename_window(index, &name)
                 .await
@@ -150,6 +152,7 @@ async fn new_window(r: &Resolved, req: NewWindowRequest) -> Result<i32, String> 
         .clone()
         .unwrap_or_else(|| default_node_name(&command));
     let mut client = ensure_client(r).await?;
+    apply_key(&mut client, r.idempotency_key.as_deref());
     let info = client
         .new_window(NewWindowOpts {
             name: req.name,

@@ -13,6 +13,10 @@ pub struct Config {
     pub history_limit: usize,
     /// Export TMUX/TMUX_PANE and the mpx `tmux` shim in every pane.
     pub tmux_compat: bool,
+    /// After a crash or reboot, recreate the last session layout and resume its agents on start.
+    pub restore: bool,
+    /// Keep pipe messages and consumer cursors on disk across daemon restarts.
+    pub persist_pipes: bool,
     pub agent: AgentConfig,
     /// Extra or overriding key bindings: key (tmux notation) -> command line.
     pub bind: BTreeMap<String, String>,
@@ -50,6 +54,8 @@ impl Default for Config {
             remain_on_exit: false,
             history_limit: 64,
             tmux_compat: false,
+            restore: true,
+            persist_pipes: true,
             agent: AgentConfig::default(),
             bind: BTreeMap::new(),
             harness: Vec::new(),

@@ -12,6 +12,7 @@ pub mod layout;
 pub mod vt;
 pub mod tui;
 pub mod pipe;
+pub mod store;
 pub mod mcp;
 pub mod tmux_shim;
 

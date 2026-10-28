@@ -22,6 +22,8 @@ The server targets `$MPX_SESSION` / `$MPX_ENDPOINT` when set. Every mpx pane exp
 
 Pane arguments accept a node name or a pane id `%N`.
 
+**Safe retries:** `mpx_run`, `mpx_split`, `mpx_new_window`, `mpx_send`, `mpx_send_keys`, `mpx_paste`, `mpx_kill`, `mpx_pipe_write`, `mpx_agent_launch` and `mpx_agent_prompt` accept an optional `idempotency_key`. The daemon runs the action at most once per key (kept 10 minutes), and a retry with the same key gets the first result. A retried `mpx_agent_prompt` therefore never submits the prompt twice.
+
 ### Processes and panes
 
 | Tool | Parameters | Description |
@@ -35,7 +37,8 @@ Pane arguments accept a node name or a pane id `%N`.
 | `mpx_split` | `command`, `args`, `name`, `direction` (`h`/`v`), `percent`, `target`, `pty`, `focus`, `cwd` | Split a pane in the user's workspace (focus defaults to false). |
 | `mpx_new_window` | `command`, `args`, `name`, `pty`, `focus`, `cwd` | Open a window. |
 | `mpx_focus` | `name` | Move the user's focus to a pane. |
-| `mpx_sessions` | | Reachable sessions with window and pane counts. |
+| `mpx_sessions` | | Reachable sessions with window and pane counts, and `restored_ms` when the session was restored from a snapshot. |
+| `mpx_restore` | | Recreate the session's windows, panes and agents from its last snapshot. Errors when the session already has panes or has no snapshot. |
 
 ### Input and waiting
 
@@ -50,7 +53,7 @@ Pane arguments accept a node name or a pane id `%N`.
 
 | Tool | Parameters | Description |
 | :--- | :--- | :--- |
-| `mpx_pipe_write` | `name`, `data` | Append a message; returns its sequence number. Creates the pipe. |
+| `mpx_pipe_write` | `name`, `data` | Append a message; returns its sequence number. Creates the pipe. Messages and consumer cursors survive daemon restarts (`persist_pipes`). |
 | `mpx_pipe_read` | `name`, `since`, `consumer`, `wait_ms`, `limit` | Read messages. A `consumer` gets a daemon-side cursor (each message once). `wait_ms` long-polls. Readers may start before any writer. |
 | `mpx_pipe_create` | `name`, `capacity` | Create with a custom byte capacity (optional). |
 | `mpx_pipe_list` | | Pipes with message counts and next sequence numbers. |

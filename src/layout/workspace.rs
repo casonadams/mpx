@@ -221,6 +221,33 @@ impl Workspace {
         id
     }
 
+    /// Adds a window with a restored layout. `sticky` keeps a user-chosen name; otherwise `label`
+    /// names it until automatic naming takes over. Focus falls back to the first pane.
+    pub fn install_window(
+        &mut self,
+        label: String,
+        sticky: Option<String>,
+        root: LayoutNode,
+        focused: Option<String>,
+    ) -> usize {
+        let id = self.next_window_id;
+        self.next_window_id += 1;
+        let focused = focused
+            .filter(|f| root.has_leaf(f))
+            .or_else(|| root.all_leaves().into_iter().next());
+        self.windows.push(Window {
+            id,
+            name: sticky.clone().unwrap_or_else(|| label.clone()),
+            label,
+            renamed: sticky.is_some(),
+            root: Some(root),
+            focused,
+            last_focused: None,
+            preset: None,
+        });
+        self.windows.len() - 1
+    }
+
     fn set_active(&mut self, idx: usize) {
         if idx < self.windows.len() && idx != self.active_idx {
             self.last_window = Some(self.active_idx);

@@ -1,6 +1,8 @@
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 const BIN: &str = env!("CARGO_BIN_EXE_mpx");
 
@@ -37,6 +39,7 @@ impl Session {
     fn base(&self) -> Command {
         let mut cmd = Command::new(BIN);
         cmd.env("XDG_RUNTIME_DIR", &self.runtime)
+            .env("MPX_STATE_DIR", self.runtime.join("state"))
             .env_remove("MPX_ENDPOINT")
             .env_remove("MPX_SESSION")
             .env_remove("MPX_PANE")
@@ -291,4 +294,85 @@ fn tmux_multicall_splits_sends_and_captures() {
             .contains("shim-token")
     });
     assert!(captured, "capture-pane never showed the typed token");
+}
+
+#[test]
+fn help_lists_restore_and_the_idempotency_flag() {
+    let out = Command::new(BIN).arg("--help").output().expect("spawn");
+    let help = String::from_utf8_lossy(&out.stdout);
+    assert!(help.contains("restore"), "{help}");
+    assert!(help.contains("--idempotency-key"), "{help}");
+}
+
+#[test]
+fn restore_without_a_snapshot_exits_one_with_a_message() {
+    let s = Session::new("rs");
+    let out = s.run(&["restore"]);
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("snapshot"), "{stderr}");
+}
+
+#[test]
+fn idempotency_key_delivers_a_repeated_send_once() {
+    let s = Session::new("ik");
+    let _ = s.run(&["run", "-n", "echo", "cat"]);
+    for _ in 0..2 {
+        assert_eq!(
+            s.code(&[
+                "--idempotency-key",
+                "dedupe-1",
+                "send",
+                "echo",
+                "once-token"
+            ]),
+            0
+        );
+    }
+    assert_eq!(
+        s.code(&["wait", "echo", "--match", "once-token", "--timeout", "2"]),
+        0
+    );
+    std::thread::sleep(Duration::from_millis(200));
+    let text = s.stdout(&["logs", "echo", "--plain"]);
+    assert_eq!(text.matches("once-token").count(), 1, "{text}");
+}
+
+#[test]
+fn logs_follow_prints_a_burst_without_gaps() {
+    let s = Session::new("lf");
+    let _ = s.run(&["run", "-n", "burst", "sh", "-c", "sleep 0.05; seq 1 2000"]);
+    let mut child = s
+        .base()
+        .args(["logs", "burst", "-f"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn logs -f");
+    let stdout = child.stdout.take().expect("stdout");
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    let mut lines: Vec<String> = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while lines.last().map(String::as_str) != Some("2000") {
+        match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+            Ok(line) => lines.push(line),
+            Err(_) => break,
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    let numbers: Vec<u64> = lines.iter().filter_map(|l| l.parse().ok()).collect();
+    assert_eq!(numbers.first(), Some(&1), "{numbers:?}");
+    assert_eq!(numbers.last(), Some(&2000), "{numbers:?}");
+    assert!(
+        numbers.windows(2).all(|w| w[1] == w[0] + 1),
+        "gap in {numbers:?}"
+    );
 }

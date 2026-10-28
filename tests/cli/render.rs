@@ -1,4 +1,4 @@
-use mpx::cli::render;
+use mpx::cli::render::{self, FollowStep, follow_step};
 use mpx::protocol::{NodeInfo, PipeInfo, PipeMessage, StreamEvent};
 use serde_json::Value;
 
@@ -111,6 +111,25 @@ fn subscribe_prints_pipe_messages_only() {
     let output = StreamEvent::Output {
         name: "p".into(),
         data: "ignored".into(),
+        offset: 0,
+        next: 7,
     };
     assert_eq!(render::pipe_event(&output), None);
+}
+
+#[test]
+fn follow_prints_the_chunk_that_continues_the_output() {
+    assert_eq!(follow_step(10, 10, 14), FollowStep::Print);
+}
+
+#[test]
+fn follow_skips_chunks_already_printed() {
+    assert_eq!(follow_step(10, 4, 10), FollowStep::Skip);
+    assert_eq!(follow_step(10, 6, 9), FollowStep::Skip);
+}
+
+#[test]
+fn follow_resyncs_after_a_gap_or_a_straddling_chunk() {
+    assert_eq!(follow_step(10, 12, 16), FollowStep::Resync);
+    assert_eq!(follow_step(10, 8, 13), FollowStep::Resync);
 }

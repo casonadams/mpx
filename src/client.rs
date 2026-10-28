@@ -12,6 +12,8 @@ pub type LayoutTuple = (Vec<(String, Rect, bool)>, Vec<Divider>, Vec<WindowTab>)
 
 pub struct Client {
     framed: Framed<IpcStream, LinesCodec>,
+    /// Idempotency key applied to the next request only.
+    pending_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -45,10 +47,25 @@ impl Client {
             .map_err(|e| format!("Failed to connect to daemon at '{}': {}", endpoint, e))?;
         Ok(Self {
             framed: Framed::new(stream, LinesCodec::new()),
+            pending_key: None,
         })
     }
 
+    /// Makes the next request idempotent under `key`: the daemon runs it at most once per key and
+    /// returns the first response to repeats, so retries are safe.
+    pub fn idempotency_key(&mut self, key: impl Into<String>) -> &mut Self {
+        self.pending_key = Some(key.into());
+        self
+    }
+
     async fn call(&mut self, req: Request) -> Result<Response, String> {
+        let req = match self.pending_key.take() {
+            Some(key) => Request::Idempotent {
+                key,
+                request: Box::new(req),
+            },
+            None => req,
+        };
         let req_str = serde_json::to_string(&req).map_err(|e| e.to_string())?;
         self.framed.send(req_str).await.map_err(|e| e.to_string())?;
         let line = self
@@ -336,12 +353,18 @@ impl Client {
         self.call_ok("AgentReport", req).await
     }
 
-    /// Streams node events; the handler returns false to stop.
-    pub async fn stream_logs<F>(&mut self, name: Option<String>, handler: F) -> Result<(), String>
+    /// Recreates the session from its last snapshot.
+    pub async fn restore(&mut self) -> Result<(), String> {
+        self.call_ok("Restore", Request::Restore).await
+    }
+
+    /// Streams node events; the handler returns false to stop. With `name` and `since`, output from
+    /// that byte offset is replayed first without a gap.
+    pub async fn stream_logs<F>(&mut self, name: Option<String>, since: Option<u64>, handler: F) -> Result<(), String>
     where
         F: FnMut(StreamEvent) -> bool,
     {
-        self.stream(Request::Subscribe { name }, handler).await
+        self.stream(Request::Subscribe { name, since }, handler).await
     }
 
     /// Streams `StreamEvent::Pipe` messages for one pipe; the handler returns false to stop.

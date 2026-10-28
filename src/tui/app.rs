@@ -15,6 +15,7 @@ use super::keymap::{self, Keymap};
 use super::overlay::Overlay;
 use super::panes::{LayoutCache, PaneRect, sync_dims};
 use super::prompt::PromptState;
+use super::status::{local_utc_offset, restored_notice};
 use super::terminal::TerminalGuard;
 use crate::agents::{self, Harness};
 use crate::client::Client;
@@ -76,6 +77,8 @@ pub struct App {
     pub repeat_until: Option<Instant>,
     pub vt: HashMap<String, VtScreen>,
     pub pane_dims: HashMap<String, (u16, u16)>,
+    /// Byte offset each pane's screen has absorbed; the next output chunk must start there.
+    pub expected: HashMap<String, u64>,
     pub layout: LayoutCache,
     /// Terminal width and height available to panes (status row excluded).
     pub viewport: (u16, u16),
@@ -120,6 +123,7 @@ impl App {
             repeat_until: None,
             vt: HashMap::new(),
             pane_dims: HashMap::new(),
+            expected: HashMap::new(),
             layout: LayoutCache::new(),
             viewport: (80, 23),
             panes: Vec::new(),
@@ -140,6 +144,11 @@ impl App {
         app.subscribe(sub_client);
         app.refresh_nodes().await;
         app.refresh_agents().await;
+        if let Ok(info) = app.client.info().await
+            && let Some(restored_ms) = info.restored_ms
+        {
+            app.say(restored_notice(restored_ms, local_utc_offset(restored_ms)));
+        }
         if start == StartView::Agents {
             app.open_overlay(Overlay::agents()).await;
         }
@@ -156,7 +165,7 @@ impl App {
         let tx = self.sub.tx.clone();
         self.sub.task = Some(tokio::spawn(async move {
             let _ = client
-                .stream_logs(None, |event| tx.send((generation, event)).is_ok())
+                .stream_logs(None, None, |event| tx.send((generation, event)).is_ok())
                 .await;
         }));
     }
@@ -186,6 +195,7 @@ impl App {
             &self.panes,
             &mut self.pane_dims,
             &mut self.vt,
+            &mut self.expected,
         )
         .await;
         self.route_focus().await;
@@ -242,7 +252,7 @@ impl App {
             batch.push(more);
         }
         for (generation, event) in batch {
-            if generation == self.sub.generation && apply_stream_event(event, &mut self.vt) {
+            if generation == self.sub.generation && self.apply_event(event).await {
                 self.layout.dirty = true;
             }
         }
@@ -356,22 +366,6 @@ async fn wait_for_frame(last_render: Option<Instant>, budget: Duration) {
         && last.elapsed() < budget
     {
         tokio::time::sleep(budget.saturating_sub(last.elapsed())).await;
-    }
-}
-
-fn apply_stream_event(event: StreamEvent, vt: &mut HashMap<String, VtScreen>) -> bool {
-    match event {
-        StreamEvent::Output { name, data } => {
-            vt.entry(name)
-                .or_insert_with(|| VtScreen::new(80, 24))
-                .feed(data.as_bytes());
-            false
-        }
-        StreamEvent::Exit { name, .. } => {
-            vt.remove(&name);
-            true
-        }
-        _ => false,
     }
 }
 

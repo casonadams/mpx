@@ -30,7 +30,10 @@ fn the_idle_state_from_before_the_prompt_does_not_finish_it() {
 fn a_later_transition_into_a_settled_state_finishes_the_prompt() {
     for state in [AgentState::Idle, AgentState::NeedsInput, AgentState::Exited] {
         let after = agent(state, BASELINE + 1);
-        assert_eq!(poll_step(Some(&after), BASELINE, PLENTY), PollStep::Finished(state));
+        assert_eq!(
+            poll_step(Some(&after), BASELINE, PLENTY),
+            PollStep::Finished(state)
+        );
     }
 }
 
@@ -50,5 +53,8 @@ fn an_exhausted_deadline_times_out_with_the_current_state() {
         poll_step(Some(&working), BASELINE, Duration::ZERO),
         PollStep::TimedOut(Some(AgentState::Working))
     );
-    assert_eq!(poll_step(None, BASELINE, Duration::ZERO), PollStep::TimedOut(None));
+    assert_eq!(
+        poll_step(None, BASELINE, Duration::ZERO),
+        PollStep::TimedOut(None)
+    );
 }

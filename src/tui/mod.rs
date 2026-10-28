@@ -9,13 +9,14 @@ pub mod overlay;
 pub mod panes;
 pub mod prompt;
 pub mod render;
+pub mod stream;
 pub mod terminal;
 
 mod exec;
 mod mouse;
 mod session;
-mod status;
+pub mod status;
 
-pub use app::{run_tui, StartView};
+pub use app::{StartView, run_tui};
 pub use render::Compositor;
 pub use terminal::TerminalGuard;

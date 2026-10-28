@@ -1,13 +1,15 @@
 mod mcp {
     mod poll;
+    mod stdio;
 }
 
+use mpx::cli::RestoreOutcome;
 use mpx::layout::Direction;
-use mpx::mcp::{Call, parse_call, tool_list, tool_names};
+use mpx::mcp::{Call, PromptCall, parse_call, restore_outcome_json, tool_list, tool_names};
 use mpx::protocol::{AgentState, WaitCondition};
 use serde_json::{Value, json};
 
-const EXPECTED: [&str; 21] = [
+const EXPECTED: [&str; 22] = [
     "mpx_run",
     "mpx_list",
     "mpx_status",
@@ -29,6 +31,7 @@ const EXPECTED: [&str; 21] = [
     "mpx_agents",
     "mpx_agent_launch",
     "mpx_agent_prompt",
+    "mpx_restore",
 ];
 
 #[test]
@@ -89,7 +92,7 @@ fn run_maps_command_args_env_and_default_name() {
         &json!({"command": "/usr/bin/tail", "args": ["-f", "log"], "env": ["A=1"], "remain": true}),
     )
     .expect("valid");
-    let Call::Run(spawn) = call else {
+    let Call::Run { spawn, .. } = call else {
         panic!("expected Run");
     };
     assert_eq!(spawn.name, "tail");
@@ -239,11 +242,11 @@ fn agent_prompt_waits_by_default_for_two_minutes() {
     let call = parse_call("mpx_agent_prompt", &json!({"name": "n", "text": "hi"})).expect("valid");
     assert!(matches!(
         call,
-        Call::AgentPrompt {
+        Call::AgentPrompt(PromptCall {
             wait: true,
             timeout_secs: 120,
             ..
-        }
+        })
     ));
 }
 
@@ -261,4 +264,72 @@ fn agent_launch_maps_flags() {
     assert_eq!(launch.resume.as_deref(), Some("abc"));
     assert!(launch.split && launch.teams);
     assert!(parse_call("mpx_agent_launch", &json!({})).is_err());
+}
+
+fn key_of(call: &Call) -> Option<&str> {
+    match call {
+        Call::Run { key, .. }
+        | Call::Split { key, .. }
+        | Call::NewWindow { key, .. }
+        | Call::Send { key, .. }
+        | Call::SendKeys { key, .. }
+        | Call::Paste { key, .. }
+        | Call::Kill { key, .. }
+        | Call::PipeWrite { key, .. } => key.as_deref(),
+        Call::AgentLaunch(launch) => launch.key.as_deref(),
+        Call::AgentPrompt(prompt) => prompt.key.as_deref(),
+        _ => None,
+    }
+}
+
+#[test]
+fn every_mutating_tool_maps_the_idempotency_key() {
+    let cases = [
+        ("mpx_run", json!({"command": "sh"})),
+        ("mpx_split", json!({"command": "sh"})),
+        ("mpx_new_window", json!({"command": "sh"})),
+        ("mpx_send", json!({"name": "n", "data": "x"})),
+        ("mpx_send_keys", json!({"name": "n", "keys": ["Enter"]})),
+        ("mpx_paste", json!({"name": "n", "text": "t"})),
+        ("mpx_kill", json!({"name": "n"})),
+        ("mpx_pipe_write", json!({"name": "p", "data": "d"})),
+        ("mpx_agent_launch", json!({"harness": "claude"})),
+        ("mpx_agent_prompt", json!({"name": "n", "text": "t"})),
+    ];
+    for (tool, mut args) in cases {
+        args["idempotency_key"] = json!("k1");
+        let call = parse_call(tool, &args).expect(tool);
+        assert_eq!(key_of(&call), Some("k1"), "{tool}");
+    }
+}
+
+#[test]
+fn missing_or_empty_idempotency_key_is_none() {
+    let empty = parse_call(
+        "mpx_paste",
+        &json!({"name": "n", "text": "t", "idempotency_key": ""}),
+    )
+    .expect("valid");
+    assert_eq!(key_of(&empty), None);
+    let missing = parse_call("mpx_kill", &json!({"name": "n"})).expect("valid");
+    assert_eq!(key_of(&missing), None);
+}
+
+#[test]
+fn restore_tool_parses_and_reports_the_outcome() {
+    assert!(matches!(
+        parse_call("mpx_restore", &json!({})).expect("valid"),
+        Call::Restore
+    ));
+    assert_eq!(
+        restore_outcome_json(&RestoreOutcome::AlreadyRestored { restored_ms: 5 }),
+        json!({"restored": false, "restored_ms": 5})
+    );
+    assert_eq!(
+        restore_outcome_json(&RestoreOutcome::Restored {
+            windows: 2,
+            panes: 3
+        }),
+        json!({"restored": true, "windows": 2, "panes": 3})
+    );
 }

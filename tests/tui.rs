@@ -9,4 +9,6 @@ mod tui {
     mod panes;
     mod prompt;
     mod render;
+    mod status;
+    mod stream;
 }

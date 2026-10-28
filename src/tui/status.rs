@@ -21,3 +21,49 @@ pub fn agent_badge(waiting: usize) -> Option<String> {
 pub fn osc9_needs_input(name: &str) -> String {
     format!("\x1b]9;mpx: {name} needs input\x07")
 }
+
+/// Seconds east of UTC of the local time zone at `unix_ms` (0 when it cannot be determined).
+pub fn local_utc_offset(unix_ms: u64) -> i64 {
+    #[cfg(unix)]
+    {
+        let t = (unix_ms / 1000) as libc::time_t;
+        // SAFETY: localtime_r only writes into the zeroed `tm` we own.
+        let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+        if unsafe { libc::localtime_r(&t, &mut tm) }.is_null() {
+            return 0;
+        }
+        tm.tm_gmtoff as i64
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = unix_ms;
+        0
+    }
+}
+
+/// `(hours, minutes, seconds)` of the day for `unix_ms` shifted by `utc_offset_secs`.
+pub fn time_of_day(unix_ms: u64, utc_offset_secs: i64) -> (u64, u64, u64) {
+    let secs = ((unix_ms / 1000) as i64 + utc_offset_secs).rem_euclid(86_400) as u64;
+    (secs / 3600, (secs / 60) % 60, secs % 60)
+}
+
+/// `HH:MM:SS` (24-hour) of `unix_ms` at `utc_offset_secs`.
+pub fn clock_hms(unix_ms: u64, utc_offset_secs: i64) -> String {
+    let (h, m, s) = time_of_day(unix_ms, utc_offset_secs);
+    format!("{h:02}:{m:02}:{s:02}")
+}
+
+/// `hh:MM:SS` (12-hour, like tmux `%I:%M:%S`) of `unix_ms` at `utc_offset_secs`.
+pub fn clock_12h(unix_ms: u64, utc_offset_secs: i64) -> String {
+    let (h, m, s) = time_of_day(unix_ms, utc_offset_secs);
+    let h12 = match h % 12 {
+        0 => 12,
+        h => h,
+    };
+    format!("{h12:02}:{m:02}:{s:02}")
+}
+
+/// Status-row notice shown when a session was restored from a snapshot at `restored_ms`.
+pub fn restored_notice(restored_ms: u64, utc_offset_secs: i64) -> String {
+    format!("restored session from {}", clock_hms(restored_ms, utc_offset_secs))
+}

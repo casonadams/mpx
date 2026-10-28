@@ -70,6 +70,7 @@ impl App {
     fn reset_view(&mut self) {
         self.vt.clear();
         self.pane_dims.clear();
+        self.expected.clear();
         self.layout.dirty = true;
         self.layout.raw.clear();
         self.zoomed = None;

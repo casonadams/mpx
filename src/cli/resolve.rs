@@ -8,6 +8,8 @@ pub const WAIT_TIMEOUT_EXIT: i32 = 124;
 pub struct Resolved {
     pub session: String,
     pub endpoint: String,
+    /// Applied to the next mutating request of the command (`--idempotency-key`).
+    pub idempotency_key: Option<String>,
 }
 
 /// Session: `-s` > `$MPX_SESSION` > `main`. Endpoint: `--endpoint` > `$MPX_ENDPOINT` (only when `-s` is absent) > socket of the session.
@@ -27,7 +29,17 @@ pub fn resolve(
         .or(env_ep)
         .map(str::to_string)
         .unwrap_or_else(|| default_endpoint(&session));
-    Resolved { session, endpoint }
+    Resolved {
+        session,
+        endpoint,
+        idempotency_key: None,
+    }
+}
+
+/// Idempotency key from `--idempotency-key`; an empty value is unset. Deliberately not read from the
+/// environment: an exported key would silently dedupe every later mutating call in that shell.
+pub fn resolve_idempotency_key(flag: Option<&str>) -> Option<String> {
+    flag.filter(|s| !s.is_empty()).map(str::to_string)
 }
 
 /// Attaching from inside an mpx pane nests the TUI, which tmux also refuses unless forced.

@@ -2,26 +2,52 @@ use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_s
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::mpsc;
 
-use super::{Node, NodeCore, NodeError, SpawnSpec};
-use crate::protocol::StreamEvent;
+use super::pane::PaneMsg;
+use super::{NodeError, Process, SpawnSpec};
 
 const COLS: u16 = 80;
 const ROWS: u16 = 24;
 
+type Master = Arc<Mutex<Option<Box<dyn MasterPty + Send>>>>;
+
 pub struct PtyNode {
-    core: Arc<NodeCore>,
     stdin_tx: mpsc::UnboundedSender<Vec<u8>>,
-    master: Mutex<Option<Box<dyn MasterPty + Send>>>,
+    master: Master,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
+    pid: Option<u32>,
+}
+
+/// Terminal-side control of a PTY (window size, foreground process), held by its pane actor.
+#[derive(Clone)]
+pub struct PtyTerminal {
+    master: Master,
+}
+
+impl PtyTerminal {
+    pub fn resize(&self, cols: u16, rows: u16) {
+        if let Some(master) = self.master.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            let _ = master.resize(PtySize {
+                rows: rows.max(1),
+                cols: cols.max(1),
+                pixel_width: 0,
+                pixel_height: 0,
+            });
+        }
+    }
+
+    /// Process group leader of the terminal, i.e. the program the user is running in it.
+    pub fn foreground_pid(&self) -> Option<u32> {
+        let master = self.master.lock().unwrap_or_else(|e| e.into_inner());
+        let leader = master.as_ref()?.process_group_leader()?;
+        u32::try_from(leader).ok().filter(|p| *p > 0)
+    }
 }
 
 impl PtyNode {
-    pub fn spawn(
-        spec: SpawnSpec,
-        event_tx: broadcast::Sender<StreamEvent>,
-    ) -> Result<Self, NodeError> {
+    /// Starts the child on a PTY. Output and its exit are sent to `out`.
+    pub fn spawn(spec: &SpawnSpec, out: mpsc::UnboundedSender<PaneMsg>) -> Result<Self, NodeError> {
         let pair = native_pty_system()
             .openpty(PtySize {
                 rows: ROWS,
@@ -48,8 +74,9 @@ impl PtyNode {
             .map_err(|e| NodeError::Internal(format!("Failed to spawn command in PTY: {}", e)))?;
         let pid = child.process_id();
         let killer = child.clone_killer();
-        // The parent must drop its slave fd so that child exit surfaces as EOF on the master.
-        drop(pair.slave);
+        // The slave stays open until the child is reaped: closing it first can discard output the
+        // reader has not consumed yet. The waiter releases it once the child has exited.
+        let slave = pair.slave;
 
         let reader = pair
             .master
@@ -60,41 +87,37 @@ impl PtyNode {
             .take_writer()
             .map_err(|e| NodeError::Internal(format!("Failed to take PTY writer: {}", e)))?;
 
-        let core = Arc::new(NodeCore::new(
-            &spec,
-            true,
-            pid,
-            usize::from(COLS),
-            usize::from(ROWS),
-        ));
         let (stdin_tx, stdin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
         spawn_writer(writer, stdin_rx);
 
         let (eof_tx, eof_rx) = std::sync::mpsc::channel::<()>();
         {
-            let core = Arc::clone(&core);
-            let replies = stdin_tx.clone();
+            let out = out.clone();
             std::thread::spawn(move || {
-                pump_output(reader, &core, &event_tx, &replies);
+                pump_output(reader, &out);
                 let _ = eof_tx.send(());
             });
         }
-        {
-            let core = Arc::clone(&core);
-            std::thread::spawn(move || {
-                let code = child.wait().ok().map(|s| s.exit_code() as i32);
-                // Give the reader a moment to drain output the child wrote before exiting.
-                let _ = eof_rx.recv_timeout(Duration::from_millis(500));
-                core.mark_exited(code);
-            });
-        }
+        std::thread::spawn(move || {
+            let code = child.wait().ok().map(|s| s.exit_code() as i32);
+            drop(slave);
+            // EOF follows the release of the slave once the reader has drained every byte.
+            let _ = eof_rx.recv_timeout(Duration::from_millis(500));
+            let _ = out.send(PaneMsg::Exited(code));
+        });
 
         Ok(Self {
-            core,
             stdin_tx,
-            master: Mutex::new(Some(pair.master)),
+            master: Arc::new(Mutex::new(Some(pair.master))),
             killer: Mutex::new(killer),
+            pid,
         })
+    }
+
+    pub fn terminal(&self) -> PtyTerminal {
+        PtyTerminal {
+            master: Arc::clone(&self.master),
+        }
     }
 }
 
@@ -112,79 +135,33 @@ fn spawn_writer(mut writer: Box<dyn Write + Send>, mut rx: mpsc::UnboundedReceiv
     });
 }
 
-fn pump_output(
-    mut reader: Box<dyn Read + Send>,
-    core: &NodeCore,
-    events: &broadcast::Sender<StreamEvent>,
-    replies: &mpsc::UnboundedSender<Vec<u8>>,
-) {
+fn pump_output(mut reader: Box<dyn Read + Send>, out: &mpsc::UnboundedSender<PaneMsg>) {
     let mut chunk = [0u8; 4096];
     loop {
         match reader.read(&mut chunk) {
             Ok(0) | Err(_) => break,
             Ok(n) => {
-                let bytes = &chunk[..n];
-                for reply in core.ingest(bytes) {
-                    let _ = replies.send(reply);
+                if out.send(PaneMsg::Output(chunk[..n].to_vec())).is_err() {
+                    break;
                 }
-                let _ = events.send(StreamEvent::Output {
-                    name: core.name.clone(),
-                    data: String::from_utf8_lossy(bytes).into_owned(),
-                });
             }
         }
     }
 }
 
-impl Node for PtyNode {
-    fn core(&self) -> &NodeCore {
-        &self.core
+impl Process for PtyNode {
+    fn pid(&self) -> Option<u32> {
+        self.pid
     }
 
     fn send_input(&self, data: &[u8]) -> Result<(), NodeError> {
-        if !self.is_running() {
-            return Err(NodeError::NotRunning);
-        }
         self.stdin_tx
             .send(data.to_vec())
             .map_err(|_| NodeError::NotRunning)
     }
 
     fn kill(&self) -> Result<(), NodeError> {
-        if !self.is_running() {
-            return Ok(());
-        }
         let mut killer = self.killer.lock().unwrap_or_else(|e| e.into_inner());
         killer.kill().map_err(NodeError::Io)
-    }
-
-    fn resize(&self, cols: u16, rows: u16) -> Result<(), NodeError> {
-        let cols = cols.max(1);
-        let rows = rows.max(1);
-        if let Some(master) = self
-            .master
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .as_ref()
-        {
-            let _ = master.resize(PtySize {
-                rows,
-                cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            });
-        }
-        self.resize_screen(cols, rows);
-        Ok(())
-    }
-
-    fn foreground_pid(&self) -> Option<u32> {
-        let master = self.master.lock().unwrap_or_else(|e| e.into_inner());
-        let leader = master.as_ref()?.process_group_leader()?;
-        u32::try_from(leader).ok().filter(|p| *p > 0)
-    }
-
-    fn release(&self) {
-        self.master.lock().unwrap_or_else(|e| e.into_inner()).take();
     }
 }

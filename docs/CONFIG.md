@@ -14,6 +14,8 @@ prefix = "C-b"          # tmux notation: C-a, C-Space, M-b ...
 remain_on_exit = false  # keep panes on screen after their process exits
 history_limit = 64      # exited, removed panes whose logs stay readable
 tmux_compat = false     # export TMUX/TMUX_PANE + the tmux shim in every pane
+restore = true          # after a crash or reboot, recreate the last layout and resume agents
+persist_pipes = true    # keep pipe messages and consumer cursors across daemon restarts
 
 [agent]
 idle_ms = 1500          # quiet period before a hook-less agent counts as idle
@@ -33,3 +35,14 @@ session_id_args = []
 ```
 
 Key names use tmux notation: `C-` (Ctrl), `M-` (Alt), `S-` (Shift) prefixes, plus `Enter`, `Escape`, `Tab`, `BTab`, `Space`, `BSpace`, `Up`/`Down`/`Left`/`Right`, `Home`, `End`, `PageUp`/`PPage`, `PageDown`/`NPage`, `IC`, `DC`, `F1`-`F12`, or a single character (case-sensitive: `H` is Shift-h).
+
+## State directory
+
+Snapshots and durable pipes live outside the runtime directory (which is cleared on reboot), in the first of:
+
+1. `$MPX_STATE_DIR`
+2. `$XDG_STATE_HOME/mpx`
+3. `%LOCALAPPDATA%\mpx\state` (Windows)
+4. `~/.local/state/mpx`
+
+Each session has its own directory there: `snapshot.json` (the latest layout snapshot) and `pipes/` (a message log and metadata file per pipe).

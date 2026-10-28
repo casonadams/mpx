@@ -151,13 +151,16 @@ pub fn omp_hook_file() -> Option<PathBuf> {
 }
 
 /// Reports a hook event for `$MPX_PANE` on `$MPX_ENDPOINT`; silently does nothing outside mpx or on failure.
-pub async fn send_hook_report(harness: &str, report: HookReport) {
+pub async fn send_hook_report(harness: &str, report: HookReport, key: Option<&str>) {
     let (Ok(pane), Ok(endpoint)) = (std::env::var("MPX_PANE"), std::env::var("MPX_ENDPOINT"))
     else {
         return;
     };
     let send = async {
         let mut client = Client::connect(&endpoint).await.ok()?;
+        if let Some(key) = key {
+            client.idempotency_key(key);
+        }
         client.agent_report(&pane, report.args(harness)).await.ok()
     };
     let _ = tokio::time::timeout(REPORT_TIMEOUT, send).await;

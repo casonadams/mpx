@@ -114,20 +114,35 @@ pub fn pending_resizes(
         .collect()
 }
 
-/// Resizes panes whose cell size changed and reloads their scrollback into fresh screens.
+/// Loads a pane's scrollback into a fresh screen of the given size. Returns the screen and the
+/// byte offset its contents end at, which is the next offset expected from the event stream.
+pub async fn load_pane(
+    client: &mut Client,
+    name: &str,
+    width: u16,
+    height: u16,
+) -> Option<(VtScreen, u64)> {
+    let (logs, next) = client.logs(name, None, false, None).await.ok()?;
+    let mut screen = VtScreen::new(width as usize, height as usize);
+    screen.feed(logs.as_bytes());
+    Some((screen, next))
+}
+
+/// Resizes panes whose cell size changed and reloads their scrollback into fresh screens,
+/// recording each reloaded pane's expected stream offset.
 pub async fn sync_dims(
     client: &mut Client,
     panes: &[PaneRect],
     dims: &mut HashMap<String, (u16, u16)>,
     vt: &mut HashMap<String, VtScreen>,
+    expected: &mut HashMap<String, u64>,
 ) {
     for (name, width, height) in pending_resizes(panes, dims) {
         dims.insert(name.clone(), (width, height));
         let _ = client.resize_pane(&name, width, height).await;
-        if let Ok((logs, _)) = client.logs(&name, None, false, None).await {
-            let mut fresh = VtScreen::new(width as usize, height as usize);
-            fresh.feed(logs.as_bytes());
-            vt.insert(name, fresh);
+        if let Some((screen, next)) = load_pane(client, &name, width, height).await {
+            expected.insert(name.clone(), next);
+            vt.insert(name, screen);
         }
     }
 }

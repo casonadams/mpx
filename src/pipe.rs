@@ -18,20 +18,57 @@ pub struct VirtualPipe {
 
 impl VirtualPipe {
     pub fn new(name: String, capacity: usize) -> Self {
-        let (tip, _) = watch::channel(0);
-        Self {
+        Self::restore(name, capacity, 1, Vec::new(), Vec::new())
+    }
+
+    /// Rebuilds a pipe from persisted parts. Messages beyond the capacity are dropped oldest first.
+    pub fn restore(
+        name: String,
+        capacity: usize,
+        next_seq: u64,
+        messages: Vec<PipeMessage>,
+        cursors: Vec<(String, u64)>,
+    ) -> Self {
+        let next_seq = messages
+            .last()
+            .map_or(next_seq, |m| next_seq.max(m.seq + 1))
+            .max(1);
+        let bytes = messages.iter().map(|m| m.data.len()).sum();
+        let (tip, _) = watch::channel(next_seq - 1);
+        let mut pipe = Self {
             name,
             capacity,
-            messages: VecDeque::new(),
-            bytes: 0,
-            next_seq: 1,
-            cursors: HashMap::new(),
+            messages: VecDeque::from(messages),
+            bytes,
+            next_seq,
+            cursors: cursors.into_iter().collect(),
             tip,
-        }
+        };
+        pipe.trim();
+        pipe
     }
 
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+
+    /// Sequence number the next message will get.
+    pub fn next_seq(&self) -> u64 {
+        self.next_seq
+    }
+
+    /// Number of retained messages.
+    pub fn message_count(&self) -> usize {
+        self.messages.len()
+    }
+
+    /// Consumer cursors, for persistence.
+    pub fn cursors(&self) -> Vec<(String, u64)> {
+        self.cursors.iter().map(|(k, v)| (k.clone(), *v)).collect()
     }
 
     /// Appends a message and returns its sequence number.
@@ -44,13 +81,17 @@ impl VirtualPipe {
             ts_ms,
             data: data.to_string(),
         });
+        self.trim();
+        self.tip.send_replace(seq);
+        seq
+    }
+
+    fn trim(&mut self) {
         while self.bytes > self.capacity && self.messages.len() > 1 {
             if let Some(old) = self.messages.pop_front() {
                 self.bytes -= old.data.len();
             }
         }
-        self.tip.send_replace(seq);
-        seq
     }
 
     /// Messages with `seq > after`, oldest first.
@@ -65,7 +106,12 @@ impl VirtualPipe {
 
     /// Messages after the consumer's cursor; a consumer without a cursor starts after `start`.
     /// The cursor is registered and advances past the last message returned.
-    pub fn read_consumer(&mut self, consumer: &str, start: u64, limit: Option<usize>) -> Vec<PipeMessage> {
+    pub fn read_consumer(
+        &mut self,
+        consumer: &str,
+        start: u64,
+        limit: Option<usize>,
+    ) -> Vec<PipeMessage> {
         let cursor = self.cursor(consumer).unwrap_or(start);
         let out = self.read(cursor, limit);
         let advanced = out.last().map_or(cursor, |m| m.seq);
