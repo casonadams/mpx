@@ -24,6 +24,53 @@ pub struct Config {
     pub bind: BTreeMap<String, String>,
     /// Extra or overriding agent harness definitions.
     pub harness: Vec<HarnessConfig>,
+    pub style: StyleConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct StyleConfig {
+    /// Active pane border color name or hex (e.g. "bright-green", "#3fb950").
+    pub border_active: String,
+    /// Inactive pane border color name or hex (e.g. "bright-black", "#263345").
+    pub border_inactive: String,
+    /// Border style: "single", "rounded", "double", or "ascii".
+    pub border_style: BorderStyle,
+    /// Status bar background color name or hex.
+    pub status_bg: String,
+    /// Status bar foreground color name or hex.
+    pub status_fg: String,
+    /// Dim output of inactive panes when multiple are visible.
+    pub dim_inactive: bool,
+    /// Dimming factor for inactive panes (0.0 to 1.0; 0.20 = 20% reduction).
+    pub dim_factor: f32,
+    /// Whether to also dim explicit application background colors in inactive panes.
+    pub dim_content_bg: bool,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum BorderStyle {
+    #[default]
+    Single,
+    Rounded,
+    Double,
+    Ascii,
+}
+
+impl Default for StyleConfig {
+    fn default() -> Self {
+        Self {
+            border_active: "bright-green".to_string(),
+            border_inactive: "bright-black".to_string(),
+            border_style: BorderStyle::Single,
+            status_bg: "dark-green".to_string(),
+            status_fg: "black".to_string(),
+            dim_inactive: true,
+            dim_factor: 0.20,
+            dim_content_bg: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -62,6 +109,7 @@ impl Default for Config {
             agent: AgentConfig::default(),
             bind: BTreeMap::new(),
             harness: Vec::new(),
+            style: StyleConfig::default(),
         }
     }
 }

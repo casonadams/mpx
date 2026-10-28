@@ -187,6 +187,16 @@ restore = true          # after a crash or reboot, recreate layout and resume ag
 persist_pipes = true    # keep pipe messages and consumer cursors across restarts
 which_key_delay_ms = 300  # delay before showing the shortcut HUD popup (0 = at once)
 
+[style]
+border_active = "bright-green"      # active border color or hex ("#3fb950")
+border_inactive = "bright-black"    # inactive border color or hex ("#263345")
+border_style = "single"             # "single", "rounded", "double", "ascii"
+status_bg = "dark-green"            # status line background or hex ("#121820")
+status_fg = "black"                 # status line foreground or hex ("#c5d1de")
+dim_inactive = true                 # dim inactive panes when multiple are visible
+dim_factor = 0.20                   # dim factor (0.20 = 20% reduction)
+dim_content_bg = true               # dim explicit app backgrounds (diffs, selections)
+
 [agent]
 idle_ms = 1500          # quiet period before a hook-less agent counts as idle
 notify = true           # OSC 9 desktop notification when an off-screen agent needs input
@@ -196,12 +206,21 @@ notify = true           # OSC 9 desktop notification when an off-screen agent ne
 "g" = "launch-agent claude --split"
 "r" = "command-prompt -I 'rename-window '"
 
-[[harness]]             # custom or overriding agent harnesses
+# Define custom aider harness
+[[harness]]
 name = "aider"
 detect = ["aider"]
 command = ["aider"]
 resume = []
-session_id_args = []</code></pre>
+session_id_args = []
+
+# Define custom internal harness (multiple [[harness]] blocks supported)
+[[harness]]
+name = "myagent"
+detect = ["myagent-bin"]
+command = ["myagent", "--mode", "autonomous"]
+resume = ["myagent", "--resume", "{id}"]
+session_id_args = ["--session", "{id}"]</code></pre>
 
       <h3>Configuration Reference</h3>
       <div class="table-container">
@@ -217,13 +236,64 @@ session_id_args = []</code></pre>
             <tr><td><code>restore</code></td><td>bool</td><td><code>true</code></td><td>Daemon</td><td>Automatically restore saved session layout and resume agent harnesses on startup.</td></tr>
             <tr><td><code>persist_pipes</code></td><td>bool</td><td><code>true</code></td><td>Daemon</td><td>Persist virtual pipe messages and consumer cursors to disk across daemon restarts.</td></tr>
             <tr><td><code>which_key_delay_ms</code></td><td>integer</td><td><code>300</code></td><td>TUI</td><td>Milliseconds to wait after prefix before showing shortcut HUD popup (0 = instant).</td></tr>
+            <tr><td><code>style.border_active</code></td><td>string</td><td><code>"bright-green"</code></td><td>TUI</td><td>Active pane border color name or hex (e.g. <code>"#3fb950"</code>).</td></tr>
+            <tr><td><code>style.border_inactive</code></td><td>string</td><td><code>"bright-black"</code></td><td>TUI</td><td>Inactive pane border color name or hex (e.g. <code>"#263345"</code>).</td></tr>
+            <tr><td><code>style.border_style</code></td><td>string</td><td><code>"single"</code></td><td>TUI</td><td>Border characters: <code>"single"</code> (─│), <code>"rounded"</code> (╭╮), <code>"double"</code> (═║), or <code>"ascii"</code> (-|+).</td></tr>
+            <tr><td><code>style.status_bg</code></td><td>string</td><td><code>"dark-green"</code></td><td>TUI</td><td>Status line background color name or hex (e.g. <code>"#121820"</code>).</td></tr>
+            <tr><td><code>style.status_fg</code></td><td>string</td><td><code>"black"</code></td><td>TUI</td><td>Status line text foreground color name or hex (e.g. <code>"#c5d1de"</code>).</td></tr>
+            <tr><td><code>style.dim_inactive</code></td><td>bool</td><td><code>true</code></td><td>TUI</td><td>Subtly dim inactive splits when multiple panes are visible to emphasize focus.</td></tr>
+            <tr><td><code>style.dim_factor</code></td><td>float</td><td><code>0.20</code></td><td>TUI</td><td>Dimming percentage between 0.0 and 1.0 (0.20 dims by 20%, keeping text legible).</td></tr>
+            <tr><td><code>style.dim_content_bg</code></td><td>bool</td><td><code>true</code></td><td>TUI</td><td>Dim explicit application backgrounds (diffs, selections) while leaving terminal canvas transparent.</td></tr>
             <tr><td><code>agent.idle_ms</code></td><td>integer</td><td><code>1500</code></td><td>Daemon</td><td>Inactivity quiet period in milliseconds before classifying an agent as idle.</td></tr>
             <tr><td><code>agent.notify</code></td><td>bool</td><td><code>true</code></td><td>TUI</td><td>Send OSC 9 desktop notification when an off-screen agent needs user input.</td></tr>
             <tr><td><code>bind</code></td><td>table</td><td><code>{}</code></td><td>TUI</td><td>Custom key bindings mapping tmux key notation to mpx command lines.</td></tr>
-            <tr><td><code>harness</code></td><td>array</td><td><code>[]</code></td><td>Daemon</td><td>Custom agent harness definitions (<code>name</code>, <code>detect</code>, <code>command</code>, <code>resume</code>).</td></tr>
+            <tr><td><code>harness</code></td><td>array of tables</td><td><code>[]</code></td><td>Daemon</td><td>Custom agent harness definitions (repeat <code>[[harness]]</code> for multiple agents).</td></tr>
           </tbody>
         </table>
       </div>
+
+      <h3>Bindable Commands Reference</h3>
+      <p>Commands that can be bound in <code>[bind]</code> or executed directly at the command prompt (<code>Prefix + :</code>):</p>
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr><th>Command</th><th>Aliases</th><th>Arguments &amp; Flags</th><th>Description</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>split-window</code></td><td><code>splitw</code>, <code>split</code>, <code>vsplit</code></td><td><code>[-h|-v] [-d] [-c &lt;dir&gt;] [-- &lt;cmd&gt;]</code></td><td>Split active pane vertically (<code>-h</code>) or horizontally (<code>-v</code>).</td></tr>
+            <tr><td><code>select-pane</code></td><td><code>selectp</code></td><td><code>[-L|-R|-U|-D] [-t &lt;pane&gt;]</code></td><td>Geometric focus navigation or jump to pane.</td></tr>
+            <tr><td><code>resize-pane</code></td><td><code>resizep</code></td><td><code>[-L|-R|-U|-D] [-x &lt;w&gt;] [-y &lt;h&gt;] [-Z]</code></td><td>Resize split boundary or toggle zoom (<code>-Z</code>).</td></tr>
+            <tr><td><code>swap-pane</code></td><td><code>swapp</code></td><td><code>[-U|-D] [-s &lt;pane&gt;] [-t &lt;pane&gt;]</code></td><td>Swap active pane with neighbor.</td></tr>
+            <tr><td><code>break-pane</code></td><td><code>breakp</code></td><td><code>[-d]</code></td><td>Break active pane out into its own window tab.</td></tr>
+            <tr><td><code>kill-pane</code></td><td><code>killp</code>, <code>close</code>, <code>q</code></td><td><code>[-t &lt;pane&gt;]</code></td><td>Terminate pane process and remove split.</td></tr>
+            <tr><td><code>zoom</code></td><td><code>resize-pane -Z</code></td><td>none</td><td>Toggle 100% full-screen zoom on active pane.</td></tr>
+            <tr><td><code>new-window</code></td><td><code>neww</code>, <code>tabnew</code>, <code>tabe</code></td><td><code>[-n &lt;name&gt;] [-c &lt;dir&gt;] [-- &lt;cmd&gt;]</code></td><td>Create a new window tab.</td></tr>
+            <tr><td><code>kill-window</code></td><td><code>killw</code>, <code>tabclose</code>, <code>tabc</code></td><td><code>[-t &lt;index&gt;]</code></td><td>Close window tab and its child panes.</td></tr>
+            <tr><td><code>rename-window</code></td><td><code>renamew</code></td><td><code>&lt;new-name&gt;</code></td><td>Rename active window tab.</td></tr>
+            <tr><td><code>select-window</code></td><td><code>selectw</code></td><td><code>[-t &lt;index&gt;]</code></td><td>Switch to window tab index.</td></tr>
+            <tr><td><code>next-window</code></td><td><code>tabnext</code>, <code>tabn</code></td><td>none</td><td>Switch to next window tab.</td></tr>
+            <tr><td><code>previous-window</code></td><td><code>prev-window</code>, <code>tabp</code></td><td>none</td><td>Switch to previous window tab.</td></tr>
+            <tr><td><code>last-window</code></td><td>none</td><td>none</td><td>Toggle back to previous active window tab.</td></tr>
+            <tr><td><code>select-layout</code></td><td><code>selectl</code>, <code>next-layout</code></td><td><code>[preset]</code></td><td>Cycle or select split layout preset.</td></tr>
+            <tr><td><code>launch-agent</code></td><td>none</td><td><code>[--split] [--teams] [--resume &lt;id&gt;] &lt;harness&gt;</code></td><td>Launch an AI agent harness with hooks.</td></tr>
+            <tr><td><code>agents</code></td><td>none</td><td>none</td><td>Open full-screen Agent Manager overlay.</td></tr>
+            <tr><td><code>next-attention</code></td><td>none</td><td>none</td><td>Jump to agent waiting longest for input.</td></tr>
+            <tr><td><code>choose-tree</code></td><td><code>tree</code></td><td>none</td><td>Open session/window/pane tree navigation.</td></tr>
+            <tr><td><code>list-keys</code></td><td><code>help</code></td><td>none</td><td>Open searchable keybindings cheat sheet.</td></tr>
+            <tr><td><code>copy-mode</code></td><td>none</td><td>none</td><td>Enter Vi copy / visual scrollback mode.</td></tr>
+            <tr><td><code>command-prompt</code></td><td>none</td><td><code>[-I &lt;initial&gt;] [-p &lt;prompt&gt;]</code></td><td>Open interactive command prompt.</td></tr>
+            <tr><td><code>detach-client</code></td><td><code>detach</code>, <code>quit</code></td><td>none</td><td>Detach from session, leaving processes running.</td></tr>
+            <tr><td><code>switch-client</code></td><td><code>session</code>, <code>switchc</code></td><td><code>[-p|-n] [-t &lt;session&gt;]</code></td><td>Switch client to another session.</td></tr>
+            <tr><td><code>kill-server</code></td><td><code>qa</code></td><td>none</td><td>Prompt to terminate the daemon and all panes.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Applying &amp; Reloading Configuration</h3>
+      <ul>
+        <li><strong>TUI &amp; Visual Settings</strong> (<code>prefix</code>, <code>[style]</code>, <code>[bind]</code>, <code>which_key_delay_ms</code>): Re-read automatically whenever attaching to a session. Detach with <strong><code>Prefix + d</code></strong> and re-attach with <strong><code>mpx</code></strong> to apply edits immediately.</li>
+        <li><strong>Daemon Settings</strong> (<code>remain_on_exit</code>, <code>restore</code>, <code>persist_pipes</code>, <code>tmux_compat</code>, <code>history_limit</code>, <code>[[harness]]</code>): Read when the background daemon starts. Run <code>mpx kill-server</code> and then <code>mpx</code> (or <code>mpx restore</code>) to restart with new daemon settings.</li>
+      </ul>
     </section>
 
     <hr>

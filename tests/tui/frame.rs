@@ -38,7 +38,7 @@ fn focused_pane_in_copy_mode_shows_the_copy_badge_and_scroll() {
         &grid,
         &[],
         &pane("main", 10, 5, true),
-        (1, false),
+        (1, false, true),
     );
     let badge = view.badge.expect("copy badge");
     assert!(badge.contains("VISUAL LINE"), "{badge}");
@@ -55,7 +55,7 @@ fn unfocused_pane_ignores_copy_mode() {
         &grid,
         &[],
         &pane("other", 10, 5, false),
-        (2, false),
+        (2, false, true),
     );
     assert_eq!(view.badge, None);
     assert_eq!(view.scroll_offset, 0);
@@ -71,7 +71,7 @@ fn exited_pane_shows_its_exit_code() {
         &grid,
         &nodes,
         &pane("done", 10, 5, false),
-        (1, false),
+        (1, false, true),
     );
     assert_eq!(view.badge.as_deref(), Some("[exited 2]"));
     let view = pane_view(
@@ -79,7 +79,7 @@ fn exited_pane_shows_its_exit_code() {
         &grid,
         &nodes,
         &pane("gone", 10, 5, false),
-        (1, false),
+        (1, false, true),
     );
     assert_eq!(view.badge.as_deref(), Some("[exited]"));
 }
@@ -93,7 +93,7 @@ fn running_pane_without_copy_mode_has_no_badge() {
         &grid,
         &nodes,
         &pane("live", 10, 5, true),
-        (1, false),
+        (1, false, true),
     );
     assert_eq!(view.badge, None);
 }
@@ -103,10 +103,11 @@ fn unfocused_panes_dim_only_when_several_are_shown_and_none_is_zoomed() {
     let grid = Grid::new(10, 5);
     let idle = pane("idle", 10, 5, false);
     let focus = pane("focus", 10, 5, true);
-    assert!(pane_view(&Mode::Normal, &grid, &[], &idle, (2, false)).dimmed);
-    assert!(!pane_view(&Mode::Normal, &grid, &[], &focus, (2, false)).dimmed);
-    assert!(!pane_view(&Mode::Normal, &grid, &[], &idle, (1, false)).dimmed);
-    assert!(!pane_view(&Mode::Normal, &grid, &[], &idle, (2, true)).dimmed);
+    assert!(pane_view(&Mode::Normal, &grid, &[], &idle, (2, false, true)).dimmed);
+    assert!(!pane_view(&Mode::Normal, &grid, &[], &focus, (2, false, true)).dimmed);
+    assert!(!pane_view(&Mode::Normal, &grid, &[], &idle, (1, false, true)).dimmed);
+    assert!(!pane_view(&Mode::Normal, &grid, &[], &idle, (2, true, true)).dimmed);
+    assert!(!pane_view(&Mode::Normal, &grid, &[], &idle, (2, false, false)).dimmed);
 }
 
 #[test]

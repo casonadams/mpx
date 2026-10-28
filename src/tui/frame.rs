@@ -4,10 +4,13 @@ use std::io::{self, Write};
 use super::app::{App, Mode};
 use super::copy::{CopyState, SelectionKind};
 use super::panes::PaneRect;
-use super::render::{Compositor, RenderPaneContext, SelectionRange, StatusBar, hud_rect};
+use super::render::{
+    Compositor, DividerStyle, RenderPaneContext, SelectionRange, StatusBar, hud_rect, parse_color,
+};
 use super::status::exit_badge;
 use crate::layout::geometry::Rect;
 use crate::protocol::NodeInfo;
+use crate::vt::Color as VtColor;
 use crate::vt::VtScreen;
 use crate::vt::grid::Grid;
 
@@ -32,7 +35,20 @@ pub fn draw<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
     app.canvas.begin(screen_w, layout_h, covered);
     draw_panes(app, out)?;
     if app.zoomed.is_none() && !app.layout.dividers.is_empty() {
-        Compositor::draw_dividers(&mut app.canvas, out, &app.layout.dividers, app.active_rect)?;
+        let style = DividerStyle {
+            active_color: parse_color(&app.config.style.border_active)
+                .unwrap_or(VtColor::BrightGreen),
+            inactive_color: parse_color(&app.config.style.border_inactive)
+                .unwrap_or(VtColor::BrightBlack),
+            border_style: app.config.style.border_style,
+        };
+        Compositor::draw_dividers(
+            &mut app.canvas,
+            out,
+            &app.layout.dividers,
+            app.active_rect,
+            style,
+        )?;
     }
     app.canvas.finish(out)?;
     draw_status_row(app, out)?;
@@ -64,17 +80,17 @@ pub fn drawable(panes: &[PaneRect]) -> Vec<PaneRect> {
         .collect()
 }
 
-/// Decorations for one pane. `crowd` is `(visible pane count, zoomed)`.
+/// Decorations for one pane. `crowd` is `(visible pane count, zoomed, dim_inactive)`.
 pub fn pane_view(
     mode: &Mode,
     grid: &Grid,
     nodes: &[NodeInfo],
     pane: &PaneRect,
-    crowd: (usize, bool),
+    crowd: (usize, bool, bool),
 ) -> PaneView {
     let (name, _, focused) = pane;
-    let (count, zoomed) = crowd;
-    let dimmed = is_dimmed(count, zoomed, *focused);
+    let (count, zoomed, dim_inactive) = crowd;
+    let dimmed = is_dimmed(count, zoomed, *focused, dim_inactive);
     match mode {
         Mode::Copy(cs) if *focused => PaneView {
             badge: Some(copy_label(cs, grid.history_len())),
@@ -95,7 +111,13 @@ pub fn pane_view(
 fn draw_panes<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
     let mut panes = drawable(&app.panes);
     panes.sort_by_key(|(_, rect, _)| (rect.x, rect.y));
-    let crowd = (app.panes.len(), app.zoomed.is_some());
+    let crowd = (
+        app.panes.len(),
+        app.zoomed.is_some(),
+        app.config.style.dim_inactive,
+    );
+    let dim_factor = app.config.style.dim_factor;
+    let dim_content_bg = app.config.style.dim_content_bg;
     for pane in &panes {
         let (_, rect, _) = pane;
         let vt = app
@@ -113,6 +135,8 @@ fn draw_panes<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
                 scroll_offset: view.scroll_offset,
                 badge: view.badge.as_deref(),
                 dimmed: view.dimmed,
+                dim_factor,
+                dim_content_bg,
             },
         )?;
     }
@@ -132,6 +156,8 @@ fn draw_status_row<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
 
 fn status_row(app: &App, out: &mut Vec<u8>) -> io::Result<()> {
     let (width, y) = app.viewport;
+    let bg = parse_color(&app.config.style.status_bg);
+    let fg = parse_color(&app.config.style.status_fg);
     match &app.mode {
         Mode::Prompt(prompt) => {
             Compositor::draw_command_line(out, &format!(":{}", prompt.text()), y, width)
@@ -154,6 +180,8 @@ fn status_row(app: &App, out: &mut Vec<u8>) -> io::Result<()> {
                     waiting_agents: app.watch.badge,
                     width,
                     y,
+                    bg,
+                    fg,
                 },
             ),
         },
@@ -226,6 +254,6 @@ fn exit_badge_for(nodes: &[NodeInfo], name: &str) -> Option<String> {
 }
 
 /// Panes other than the focused one dim when several are visible and none is zoomed.
-fn is_dimmed(count: usize, zoomed: bool, focused: bool) -> bool {
-    count > 1 && !zoomed && !focused
+fn is_dimmed(count: usize, zoomed: bool, focused: bool, dim_inactive: bool) -> bool {
+    dim_inactive && count > 1 && !zoomed && !focused
 }

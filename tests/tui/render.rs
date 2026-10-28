@@ -1,8 +1,11 @@
 use mpx::layout::{Divider, Rect, WindowTab};
 use mpx::tui::canvas::Canvas;
+use mpx::config::BorderStyle;
 use mpx::tui::render::{
-    Compositor, RenderPaneContext, SelectionRange, StatusBar, hud_rect, status_left, status_right,
+    Compositor, DividerStyle, RenderPaneContext, SelectionRange, StatusBar, dim_color, hud_rect,
+    parse_color, status_left, status_right, vt_to_crossterm,
 };
+use mpx::vt::{CellStyle, Color as VtColor};
 use mpx::vt::grid::Grid;
 
 fn pane_ctx<'a>(grid: &'a Grid, rect: Rect, dimmed: bool) -> RenderPaneContext<'a> {
@@ -13,6 +16,8 @@ fn pane_ctx<'a>(grid: &'a Grid, rect: Rect, dimmed: bool) -> RenderPaneContext<'
         scroll_offset: 0,
         badge: None,
         dimmed,
+        dim_factor: 0.20,
+        dim_content_bg: true,
     }
 }
 
@@ -57,6 +62,8 @@ fn status_bar_lists_session_and_pane_names() {
         waiting_agents: 0,
         width: 80,
         y: 23,
+        bg: None,
+        fg: None,
     };
     Compositor::draw_status_bar(&mut buf, &bar).unwrap();
     let out = String::from_utf8_lossy(&buf);
@@ -76,6 +83,8 @@ fn status_bar_paints_every_column_of_its_row() {
         waiting_agents: 0,
         width: 40,
         y: 9,
+        bg: None,
+        fg: None,
     };
     let mut terminal = mpx::vt::VtScreen::new(40, 10);
     terminal.feed(format!("\x1b[?7l\x1b[10;1H{}", "X".repeat(40)).as_bytes());
@@ -99,6 +108,8 @@ fn status_bar_shows_waiting_agent_badge() {
         waiting_agents: 3,
         width: 80,
         y: 23,
+        bg: None,
+        fg: None,
     };
     Compositor::draw_status_bar(&mut buf, &bar).unwrap();
     assert!(String::from_utf8_lossy(&buf).contains("◆3"));
@@ -127,6 +138,8 @@ fn status_text_prefers_window_tabs_and_flags_the_prefix() {
         waiting_agents: 2,
         width: 80,
         y: 23,
+        bg: None,
+        fg: None,
     };
     assert_eq!(status_left(&bar), "[dev] 0:claude- 1:cargo* ");
     assert_eq!(status_right(&bar, "12:00"), " \u{25c6}2  [PREFIX] 12:00");
@@ -200,6 +213,147 @@ fn dividers_render_junction_connector() {
     let active_rect = Some(Rect::new(41, 11, 39, 13));
     let mut canvas = Canvas::default();
     canvas.begin(80, 24, None);
-    Compositor::draw_dividers(&mut canvas, &mut buf, &dividers, active_rect).unwrap();
+    Compositor::draw_dividers(&mut canvas, &mut buf, &dividers, active_rect, DividerStyle::default()).unwrap();
     assert!(String::from_utf8_lossy(&buf).contains('┬'));
+}
+
+#[test]
+fn parse_color_resolves_named_and_hex() {
+    assert_eq!(parse_color("black"), Some(VtColor::Black));
+    assert_eq!(parse_color("bright-green"), Some(VtColor::BrightGreen));
+    assert_eq!(parse_color("bright_green"), Some(VtColor::BrightGreen));
+    assert_eq!(parse_color("dark-grey"), Some(VtColor::BrightBlack));
+    assert_eq!(parse_color("#3fb950"), Some(VtColor::Rgb(63, 185, 80)));
+    assert_eq!(parse_color("#fff"), Some(VtColor::Rgb(255, 255, 255)));
+    assert_eq!(parse_color("color238"), Some(VtColor::Indexed(238)));
+    assert_eq!(parse_color("238"), Some(VtColor::Indexed(238)));
+    assert_eq!(parse_color("invalid_color"), None);
+}
+
+#[test]
+fn vt_to_crossterm_maps_correctly() {
+    use crossterm::style::Color as CtColor;
+    assert_eq!(vt_to_crossterm(VtColor::Black), CtColor::Black);
+    assert_eq!(vt_to_crossterm(VtColor::Green), CtColor::DarkGreen);
+    assert_eq!(vt_to_crossterm(VtColor::BrightGreen), CtColor::Green);
+    assert_eq!(vt_to_crossterm(VtColor::Rgb(10, 20, 30)), CtColor::Rgb { r: 10, g: 20, b: 30 });
+}
+
+#[test]
+fn dim_color_scales_rgb_and_dims_bright() {
+    let rgb = VtColor::Rgb(100, 200, 50);
+    // 20% dimming factor -> 80% brightness
+    assert_eq!(dim_color(Some(rgb), 0.20), VtColor::Rgb(80, 160, 40));
+    assert_eq!(dim_color(Some(VtColor::BrightRed), 0.20), VtColor::Red);
+    assert_eq!(dim_color(None, 0.20), VtColor::BrightBlack);
+}
+
+#[test]
+fn dimmed_pane_dims_content_background_and_suppresses_bold() {
+    let mut grid = Grid::new(10, 5);
+    grid.current_style = CellStyle {
+        fg: Some(VtColor::Rgb(200, 200, 200)),
+        bg: Some(VtColor::Rgb(100, 100, 100)),
+        bold: true,
+        ..CellStyle::default()
+    };
+    grid.put_char('X');
+    let mut canvas = Canvas::default();
+    canvas.begin(10, 5, None);
+    let mut buf = Vec::new();
+    Compositor::draw_pane_content(
+        &mut canvas,
+        &mut buf,
+        RenderPaneContext {
+            rect: Rect::new(0, 0, 10, 5),
+            grid: &grid,
+            selection: None,
+            scroll_offset: 0,
+            badge: None,
+            dimmed: true,
+            dim_factor: 0.20,
+            dim_content_bg: true,
+        },
+    )
+    .unwrap();
+    let out = String::from_utf8_lossy(&buf);
+    // Bold (\x1b[0;1...) must be suppressed, and bg dimmed (100 * 0.8 = 80)
+    assert!(!out.contains(";1m"), "bold was not suppressed in dimmed pane: {out}");
+    assert!(out.contains(";48;2;80;80;80"), "background was not dimmed: {out}");
+}
+
+#[test]
+fn divider_styles_render_distinct_characters() {
+    let dividers = vec![
+        Divider {
+            is_vertical: false,
+            x: 0,
+            y: 0,
+            length: 10,
+        },
+        Divider {
+            is_vertical: true,
+            x: 5,
+            y: 0,
+            length: 5,
+        },
+    ];
+
+    // Double style
+    let mut canvas = Canvas::default();
+    canvas.begin(10, 5, None);
+    let mut buf = Vec::new();
+    Compositor::draw_dividers(
+        &mut canvas,
+        &mut buf,
+        &dividers,
+        None,
+        DividerStyle {
+            active_color: VtColor::BrightGreen,
+            inactive_color: VtColor::BrightBlack,
+            border_style: BorderStyle::Double,
+        },
+    )
+    .unwrap();
+    let out = String::from_utf8_lossy(&buf);
+    assert!(out.contains('╦') || out.contains('═'), "double border missing: {out}");
+
+    // Ascii style
+    canvas.begin(10, 5, None);
+    buf.clear();
+    Compositor::draw_dividers(
+        &mut canvas,
+        &mut buf,
+        &dividers,
+        None,
+        DividerStyle {
+            active_color: VtColor::BrightGreen,
+            inactive_color: VtColor::BrightBlack,
+            border_style: BorderStyle::Ascii,
+        },
+    )
+    .unwrap();
+    let out = String::from_utf8_lossy(&buf);
+    assert!(out.contains('+') || out.contains('-'), "ascii border missing: {out}");
+}
+
+#[test]
+fn status_bar_applies_custom_colors() {
+    let panes = vec![("main".to_string(), Rect::new(0, 0, 80, 23), true)];
+    let bar = StatusBar {
+        session: "s",
+        tabs: &[],
+        panes: &panes,
+        prefix_active: false,
+        waiting_agents: 0,
+        width: 80,
+        y: 23,
+        bg: Some(VtColor::Rgb(18, 24, 32)),
+        fg: Some(VtColor::Rgb(240, 246, 252)),
+    };
+    let mut buf = Vec::new();
+    Compositor::draw_status_bar(&mut buf, &bar).unwrap();
+    let text = String::from_utf8_lossy(&buf);
+    assert!(text.contains(";48;2;18;24;32"), "bg color missing: {text}");
+    assert!(text.contains(";38;2;240;246;252"), "fg color missing: {text}");
 }

@@ -7,10 +7,10 @@ use std::io::{self, Write};
 
 use super::canvas::Canvas;
 use super::status::agent_badge;
+use crate::config::BorderStyle;
 use crate::layout::{Divider, WindowTab, geometry::Rect};
 use crate::vt::grid::Grid;
 use crate::vt::{Cell, CellStyle, Color as VtColor};
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SelectionRange {
     Character {
@@ -71,6 +71,8 @@ pub struct RenderPaneContext<'a> {
     pub scroll_offset: usize,
     pub badge: Option<&'a str>,
     pub dimmed: bool,
+    pub dim_factor: f32,
+    pub dim_content_bg: bool,
 }
 
 /// Inputs for the bottom status row.
@@ -82,49 +84,124 @@ pub struct StatusBar<'a> {
     pub waiting_agents: usize,
     pub width: u16,
     pub y: u16,
+    pub bg: Option<VtColor>,
+    pub fg: Option<VtColor>,
 }
 
-fn divider_color(x: u16, y: u16, rect: Option<Rect>) -> VtColor {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DividerStyle {
+    pub active_color: VtColor,
+    pub inactive_color: VtColor,
+    pub border_style: BorderStyle,
+}
+
+impl Default for DividerStyle {
+    fn default() -> Self {
+        Self {
+            active_color: VtColor::BrightGreen,
+            inactive_color: VtColor::BrightBlack,
+            border_style: BorderStyle::Single,
+        }
+    }
+}
+
+fn divider_color(x: u16, y: u16, rect: Option<Rect>, style: DividerStyle) -> VtColor {
     if let Some(r) = rect {
         let is_left = x + 1 == r.x && y + 1 >= r.y && y <= r.y + r.height;
         let is_right = x == r.x + r.width && y + 1 >= r.y && y <= r.y + r.height;
         let is_top = y + 1 == r.y && x + 1 >= r.x && x <= r.x + r.width;
         let is_bottom = y == r.y + r.height && x + 1 >= r.x && x <= r.x + r.width;
         if is_left || is_right || is_top || is_bottom {
-            return VtColor::BrightGreen;
+            return style.active_color;
         }
     }
-    VtColor::BrightBlack
+    style.inactive_color
 }
 
-fn divider_cell(div: &Divider, (x, y): (u16, u16), all: &[Divider], active: Option<Rect>) -> Cell {
+fn divider_cell(
+    div: &Divider,
+    (x, y): (u16, u16),
+    all: &[Divider],
+    active: Option<Rect>,
+    style: DividerStyle,
+) -> Cell {
     Cell {
-        c: get_divider_char(div, x, y, all),
+        c: get_divider_char(div, x, y, all, style.border_style),
         style: CellStyle {
-            fg: Some(divider_color(x, y, active)),
+            fg: Some(divider_color(x, y, active, style)),
             ..CellStyle::default()
         },
     }
 }
-
-fn junction_char(up: bool, down: bool, left: bool, right: bool) -> char {
-    match (up, down, left, right) {
-        (true, true, true, true) => '┼',
-        (true, true, true, false) => '┤',
-        (true, true, false, true) => '├',
-        (false, true, true, true) => '┬',
-        (true, false, true, true) => '┴',
-        (false, true, false, true) => '┌',
-        (false, true, true, false) => '┐',
-        (true, false, false, true) => '└',
-        (true, false, true, false) => '┘',
-        (true, true, false, false) => '│',
-        (false, false, true, true) => '─',
-        _ => '┼',
+fn vertical_char(style: BorderStyle) -> char {
+    match style {
+        BorderStyle::Double => '║',
+        BorderStyle::Ascii => '|',
+        BorderStyle::Single | BorderStyle::Rounded => '│',
     }
 }
 
-fn get_divider_char(div: &Divider, x: u16, y: u16, all: &[Divider]) -> char {
+fn horizontal_char(style: BorderStyle) -> char {
+    match style {
+        BorderStyle::Double => '═',
+        BorderStyle::Ascii => '-',
+        BorderStyle::Single | BorderStyle::Rounded => '─',
+    }
+}
+
+fn junction_char(up: bool, down: bool, left: bool, right: bool, style: BorderStyle) -> char {
+    match style {
+        BorderStyle::Ascii => match (up, down, left, right) {
+            (true, true, false, false) => '|',
+            (false, false, true, true) => '-',
+            _ => '+',
+        },
+        BorderStyle::Double => match (up, down, left, right) {
+            (true, true, true, true) => '╬',
+            (true, true, true, false) => '╣',
+            (true, true, false, true) => '╠',
+            (false, true, true, true) => '╦',
+            (true, false, true, true) => '╩',
+            (false, true, false, true) => '╔',
+            (false, true, true, false) => '╗',
+            (true, false, false, true) => '╚',
+            (true, false, true, false) => '╝',
+            (true, true, false, false) => '║',
+            (false, false, true, true) => '═',
+            _ => '╬',
+        },
+        BorderStyle::Rounded => match (up, down, left, right) {
+            (false, true, false, true) => '╭',
+            (false, true, true, false) => '╮',
+            (true, false, false, true) => '╰',
+            (true, false, true, false) => '╯',
+            (true, true, true, true) => '┼',
+            (true, true, true, false) => '┤',
+            (true, true, false, true) => '├',
+            (false, true, true, true) => '┬',
+            (true, false, true, true) => '┴',
+            (true, true, false, false) => '│',
+            (false, false, true, true) => '─',
+            _ => '┼',
+        },
+        BorderStyle::Single => match (up, down, left, right) {
+            (true, true, true, true) => '┼',
+            (true, true, true, false) => '┤',
+            (true, true, false, true) => '├',
+            (false, true, true, true) => '┬',
+            (true, false, true, true) => '┴',
+            (false, true, false, true) => '┌',
+            (false, true, true, false) => '┐',
+            (true, false, false, true) => '└',
+            (true, false, true, false) => '┘',
+            (true, true, false, false) => '│',
+            (false, false, true, true) => '─',
+            _ => '┼',
+        },
+    }
+}
+
+fn get_divider_char(div: &Divider, x: u16, y: u16, all: &[Divider], style: BorderStyle) -> char {
     let has_v = all
         .iter()
         .any(|d| d.is_vertical && d.x == x && (y + 1 >= d.y && y <= d.y + d.length));
@@ -141,11 +218,11 @@ fn get_divider_char(div: &Divider, x: u16, y: u16, all: &[Divider]) -> char {
         let right = all
             .iter()
             .any(|d| !d.is_vertical && d.y == y && (d.x == x + 1 || d.x + d.length > x));
-        junction_char(up, down, left, right)
+        junction_char(up, down, left, right, style)
     } else if div.is_vertical {
-        '│'
+        vertical_char(style)
     } else {
-        '─'
+        horizontal_char(style)
     }
 }
 
@@ -191,16 +268,17 @@ impl Compositor {
         Ok(())
     }
 
-    /// Draws tmux-style single-line dividers on `canvas`, highlighting the active pane's edges.
+    /// Draws tmux-style dividers on `canvas`, highlighting the active pane's edges according to `style`.
     pub fn draw_dividers<W: Write>(
         canvas: &mut Canvas,
         w: &mut W,
         dividers: &[Divider],
         active_rect: Option<Rect>,
+        style: DividerStyle,
     ) -> io::Result<()> {
         for div in dividers {
             for pos in divider_cells(div) {
-                let cell = divider_cell(div, pos, dividers, active_rect);
+                let cell = divider_cell(div, pos, dividers, active_rect, style);
                 canvas.put(w, pos.0, pos.1, cell)?;
             }
         }
@@ -214,19 +292,12 @@ impl Compositor {
         let right = status_right(bar, &get_current_time());
         let total_chars = left.chars().count() + right.chars().count();
         let pad_len = (bar.width as usize).saturating_sub(total_chars + 1);
-        queue!(
-            w,
-            MoveTo(0, bar.y),
-            SetBackgroundColor(Color::DarkGreen),
-            SetForegroundColor(Color::Black),
-            Print(&left),
-            Print(" ".repeat(pad_len)),
-            Print(&right),
-            Print(" "),
-            ResetColor
-        )
+        let bg = bar.bg.unwrap_or(VtColor::Green);
+        let fg = bar.fg.unwrap_or(VtColor::Black);
+        queue!(w, MoveTo(0, bar.y))?;
+        write_status_color(w, fg, bg)?;
+        write!(w, "{left}{pad}{right} \x1b[0m", pad = " ".repeat(pad_len))
     }
-
     /// Renders a one-line command row (`:` prompt, confirmation question or message) across the status row.
     pub fn draw_command_line<W: Write>(
         w: &mut W,
@@ -475,10 +546,19 @@ fn cell_content(
     if ctx.selection.is_some_and(|s| s.contains_abs(col, abs_row)) {
         highlighted(cell.c)
     } else if ctx.dimmed {
+        let style = &cell.style;
+        let dimmed_fg = Some(dim_color(style.fg, ctx.dim_factor));
+        let dimmed_bg = if ctx.dim_content_bg {
+            style.bg.map(|bg| dim_color(Some(bg), ctx.dim_factor))
+        } else {
+            style.bg
+        };
         Cell {
             c: cell.c,
             style: CellStyle {
-                fg: Some(dim(cell.style.fg)),
+                fg: dimmed_fg,
+                bg: dimmed_bg,
+                bold: false,
                 ..cell.style
             },
         }
@@ -500,13 +580,14 @@ fn highlighted(c: char) -> Cell {
 }
 
 /// Foreground of an unfocused pane: default and white turn grey, bright colors their normal shade.
-fn dim(fg: Option<VtColor>) -> VtColor {
+pub fn dim_color(fg: Option<VtColor>, factor: f32) -> VtColor {
+    let scale = (1.0 - factor).clamp(0.0, 1.0);
     match fg {
         None | Some(VtColor::White | VtColor::BrightWhite) => VtColor::BrightBlack,
         Some(VtColor::Rgb(r, g, b)) => VtColor::Rgb(
-            (r as u16 * 140 / 255) as u8,
-            (g as u16 * 140 / 255) as u8,
-            (b as u16 * 140 / 255) as u8,
+            (r as f32 * scale).round() as u8,
+            (g as f32 * scale).round() as u8,
+            (b as f32 * scale).round() as u8,
         ),
         Some(VtColor::BrightRed) => VtColor::Red,
         Some(VtColor::BrightGreen) => VtColor::Green,
@@ -514,7 +595,129 @@ fn dim(fg: Option<VtColor>) -> VtColor {
         Some(VtColor::BrightBlue) => VtColor::Blue,
         Some(VtColor::BrightMagenta) => VtColor::Magenta,
         Some(VtColor::BrightCyan) => VtColor::Cyan,
+        Some(VtColor::Indexed(i)) => {
+            if (16..=231).contains(&i) {
+                let idx = i - 16;
+                let b = (idx % 6) as f32 * 51.0;
+                let g = ((idx / 6) % 6) as f32 * 51.0;
+                let r = (idx / 36) as f32 * 51.0;
+                VtColor::Rgb(
+                    (r * scale).round() as u8,
+                    (g * scale).round() as u8,
+                    (b * scale).round() as u8,
+                )
+            } else if (232..=255).contains(&i) {
+                let gray = 8.0 + (i - 232) as f32 * 10.0;
+                let scaled = (gray * scale).round() as u8;
+                VtColor::Rgb(scaled, scaled, scaled)
+            } else {
+                VtColor::Indexed(i)
+            }
+        }
         Some(other) => other,
+    }
+}
+
+pub fn parse_color(s: &str) -> Option<VtColor> {
+    let s = s.trim().to_lowercase();
+    if let Some(hex) = s.strip_prefix('#') {
+        return parse_hex_color(hex);
+    }
+    match s.replace('_', "-").as_str() {
+        "black" => Some(VtColor::Black),
+        "red" | "dark-red" => Some(VtColor::Red),
+        "green" | "dark-green" => Some(VtColor::Green),
+        "yellow" | "dark-yellow" => Some(VtColor::Yellow),
+        "blue" | "dark-blue" => Some(VtColor::Blue),
+        "magenta" | "dark-magenta" => Some(VtColor::Magenta),
+        "cyan" | "dark-cyan" => Some(VtColor::Cyan),
+        "white" | "grey" | "gray" => Some(VtColor::White),
+        "bright-black" | "brightblack" | "dark-grey" | "dark-gray" => Some(VtColor::BrightBlack),
+        "bright-red" | "brightred" => Some(VtColor::BrightRed),
+        "bright-green" | "brightgreen" => Some(VtColor::BrightGreen),
+        "bright-yellow" | "brightyellow" => Some(VtColor::BrightYellow),
+        "bright-blue" | "brightblue" => Some(VtColor::BrightBlue),
+        "bright-magenta" | "brightmagenta" => Some(VtColor::BrightMagenta),
+        "bright-cyan" | "brightcyan" => Some(VtColor::BrightCyan),
+        "bright-white" | "brightwhite" => Some(VtColor::BrightWhite),
+        other => {
+            if let Some(num) = other.strip_prefix("color").or_else(|| other.strip_prefix("colour")) {
+                num.parse::<u8>().ok().map(VtColor::Indexed)
+            } else if let Ok(num) = other.parse::<u8>() {
+                Some(VtColor::Indexed(num))
+            } else {
+                None
+            }
+        }
+    }
+}
+
+fn parse_hex_color(hex: &str) -> Option<VtColor> {
+    if hex.len() == 6 {
+        let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+        let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+        let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+        Some(VtColor::Rgb(r, g, b))
+    } else if hex.len() == 3 {
+        let r = u8::from_str_radix(&hex[0..1], 16).ok()? * 17;
+        let g = u8::from_str_radix(&hex[1..2], 16).ok()? * 17;
+        let b = u8::from_str_radix(&hex[2..3], 16).ok()? * 17;
+        Some(VtColor::Rgb(r, g, b))
+    } else {
+        None
+    }
+}
+
+pub fn vt_to_crossterm(color: VtColor) -> Color {
+    match color {
+        VtColor::Black => Color::Black,
+        VtColor::Red => Color::DarkRed,
+        VtColor::Green => Color::DarkGreen,
+        VtColor::Yellow => Color::DarkYellow,
+        VtColor::Blue => Color::DarkBlue,
+        VtColor::Magenta => Color::DarkMagenta,
+        VtColor::Cyan => Color::DarkCyan,
+        VtColor::White => Color::Grey,
+        VtColor::BrightBlack => Color::DarkGrey,
+        VtColor::BrightRed => Color::Red,
+        VtColor::BrightGreen => Color::Green,
+        VtColor::BrightYellow => Color::Yellow,
+        VtColor::BrightBlue => Color::Blue,
+        VtColor::BrightMagenta => Color::Magenta,
+        VtColor::BrightCyan => Color::Cyan,
+        VtColor::BrightWhite => Color::White,
+        VtColor::Indexed(n) => Color::AnsiValue(n),
+        VtColor::Rgb(r, g, b) => Color::Rgb { r, g, b },
+    }
+}
+
+fn write_status_color<W: Write>(w: &mut W, fg: VtColor, bg: VtColor) -> io::Result<()> {
+    write!(w, "\x1b[0")?;
+    write_vt_color(w, fg, 30)?;
+    write_vt_color(w, bg, 40)?;
+    write!(w, "m")
+}
+
+fn write_vt_color<W: Write>(out: &mut W, color: VtColor, base: u8) -> io::Result<()> {
+    match color {
+        VtColor::Indexed(i) => write!(out, ";{};5;{i}", base + 8),
+        VtColor::Rgb(r, g, b) => write!(out, ";{};2;{r};{g};{b}", base + 8),
+        VtColor::Black => write!(out, ";{base}"),
+        VtColor::Red => write!(out, ";{}", base + 1),
+        VtColor::Green => write!(out, ";{}", base + 2),
+        VtColor::Yellow => write!(out, ";{}", base + 3),
+        VtColor::Blue => write!(out, ";{}", base + 4),
+        VtColor::Magenta => write!(out, ";{}", base + 5),
+        VtColor::Cyan => write!(out, ";{}", base + 6),
+        VtColor::White => write!(out, ";{}", base + 7),
+        VtColor::BrightBlack => write!(out, ";{}", base + 60),
+        VtColor::BrightRed => write!(out, ";{}", base + 61),
+        VtColor::BrightGreen => write!(out, ";{}", base + 62),
+        VtColor::BrightYellow => write!(out, ";{}", base + 63),
+        VtColor::BrightBlue => write!(out, ";{}", base + 64),
+        VtColor::BrightMagenta => write!(out, ";{}", base + 65),
+        VtColor::BrightCyan => write!(out, ";{}", base + 66),
+        VtColor::BrightWhite => write!(out, ";{}", base + 67),
     }
 }
 
