@@ -132,3 +132,27 @@ fn clear_screen_resets_cursor_and_cells() {
     assert_eq!(grid.cursor.y, 0);
     assert_eq!(grid.get_cell(0, 0).unwrap().c, ' ');
 }
+
+#[test]
+fn line_cells_borrows_history_and_live_screen() {
+    let mut grid = Grid::new(10, 2);
+    write_str(&mut grid, "hist0");
+    grid.carriage_return();
+    grid.newline();
+    write_str(&mut grid, "live0");
+    grid.carriage_return();
+    grid.newline();
+    write_str(&mut grid, "live1");
+
+    assert_eq!(grid.history_len(), 1);
+    // History line at abs_line 0
+    let h_cells = grid.line_cells(0).expect("history line 0");
+    assert_eq!(h_cells[0].c, 'h');
+    // Live lines at abs_line 1 and 2
+    let l0_cells = grid.line_cells(1).expect("live line 0");
+    assert_eq!(l0_cells[0].c, 'l');
+    let l1_cells = grid.line_cells(2).expect("live line 1");
+    assert_eq!(l1_cells[4].c, '1');
+    // Out of bounds
+    assert!(grid.line_cells(3).is_none());
+}

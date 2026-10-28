@@ -162,26 +162,28 @@ pub async fn inventory_json(registry: &[Harness], limit: usize, socket_dir: &Pat
 
 /// Nodes with agent info from every reachable mpx session whose socket is in `socket_dir`.
 pub async fn list_live(socket_dir: &Path) -> Vec<LiveAgent> {
-    let mut out = Vec::new();
-    for ep in crate::ipc::list_sessions(socket_dir) {
+    let probes = crate::ipc::list_sessions(socket_dir).into_iter().map(|ep| async move {
         let Ok(Ok(mut client)) =
             tokio::time::timeout(PROBE_TIMEOUT, Client::connect(&ep.endpoint)).await
         else {
-            continue;
+            return Vec::new();
         };
         let Ok(Ok(nodes)) = tokio::time::timeout(PROBE_TIMEOUT, client.list()).await else {
-            continue;
+            return Vec::new();
         };
-        out.extend(
-            nodes
-                .into_iter()
-                .filter(|n| n.agent.is_some())
-                .map(|node| LiveAgent {
-                    session: ep.name.clone(),
-                    endpoint: ep.endpoint.clone(),
-                    node,
-                }),
-        );
-    }
-    out
+        nodes
+            .into_iter()
+            .filter(|n| n.agent.is_some())
+            .map(|node| LiveAgent {
+                session: ep.name.clone(),
+                endpoint: ep.endpoint.clone(),
+                node,
+            })
+            .collect::<Vec<_>>()
+    });
+    futures_util::future::join_all(probes)
+        .await
+        .into_iter()
+        .flatten()
+        .collect()
 }

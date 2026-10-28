@@ -124,6 +124,28 @@ fn since_future_offset_is_empty() {
 }
 
 #[test]
+fn since_wrapped_buffer_slices() {
+    let mut rb = RingBuffer::new(6);
+    rb.write(b"abcdef");
+    // Writing 3 more evicts 3, leaving "defghi" wrapped across slices in VecDeque.
+    rb.write(b"ghi");
+    assert_eq!(rb.oldest_offset(), 3);
+    assert_eq!(rb.total_written(), 9);
+
+    // Read spanning both slices:
+    let (all, _) = rb.since(3);
+    assert_eq!(all, b"defghi");
+
+    // Read starting partially in first slice:
+    let (part_first, _) = rb.since(4);
+    assert_eq!(part_first, b"efghi");
+
+    // Read starting in second slice:
+    let (second_slice, _) = rb.since(7);
+    assert_eq!(second_slice, b"hi");
+}
+
+#[test]
 fn strip_ansi_removes_csi_and_osc_sequences() {
     let raw = b"\x1b[31mred\x1b[0m \x1b]0;title\x07ok\x1b]2;t\x1b\\!";
     assert_eq!(strip_ansi(raw), "red ok!");

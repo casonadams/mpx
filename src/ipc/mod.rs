@@ -203,17 +203,21 @@ pub async fn connect_stream(endpoint: &str) -> std::io::Result<IpcStream> {
 
 /// Info of every session in `dir` that answers within a short timeout, sorted by name.
 pub async fn session_infos(dir: &Path) -> Vec<crate::protocol::SessionInfo> {
-    let mut out = Vec::new();
-    for ep in list_sessions(dir) {
+    let probes = list_sessions(dir).into_iter().map(|ep| async move {
         let probe = async {
             let mut client = crate::client::Client::connect(&ep.endpoint).await.ok()?;
             client.info().await.ok()
         };
-        if let Ok(Some(info)) = tokio::time::timeout(SESSION_PROBE_TIMEOUT, probe).await {
-            out.push(info);
-        }
-    }
-    out
+        tokio::time::timeout(SESSION_PROBE_TIMEOUT, probe)
+            .await
+            .ok()
+            .flatten()
+    });
+    futures_util::future::join_all(probes)
+        .await
+        .into_iter()
+        .flatten()
+        .collect()
 }
 
 const SESSION_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(300);

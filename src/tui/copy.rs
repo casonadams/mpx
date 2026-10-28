@@ -3,7 +3,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::prompt::PromptState;
 use super::render::SelectionRange;
-use crate::vt::grid::Grid;
+use crate::vt::grid::{Cell, Grid};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SelectionKind {
@@ -214,7 +214,7 @@ impl CopyState {
             SelectionKind::Line => yank_lines(grid, self.anchor_abs_y, cursor_abs_y),
             SelectionKind::Character => yank_chars(grid, self, cursor_abs_y),
             SelectionKind::None => grid
-                .get_line_cells(cursor_abs_y)
+                .line_cells(cursor_abs_y)
                 .map(|cells| {
                     cells
                         .iter()
@@ -255,7 +255,7 @@ fn yank_lines(grid: &Grid, anchor_abs_y: usize, cursor_abs_y: usize) -> String {
     );
     let mut out = String::new();
     for y in min_y..=max_y {
-        if let Some(cells) = grid.get_line_cells(y) {
+        if let Some(cells) = grid.line_cells(y) {
             let line: String = cells.iter().map(|c| c.c).collect();
             out.push_str(line.trim_end());
             out.push('\n');
@@ -273,7 +273,7 @@ fn yank_chars(grid: &Grid, cs: &CopyState, cursor_abs_y: usize) -> String {
     let top = anchor.1.min(cursor.1);
     let bot = anchor.1.max(cursor.1);
     let lines: Vec<Option<Vec<char>>> = (top..=bot)
-        .map(|y| grid.get_line_cells(y).map(|cells| cells.iter().map(|c| c.c).collect()))
+        .map(|y| grid.line_cells(y).map(|cells| cells.iter().map(|c| c.c).collect()))
         .collect();
     char_selection_text(&lines, anchor, cursor)
 }
@@ -504,44 +504,107 @@ pub fn find_next_match(
     if total_lines == 0 {
         return None;
     }
-    let smart_case = query.chars().all(|c| !c.is_uppercase());
+    let query_chars: Vec<char> = query.chars().collect();
+    let smart_case = query_chars.iter().all(|c| !c.is_uppercase());
     let from = (from.0, from.1.min(total_lines.saturating_sub(1)));
     match direction {
-        SearchDirection::Down => find_forward(grid, query, from, total_lines, smart_case),
-        SearchDirection::Up => find_backward(grid, query, from, total_lines, smart_case),
+        SearchDirection::Down => find_forward(grid, &query_chars, from, total_lines, smart_case),
+        SearchDirection::Up => find_backward(grid, &query_chars, from, total_lines, smart_case),
     }
+}
+
+fn trimmed_cell_len(cells: &[Cell]) -> usize {
+    cells
+        .iter()
+        .rposition(|c| !c.c.is_whitespace())
+        .map_or(0, |idx| idx + 1)
+}
+
+fn cell_match(a: char, b: char, smart_case: bool) -> bool {
+    if smart_case {
+        a.to_lowercase().eq(b.to_lowercase())
+    } else {
+        a == b
+    }
+}
+
+fn find_cell_match(
+    cells: &[Cell],
+    query: &[char],
+    smart_case: bool,
+    min_col: Option<usize>,
+) -> Option<usize> {
+    let len = trimmed_cell_len(cells);
+    if len < query.len() {
+        return None;
+    }
+    let start = min_col.map_or(0, |c| c + 1);
+    if start + query.len() > len {
+        return None;
+    }
+    (start..=(len - query.len())).find(|&i| {
+        query
+            .iter()
+            .enumerate()
+            .all(|(k, &qc)| cell_match(cells[i + k].c, qc, smart_case))
+    })
+}
+
+fn rfind_cell_match(
+    cells: &[Cell],
+    query: &[char],
+    smart_case: bool,
+    max_col: Option<usize>,
+) -> Option<usize> {
+    let len = trimmed_cell_len(cells);
+    if len < query.len() {
+        return None;
+    }
+    let max_i = match max_col {
+        Some(max) => {
+            if max == 0 {
+                return None;
+            }
+            (max - 1).min(len - query.len())
+        }
+        None => len - query.len(),
+    };
+    (0..=max_i).rev().find(|&i| {
+        query
+            .iter()
+            .enumerate()
+            .all(|(k, &qc)| cell_match(cells[i + k].c, qc, smart_case))
+    })
 }
 
 fn find_forward(
     grid: &Grid,
-    query: &str,
+    query: &[char],
     (from_x, from_abs_y): (usize, usize),
     total_lines: usize,
     smart_case: bool,
 ) -> Option<(usize, usize)> {
-    if let Some(text) = grid.line_text(from_abs_y)
-        && let Some(&col) = line_matches(&text, query, smart_case)
-            .iter()
-            .find(|&&c| c > from_x)
+    if let Some(cells) = grid.line_cells(from_abs_y)
+        && let Some(col) = find_cell_match(cells, query, smart_case, Some(from_x))
     {
         return Some((col, from_abs_y));
     }
     for abs_y in (from_abs_y + 1)..total_lines {
-        if let Some(text) = grid.line_text(abs_y)
-            && let Some(&col) = line_matches(&text, query, smart_case).first()
+        if let Some(cells) = grid.line_cells(abs_y)
+            && let Some(col) = find_cell_match(cells, query, smart_case, None)
         {
             return Some((col, abs_y));
         }
     }
     for abs_y in 0..from_abs_y {
-        if let Some(text) = grid.line_text(abs_y)
-            && let Some(&col) = line_matches(&text, query, smart_case).first()
+        if let Some(cells) = grid.line_cells(abs_y)
+            && let Some(col) = find_cell_match(cells, query, smart_case, None)
         {
             return Some((col, abs_y));
         }
     }
-    if let Some(text) = grid.line_text(from_abs_y)
-        && let Some(&col) = line_matches(&text, query, smart_case).first()
+    if let Some(cells) = grid.line_cells(from_abs_y)
+        && let Some(col) = find_cell_match(cells, query, smart_case, None)
     {
         return Some((col, from_abs_y));
     }
@@ -550,35 +613,32 @@ fn find_forward(
 
 fn find_backward(
     grid: &Grid,
-    query: &str,
+    query: &[char],
     (from_x, from_abs_y): (usize, usize),
     total_lines: usize,
     smart_case: bool,
 ) -> Option<(usize, usize)> {
-    if let Some(text) = grid.line_text(from_abs_y)
-        && let Some(&col) = line_matches(&text, query, smart_case)
-            .iter()
-            .rev()
-            .find(|&&c| c < from_x)
+    if let Some(cells) = grid.line_cells(from_abs_y)
+        && let Some(col) = rfind_cell_match(cells, query, smart_case, Some(from_x))
     {
         return Some((col, from_abs_y));
     }
     for abs_y in (0..from_abs_y).rev() {
-        if let Some(text) = grid.line_text(abs_y)
-            && let Some(&col) = line_matches(&text, query, smart_case).last()
+        if let Some(cells) = grid.line_cells(abs_y)
+            && let Some(col) = rfind_cell_match(cells, query, smart_case, None)
         {
             return Some((col, abs_y));
         }
     }
     for abs_y in ((from_abs_y + 1)..total_lines).rev() {
-        if let Some(text) = grid.line_text(abs_y)
-            && let Some(&col) = line_matches(&text, query, smart_case).last()
+        if let Some(cells) = grid.line_cells(abs_y)
+            && let Some(col) = rfind_cell_match(cells, query, smart_case, None)
         {
             return Some((col, abs_y));
         }
     }
-    if let Some(text) = grid.line_text(from_abs_y)
-        && let Some(&col) = line_matches(&text, query, smart_case).last()
+    if let Some(cells) = grid.line_cells(from_abs_y)
+        && let Some(col) = rfind_cell_match(cells, query, smart_case, None)
     {
         return Some((col, from_abs_y));
     }

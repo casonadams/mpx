@@ -512,16 +512,30 @@ impl VtScreen {
     /// Scrollback history plus the visible screen as plain text, trailing blank lines trimmed;
     /// `tail` keeps only the last N lines.
     pub fn scrollback_text(&self, tail: Option<usize>) -> String {
-        let grid = &self.handler.grid;
-        let history = grid.history.iter().map(|row| row_text(row));
-        let visible = grid.screen_lines().map(row_text);
-        let mut lines: Vec<String> = history.chain(visible).collect();
-        while lines.last().is_some_and(String::is_empty) {
-            lines.pop();
+        if tail == Some(0) {
+            return String::new();
         }
-        let start = tail.map_or(0, |n| lines.len().saturating_sub(n));
-        lines[start..].join("\n")
+        let grid = &self.handler.grid;
+        let all_rows = grid
+            .history
+            .iter()
+            .map(Vec::as_slice)
+            .chain(grid.screen_lines());
+
+        let non_blank_from_end = all_rows.rev().skip_while(|row| is_blank_row(row));
+
+        let rows: Vec<&[Cell]> = match tail {
+            Some(n) => non_blank_from_end.take(n).collect(),
+            None => non_blank_from_end.collect(),
+        };
+
+        let lines: Vec<String> = rows.into_iter().rev().map(row_text).collect();
+        lines.join("\n")
     }
+}
+
+fn is_blank_row(row: &[Cell]) -> bool {
+    row.iter().all(|cell| cell.c.is_whitespace())
 }
 
 fn row_text(row: &[Cell]) -> String {

@@ -208,6 +208,26 @@ fn find_next_match_finds_forward_and_backward_across_lines() {
     assert_eq!(up, Some((0, 0)), "finds foo on row 0");
 }
 
+#[test]
+fn find_next_match_same_line_and_smart_case() {
+    let mut grid = Grid::new(30, 2);
+    for c in "foo and foo and Foo".chars() {
+        grid.put_char(c);
+    }
+    // Search forward from column 0: finds second foo at 8
+    let next1 = find_next_match(&grid, "foo", (0, 0), SearchDirection::Down);
+    assert_eq!(next1, Some((8, 0)));
+    // Search forward from column 8: finds third Foo at 16 (smart case matches uppercase)
+    let next2 = find_next_match(&grid, "foo", (8, 0), SearchDirection::Down);
+    assert_eq!(next2, Some((16, 0)));
+    // Exact case search for "Foo" does not match lowercase
+    let exact = find_next_match(&grid, "Foo", (0, 0), SearchDirection::Down);
+    assert_eq!(exact, Some((16, 0)));
+    // Backward search from 16 finds previous foo at 8
+    let prev = find_next_match(&grid, "foo", (16, 0), SearchDirection::Up);
+    assert_eq!(prev, Some((8, 0)));
+}
+
 
 #[test]
 fn line_matches_supports_smart_case() {

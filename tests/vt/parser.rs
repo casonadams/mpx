@@ -205,6 +205,13 @@ fn scrollback_trims_trailing_spaces_and_blank_lines() {
 }
 
 #[test]
+fn scrollback_tail_preserves_internal_blank_lines() {
+    let mut vt = VtScreen::new(10, 4);
+    feed(&mut vt, "line1\r\n\r\nline2\r\nline3\r\n\r\n");
+    assert_eq!(vt.scrollback_text(Some(3)), "\nline2\nline3");
+}
+
+#[test]
 fn cha_hpa_vpa_set_absolute_cursor_position() {
     let cases: &[(&str, (usize, usize))] = &[
         ("\x1b[5G", (4, 0)),

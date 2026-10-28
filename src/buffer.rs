@@ -56,7 +56,16 @@ impl RingBuffer {
         let oldest = self.written - self.buffer.len() as u64;
         let start = offset.clamp(oldest, self.written);
         let skip = (start - oldest) as usize;
-        let out = self.buffer.iter().skip(skip).copied().collect();
+        let needed = self.buffer.len() - skip;
+        let mut out = Vec::with_capacity(needed);
+        let (first, second) = self.buffer.as_slices();
+        if skip < first.len() {
+            out.extend_from_slice(&first[skip..]);
+            out.extend_from_slice(second);
+        } else {
+            let second_skip = skip - first.len();
+            out.extend_from_slice(&second[second_skip..]);
+        }
         (out, self.written)
     }
 

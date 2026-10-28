@@ -116,7 +116,7 @@ impl Grid {
     }
 
     /// The visible rows, top to bottom.
-    pub fn screen_lines(&self) -> impl Iterator<Item = &[Cell]> {
+    pub fn screen_lines(&self) -> impl DoubleEndedIterator<Item = &[Cell]> {
         self.lines.iter().map(Vec::as_slice)
     }
 
@@ -159,14 +159,17 @@ impl Grid {
         (total_hist + screen_y).saturating_sub(scroll_offset)
     }
 
-    pub fn get_line_cells(&self, abs_line: usize) -> Option<Vec<Cell>> {
+    pub fn line_cells(&self, abs_line: usize) -> Option<&[Cell]> {
         let total_hist = self.history.len();
         if abs_line < total_hist {
-            self.history.get(abs_line).cloned()
+            self.history.get(abs_line).map(Vec::as_slice)
         } else {
-            let live_y = abs_line - total_hist;
-            self.lines.get(live_y).cloned()
+            self.lines.get(abs_line - total_hist).map(Vec::as_slice)
         }
+    }
+
+    pub fn get_line_cells(&self, abs_line: usize) -> Option<Vec<Cell>> {
+        self.line_cells(abs_line).map(<[Cell]>::to_vec)
     }
 
     /// Returns the text of line `abs_line` (history or live screen), trailing blanks trimmed.
