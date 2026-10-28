@@ -2,7 +2,7 @@
 
 mpx tracks AI coding agents (Claude Code, oh-my-pi, Codex, or any configured harness) running in its panes. It shows which ones need you, jumps between them across sessions, resumes stored sessions, and launches new ones.
 
-Open it with **`Prefix a`**, or start mpx straight into it with **`mpx agents`**.
+Open it with **`Prefix s`**, or start mpx straight into it with **`mpx agents`**.
 
 ```
 ┌─ Agents · 1 need you ───────────────────────────────────────────────────┐
@@ -56,7 +56,7 @@ Typing into an agent that needs input moves it back to working.
 
 ### How state is detected
 
-1. **Hooks** (authoritative). Agents launched with `mpx agents new` / `Prefix a n` get hooks automatically:
+1. **Hooks** (authoritative). Agents launched with `mpx agents new` / `Prefix s n` get hooks automatically:
    - **Claude Code** receives `--settings` with hooks for `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `Notification`, `Stop` and `SessionEnd`. Each runs `mpx hook claude`. mpx also pre-assigns the session id with `--session-id`, so pane and session are linked exactly.
    - **oh-my-pi** receives an extension via `--hook=<file>` that reports session start (with the session id), run start/end, tool approval requests and resolutions, and shutdown through `mpx hook omp <event>`. Approval prompts appear as *needs input* with the tool name as detail.
    - For Claude Code started some other way inside an mpx pane, install the hooks once: `mpx hook print-config claude` prints the `settings.json` block. The hook is silent and exits 0 outside mpx.

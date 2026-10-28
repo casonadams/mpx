@@ -64,6 +64,8 @@ fn status_bar_lists_session_and_pane_names() {
         y: 23,
         bg: None,
         fg: None,
+        zoomed: false,
+        copy_pane: None,
     };
     Compositor::draw_status_bar(&mut buf, &bar).unwrap();
     let out = String::from_utf8_lossy(&buf);
@@ -85,6 +87,8 @@ fn status_bar_paints_every_column_of_its_row() {
         y: 9,
         bg: None,
         fg: None,
+        zoomed: false,
+        copy_pane: None,
     };
     let mut terminal = mpx::vt::VtScreen::new(40, 10);
     terminal.feed(format!("\x1b[?7l\x1b[10;1H{}", "X".repeat(40)).as_bytes());
@@ -110,6 +114,8 @@ fn status_bar_shows_waiting_agent_badge() {
         y: 23,
         bg: None,
         fg: None,
+        zoomed: false,
+        copy_pane: None,
     };
     Compositor::draw_status_bar(&mut buf, &bar).unwrap();
     assert!(String::from_utf8_lossy(&buf).contains("◆3"));
@@ -140,9 +146,31 @@ fn status_text_prefers_window_tabs_and_agent_badge() {
         y: 23,
         bg: None,
         fg: None,
+        zoomed: false,
+        copy_pane: None,
     };
     assert_eq!(status_left(&bar), "[dev] 0:claude- 1:cargo* ");
     assert_eq!(status_right(&bar, "12:00"), " \u{25c6}2 12:00");
+}
+
+#[test]
+fn status_bar_shows_zoom_flag_and_copy_pane_badge() {
+    let panes = vec![("pane-1".to_string(), Rect::new(0, 0, 80, 23), true)];
+    let bar = StatusBar {
+        session: "main",
+        tabs: &[],
+        panes: &panes,
+        prefix_active: false,
+        waiting_agents: 0,
+        width: 80,
+        y: 23,
+        bg: None,
+        fg: None,
+        zoomed: true,
+        copy_pane: Some("pane-1"),
+    };
+    assert_eq!(status_left(&bar), "[main] 0:pane-1*Z ");
+    assert_eq!(status_right(&bar, "12:00"), "[pane-1] Z 12:00");
 }
 
 #[test]
@@ -350,6 +378,8 @@ fn status_bar_applies_custom_colors() {
         y: 23,
         bg: Some(VtColor::Rgb(18, 24, 32)),
         fg: Some(VtColor::Rgb(240, 246, 252)),
+        zoomed: false,
+        copy_pane: None,
     };
     let mut buf = Vec::new();
     Compositor::draw_status_bar(&mut buf, &bar).unwrap();

@@ -9,6 +9,14 @@ pub struct PromptState {
     hist: Option<usize>,
     /// Text typed before history browsing started.
     draft: Vec<char>,
+    comp: Option<CompletionState>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CompletionState {
+    original_prefix: String,
+    candidates: Vec<String>,
+    index: Option<usize>,
 }
 
 impl PromptState {
@@ -19,6 +27,7 @@ impl PromptState {
             chars,
             hist: None,
             draft: Vec::new(),
+            comp: None,
         }
     }
 
@@ -121,33 +130,82 @@ impl PromptState {
         }
     }
 
-    /// Tab: completes the command name. A unique match gets a trailing space; several matches
-    /// extend to their common prefix. Arguments are not completed.
+    /// Tab: completes the command name like tmux. A unique match gets a trailing space; several matches
+    /// extend to their common prefix on the first press and cycle through candidates on repeated Tab.
     pub fn complete(&mut self, names: &[&str]) {
-        let prefix = self.text();
-        if prefix.chars().any(char::is_whitespace) {
+        self.cycle_complete(names, true);
+    }
+
+    /// Shift-Tab / BackTab: cycles through matching candidates in reverse order.
+    pub fn complete_prev(&mut self, names: &[&str]) {
+        self.cycle_complete(names, false);
+    }
+
+    fn cycle_complete(&mut self, names: &[&str], forward: bool) {
+        let text = self.text();
+        if text.chars().any(char::is_whitespace) {
             return;
         }
+
+        if let Some(mut comp) = self.comp.take()
+            && !comp.candidates.is_empty()
+        {
+            let n = comp.candidates.len();
+                let next_idx = match comp.index {
+                    None => {
+                        if forward {
+                            0
+                        } else {
+                            n - 1
+                        }
+                    }
+                    Some(i) => {
+                        if forward {
+                            (i + 1) % n
+                        } else {
+                            (i + n - 1) % n
+                        }
+                    }
+                };
+                comp.index = Some(next_idx);
+                let choice = &comp.candidates[next_idx];
+                self.show(choice);
+                self.comp = Some(comp);
+                return;
+        }
+
+        let prefix = text;
         let matches: Vec<&str> = names
             .iter()
             .copied()
             .filter(|n| n.starts_with(&prefix))
             .collect();
+
         match matches.as_slice() {
             [] => {}
-            [only] => self.show(&format!("{only} ")),
+            [only] => {
+                self.show(&format!("{only} "));
+                self.comp = None;
+            }
             many => {
                 let common = common_prefix(many);
+                let candidates: Vec<String> = many.iter().map(|s| s.to_string()).collect();
                 if common.chars().count() > prefix.chars().count() {
                     self.show(&common);
                 }
+                self.comp = Some(CompletionState {
+                    original_prefix: prefix,
+                    candidates,
+                    index: None,
+                });
             }
         }
     }
 
-    /// Any edit leaves history browsing.
+    /// Any edit leaves history browsing and resets completion cycling.
     fn edit(&mut self) {
         self.hist = None;
+        self.comp = None;
     }
 
     fn show(&mut self, text: &str) {

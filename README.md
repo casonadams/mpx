@@ -96,7 +96,7 @@ mpx wait test-watcher --match 'test result: ok' --timeout 120
 # 5. Split a pane without stealing focus (tmux -h / -d)
 mpx split -h -d --pty -- htop
 
-# 6. Launch an agent beside you, then manage all agents (Prefix a)
+# 6. Launch an agent beside you, then manage all agents (Prefix s)
 mpx agents new claude --split
 ```
 
@@ -104,7 +104,7 @@ mpx agents new claude --split
 
 ## Agent Manager
 
-`Prefix a` (or `mpx agents`) lists every AI agent running in any session (Claude Code, oh-my-pi, Codex, or your own harness). Agents are grouped by state (**needs you**, working, idle, exited), next to stored sessions you can resume. You can jump to an agent, resume or launch one, message several at once, or kill them, all with vim keys. `Prefix A` jumps to the agent that has waited longest, and the status bar shows `◆N` while agents wait. State comes from harness hooks that mpx installs when it launches an agent, with terminal bells and output activity as fallbacks. See **[Agent Manager](docs/AGENT-MANAGER.md)**.
+`Prefix s` (or `mpx agents`) lists every AI agent running in any session (Claude Code, oh-my-pi, Codex, or your own harness). Agents are grouped by state (**needs you**, working, idle, exited), next to stored sessions you can resume. You can jump to an agent, resume or launch one, message several at once, or kill them, all with vim keys. `Prefix A` jumps to the agent that has waited longest, and the status bar shows `◆N` while agents wait. State comes from harness hooks that mpx installs when it launches an agent, with terminal bells and output activity as fallbacks. See **[Agent Manager](docs/AGENT-MANAGER.md)**.
 
 **tmux compatibility**: invoked as `tmux`, the mpx binary translates `split-window`, `send-keys`, `capture-pane`, `list-panes` and friends. With `mpx agents new claude --teams`, Claude Code agent teams spawn their teammates as mpx panes.
 

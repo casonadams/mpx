@@ -182,6 +182,11 @@ fn status_row(app: &App, out: &mut Vec<u8>) -> io::Result<()> {
                     y,
                     bg,
                     fg,
+                    zoomed: app.zoomed.is_some(),
+                    copy_pane: match &app.mode {
+                        Mode::Copy(_) => Some(app.active_pane.as_str()),
+                        _ => None,
+                    },
                 },
             ),
         },

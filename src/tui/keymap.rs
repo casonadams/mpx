@@ -44,11 +44,10 @@ const DEFAULT_BINDINGS: &[(&str, &str)] = &[
     ("q", "detach-client"),
     (":", "command-prompt"),
     ("?", "list-keys"),
-    ("s", "choose-tree"),
+    ("s", "agents"),
     ("w", "choose-tree"),
     ("(", "prev-session"),
     (")", "next-session"),
-    ("a", "agents"),
     ("A", "next-attention"),
 ];
 

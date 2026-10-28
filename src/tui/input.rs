@@ -121,6 +121,7 @@ impl App {
             (KeyCode::Up, _) => prompt.history_prev(&self.history),
             (KeyCode::Down, _) => prompt.history_next(&self.history),
             (KeyCode::Tab, _) => prompt.complete(COMMAND_NAMES),
+            (KeyCode::BackTab, _) => prompt.complete_prev(COMMAND_NAMES),
             _ => {}
         }
     }

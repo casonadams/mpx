@@ -86,6 +86,8 @@ pub struct StatusBar<'a> {
     pub y: u16,
     pub bg: Option<VtColor>,
     pub fg: Option<VtColor>,
+    pub zoomed: bool,
+    pub copy_pane: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -399,21 +401,21 @@ pub fn status_left(bar: &StatusBar<'_>) -> String {
     let mut left = format!("[{}] ", bar.session);
     if bar.tabs.is_empty() {
         for (i, (name, _, is_focused)) in bar.panes.iter().enumerate() {
-            left.push_str(&format!(
-                "{}:{}{} ",
-                i,
-                name,
-                if *is_focused { "*" } else { "-" }
-            ));
+            let flag = match (*is_focused, bar.zoomed) {
+                (true, true) => "*Z",
+                (true, false) => "*",
+                (false, _) => "-",
+            };
+            left.push_str(&format!("{}:{}{} ", i, name, flag));
         }
     } else {
         for tab in bar.tabs {
-            left.push_str(&format!(
-                "{}:{}{} ",
-                tab.index,
-                tab.name,
-                if tab.is_active { "*" } else { "-" }
-            ));
+            let flag = match (tab.is_active, bar.zoomed) {
+                (true, true) => "*Z",
+                (true, false) => "*",
+                (false, _) => "-",
+            };
+            left.push_str(&format!("{}:{}{} ", tab.index, tab.name, flag));
         }
     }
     left
@@ -422,6 +424,12 @@ pub fn status_left(bar: &StatusBar<'_>) -> String {
 /// Right side of the status row: waiting-agent badge, prefix indicator and `clock`.
 pub fn status_right(bar: &StatusBar<'_>, clock: &str) -> String {
     let mut right = String::new();
+    if let Some(pane) = bar.copy_pane {
+        right.push_str(&format!("[{pane}] "));
+    }
+    if bar.zoomed {
+        right.push_str("Z ");
+    }
     if let Some(badge) = agent_badge(bar.waiting_agents) {
         right.push_str(&format!(" {badge} "));
     }

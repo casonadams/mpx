@@ -140,3 +140,18 @@ fn tab_does_not_complete_arguments_or_unknown_names() {
     p.complete(COMMAND_NAMES);
     assert_eq!(p.text(), "zzz");
 }
+
+#[test]
+fn tab_cycles_through_matches_and_backtab_reverses() {
+    let mut p = typed("kill-");
+    p.complete(COMMAND_NAMES);
+    assert_eq!(p.text(), "kill-");
+    p.complete(COMMAND_NAMES);
+    assert_eq!(p.text(), "kill-pane");
+    p.complete(COMMAND_NAMES);
+    assert_eq!(p.text(), "kill-server");
+    p.complete(COMMAND_NAMES);
+    assert_eq!(p.text(), "kill-window");
+    p.complete_prev(COMMAND_NAMES);
+    assert_eq!(p.text(), "kill-server");
+}
