@@ -292,6 +292,7 @@ impl Harness {
         nodes.into_iter().map(|node| node.name).collect()
     }
 
+    #[allow(dead_code)]
     pub async fn logs(&mut self, pane: &str) -> String {
         let (data, _) = self
             .probe
