@@ -291,12 +291,12 @@ impl Compositor {
         let left = status_left(bar);
         let right = status_right(bar, &get_current_time());
         let total_chars = left.chars().count() + right.chars().count();
-        let pad_len = (bar.width as usize).saturating_sub(total_chars + 1);
+        let pad_len = (bar.width as usize).saturating_sub(total_chars);
         let bg = bar.bg.unwrap_or(VtColor::Green);
         let fg = bar.fg.unwrap_or(VtColor::Black);
         queue!(w, MoveTo(0, bar.y))?;
         write_status_color(w, fg, bg)?;
-        write!(w, "{left}{pad}{right} \x1b[0m", pad = " ".repeat(pad_len))
+        write!(w, "{left}{pad}{right}\x1b[0m", pad = " ".repeat(pad_len))
     }
     /// Renders a one-line command row (`:` prompt, confirmation question or message) across the status row.
     pub fn draw_command_line<W: Write>(
@@ -425,7 +425,6 @@ pub fn status_right(bar: &StatusBar<'_>, clock: &str) -> String {
     if let Some(badge) = agent_badge(bar.waiting_agents) {
         right.push_str(&format!(" {badge} "));
     }
-    right.push_str(if bar.prefix_active { " [PREFIX] " } else { " " });
     right.push_str(clock);
     right
 }

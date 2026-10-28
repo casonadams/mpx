@@ -93,7 +93,6 @@ async fn prefix_shows_the_shortcut_menu_after_the_delay_and_help_hides_the_curso
     h.frame().await;
     h.ctrl('b').await;
     let early = h.frame().await;
-    assert!(early.contains("[PREFIX]"), "the prefix shows at once");
     assert!(
         !early.contains("new window"),
         "the menu waits for the delay"

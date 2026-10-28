@@ -75,6 +75,8 @@ impl PtyNode {
         }
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
+        cmd.env_remove("TERM_SESSION_ID");
+        cmd.env("SHELL_SESSIONS_DISABLE", "1");
         for (key, value) in &spec.env {
             cmd.env(key, value);
         }

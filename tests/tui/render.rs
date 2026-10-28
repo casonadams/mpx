@@ -116,7 +116,7 @@ fn status_bar_shows_waiting_agent_badge() {
 }
 
 #[test]
-fn status_text_prefers_window_tabs_and_flags_the_prefix() {
+fn status_text_prefers_window_tabs_and_agent_badge() {
     let panes = vec![("pane".to_string(), Rect::new(0, 0, 80, 23), true)];
     let tabs = vec![
         WindowTab {
@@ -142,7 +142,7 @@ fn status_text_prefers_window_tabs_and_flags_the_prefix() {
         fg: None,
     };
     assert_eq!(status_left(&bar), "[dev] 0:claude- 1:cargo* ");
-    assert_eq!(status_right(&bar, "12:00"), " \u{25c6}2  [PREFIX] 12:00");
+    assert_eq!(status_right(&bar, "12:00"), " \u{25c6}2 12:00");
 }
 
 #[test]
