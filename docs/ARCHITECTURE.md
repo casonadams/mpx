@@ -1,61 +1,67 @@
 # Architecture & Design
 
-`mpx` is built from first principles in Rust on the Tokio asynchronous runtime to eliminate the architectural friction of legacy terminal multiplexers.
-
----
-
-## 1. The Paradigm Shift: From "Terminal" to "Stream Node"
-
-Traditional multiplexers treat every pane as an interactive PTY running a login shell. That assumption introduces significant overhead when coordinating task runners, build watchers, and AI agent harnesses.
-
-In `mpx`, every unit is an **Execution Node**:
+`mpx` is a Rust / Tokio daemon per session, plus thin clients: the TUI, the CLI, the stdio MCP server, and the `tmux` shim. All of them speak the same newline-delimited JSON protocol (`src/protocol.rs`) over a Unix domain socket or Windows Named Pipe.
 
 ```mermaid
 graph TD
-Client[mpx Client / TUI] <-->|Native IPC Socket| Daemon[mpx Daemon Engine]
-Daemon --> L[Layout Engine: Split Tree]
-subgraph Stream Nodes
-PTY[Node: Interactive PTY<br/>zsh / nvim / htop<br/>Full VT parser]
-TASK[Node: Task Runner<br/>cargo watch / dev server<br/>Clean stdout/err buffer]
-PIPE[Node: Virtual FIFO Pipe<br/>JSON-RPC / Agent protocol<br/>In-memory pub/sub]
-end
-L --> PTY
-L --> TASK
-L --> PIPE
+TUI[TUI client] --> D
+CLI[CLI / tmux shim] --> D
+MCP[stdio MCP server] --> D
+HOOK[mpx hook from Claude Code / omp] --> D
+D[Session daemon] --> WS[Workspace: windows, split trees, focus history]
+D --> N[Stream nodes]
+D --> P[Virtual pipes]
+N --> PTY[PTY node: VT grid, modes, title, alerts]
+N --> TASK[Task node: plain stdout/stderr]
+N --> AG[Agent tracker: harness, state, session id]
 ```
 
-### Execution Node Modes
-1. **`Interactive` (PTY)**: Full ANSI/VT terminal emulator using `portable-pty` (POSIX PTY on macOS/Linux, Windows ConPTY on Windows). Raw mode, cursor addressing, DECSTBM margins, mouse tracking.
-2. **`Task` (Pipe Stream)**: Non-PTY child process. Directly captures `stdout`/`stderr` without shell wrappers, tracks process lifecycle, and emits clean line streams.
-3. **`Virtual Pipe` (Structured Channel)**: Circular in-memory FIFO channels for cross-agent communication without disk I/O.
-
 ---
 
-## 2. Dual-Buffer Engine
+## 1. Stream nodes
 
-To bridge the gap between human visual rendering and machine parsing:
+Every pane is a **node** with a stable id (`%N`):
 
-- **Raw Stream Buffer**: An in-memory, thread-safe preallocated ring buffer (`RingBuffer`) storing clean, unescaped output bytes with O(tail) reverse-scanning.
-- **2D Virtual Grid**: A compact 2D cell grid driven by the bare `vte` parser state machine. Tracks cursor coordinates, styles, visual selection ranges, and scrollback history.
+1. **PTY** (`--pty`): a full terminal (POSIX PTY or ConPTY) mirrored into a VT grid. The grid tracks the program's input modes (cursor keys, bracketed paste, focus events), window title (OSC 0/2) and alerts (BEL, OSC 9/777).
+2. **Task**: a child process with captured stdout/stderr and no terminal emulation.
 
-When an AI agent requests logs via MCP or CLI, it reads the clean stream buffer directly without parsing terminal escape codes. When a human views the pane, the TUI composites the 2D grid.
+Each node gets `MPX_ENDPOINT`, `MPX_SESSION`, `MPX_PANE` and `MPX_PANE_ID` in its environment, so programs inside a pane (agents, scripts, `mpx` itself) address their own session. With tmux compatibility, `TMUX`, `TMUX_PANE` and the shim directory on `PATH` are added.
 
----
+Output goes into a ring buffer with **absolute byte offsets**, so readers can poll incrementally (`logs --since`, MCP `mpx_read`) without rereading. PTY scrollback is also available as plain rendered text.
 
-## 3. High-Performance Compositing Pipeline
+## 2. Agent tracking
 
-1. **DEC Mode 2026 Synchronized Updates**: Every frame is wrapped in `\x1b[?2026h` (Begin Synchronized Update) and `\x1b[?2026l` (End Synchronized Update). The outer terminal buffers characters and blits atomically at v-blank, eliminating cursor flicker and line tearing.
-2. **DEC Mode ?7l Autowrap Guard**: Line wrapping is disabled (`\x1b[?7l`) on the alternate screen and the bottom status bar is padded to `width - 1`, guaranteeing that bottom-row clock updates never trigger implicit terminal scrolling.
-3. **Differential SGR Color Emission**: `render_row_cells` tracks active foreground and background colors, emitting escape sequences only when colors transition. This reduces stdout escape byte volume by ~85%.
-4. **Layout Caching**: Split tree layouts and tab geometries are cached in the client, eliminating redundant socket IPC calls during continuous typing or log streaming.
+For each node, the daemon reads the PTY foreground process (comm and argv) to recognize agent harnesses. It keeps a small state machine (`src/node/agent.rs`):
 
----
+- Hook reports (`mpx hook`) are authoritative: session id, working / idle / needs input, detail text.
+- Terminal alerts move an agent to *needs input*; any input to the pane moves it back to *working*.
+- Without hooks, output recency decides *working* versus *idle*.
 
-## 4. Cross-Platform Native IPC
+`Wait` requests can block on exit, quiet output, a regex over screen plus new output, or an agent state. They are evaluated in the daemon with a timeout.
 
-| Platform | Transport | Endpoint Syntax |
+## 3. Workspace
+
+Windows hold binary split trees with ratios. The daemon implements focus history (last pane, last window), swap, break, resize (tmux border semantics), layout presets (even-horizontal, even-vertical, main-vertical, main-horizontal, tiled), sticky window renames, and automatic window names from the focused pane's agent or foreground process. With `remain_on_exit`, an exited pane stays in the layout with its final screen.
+
+## 4. Virtual pipes
+
+Named, in-memory message queues for agent-to-agent coordination. Messages carry sequence numbers and timestamps. Readers use either an explicit `since` or a named **consumer** whose cursor the daemon keeps, and may long-poll (`wait_ms`). Pipes are created on first read or write, and the oldest messages are dropped beyond their byte capacity.
+
+## 5. TUI
+
+A mode state machine (normal, prefix, copy, prompt, confirm, overlay) over a per-pane VT mirror:
+
+- **Keymap**: a tmux-notation key → command-line table; config bindings replace or add keys. Commands share one parser with the `:` prompt.
+- **Input**: xterm key encoding with modifiers and DECCKM, bracketed paste, and focus events forwarded according to each pane's modes.
+- **Sessions**: the client can switch daemons (`(`, `)`, tree, agent jumps) without restarting.
+- **Overlays**: the agent manager, tree, and help, drawn over the panes.
+- **Rendering**: DEC 2026 synchronized updates, differential SGR, and autowrap disabled on the status row.
+
+## 6. Cross-platform IPC
+
+| Platform | Transport | Endpoint |
 | :--- | :--- | :--- |
-| **macOS / Linux** | Unix Domain Socket | `/tmp/mpx-<uid>/<session>.sock` or `$XDG_RUNTIME_DIR/mpx/...` |
-| **Windows** | Windows Named Pipe | `\\.\pipe\mpx-<session>` |
+| macOS / Linux | Unix Domain Socket | `$XDG_RUNTIME_DIR/mpx/<session>.sock` or `/tmp/mpx-<uid>/<session>.sock` (directory mode 0700) |
+| Windows | Named Pipe | `\\.\pipe\mpx-<session>` |
 
-Both implementations wrap `tokio::io::AsyncRead + AsyncWrite`, allowing 100% of framing, serialization, and JSON-RPC dispatch to remain platform-agnostic with zero WSL requirement.
+Sessions are discovered by listing that directory (or the pipe namespace). `kill-server` stops the daemon process and removes its socket.

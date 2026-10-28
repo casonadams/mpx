@@ -123,7 +123,7 @@ Your branch is up to date with 'origin/main'.
 
         <div class="card">
           <h3>tmux Parity & Tabs</h3>
-          <p>Window tabs with <code>Prefix + c</code> (create), <code>Prefix + n/p</code> (nav), <code>%</code> (vertical split), <code>"</code> (horizontal split), and 1-character clean dividers.</p>
+          <p>tmux key bindings (<code>Prefix + c</code>, <code>n/p</code>, <code>%</code>, <code>"</code>, <code>;</code>, <code>!</code>, <code>{ }</code>, <code>Space</code>), a <code>:</code> command prompt with vim aliases, tmux CLI names (<code>ls</code>, <code>send-keys</code>, <code>split -h</code>), and a <code>tmux</code> shim for tools that drive tmux.</p>
         </div>
 
         <div class="card">
@@ -137,13 +137,18 @@ Your branch is up to date with 'origin/main'.
         </div>
 
         <div class="card">
+          <h3>Agent Manager</h3>
+          <p><code>Prefix + a</code> lists every Claude Code, oh-my-pi and Codex session across sessions, grouped by needs-you / working / idle, plus stored sessions you can resume. <code>Prefix + A</code> jumps to the agent waiting longest.</p>
+        </div>
+
+        <div class="card">
           <h3>Native Model Context Protocol</h3>
-          <p>Built-in stdio MCP server. AI agents (<code>oh-my-pi</code>, <code>claude code</code>, Cursor, Windsurf) can spawn tasks, query buffers, and supervise processes without terminal scraping.</p>
+          <p>Built-in stdio MCP server with 21 tools. Agents can wait on exit, regex, or agent state, send tmux key names and bracketed pastes, and launch and prompt other agents without terminal scraping.</p>
         </div>
 
         <div class="card">
           <h3>Inter-Agent Virtual Pipes</h3>
-          <p>In-memory circular FIFO channels allowing concurrent agents and sub-processes to exchange structured tokens and JSON streams with zero disk I/O.</p>
+          <p>In-memory, sequenced message queues with per-consumer cursors and long-polling, so agents coordinate exactly-once with zero disk I/O.</p>
         </div>
       </div>
     </section>

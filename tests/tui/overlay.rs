@@ -1,0 +1,842 @@
+use std::path::PathBuf;
+
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use mpx::agents::{LiveAgent, ResumableSession};
+use mpx::layout::{Rect, WindowTab};
+use mpx::protocol::{AgentInfo, AgentState, NodeInfo, NodeState};
+use mpx::tui::command::Command;
+use mpx::tui::overlay::nav::fuzzy_match;
+use mpx::tui::overlay::tree_view::session_from_snapshot;
+use mpx::tui::overlay::widgets::age_label;
+use mpx::tui::overlay::{
+    AgentsView, HelpEntry, HelpView, Overlay, OverlayAction, TreePane, TreeSession, TreeView,
+    TreeWindow,
+};
+
+fn key(c: char) -> KeyEvent {
+    KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)
+}
+
+fn code(code: KeyCode) -> KeyEvent {
+    KeyEvent::new(code, KeyModifiers::NONE)
+}
+
+fn ctrl(c: char) -> KeyEvent {
+    KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)
+}
+
+fn type_text(view: &mut AgentsView, text: &str) {
+    for c in text.chars() {
+        view.handle_key(key(c));
+    }
+}
+
+fn agent(
+    session: &str,
+    name: &str,
+    id: u32,
+    state: Option<AgentState>,
+    since_ms: u64,
+    output_ms: u64,
+) -> LiveAgent {
+    let mut node = NodeInfo::new(name.to_string(), true, "claude".to_string());
+    node.id = id;
+    node.last_output_ms = output_ms;
+    node.agent = state.map(|state| AgentInfo {
+        harness: "claude".to_string(),
+        state,
+        session_id: Some(format!("sid-{id}")),
+        detail: None,
+        since_ms,
+    });
+    LiveAgent {
+        session: session.to_string(),
+        endpoint: String::new(),
+        node,
+    }
+}
+
+fn exited(mut live: LiveAgent) -> LiveAgent {
+    live.node.state = NodeState::Exited;
+    live
+}
+
+fn with_harness(mut live: LiveAgent, harness: &str) -> LiveAgent {
+    if let Some(info) = live.node.agent.as_mut() {
+        info.harness = harness.to_string();
+    }
+    live
+}
+
+fn resume(harness: &str, id: &str, title: &str, cwd: Option<&str>) -> ResumableSession {
+    ResumableSession {
+        harness: harness.to_string(),
+        id: id.to_string(),
+        title: title.to_string(),
+        cwd: cwd.map(str::to_string),
+        modified_ms: 0,
+        path: PathBuf::new(),
+    }
+}
+
+/// alpha(NeedsInput, since 200), beta(NeedsInput, since 100), gamma/delta(Working), eps(Idle), dead(Exited).
+fn fleet() -> AgentsView {
+    AgentsView::from_data(
+        vec![
+            agent("s", "alpha", 1, Some(AgentState::NeedsInput), 200, 0),
+            agent("s", "beta", 2, Some(AgentState::NeedsInput), 100, 0),
+            agent("s", "gamma", 3, Some(AgentState::Working), 0, 500),
+            agent("s", "delta", 4, Some(AgentState::Working), 0, 900),
+            agent("s", "eps", 5, Some(AgentState::Idle), 0, 0),
+            exited(agent("s", "dead", 6, Some(AgentState::Working), 0, 0)),
+        ],
+        Vec::new(),
+        vec!["claude".to_string(), "omp".to_string()],
+        Some("/work".to_string()),
+    )
+}
+
+fn names(view: &AgentsView) -> Vec<String> {
+    view.visible_names()
+}
+
+#[test]
+fn agents_groups_follow_state_order_and_sort_within_groups() {
+    let view = fleet();
+    assert_eq!(
+        view.group_titles(),
+        vec!["NEEDS YOU", "WORKING", "IDLE", "EXITED"]
+    );
+    assert_eq!(
+        names(&view),
+        vec!["beta", "alpha", "delta", "gamma", "eps", "dead"]
+    );
+}
+
+#[test]
+fn agents_resume_section_is_titled_with_scope_and_listed_last() {
+    let view = AgentsView::from_data(
+        vec![agent("s", "alpha", 1, Some(AgentState::Idle), 0, 0)],
+        vec![
+            resume("claude", "r1", "fix bug", Some("/work")),
+            resume("omp", "r2", "notes", None),
+        ],
+        Vec::new(),
+        Some("/work".to_string()),
+    );
+    assert_eq!(view.group_titles(), vec!["IDLE", "RESUME · /work"]);
+    assert_eq!(names(&view), vec!["alpha", "r1", "r2"]);
+}
+
+#[test]
+fn agents_resume_title_says_all_when_scope_is_toggled() {
+    let mut view = AgentsView::from_data(
+        Vec::new(),
+        vec![resume("claude", "r1", "fix bug", Some("/work"))],
+        Vec::new(),
+        Some("/work".to_string()),
+    );
+    assert!(!view.scope_all());
+    assert_eq!(view.group_titles(), vec!["RESUME · /work"]);
+    assert_eq!(view.handle_key(key('s')), OverlayAction::None);
+    assert!(view.scope_all());
+    assert_eq!(view.group_titles(), vec!["RESUME · all"]);
+    view.handle_key(key('s'));
+    assert!(!view.scope_all());
+}
+
+#[test]
+fn fuzzy_match_is_case_insensitive_ordered_subsequence() {
+    assert!(fuzzy_match("", "anything"));
+    assert!(fuzzy_match("clde", "Claude"));
+    assert!(fuzzy_match("a-b", "alpha-beta"));
+    assert!(!fuzzy_match("tb", "alpha-beta"));
+    assert!(!fuzzy_match("xyz", "alpha"));
+}
+
+#[test]
+fn agents_filter_narrows_live_rows_and_enter_keeps_it() {
+    let mut view = fleet();
+    view.handle_key(key('/'));
+    type_text(&mut view, "dl");
+    assert_eq!(names(&view), vec!["delta"]);
+    assert_eq!(view.handle_key(code(KeyCode::Enter)), OverlayAction::None);
+    assert_eq!(names(&view), vec!["delta"]);
+    assert_eq!(view.handle_key(key('j')), OverlayAction::None);
+    assert_eq!(view.handle_key(code(KeyCode::Esc)), OverlayAction::None);
+    assert_eq!(names(&view).len(), 6);
+}
+
+#[test]
+fn agents_filter_matches_harness_and_backspace_widens_again() {
+    let mut view = AgentsView::from_data(
+        vec![
+            with_harness(agent("s", "one", 1, Some(AgentState::Idle), 0, 0), "omp"),
+            agent("s", "two", 2, Some(AgentState::Idle), 0, 0),
+        ],
+        Vec::new(),
+        Vec::new(),
+        None,
+    );
+    view.handle_key(key('/'));
+    type_text(&mut view, "omp");
+    assert_eq!(names(&view), vec!["one"]);
+    view.handle_key(code(KeyCode::Backspace));
+    view.handle_key(code(KeyCode::Backspace));
+    view.handle_key(code(KeyCode::Backspace));
+    assert_eq!(names(&view), vec!["one", "two"]);
+}
+
+#[test]
+fn agents_esc_in_filter_clears_text_then_closes() {
+    let mut view = fleet();
+    view.handle_key(key('/'));
+    type_text(&mut view, "zzz");
+    assert!(names(&view).is_empty());
+    assert_eq!(view.handle_key(code(KeyCode::Esc)), OverlayAction::None);
+    assert_eq!(names(&view).len(), 6);
+    assert_eq!(view.handle_key(code(KeyCode::Esc)), OverlayAction::Close);
+    assert_eq!(view.handle_key(key('q')), OverlayAction::Close);
+}
+
+#[test]
+fn agents_enter_on_live_selects_its_pane_in_its_session() {
+    let mut view = fleet();
+    assert_eq!(
+        view.handle_key(code(KeyCode::Enter)),
+        OverlayAction::Run(vec![Command::SelectPane {
+            target: "s:%2".to_string()
+        }])
+    );
+}
+
+#[test]
+fn agents_enter_on_resumable_launches_with_resume_id_and_its_cwd() {
+    let mut view = AgentsView::from_data(
+        Vec::new(),
+        vec![resume("omp", "abc", "notes", Some("/proj"))],
+        Vec::new(),
+        None,
+    );
+    let launch = Command::LaunchAgent {
+        harness: "omp".to_string(),
+        resume: Some("abc".to_string()),
+        cwd: Some("/proj".to_string()),
+        split: false,
+    };
+    assert_eq!(
+        view.handle_key(code(KeyCode::Enter)),
+        OverlayAction::Run(vec![launch.clone()])
+    );
+    assert_eq!(view.handle_key(key('r')), OverlayAction::Run(vec![launch]));
+}
+
+#[test]
+fn agents_capital_r_resumes_as_split() {
+    let mut view = AgentsView::from_data(
+        Vec::new(),
+        vec![resume("claude", "abc", "notes", Some("/proj"))],
+        Vec::new(),
+        None,
+    );
+    assert_eq!(
+        view.handle_key(key('R')),
+        OverlayAction::Run(vec![Command::LaunchAgent {
+            harness: "claude".to_string(),
+            resume: Some("abc".to_string()),
+            cwd: Some("/proj".to_string()),
+            split: true,
+        }])
+    );
+}
+
+#[test]
+fn agents_resume_keys_do_nothing_on_live_rows() {
+    let mut view = fleet();
+    assert_eq!(view.handle_key(key('r')), OverlayAction::None);
+    assert_eq!(view.handle_key(key('R')), OverlayAction::None);
+}
+
+#[test]
+fn agents_new_agent_picks_harness_then_launches_in_ctx_cwd() {
+    let mut view = fleet();
+    view.handle_key(key('n'));
+    view.handle_key(key('j'));
+    assert_eq!(
+        view.handle_key(code(KeyCode::Enter)),
+        OverlayAction::Run(vec![Command::LaunchAgent {
+            harness: "omp".to_string(),
+            resume: None,
+            cwd: Some("/work".to_string()),
+            split: false,
+        }])
+    );
+}
+
+#[test]
+fn agents_harness_picker_escape_cancels_without_launching() {
+    let mut view = fleet();
+    view.handle_key(key('n'));
+    assert_eq!(view.handle_key(code(KeyCode::Esc)), OverlayAction::None);
+    assert_eq!(view.handle_key(key('q')), OverlayAction::Close);
+}
+
+#[test]
+fn agents_message_goes_to_every_marked_agent_in_order() {
+    let mut view = fleet();
+    view.handle_key(code(KeyCode::Tab));
+    view.handle_key(key('j'));
+    view.handle_key(code(KeyCode::Tab));
+    view.handle_key(key('m'));
+    type_text(&mut view, "hi");
+    assert_eq!(
+        view.handle_key(code(KeyCode::Enter)),
+        OverlayAction::Run(vec![
+            Command::Paste {
+                target: Some("s:%1".to_string()),
+                text: "hi".to_string(),
+                submit: true,
+            },
+            Command::Paste {
+                target: Some("s:%2".to_string()),
+                text: "hi".to_string(),
+                submit: true,
+            },
+        ])
+    );
+}
+
+#[test]
+fn agents_message_without_marks_goes_to_selected_agent_only() {
+    let mut view = fleet();
+    view.handle_key(key('m'));
+    type_text(&mut view, "ping");
+    assert_eq!(
+        view.handle_key(code(KeyCode::Enter)),
+        OverlayAction::Run(vec![Command::Paste {
+            target: Some("s:%2".to_string()),
+            text: "ping".to_string(),
+            submit: true,
+        }])
+    );
+}
+
+#[test]
+fn agents_message_escape_discards_input_and_empty_message_sends_nothing() {
+    let mut view = fleet();
+    view.handle_key(key('m'));
+    type_text(&mut view, "draft");
+    assert_eq!(view.handle_key(code(KeyCode::Esc)), OverlayAction::None);
+    assert_eq!(view.handle_key(key('q')), OverlayAction::Close);
+
+    view.handle_key(key('m'));
+    assert_eq!(view.handle_key(code(KeyCode::Enter)), OverlayAction::None);
+}
+
+#[test]
+fn agents_message_on_resumable_row_has_no_target() {
+    let mut view = AgentsView::from_data(
+        Vec::new(),
+        vec![resume("claude", "abc", "notes", None)],
+        Vec::new(),
+        None,
+    );
+    view.handle_key(key('m'));
+    type_text(&mut view, "hello");
+    assert_eq!(view.handle_key(code(KeyCode::Enter)), OverlayAction::None);
+}
+
+#[test]
+fn agents_tab_toggles_mark_on_and_off() {
+    let mut view = fleet();
+    view.handle_key(code(KeyCode::Tab));
+    view.handle_key(code(KeyCode::Tab));
+    view.handle_key(key('m'));
+    type_text(&mut view, "x");
+    assert_eq!(
+        view.handle_key(code(KeyCode::Enter)),
+        OverlayAction::Run(vec![Command::Paste {
+            target: Some("s:%2".to_string()),
+            text: "x".to_string(),
+            submit: true,
+        }])
+    );
+}
+
+#[test]
+fn agents_kill_confirms_then_kills_the_pane() {
+    let mut view = fleet();
+    assert_eq!(
+        view.handle_key(key('x')),
+        OverlayAction::Run(vec![Command::Confirm {
+            prompt: "kill beta?".to_string(),
+            then: Box::new(Command::KillPane {
+                target: Some("s:%2".to_string()),
+            }),
+        }])
+    );
+}
+
+#[test]
+fn agents_yank_copies_live_session_id_or_resume_id() {
+    let view = fleet();
+    assert_eq!(view.yank_text(), Some("sid-2".to_string()));
+    let resumable = AgentsView::from_data(
+        Vec::new(),
+        vec![resume("claude", "abc", "notes", None)],
+        Vec::new(),
+        None,
+    );
+    assert_eq!(resumable.yank_text(), Some("abc".to_string()));
+}
+
+#[test]
+fn agents_gg_and_capital_g_jump_to_bounds() {
+    let mut view = fleet();
+    view.handle_key(key('G'));
+    assert_eq!(
+        view.handle_key(code(KeyCode::Enter)),
+        OverlayAction::Run(vec![Command::SelectPane {
+            target: "s:%6".to_string()
+        }])
+    );
+    view.handle_key(key('g'));
+    view.handle_key(key('g'));
+    assert_eq!(
+        view.handle_key(code(KeyCode::Enter)),
+        OverlayAction::Run(vec![Command::SelectPane {
+            target: "s:%2".to_string()
+        }])
+    );
+}
+
+#[test]
+fn agents_k_at_top_and_j_at_bottom_stay_in_bounds() {
+    let mut view = fleet();
+    view.handle_key(key('k'));
+    view.handle_key(code(KeyCode::Up));
+    assert_eq!(names(&view)[0], "beta");
+    view.handle_key(key('G'));
+    view.handle_key(key('j'));
+    view.handle_key(code(KeyCode::Down));
+    assert_eq!(
+        view.handle_key(code(KeyCode::Enter)),
+        OverlayAction::Run(vec![Command::SelectPane {
+            target: "s:%6".to_string()
+        }])
+    );
+}
+
+#[test]
+fn agents_ctrl_d_and_ctrl_u_move_half_page_and_clamp() {
+    let mut view = fleet();
+    view.handle_key(ctrl('d'));
+    assert_eq!(
+        view.handle_key(code(KeyCode::Enter)),
+        OverlayAction::Run(vec![Command::SelectPane {
+            target: "s:%6".to_string()
+        }])
+    );
+    view.handle_key(ctrl('u'));
+    assert_eq!(
+        view.handle_key(code(KeyCode::Enter)),
+        OverlayAction::Run(vec![Command::SelectPane {
+            target: "s:%2".to_string()
+        }])
+    );
+}
+
+#[test]
+fn agents_g_then_other_key_cancels_the_pending_g() {
+    let mut view = fleet();
+    view.handle_key(key('G'));
+    view.handle_key(key('g'));
+    view.handle_key(key('k'));
+    assert_eq!(
+        view.handle_key(code(KeyCode::Enter)),
+        OverlayAction::Run(vec![Command::SelectPane {
+            target: "s:%5".to_string()
+        }])
+    );
+}
+
+#[test]
+fn agents_preview_is_on_by_default() {
+    let text = render_to_string(
+        &Overlay::Agents(AgentsView::default()),
+        Rect::new(0, 0, 120, 20),
+    );
+    assert!(text.contains("Preview"));
+}
+
+#[test]
+fn agents_preview_panel_shows_when_wide_and_hides_on_p() {
+    let mut view = fleet();
+    let wide = render_to_string(&Overlay::Agents(fleet()), Rect::new(0, 0, 120, 20));
+    assert!(wide.contains("Preview"));
+    assert_eq!(view.handle_key(key('p')), OverlayAction::None);
+    let hidden = render_to_string(&Overlay::Agents(view), Rect::new(0, 0, 120, 20));
+    assert!(!hidden.contains("Preview"));
+    let narrow = render_to_string(&Overlay::Agents(fleet()), Rect::new(0, 0, 99, 20));
+    assert!(!narrow.contains("Preview"));
+}
+
+#[test]
+fn age_labels_use_largest_whole_unit() {
+    assert_eq!(age_label(12_000), "12s");
+    assert_eq!(age_label(59_999), "59s");
+    assert_eq!(age_label(3 * 60_000), "3m");
+    assert_eq!(age_label(2 * 3_600_000), "2h");
+    assert_eq!(age_label(5 * 86_400_000), "5d");
+}
+
+fn pane(name: &str, id: u32, agent: Option<AgentState>, active: bool) -> TreePane {
+    TreePane {
+        name: name.to_string(),
+        id,
+        agent,
+        active,
+    }
+}
+
+fn tree() -> TreeView {
+    TreeView::from_data(
+        vec![
+            TreeSession {
+                name: "main".to_string(),
+                windows: vec![
+                    TreeWindow {
+                        index: 0,
+                        name: "shell".to_string(),
+                        active: true,
+                        panes: vec![
+                            pane("zsh", 1, None, true),
+                            pane("claude", 2, Some(AgentState::Idle), false),
+                        ],
+                    },
+                    TreeWindow {
+                        index: 1,
+                        name: "logs".to_string(),
+                        active: false,
+                        panes: vec![pane("tail", 3, None, false)],
+                    },
+                ],
+            },
+            TreeSession {
+                name: "work".to_string(),
+                windows: vec![TreeWindow {
+                    index: 0,
+                    name: "edit".to_string(),
+                    active: true,
+                    panes: vec![pane("vim", 9, None, true)],
+                }],
+            },
+        ],
+        "main",
+    )
+}
+
+/// Moves to `label` from the top and sends `k`.
+fn act(view: &mut TreeView, label: &str, k: KeyEvent) -> OverlayAction {
+    view.handle_key(key('g'));
+    view.handle_key(key('g'));
+    let idx = view
+        .labels()
+        .iter()
+        .position(|l| l == label)
+        .expect("label visible");
+    for _ in 0..idx {
+        view.handle_key(key('j'));
+    }
+    view.handle_key(k)
+}
+
+#[test]
+fn tree_lists_sessions_windows_and_panes_expanded_by_default() {
+    assert_eq!(
+        tree().labels(),
+        vec![
+            "main", "shell", "zsh", "claude", "logs", "tail", "work", "edit", "vim"
+        ]
+    );
+}
+
+#[test]
+fn tree_h_collapses_a_session_and_l_expands_it_again() {
+    let mut view = tree();
+    assert_eq!(act(&mut view, "main", key('h')), OverlayAction::None);
+    assert_eq!(view.labels(), vec!["main", "work", "edit", "vim"]);
+    assert_eq!(act(&mut view, "main", key('l')), OverlayAction::None);
+    assert_eq!(view.labels().len(), 9);
+}
+
+#[test]
+fn tree_h_on_a_leaf_moves_to_its_parent_window() {
+    let mut view = tree();
+    assert_eq!(act(&mut view, "zsh", key('h')), OverlayAction::None);
+    assert_eq!(
+        view.handle_key(code(KeyCode::Enter)),
+        OverlayAction::Run(vec![Command::SelectWindow { index: 0 }])
+    );
+}
+
+#[test]
+fn tree_collapsed_window_hides_its_panes() {
+    let mut view = tree();
+    assert_eq!(act(&mut view, "shell", key('h')), OverlayAction::None);
+    assert_eq!(
+        view.labels(),
+        vec!["main", "shell", "logs", "tail", "work", "edit", "vim"]
+    );
+}
+
+#[test]
+fn tree_enter_on_other_session_switches_to_it() {
+    let mut view = tree();
+    assert_eq!(
+        act(&mut view, "work", code(KeyCode::Enter)),
+        OverlayAction::Run(vec![Command::SwitchSession {
+            name: "work".to_string()
+        }])
+    );
+}
+
+#[test]
+fn tree_enter_on_current_session_just_closes() {
+    let mut view = tree();
+    assert_eq!(
+        act(&mut view, "main", code(KeyCode::Enter)),
+        OverlayAction::Close
+    );
+}
+
+#[test]
+fn tree_enter_on_window_selects_it_and_switches_first_when_remote() {
+    let mut view = tree();
+    assert_eq!(
+        act(&mut view, "logs", code(KeyCode::Enter)),
+        OverlayAction::Run(vec![Command::SelectWindow { index: 1 }])
+    );
+    assert_eq!(
+        act(&mut view, "edit", code(KeyCode::Enter)),
+        OverlayAction::Run(vec![
+            Command::SwitchSession {
+                name: "work".to_string()
+            },
+            Command::SelectWindow { index: 0 },
+        ])
+    );
+}
+
+#[test]
+fn tree_enter_on_pane_selects_session_qualified_pane() {
+    let mut view = tree();
+    assert_eq!(
+        act(&mut view, "claude", code(KeyCode::Enter)),
+        OverlayAction::Run(vec![Command::SelectPane {
+            target: "main:%2".to_string()
+        }])
+    );
+}
+
+#[test]
+fn tree_l_on_collapsed_session_expands_instead_of_selecting() {
+    let mut view = tree();
+    act(&mut view, "work", key('h'));
+    assert_eq!(view.labels().len(), 7);
+    assert_eq!(act(&mut view, "work", key('l')), OverlayAction::None);
+    assert_eq!(view.labels().len(), 9);
+}
+
+#[test]
+fn tree_x_confirms_kill_for_each_node_kind() {
+    let mut view = tree();
+    assert_eq!(
+        act(&mut view, "claude", key('x')),
+        OverlayAction::Run(vec![Command::Confirm {
+            prompt: "kill pane claude?".to_string(),
+            then: Box::new(Command::KillPane {
+                target: Some("main:%2".to_string()),
+            }),
+        }])
+    );
+    assert_eq!(
+        act(&mut view, "logs", key('x')),
+        OverlayAction::Run(vec![Command::Confirm {
+            prompt: "kill window logs?".to_string(),
+            then: Box::new(Command::KillWindow { index: Some(1) }),
+        }])
+    );
+    assert_eq!(
+        act(&mut view, "work", key('x')),
+        OverlayAction::Run(vec![
+            Command::SwitchSession {
+                name: "work".to_string()
+            },
+            Command::Confirm {
+                prompt: "kill session work?".to_string(),
+                then: Box::new(Command::KillServer),
+            },
+        ])
+    );
+}
+
+#[test]
+fn tree_kill_on_current_session_needs_no_switch() {
+    let mut view = tree();
+    assert_eq!(
+        act(&mut view, "main", key('x')),
+        OverlayAction::Run(vec![Command::Confirm {
+            prompt: "kill session main?".to_string(),
+            then: Box::new(Command::KillServer),
+        }])
+    );
+}
+
+#[test]
+fn tree_filter_keeps_matching_nodes_and_their_ancestors() {
+    let mut view = tree();
+    view.handle_key(key('/'));
+    for c in "vim".chars() {
+        view.handle_key(key(c));
+    }
+    assert_eq!(view.labels(), vec!["work", "edit", "vim"]);
+    view.handle_key(code(KeyCode::Esc));
+    assert_eq!(view.labels().len(), 9);
+}
+
+#[test]
+fn tree_q_and_esc_close() {
+    let mut view = tree();
+    assert_eq!(view.handle_key(key('q')), OverlayAction::Close);
+    assert_eq!(view.handle_key(code(KeyCode::Esc)), OverlayAction::Close);
+}
+
+#[test]
+fn session_snapshot_places_panes_in_their_window_and_marks_focus() {
+    let node = |name: &str, id: u32, window: Option<usize>| {
+        let mut n = NodeInfo::new(name.to_string(), true, "sh".to_string());
+        n.id = id;
+        n.window = window;
+        n
+    };
+    let nodes = vec![
+        node("a", 1, Some(0)),
+        node("b", 2, Some(1)),
+        node("c", 3, None),
+    ];
+    let tabs = vec![
+        WindowTab {
+            index: 0,
+            name: "w0".to_string(),
+            is_active: true,
+        },
+        WindowTab {
+            index: 1,
+            name: "w1".to_string(),
+            is_active: false,
+        },
+    ];
+    let session = session_from_snapshot("main".to_string(), &nodes, &tabs, Some("a"));
+    assert_eq!(session.windows.len(), 2);
+    assert_eq!(session.windows[0].panes.len(), 1);
+    assert!(session.windows[0].panes[0].active);
+    assert_eq!(session.windows[1].panes[0].name, "b");
+    assert!(!session.windows[1].panes[0].active);
+}
+
+fn help_entries() -> Vec<HelpEntry> {
+    [
+        ("j/k", "move selection"),
+        ("q", "close overlay"),
+        ("C-b a", "open agents"),
+    ]
+    .into_iter()
+    .map(|(k, c)| HelpEntry {
+        key: k.to_string(),
+        command: c.to_string(),
+    })
+    .collect()
+}
+
+#[test]
+fn help_filter_matches_key_or_command_text() {
+    let mut help = HelpView::new(help_entries());
+    help.handle_key(key('/'));
+    for c in "agent".chars() {
+        help.handle_key(key(c));
+    }
+    let shown: Vec<String> = help.visible().iter().map(|e| e.key.clone()).collect();
+    assert_eq!(shown, vec!["C-b a"]);
+    assert_eq!(help.handle_key(code(KeyCode::Enter)), OverlayAction::None);
+    assert_eq!(help.handle_key(code(KeyCode::Esc)), OverlayAction::None);
+    assert_eq!(help.visible().len(), 3);
+}
+
+#[test]
+fn help_overlay_closes_on_q_and_esc() {
+    let mut overlay = Overlay::help(help_entries());
+    assert_eq!(overlay.handle_key(key('q')), OverlayAction::Close);
+    let mut overlay = Overlay::help(help_entries());
+    assert_eq!(overlay.handle_key(code(KeyCode::Esc)), OverlayAction::Close);
+}
+
+#[test]
+fn help_motion_keys_do_not_close() {
+    let mut help = HelpView::new(help_entries());
+    for k in [
+        key('j'),
+        key('k'),
+        key('G'),
+        key('g'),
+        key('g'),
+        ctrl('d'),
+        ctrl('u'),
+    ] {
+        assert_eq!(help.handle_key(k), OverlayAction::None);
+    }
+}
+
+fn render_to_string(overlay: &Overlay, area: Rect) -> String {
+    let mut buf: Vec<u8> = Vec::new();
+    overlay.render(&mut buf, area).expect("render");
+    String::from_utf8_lossy(&buf).into_owned()
+}
+
+#[test]
+fn agents_render_shows_header_groups_and_rows() {
+    let overlay = Overlay::Agents(fleet());
+    let text = render_to_string(&overlay, Rect::new(0, 0, 120, 20));
+    assert!(text.contains("Agents · 2 need you"));
+    assert!(text.contains("NEEDS YOU"));
+    assert!(text.contains("beta"));
+    assert!(text.contains("WORKING"));
+}
+
+#[test]
+fn overlays_render_into_tiny_and_empty_areas_without_panicking() {
+    for area in [
+        Rect::new(0, 0, 0, 0),
+        Rect::new(0, 0, 1, 1),
+        Rect::new(0, 0, 3, 2),
+    ] {
+        render_to_string(&Overlay::agents(), area);
+        render_to_string(&Overlay::tree(), area);
+        render_to_string(&Overlay::help(help_entries()), area);
+    }
+}
+
+#[test]
+fn tree_render_shows_session_and_pane_names() {
+    let text = render_to_string(&Overlay::Tree(tree()), Rect::new(0, 0, 60, 20));
+    assert!(text.contains("main"));
+    assert!(text.contains("claude"));
+    assert!(text.contains("Tree · 2 sessions"));
+}
+
+#[test]
+fn help_render_shows_entries_and_title() {
+    let text = render_to_string(&Overlay::help(help_entries()), Rect::new(0, 0, 60, 10));
+    assert!(text.contains("Help"));
+    assert!(text.contains("close overlay"));
+}

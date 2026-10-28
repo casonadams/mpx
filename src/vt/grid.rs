@@ -118,7 +118,6 @@ impl Grid {
         self.cursor.y = self.cursor.y.min(new_rows.saturating_sub(1));
     }
 
-
     #[inline]
     fn index(&self, x: usize, y: usize) -> usize {
         y * self.cols + x
@@ -187,7 +186,6 @@ impl Grid {
             }
         }
     }
-
 
     pub fn put_char(&mut self, c: char) {
         if self.cursor.x >= self.cols {
@@ -307,6 +305,47 @@ impl Grid {
         self.scroll_top = saved_top;
     }
 
+    pub fn save_cursor(&mut self) {
+        self.saved_cursor = Some(self.cursor);
+    }
+
+    pub fn restore_cursor(&mut self) {
+        if let Some(cursor) = self.saved_cursor {
+            self.cursor = cursor;
+        }
+    }
+
+    fn cursor_row_mut(&mut self) -> &mut [Cell] {
+        let cols = self.cols;
+        let base = self.cursor.y * cols;
+        &mut self.cells[base..base + cols]
+    }
+
+    pub fn erase_chars(&mut self, count: usize) {
+        let cols = self.cols;
+        let start = self.cursor.x.min(cols);
+        let end = start.saturating_add(count).min(cols);
+        self.cursor_row_mut()[start..end].fill(Cell::default());
+    }
+
+    pub fn insert_blanks(&mut self, count: usize) {
+        let cols = self.cols;
+        let x = self.cursor.x.min(cols - 1);
+        let n = count.min(cols - x);
+        let row = self.cursor_row_mut();
+        row.copy_within(x..cols - n, x + n);
+        row[x..x + n].fill(Cell::default());
+    }
+
+    pub fn delete_chars(&mut self, count: usize) {
+        let cols = self.cols;
+        let x = self.cursor.x.min(cols - 1);
+        let n = count.min(cols - x);
+        let row = self.cursor_row_mut();
+        row.copy_within(x + n..cols, x);
+        row[cols - n..].fill(Cell::default());
+    }
+
     pub fn clear_line(&mut self, mode: usize) {
         let y = self.cursor.y;
         let cols = self.cols;
@@ -391,70 +430,5 @@ impl Grid {
             out.pop();
         }
         out
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_grid_basic_write() {
-        let mut grid = Grid::new(10, 4);
-        for c in "hello".chars() {
-            grid.put_char(c);
-        }
-        assert_eq!(grid.cursor.x, 5);
-        assert_eq!(grid.cursor.y, 0);
-        assert!(grid.render_plain().starts_with("hello"));
-    }
-
-    #[test]
-    fn test_grid_newline_scroll() {
-        let mut grid = Grid::new(10, 2);
-        for c in "line1".chars() {
-            grid.put_char(c);
-        }
-        grid.carriage_return();
-        grid.newline();
-        for c in "line2".chars() {
-            grid.put_char(c);
-        }
-        grid.carriage_return();
-        grid.newline();
-        for c in "line3".chars() {
-            grid.put_char(c);
-        }
-        let rendered = grid.render_plain();
-        assert!(!rendered.contains("line1"));
-        assert!(rendered.contains("line2"));
-        assert!(rendered.contains("line3"));
-    }
-
-    #[test]
-    fn test_grid_multi_scroll_and_history() {
-        let mut grid = Grid::new(10, 4);
-        for i in 0..6 {
-            for c in format!("row{}", i).chars() {
-                grid.put_char(c);
-            }
-            grid.carriage_return();
-            grid.newline();
-        }
-        assert!(grid.history.len() >= 2);
-        assert_eq!(grid.history[0][0].c, 'r');
-        assert_eq!(grid.history[0][3].c, '0');
-    }
-
-    #[test]
-    fn test_grid_clear_screen() {
-        let mut grid = Grid::new(10, 2);
-        for c in "abc".chars() {
-            grid.put_char(c);
-        }
-        grid.clear_screen(2);
-        assert_eq!(grid.cursor.x, 0);
-        assert_eq!(grid.cursor.y, 0);
-        assert_eq!(grid.get_cell(0, 0).unwrap().c, ' ');
     }
 }

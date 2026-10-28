@@ -79,21 +79,34 @@ See **[Installation Guide](docs/INSTALL.md)** for prebuilt `.deb`, `.rpm`, `.tar
 ### 30-Second Tour
 
 ```bash
-# 1. Start or attach to default session "main" (tmux muscle-memory)
+# 1. Start or attach to the default session "main" (Ctrl-b prefix, tmux keys)
 mpx
 
 # 2. Run a background watcher without nesting shells
-mpx run --name "test-watcher" -- cargo watch -x test
+mpx run --name test-watcher -- cargo watch -x test
 
-# 3. List running nodes and inspect exit codes
-mpx list
+# 3. List sessions (tmux `ls`) and panes with exit codes
+mpx ls
+mpx list-panes
 
-# 4. Stream unpolluted logs in real-time (no escape code scraping)
+# 4. Stream logs, or wait for a regex instead of sleep-polling
 mpx logs -f test-watcher
+mpx wait test-watcher --match 'test result: ok' --timeout 120
 
-# 5. Split pane without stealing focus
-mpx split --detach --name "htop" -- htop
+# 5. Split a pane without stealing focus (tmux -h / -d)
+mpx split -h -d --pty -- htop
+
+# 6. Launch an agent beside you, then manage all agents (Prefix a)
+mpx agents new claude --split
 ```
+
+---
+
+## Agent Manager
+
+`Prefix a` (or `mpx agents`) lists every AI agent running in any session (Claude Code, oh-my-pi, Codex, or your own harness). Agents are grouped by state (**needs you**, working, idle, exited), next to stored sessions you can resume. You can jump to an agent, resume or launch one, message several at once, or kill them, all with vim keys. `Prefix A` jumps to the agent that has waited longest, and the status bar shows `◆N` while agents wait. State comes from harness hooks that mpx installs when it launches an agent, with terminal bells and output activity as fallbacks. See **[Agent Manager](docs/AGENT-MANAGER.md)**.
+
+**tmux compatibility**: invoked as `tmux`, the mpx binary translates `split-window`, `send-keys`, `capture-pane`, `list-panes` and friends. With `mpx agents new claude --teams`, Claude Code agent teams spawn their teammates as mpx panes.
 
 ---
 
@@ -112,16 +125,18 @@ mpx split --detach --name "htop" -- htop
 }
 ```
 
-Agents gain access to 12 deterministic tools (`mpx_run`, `mpx_status`, `mpx_read`, `mpx_split`, `mpx_wait`, `mpx_pipe_write`) to launch build tools, monitor background tasks, and split developer panes without terminal scraping. See **[MCP Guide](docs/MCP.md)** for full workflows.
+Agents gain 21 tools: run and wait for processes (exit, quiet output, regex, agent state), read output incrementally, send tmux key names or bracketed pastes, exchange sequenced messages through pipes with per-consumer cursors, and launch and prompt other agents (`mpx_agent_launch`, `mpx_agent_prompt`). Every mpx pane exports `MPX_SESSION`/`MPX_ENDPOINT`, so an agent inside mpx manages its own session automatically. See **[MCP Guide](docs/MCP.md)** for full workflows.
 
 ---
 
 ## Documentation
 
-- **[Architecture & Design](docs/ARCHITECTURE.md)**: Dual-buffer engine, stream nodes, and atomic synchronization.
-- **[CLI Reference & Automation](docs/CLI.md)**: Full command manual, flags, and scripting recipes.
-- **[Keyboard Shortcuts & Vi Mode](docs/KEYBINDINGS.md)**: Leader keys (`Ctrl-B` / `Ctrl-A`), splits, directional navigation, and copy mode.
-- **[Model Context Protocol (MCP)](docs/MCP.md)**: Agent configuration, tools catalog, and inter-agent virtual pipes.
+- **[Architecture & Design](docs/ARCHITECTURE.md)**: Stream nodes, agent tracking, workspace, pipes, and TUI.
+- **[CLI Reference & Automation](docs/CLI.md)**: tmux-style commands, waiting, pipes, and the tmux shim.
+- **[Keyboard Shortcuts](docs/KEYBINDINGS.md)**: Prefix bindings, `:` command prompt with vim aliases, overlays, and copy mode.
+- **[Agent Manager](docs/AGENT-MANAGER.md)**: Find, jump to, resume, launch, and message agent sessions.
+- **[Configuration](docs/CONFIG.md)**: Prefix, key bindings, `remain_on_exit`, and agent harnesses.
+- **[Model Context Protocol (MCP)](docs/MCP.md)**: Agent configuration, tools catalog, and agent-to-agent workflows.
 - **[Installation Guide](docs/INSTALL.md)**: Package managers, static archives, and cross-platform builds.
 - **[Interactive Website](https://casonadams.github.io/mpx/)**: Online visual demo and live documentation.
 

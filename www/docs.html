@@ -60,7 +60,7 @@ mpx -s dev</code></pre>
 
     <section id="shortcuts">
       <h2>TUI Keybindings & Navigation</h2>
-      <p>Both <strong><code>Ctrl-B</code></strong> (default tmux prefix) and <strong><code>Ctrl-A</code></strong> (common rebind) are supported as leader keys out of the box.</p>
+      <p><strong><code>Ctrl-b</code></strong> is the prefix (configurable, e.g. <code>prefix = "C-a"</code> in <code>~/.config/mpx/config.toml</code>). Press it twice to send it to the program. When tmux has no precedent, bindings follow vim.</p>
 
       <h3>Windows (Tabs)</h3>
       <table>
@@ -72,6 +72,8 @@ mpx -s dev</code></pre>
           <tr><td><code>Prefix + n</code></td><td>Next Window</td><td>Switch to the next window tab</td></tr>
           <tr><td><code>Prefix + p</code></td><td>Previous Window</td><td>Switch to the previous window tab</td></tr>
           <tr><td><code>Prefix + 0..9</code></td><td>Select Window</td><td>Jump directly to window tab by index</td></tr>
+          <tr><td><code>Prefix + ^</code></td><td>Last Window</td><td>Previously active window</td></tr>
+          <tr><td><code>Prefix + ,</code> / <code>&amp;</code></td><td>Rename / Kill Window</td><td>Rename via the prompt; kill asks y/n</td></tr>
         </tbody>
       </table>
 
@@ -87,10 +89,27 @@ mpx -s dev</code></pre>
           <tr><td><code>Prefix + j</code> / <code>Down</code></td><td>Focus Down</td><td>Geometric directional focus move down</td></tr>
           <tr><td><code>Prefix + k</code> / <code>Up</code></td><td>Focus Up</td><td>Geometric directional focus move up</td></tr>
           <tr><td><code>Prefix + l</code> / <code>Right</code></td><td>Focus Right</td><td>Geometric directional focus move right</td></tr>
-          <tr><td><code>Prefix + o</code> / <code>Tab</code></td><td>Rotate Pane</td><td>Cycle focus to next pane in active window</td></tr>
+          <tr><td><code>Prefix + o</code> / <code>Tab</code> / <code>;</code></td><td>Next / Last Pane</td><td>Cycle panes or return to the previous one</td></tr>
+          <tr><td><code>Prefix + H J K L</code></td><td>Resize</td><td>Move the border 5 cells (repeatable for 500 ms)</td></tr>
           <tr><td><code>Prefix + z</code></td><td>Toggle Zoom</td><td>Maximize active pane to 100% full screen (press again to un-zoom)</td></tr>
-          <tr><td><code>Prefix + x</code></td><td>Kill Pane</td><td>Terminate the active pane process</td></tr>
+          <tr><td><code>Prefix + x</code> / <code>!</code></td><td>Kill / Break Pane</td><td>Kill asks y/n; break moves the pane to its own window</td></tr>
+          <tr><td><code>Prefix + { }</code> / <code>Space</code></td><td>Swap / Layout</td><td>Swap with neighbour; cycle layout presets</td></tr>
           <tr><td><code>Prefix + d</code></td><td>Detach</td><td>Cleanly detach back to host terminal (leaves daemon running)</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Sessions, Agents &amp; Prompt</h3>
+      <table>
+        <thead>
+          <tr><th>Shortcut</th><th>Action</th><th>Description</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>Prefix + a</code></td><td>Agent Manager</td><td>All AI agents across sessions grouped by state, plus resumable sessions</td></tr>
+          <tr><td><code>Prefix + A</code></td><td>Next Attention</td><td>Jump to the agent that has waited longest for input</td></tr>
+          <tr><td><code>Prefix + s</code> / <code>w</code></td><td>Tree</td><td>Sessions, windows and panes with vim navigation</td></tr>
+          <tr><td><code>Prefix + ( )</code></td><td>Switch Session</td><td>Previous / next session</td></tr>
+          <tr><td><code>Prefix + :</code></td><td>Command Prompt</td><td>tmux commands with vim aliases (<code>:vsplit</code>, <code>:tabnew</code>, <code>:q</code>)</td></tr>
+          <tr><td><code>Prefix + ?</code></td><td>Key List</td><td>Searchable list of every binding</td></tr>
         </tbody>
       </table>
 
@@ -149,18 +168,14 @@ mpx -s dev</code></pre>
   }
 }</code></pre>
 
-      <h3>Exposed MCP Tools</h3>
+      <h3>Exposed MCP Tools (21)</h3>
       <ul>
-        <li><code>mpx_run(command, args, name, pty)</code>: Spawn a background task or interactive PTY command</li>
-        <li><code>mpx_split(command, direction, args, name, pty)</code>: Split workspace pane and run command</li>
-        <li><code>mpx_list()</code>: Query active stream nodes, types, PIDs, and exit statuses</li>
-        <li><code>mpx_read(name, tail)</code>: Retrieve clean unescaped scrollback logs</li>
-        <li><code>mpx_screen(name)</code>: Snapshot the 2D virtual terminal screen buffer</li>
-        <li><code>mpx_send(name, data)</code>: Send keystrokes / text directly to process stdin</li>
-        <li><code>mpx_wait(name)</code>: Await command exit and return exit code without polling</li>
-        <li><code>mpx_kill(name)</code>: Terminate a running node</li>
-        <li><code>mpx_pipe_write(name, data)</code>: Write message to inter-agent virtual pipe</li>
-        <li><code>mpx_pipe_read(name)</code>: Read content from an inter-agent virtual pipe</li>
+        <li><code>mpx_run</code>, <code>mpx_split</code>, <code>mpx_new_window</code>, <code>mpx_list</code>, <code>mpx_status</code>, <code>mpx_kill</code>, <code>mpx_focus</code>, <code>mpx_sessions</code>: processes, panes and sessions</li>
+        <li><code>mpx_read(name, tail, plain, since)</code>: incremental output reads returning <code>{text, next}</code>; <code>mpx_screen(name)</code>: rendered screen</li>
+        <li><code>mpx_send</code>, <code>mpx_send_keys</code> (tmux key names), <code>mpx_paste</code> (bracketed, optional submit)</li>
+        <li><code>mpx_wait(name, condition)</code>: exit, quiet output, regex match, or agent state, with timeout</li>
+        <li><code>mpx_pipe_write</code>, <code>mpx_pipe_read</code> (consumer cursors, long-poll), <code>mpx_pipe_create</code>, <code>mpx_pipe_list</code></li>
+        <li><code>mpx_agents</code>, <code>mpx_agent_launch</code>, <code>mpx_agent_prompt</code>: list, start and prompt other agents</li>
       </ul>
     </section>
 
@@ -168,35 +183,34 @@ mpx -s dev</code></pre>
 
     <section id="pipes">
       <h2>Inter-Agent Virtual Pipes</h2>
-      <p>Virtual pipes are in-memory circular FIFO buffers allowing concurrent tools and agents to communicate with zero disk I/O:</p>
-      <pre><code># Create a named pipe channel
-mpx pipe create agent_bus
-
-# Stream structured tokens or JSON into the pipe
+      <p>Virtual pipes are in-memory, sequenced message queues. Each message has a sequence number, named consumers keep daemon-side cursors, and readers can long-poll before any writer exists:</p>
+      <pre><code># Write messages (the pipe is created on first use)
 mpx pipe write agent_bus '{"action": "test_complete", "code": 0}'
 
-# Read data from the pipe
-mpx pipe read agent_bus
+# Each consumer receives every message once; block up to 30s
+mpx pipe read agent_bus --consumer reviewer --wait 30000
 
-# List all active pipes
-mpx pipe list</code></pre>
+# Stream messages as they arrive
+mpx pipe subscribe agent_bus</code></pre>
     </section>
 
     <hr style="border: 0; border-top: 1px solid var(--border); margin: 3rem 0;">
 
     <section id="cli">
       <h2>CLI Command Reference</h2>
-      <pre><code>mpx                      # Start or attach to default session
-mpx -s dev               # Start or attach to session "dev"
-mpx run -- cargo test    # Run command in managed task node
-mpx run --pty -- htop    # Run interactive command in PTY
-mpx list                 # List active nodes (ls alias)
-mpx logs &lt;name&gt; [-f]     # Read or stream logs
-mpx send &lt;name&gt; &lt;text&gt;   # Send input to stdin
-mpx wait &lt;name&gt;          # Wait for process exit code
-mpx kill &lt;name&gt;          # Terminate a node
-mpx stop                 # Stop background daemon (kill-server alias)
-mpx mcp                  # Launch stdio MCP server</code></pre>
+      <pre><code>mpx                              # Start or attach to default session
+mpx ls                           # List sessions (tmux ls)
+mpx list-panes                   # List panes with ids (%N) and status
+mpx run --pty -- htop            # Run interactive command in PTY
+mpx split -h -d -- htop          # Split side by side without focus (tmux flags)
+mpx logs --plain --tail 50 &lt;name&gt; # Rendered scrollback
+mpx send-keys -t %1 C-c          # tmux key names
+mpx paste -t %1 --submit "text"  # Bracketed paste + Enter
+mpx wait &lt;name&gt; --state needs_input --timeout 60
+mpx agents                       # Agent manager
+mpx agents new claude --split    # Launch an agent with hooks installed
+mpx kill-server                  # Stop the session daemon
+mpx mcp                          # Launch stdio MCP server</code></pre>
     </section>
   </main>
 

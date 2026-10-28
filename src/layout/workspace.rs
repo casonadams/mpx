@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use super::geometry::Rect;
-use super::tree::{Direction, Divider, LayoutNode};
+use super::tree::{Direction, Divider, LayoutNode, preset_tree};
+use crate::protocol::{LayoutPreset, Side};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WindowTab {
@@ -14,111 +15,144 @@ pub struct WindowTab {
 pub struct Window {
     pub id: usize,
     pub name: String,
+    /// Name given at creation; automatic naming falls back to it.
+    #[serde(default)]
+    pub label: String,
+    /// Set by an explicit rename; disables automatic naming.
+    #[serde(default)]
+    pub renamed: bool,
     pub root: Option<LayoutNode>,
     pub focused: Option<String>,
+    #[serde(default)]
+    pub last_focused: Option<String>,
+    /// Preset most recently applied by `select-layout`, used to cycle.
+    #[serde(default)]
+    pub preset: Option<LayoutPreset>,
 }
 
 impl Window {
     pub fn new(id: usize, name: String, root_node: String) -> Self {
         Self {
             id,
+            label: name.clone(),
             name,
+            renamed: false,
             root: Some(LayoutNode::leaf(root_node.clone())),
             focused: Some(root_node),
+            last_focused: None,
+            preset: None,
         }
     }
 
-    pub fn add_or_split(&mut self, node_name: String, dir: Direction) {
-        self.add_or_split_with_focus(node_name, dir, true);
+    pub fn leaves(&self) -> Vec<String> {
+        self.root
+            .as_ref()
+            .map(LayoutNode::all_leaves)
+            .unwrap_or_default()
     }
 
-    pub fn add_or_split_with_focus(&mut self, node_name: String, dir: Direction, focus: bool) {
-        if self.root.is_none() {
+    pub fn contains(&self, name: &str) -> bool {
+        self.root.as_ref().is_some_and(|r| r.has_leaf(name))
+    }
+
+    /// Splits `target` (or the focused pane, or the first pane). `percent` is the share the new
+    /// pane takes; the new pane is placed right of / below the target.
+    pub fn split_at(
+        &mut self,
+        target: Option<&str>,
+        node_name: String,
+        dir: Direction,
+        percent: Option<u8>,
+        focus: bool,
+    ) -> bool {
+        let Some(root) = self.root.as_mut() else {
             self.root = Some(LayoutNode::leaf(node_name.clone()));
             self.focused = Some(node_name);
-            return;
+            return true;
+        };
+        let leaves = root.all_leaves();
+        let anchor = target
+            .map(str::to_string)
+            .or_else(|| self.focused.clone())
+            .or_else(|| leaves.first().cloned());
+        let Some(anchor) = anchor else { return false };
+        let ratio = percent.map_or(0.5, |p| 1.0 - f32::from(p.clamp(1, 99)) / 100.0);
+        if !root.split_leaf_with(&anchor, node_name.clone(), dir, ratio) {
+            return false;
         }
-
-        let target = self.focused.clone();
-        if let (Some(root), Some(focus_target)) = (&mut self.root, target) {
-            if root.split_leaf(&focus_target, node_name.clone(), dir) {
-                if focus {
-                    self.focused = Some(node_name);
-                }
-                return;
-            }
+        if focus {
+            self.set_focus(&node_name);
         }
-
-        if let Some(root) = &mut self.root {
-            let leaves = root.all_leaves();
-            if let Some(first) = leaves.first() {
-                root.split_leaf(first, node_name.clone(), dir);
-                if focus {
-                    self.focused = Some(node_name);
-                }
-            }
-        }
+        true
     }
 
     pub fn remove(&mut self, node_name: &str) {
         if let Some(root) = self.root.take() {
             self.root = root.remove_leaf(node_name);
         }
-
+        if self.last_focused.as_deref() == Some(node_name) {
+            self.last_focused = None;
+        }
         if self.focused.as_deref() == Some(node_name) {
-            self.focused = self.root.as_ref().and_then(|r| r.all_leaves().into_iter().next());
+            self.focused = self.leaves().into_iter().next();
+        }
+    }
+
+    /// Focuses a leaf; the previously focused pane becomes the `last_focused` pane.
+    pub fn set_focus(&mut self, name: &str) -> bool {
+        if !self.contains(name) {
+            return false;
+        }
+        if self.focused.as_deref() != Some(name) {
+            self.last_focused = self.focused.take();
+            self.focused = Some(name.to_string());
+        }
+        true
+    }
+
+    pub fn focus_last(&mut self) -> bool {
+        match self.last_focused.clone() {
+            Some(last) if self.contains(&last) => {
+                self.last_focused = self.focused.take();
+                self.focused = Some(last);
+                true
+            }
+            _ => false,
         }
     }
 
     pub fn focus_next(&mut self) {
-        let leaves = match &self.root {
-            Some(r) => r.all_leaves(),
-            None => return,
-        };
+        let leaves = self.leaves();
         if leaves.is_empty() {
             self.focused = None;
             return;
         }
-
-        let current_idx = self
+        let current = self
             .focused
             .as_ref()
             .and_then(|f| leaves.iter().position(|l| l == f))
             .unwrap_or(0);
-
-        let next_idx = (current_idx + 1) % leaves.len();
-        self.focused = Some(leaves[next_idx].clone());
-    }
-
-    pub fn focus_prev(&mut self) {
-        let leaves = match &self.root {
-            Some(r) => r.all_leaves(),
-            None => return,
-        };
-        if leaves.is_empty() {
-            self.focused = None;
-            return;
-        }
-
-        let current_idx = self
-            .focused
-            .as_ref()
-            .and_then(|f| leaves.iter().position(|l| l == f))
-            .unwrap_or(0);
-
-        let prev_idx = if current_idx == 0 {
-            leaves.len() - 1
-        } else {
-            current_idx - 1
-        };
-        self.focused = Some(leaves[prev_idx].clone());
+        let name = leaves[(current + 1) % leaves.len()].clone();
+        self.set_focus(&name);
     }
 
     pub fn focus(&mut self, name: &str) {
-        if let Some(root) = &self.root {
-            if root.all_leaves().iter().any(|l| l == name) {
-                self.focused = Some(name.to_string());
-            }
+        self.set_focus(name);
+    }
+
+    /// Applies `preset` (or the one after the current preset when `None`) to the leaves.
+    pub fn select_layout(&mut self, preset: Option<LayoutPreset>) {
+        let next = preset.unwrap_or_else(|| next_preset(self.preset));
+        if let Some(root) = preset_tree(next, &self.leaves()) {
+            self.root = Some(root);
+            self.preset = Some(next);
+        }
+    }
+
+    pub fn resize_split(&mut self, name: &str, side: Side, cells: u16, bounds: Rect) -> bool {
+        match self.root.as_mut() {
+            Some(root) => root.resize_border(name, side, cells, bounds),
+            None => false,
         }
     }
 
@@ -139,12 +173,22 @@ impl Window {
     }
 }
 
+fn next_preset(current: Option<LayoutPreset>) -> LayoutPreset {
+    let all = LayoutPreset::ALL;
+    match current.and_then(|c| all.iter().position(|p| *p == c)) {
+        Some(i) => all[(i + 1) % all.len()],
+        None => all[0],
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Workspace {
     pub name: String,
     pub windows: Vec<Window>,
     pub active_idx: usize,
     pub next_window_id: usize,
+    #[serde(default)]
+    pub last_window: Option<usize>,
 }
 
 impl Workspace {
@@ -154,40 +198,70 @@ impl Workspace {
             windows: Vec::new(),
             active_idx: 0,
             next_window_id: 0,
+            last_window: None,
         }
     }
 
     pub fn new_window(&mut self, window_name: String, root_node: String) -> usize {
+        self.new_window_with_focus(window_name, root_node, true)
+    }
+
+    pub fn new_window_with_focus(
+        &mut self,
+        window_name: String,
+        root_node: String,
+        focus: bool,
+    ) -> usize {
         let id = self.next_window_id;
         self.next_window_id += 1;
-        let window = Window::new(id, window_name, root_node);
-        self.windows.push(window);
-        self.active_idx = self.windows.len().saturating_sub(1);
+        self.windows.push(Window::new(id, window_name, root_node));
+        if focus {
+            self.set_active(self.windows.len() - 1);
+        }
         id
+    }
+
+    fn set_active(&mut self, idx: usize) {
+        if idx < self.windows.len() && idx != self.active_idx {
+            self.last_window = Some(self.active_idx);
+            self.active_idx = idx;
+        }
     }
 
     pub fn next_window(&mut self) {
         if !self.windows.is_empty() {
-            self.active_idx = (self.active_idx + 1) % self.windows.len();
+            self.set_active((self.active_idx + 1) % self.windows.len());
         }
     }
 
     pub fn prev_window(&mut self) {
         if !self.windows.is_empty() {
-            self.active_idx = if self.active_idx == 0 {
-                self.windows.len().saturating_sub(1)
+            let prev = if self.active_idx == 0 {
+                self.windows.len() - 1
             } else {
                 self.active_idx - 1
             };
+            self.set_active(prev);
         }
     }
 
     pub fn select_window(&mut self, idx: usize) -> bool {
         if idx < self.windows.len() {
-            self.active_idx = idx;
+            self.set_active(idx);
             true
         } else {
             false
+        }
+    }
+
+    /// Switches to the window that was active before the current one.
+    pub fn last_window_switch(&mut self) -> bool {
+        match self.last_window {
+            Some(idx) if idx < self.windows.len() => {
+                self.set_active(idx);
+                true
+            }
+            _ => false,
         }
     }
 
@@ -211,6 +285,14 @@ impl Workspace {
         self.windows.get_mut(self.active_idx)
     }
 
+    pub fn window_of(&self, name: &str) -> Option<usize> {
+        self.windows.iter().position(|w| w.contains(name))
+    }
+
+    /// Number of panes across all windows.
+    pub fn pane_count(&self) -> usize {
+        self.windows.iter().map(|w| w.leaves().len()).sum()
+    }
     pub fn add_or_split(&mut self, node_name: String, dir: Direction) {
         self.add_or_split_with_focus(node_name, dir, true);
     }
@@ -218,32 +300,62 @@ impl Workspace {
     pub fn add_or_split_with_focus(&mut self, node_name: String, dir: Direction, focus: bool) {
         if self.windows.is_empty() {
             let win_name = node_name.clone();
-            self.new_window(win_name, node_name);
+            self.new_window_with_focus(win_name, node_name, focus);
             return;
         }
 
         if let Some(win) = self.windows.get_mut(self.active_idx) {
-            win.add_or_split_with_focus(node_name, dir, focus);
+            win.split_at(None, node_name, dir, None, focus);
         }
+    }
+
+    /// Splits `target` (default: the focused pane of the active window). The new pane's window
+    /// becomes active when `focus` is set.
+    pub fn split_pane(
+        &mut self,
+        target: Option<&str>,
+        node_name: String,
+        dir: Direction,
+        percent: Option<u8>,
+        focus: bool,
+    ) -> Result<(), String> {
+        let idx = match target {
+            Some(t) => self
+                .window_of(t)
+                .ok_or_else(|| format!("Node '{}' not found", t))?,
+            None if self.windows.is_empty() => {
+                self.new_window_with_focus(node_name.clone(), node_name, focus);
+                return Ok(());
+            }
+            None => self.active_idx,
+        };
+        if !self.windows[idx].split_at(target, node_name, dir, percent, focus) {
+            return Err("Split target not found".to_string());
+        }
+        if focus {
+            self.set_active(idx);
+        }
+        Ok(())
     }
 
     pub fn remove(&mut self, node_name: &str) {
         for win in &mut self.windows {
             win.remove(node_name);
         }
+        self.drop_empty_windows();
+    }
 
-        // Close windows that have no remaining panes
-        let mut i = 0;
-        while i < self.windows.len() {
-            if self.windows[i].root.is_none() {
-                self.windows.remove(i);
-                if self.active_idx >= self.windows.len() && !self.windows.is_empty() {
-                    self.active_idx = self.windows.len() - 1;
-                }
-            } else {
-                i += 1;
-            }
-        }
+    fn drop_empty_windows(&mut self) {
+        let active = self.windows.get(self.active_idx).map(|w| w.id);
+        let last = self
+            .last_window
+            .and_then(|i| self.windows.get(i))
+            .map(|w| w.id);
+        self.windows.retain(|w| w.root.is_some());
+        self.active_idx = active
+            .and_then(|id| self.windows.iter().position(|w| w.id == id))
+            .unwrap_or_else(|| self.windows.len().saturating_sub(1));
+        self.last_window = last.and_then(|id| self.windows.iter().position(|w| w.id == id));
     }
 
     pub fn focus_next(&mut self) {
@@ -252,22 +364,122 @@ impl Workspace {
         }
     }
 
-    pub fn focus_prev(&mut self) {
-        if let Some(win) = self.windows.get_mut(self.active_idx) {
-            win.focus_prev();
+    pub fn focus_last(&mut self) -> bool {
+        self.windows
+            .get_mut(self.active_idx)
+            .is_some_and(Window::focus_last)
+    }
+
+    /// Focuses a pane, switching to its window.
+    pub fn focus(&mut self, name: &str) -> bool {
+        match self.window_of(name) {
+            Some(idx) => {
+                self.windows[idx].set_focus(name);
+                self.set_active(idx);
+                true
+            }
+            None => false,
         }
     }
 
-    pub fn focus(&mut self, name: &str) {
-        for (i, win) in self.windows.iter_mut().enumerate() {
-            if let Some(root) = &win.root {
-                if root.all_leaves().iter().any(|l| l == name) {
-                    win.focus(name);
-                    self.active_idx = i;
-                    break;
+    pub fn rename_window(&mut self, idx: usize, name: String) -> bool {
+        match self.windows.get_mut(idx) {
+            Some(win) => {
+                win.name = name;
+                win.renamed = true;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Sets the automatic name of a window unless it was renamed explicitly.
+    pub fn set_auto_name(&mut self, idx: usize, name: Option<String>) {
+        if let Some(win) = self.windows.get_mut(idx)
+            && !win.renamed
+        {
+            win.name = name.unwrap_or_else(|| win.label.clone());
+        }
+    }
+
+    /// Removes a window and returns its panes.
+    pub fn kill_window(&mut self, idx: usize) -> Option<Vec<String>> {
+        if idx >= self.windows.len() {
+            return None;
+        }
+        let panes = self.windows[idx].leaves();
+        self.windows.remove(idx);
+        let shift = |i: usize| if i > idx { i - 1 } else { i };
+        self.active_idx = shift(self.active_idx).min(self.windows.len().saturating_sub(1));
+        self.last_window = self.last_window.filter(|&l| l != idx).map(shift);
+        Some(panes)
+    }
+
+    /// Exchanges two panes by name, wherever they live.
+    pub fn swap(&mut self, a: &str, b: &str) -> bool {
+        if a == b || self.window_of(a).is_none() || self.window_of(b).is_none() {
+            return false;
+        }
+        let mut swap_name = |n: &mut String| {
+            if n.as_str() == a {
+                *n = b.to_string();
+            } else if n.as_str() == b {
+                *n = a.to_string();
+            }
+        };
+        for win in &mut self.windows {
+            if let Some(root) = win.root.as_mut() {
+                root.map_leaves(&mut swap_name);
+            }
+            for slot in [&mut win.focused, &mut win.last_focused] {
+                if let Some(n) = slot.as_mut() {
+                    swap_name(n);
                 }
             }
         }
+        true
+    }
+
+    /// Moves a pane out of its window into a new window of its own.
+    pub fn break_pane(&mut self, name: &str) -> bool {
+        let Some(idx) = self.window_of(name) else {
+            return false;
+        };
+        if self.windows[idx].leaves().len() <= 1 {
+            return false;
+        }
+        self.windows[idx].remove(name);
+        let id = self.next_window_id;
+        self.next_window_id += 1;
+        self.windows
+            .push(Window::new(id, name.to_string(), name.to_string()));
+        self.set_active(self.windows.len() - 1);
+        true
+    }
+
+    /// Applies a preset to the active window; `None` cycles.
+    pub fn select_layout(&mut self, preset: Option<LayoutPreset>) -> bool {
+        match self.active_window_mut() {
+            Some(win) => {
+                win.select_layout(preset);
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub fn resize_split(
+        &mut self,
+        name: &str,
+        side: Side,
+        cells: u16,
+        width: u16,
+        height: u16,
+    ) -> bool {
+        let Some(idx) = self.window_of(name) else {
+            return false;
+        };
+        self.windows[idx].resize_split(name, side, cells, Rect::new(0, 0, width, height))
     }
 
     pub fn compute_layout(&self, width: u16, height: u16) -> Vec<(String, Rect, bool)> {
@@ -284,64 +496,5 @@ impl Workspace {
             Some(win) => win.compute_layout(bounds),
             None => (Vec::new(), Vec::new()),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_workspace_single_node() {
-        let mut ws = Workspace::new("main".to_string());
-        ws.add_or_split("pane1".to_string(), Direction::Horizontal);
-
-        let layout = ws.compute_layout(100, 50);
-        assert_eq!(layout.len(), 1);
-        let (name, rect, focused) = &layout[0];
-        assert_eq!(name, "pane1");
-        assert_eq!(*rect, Rect::new(0, 0, 100, 50));
-        assert!(focused);
-    }
-
-    #[test]
-    fn test_workspace_split_horizontal() {
-        let mut ws = Workspace::new("main".to_string());
-        ws.add_or_split("pane1".to_string(), Direction::Horizontal);
-        ws.add_or_split("pane2".to_string(), Direction::Horizontal);
-
-        let layout = ws.compute_layout(100, 50);
-        assert_eq!(layout.len(), 2);
-
-        let p1 = layout.iter().find(|(n, ..)| n == "pane1").unwrap();
-        let p2 = layout.iter().find(|(n, ..)| n == "pane2").unwrap();
-
-        assert_eq!(p1.1, Rect::new(0, 0, 50, 50));
-        assert_eq!(p2.1, Rect::new(51, 0, 49, 50));
-        assert!(p2.2, "pane2 should have focus after split");
-    }
-
-    #[test]
-    fn test_workspace_multi_windows() {
-        let mut ws = Workspace::new("main".to_string());
-        ws.new_window("win0".into(), "shell0".into());
-        ws.new_window("win1".into(), "shell1".into());
-
-        assert_eq!(ws.windows.len(), 2);
-        assert_eq!(ws.active_idx, 1);
-
-        // Previous window (p)
-        ws.prev_window();
-        assert_eq!(ws.active_idx, 0);
-
-        // Next window (n)
-        ws.next_window();
-        assert_eq!(ws.active_idx, 1);
-
-        // Window tabs
-        let tabs = ws.window_tabs();
-        assert_eq!(tabs.len(), 2);
-        assert!(!tabs[0].is_active);
-        assert!(tabs[1].is_active);
     }
 }

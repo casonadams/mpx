@@ -1,6 +1,6 @@
 # CLI Reference & Automation
 
-`mpx` provides a uniform CLI for both human terminal usage and scripted automation.
+`mpx` uses tmux command names wherever tmux has an equivalent, so scripts and muscle memory carry over.
 
 ```
 mpx [OPTIONS] [COMMAND]
@@ -8,192 +8,143 @@ mpx [OPTIONS] [COMMAND]
 
 ### Global Options
 
-- `-s, --session <NAME>`: Target session name (defaults to `main`).
-- `-e, --endpoint <PATH>`: Custom IPC socket path or Named Pipe.
-- `-h, --help`: Print help.
-- `-V, --version`: Print version.
+- `-s, --session <NAME>`: Target session. Default: `$MPX_SESSION`, then `main`.
+- `--endpoint <PATH>`: Daemon socket or Named Pipe. Default: `$MPX_ENDPOINT` when `-s` is not given, else the session socket.
+- `-h, --help` / `-V, --version`.
+
+Inside an mpx pane, `MPX_SESSION`, `MPX_ENDPOINT`, `MPX_PANE` and `MPX_PANE_ID` are set, so commands run there target their own session without flags.
+
+### Targets
+
+Commands that take a pane accept its name or its stable id `%N` (tmux style). TUI commands also accept `session:pane`.
 
 ---
 
-## Commands
+## Sessions
 
-### `mpx` or `mpx attach`
-Starts the session daemon if not already running, and attaches the full-screen interactive TUI.
-```bash
-# Attach to default session "main"
-mpx
+| Command | Description |
+| :--- | :--- |
+| `mpx` / `mpx attach [-t session] [--force]` | Start the daemon if needed and attach the TUI. Refuses to nest inside an mpx pane unless `--force`. |
+| `mpx list-sessions` (`ls`) `[--json]` | List sessions with window and pane counts. |
+| `mpx has-session [-t session]` | Exit 0 if the session's daemon answers, 1 otherwise. |
+| `mpx kill-server` (`stop`, `kill-session`) | Kill every pane and stop the daemon process. |
 
-# Attach to named session "build-agent"
-mpx -s build-agent
-```
+> `mpx ls` lists **sessions** (as in tmux). Use `mpx list-panes` (`list`, `lsp`) for panes.
 
 ---
+
+## Panes and processes
 
 ### `mpx run`
-Runs a persistent command in a managed stream node.
-
 ```bash
-mpx run [OPTIONS] -- <COMMAND> [ARGS...]
+mpx run [--name N] [--pty] [--cwd DIR] [--env K=V]... [--remain] [--tmux-compat] -- <COMMAND> [ARGS...]
 ```
+- `--pty`: interactive PTY (ConPTY on Windows) instead of a plain pipe.
+- `--remain`: keep the pane on screen after the process exits (`remain_on_exit`).
+- `--tmux-compat`: export `TMUX`/`TMUX_PANE` and put the mpx `tmux` shim first on `PATH` (see [tmux compatibility](#tmux-compatibility)).
 
-**Options**:
-- `--name <NAME>`: Custom identifier for the node (defaults to executable name).
-- `--pty`: Allocates a full pseudo-terminal (ConPTY on Windows, POSIX PTY on Unix).
-- `--cwd <DIR>`: Working directory for process execution.
-
-**Examples**:
-```bash
-# Run a background test watcher
-mpx run --name "watcher" -- cargo watch -x test
-
-# Launch an interactive REPL inside a managed PTY
-mpx run --pty --name "python-repl" -- python3
-
-# Run a dev server in a specific working directory
-mpx run --cwd ./apps/web --name "vite" -- npm run dev
+### `mpx list-panes` (`list`, `lsp`) `[--json]`
 ```
-
----
-
-### `mpx list`
-Lists all active and recently exited stream nodes in the current session.
-
-```bash
-mpx list
+ID     NAME             PID      TYPE     STATUS         COMMAND
+%0     watcher          41892    task     running        cargo watch -x test
+%1     repl             41910    pty      running        python3
 ```
+`--json` includes cwd, title, foreground process, timestamps, window index and agent state.
 
-**Sample Output**:
-```
-NAME             PID      TYPE     STATUS         COMMAND                       
---------------------------------------------------------------------------------
-watcher          41892    task     running        cargo watch -x test           
-python-repl      41910    pty      running        python3                       
-vite             41925    task     exited (0)     npm run dev                   
-```
+### `mpx status <name>`, `mpx kill <name>`, `mpx screen <name>`
 
----
-
-### `mpx status`
-Inspects non-blocking status for a specific node without scraping terminal text.
-
-```bash
-mpx status watcher
-```
-
----
+`screen` prints the rendered terminal grid as text.
 
 ### `mpx logs`
-Reads stream logs from a node's circular buffer.
-
 ```bash
-# Read recent logs
-mpx logs watcher
-
-# Read specific number of tail lines (O(tail) fast reverse scan)
-mpx logs --tail 50 watcher
-
-# Stream live output (like `tail -f` or `docker logs -f`)
-mpx logs -f watcher
+mpx logs [-n LINES | --tail LINES] [--plain] [--since OFFSET] [--json] [-f] <name>
 ```
+- `--plain`: PTY scrollback rendered as text, without escape sequences.
+- `--since OFFSET` with `--json`: incremental reads. The response is `{"data": ..., "next": N}`, and you pass `N` back as `--since`.
 
----
+### Input
 
-### `mpx send`
-Writes raw data directly to a running node's standard input.
-
-```bash
-mpx send python-repl "import sys; print(sys.version)\n"
-```
-
----
+| Command | Description |
+| :--- | :--- |
+| `mpx send <name> <data>` | Raw bytes to stdin (a newline is appended). |
+| `mpx send-keys [-t pane] [-l] KEYS...` | tmux key names (`Enter`, `Escape`, `C-c`, `M-x`, `S-Tab`, `F5`, `Up`, ...). Other words are sent as text; `-l` sends everything literally. Arrow keys honour the program's cursor-key mode. |
+| `mpx paste [-t pane] [--submit] <text \| ->` | Paste text (stdin with `-`). Uses bracketed paste when the program enabled it, so multi-line prompts are not submitted line by line. `--submit` presses Enter afterwards. |
 
 ### `mpx wait`
-Waits for a node to complete execution and exits with its return code.
-
 ```bash
-mpx wait watcher
-echo "Watcher exited with status: $?"
-
-# Wait with a timeout in seconds
-mpx wait --timeout 30 build-step
+mpx wait [--timeout SECS] [--idle MS | --match REGEX | --state STATE] <name>
 ```
+| Condition | Satisfied when | Exit code |
+| :--- | :--- | :--- |
+| *(default)* | the process exits | the process exit code |
+| `--idle MS` | no output for `MS` milliseconds | 0 |
+| `--match REGEX` | the screen or new output matches | 0 |
+| `--state needs_input\|working\|idle\|exited` | the agent reaches that state | 0 |
+
+Timeout exits with `124`, like `timeout(1)`.
 
 ---
 
-### `mpx split`
-Splits an existing pane horizontally or vertically without entering the TUI.
+## Windows and layout
 
-```bash
-mpx split [OPTIONS] -- <COMMAND> [ARGS...]
-```
+| Command | Description |
+| :--- | :--- |
+| `mpx split [-t pane] [-h \| -v] [-l PERCENT] [-d] [--pty] [--env K=V] [--tmux-compat] -- CMD...` | Split a pane. `-h` = side by side, `-v` = stacked (tmux semantics); `-d` keeps focus. Help is `--help`. |
+| `mpx new-window [-n name] [-c dir] [-d] [--pty] [--env K=V] [CMD...]` | New window (defaults to the shell). |
+| `mpx kill-window [-t index]` / `mpx rename-window [-t index] <name>` | Close / rename a window. A renamed window stops auto-naming. |
+| `mpx select-window -t <index>` / `mpx last-window` / `mpx last-pane` | Navigation. |
+| `mpx focus <pane>` | Focus a pane (switches window if needed). |
+| `mpx swap-pane --source <pane> -t <pane>` | Swap two panes (also across windows). |
+| `mpx break-pane <pane>` | Move a pane into its own window. |
+| `mpx select-layout [preset]` | `even-horizontal`, `even-vertical`, `main-vertical`, `main-horizontal`, `tiled`; no argument cycles. |
+| `mpx resize-pane [-t pane] -L\|-R\|-U\|-D [cells]` | Move the pane border (tmux semantics). `-x`/`-y` set an absolute size. |
+| `mpx layout [--width W --height H]` | Print the computed pane geometry. |
 
-**Options**:
-- `-d, --direction <h|v>`: Split direction (`h` for vertical split/side-by-side, `v` for horizontal split/stacked).
-- `--target <NAME>`: Target pane to split next to.
-- `--detach`: Keeps focus on current pane without switching focus to new split.
-- `--pty`: Allocates a managed PTY for interactive tools.
-
-**Examples**:
-```bash
-# Split active window horizontally and run htop
-mpx split --pty --direction h -- htop
-
-# Split next to "watcher" without stealing focus
-mpx split --detach --target watcher --name linter -- cargo clippy
-```
+Windows are named automatically after the agent harness or foreground process of their focused pane (`claude`, `nvim`, `cargo`) until renamed.
 
 ---
 
-### `mpx focus`
-Shifts workspace focus directly to a named pane.
+## Pipes (agent-to-agent messaging)
+
+Pipes are in-memory, sequenced message queues. Writing or reading a pipe creates it.
 
 ```bash
-mpx focus watcher
-```
-
----
-
-### `mpx screen`
-Takes an instantaneous snapshot of a node's 2D virtual terminal grid.
-
-```bash
-mpx screen python-repl
-```
-
----
-
-### `mpx layout`
-Computes and prints current workspace split tree geometry, divider lines, and window tabs.
-
-```bash
-mpx layout --width 120 --height 40
-```
-
----
-
-### `mpx pipe`
-Manages inter-agent virtual FIFO pipes.
-
-```bash
-# Create a virtual pipe
-mpx pipe create bus
-
-# Write to virtual pipe
-mpx pipe write bus '{"event": "pr_analyzed", "findings": 0}'
-
-# Read data from virtual pipe
-mpx pipe read bus
-
-# List all virtual pipes
+mpx pipe write bus '{"event":"tests_passed"}'          # prints nothing; message gets seq 1, 2, ...
+mpx pipe read bus --consumer reviewer --wait 30000      # blocks up to 30s; resumes where 'reviewer' left off
+mpx pipe read bus --since 41 --limit 10 --json          # {"messages":[{"seq":42,"ts_ms":...,"data":...}],"next":42}
+mpx pipe subscribe bus                                  # stream messages as they arrive
 mpx pipe list
+mpx pipe create bus                                     # optional; idempotent
 ```
+
+- `--consumer NAME`: the daemon keeps a cursor per consumer, so each reader gets every message exactly once. A new consumer starts after `--since` (or at the beginning).
+- Without a consumer, `--since SEQ` is exclusive. Pipes drop the oldest messages beyond their capacity (1 MiB by default).
 
 ---
 
-### `mpx stop`
-Terminates all nodes in a session and stops the background daemon process.
+## Agents
 
-```bash
-mpx stop
-mpx -s dev stop
-```
+See the **[Agent Manager guide](AGENT-MANAGER.md)**.
+
+| Command | Description |
+| :--- | :--- |
+| `mpx agents` | Attach with the agent manager open. |
+| `mpx agents --json` | `{live, resumable}`: live agents across all sessions with state, plus stored sessions you can resume. |
+| `mpx agents new <harness> [--resume ID] [--split] [--teams] [--cwd DIR] [--name N]` | Launch `claude`, `omp`, `codex`, or a configured harness. |
+| `mpx agents resume <id-prefix>` | Find a stored session in any harness store and resume it in a new window. |
+| `mpx hook <harness> [event]` | Called by harness hooks; reads the event JSON on stdin and reports agent state for `$MPX_PANE`. Exits 0 silently outside mpx. |
+| `mpx hook print-config claude` | Print the Claude Code `settings.json` hooks block for agents started outside `mpx agents new`. |
+
+---
+
+## tmux compatibility
+
+When the `mpx` binary is invoked as `tmux` (a symlink), it translates tmux commands into mpx requests. Panes started with `--tmux-compat` (or `tmux_compat = true` in the config, or `mpx agents new claude --teams`) get `TMUX`, `TMUX_PANE` and a `PATH` entry for the shim, so tools that drive tmux, such as Claude Code agent teams, create mpx panes instead.
+
+Supported: `split-window`, `new-window`, `new-session`, `send-keys`, `capture-pane`, `list-panes`, `list-windows`, `list-sessions`, `display-message`, `kill-pane`, `kill-window`, `kill-session`, `select-pane`, `select-window`, `select-layout`, `resize-pane`, `swap-pane`, `break-pane`, `last-window`, `last-pane`, `rename-window`, `has-session`, `-V`. `-F` format strings support `pane_id`, `pane_index`, `pane_pid`, `pane_title`, `pane_current_command`, `pane_current_path`, `pane_width`, `pane_height`, `pane_active`, `pane_dead`, `session_name`, `window_index`, `window_id` and `window_name`. Option commands (`set-option`, `bind-key`, ...) are accepted as no-ops.
+
+---
+
+## MCP server
+
+`mpx mcp` runs the stdio MCP server. See the **[MCP Guide](MCP.md)**.

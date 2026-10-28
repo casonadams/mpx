@@ -1,23 +1,32 @@
-use std::collections::VecDeque;
-use std::sync::Arc;
-use tokio::sync::{broadcast, Mutex};
+use std::collections::{HashMap, VecDeque};
+use tokio::sync::watch;
 
-#[derive(Debug, Clone)]
+use crate::protocol::{PipeInfo, PipeMessage};
+
+/// Named in-memory message queue shared by agents. Messages are numbered from 1 and the oldest
+/// are dropped once the retained bytes exceed the capacity.
+#[derive(Debug)]
 pub struct VirtualPipe {
     name: String,
-    buffer: Arc<Mutex<VecDeque<u8>>>,
     capacity: usize,
-    notifier: broadcast::Sender<Vec<u8>>,
+    messages: VecDeque<PipeMessage>,
+    bytes: usize,
+    next_seq: u64,
+    cursors: HashMap<String, u64>,
+    tip: watch::Sender<u64>,
 }
 
 impl VirtualPipe {
     pub fn new(name: String, capacity: usize) -> Self {
-        let (notifier, _) = broadcast::channel(1024);
+        let (tip, _) = watch::channel(0);
         Self {
             name,
-            buffer: Arc::new(Mutex::new(VecDeque::with_capacity(capacity))),
             capacity,
-            notifier,
+            messages: VecDeque::new(),
+            bytes: 0,
+            next_seq: 1,
+            cursors: HashMap::new(),
+            tip,
         }
     }
 
@@ -25,68 +34,65 @@ impl VirtualPipe {
         &self.name
     }
 
-    pub async fn write(&self, data: &[u8]) {
-        if data.is_empty() {
-            return;
-        }
-
-        let mut buf = self.buffer.lock().await;
-        if data.len() >= self.capacity {
-            buf.clear();
-            let start = data.len() - self.capacity;
-            buf.extend(&data[start..]);
-        } else {
-            let available = self.capacity.saturating_sub(buf.len());
-            if data.len() > available {
-                let to_remove = data.len() - available;
-                buf.drain(0..to_remove);
+    /// Appends a message and returns its sequence number.
+    pub fn write(&mut self, data: &str, ts_ms: u64) -> u64 {
+        let seq = self.next_seq;
+        self.next_seq += 1;
+        self.bytes += data.len();
+        self.messages.push_back(PipeMessage {
+            seq,
+            ts_ms,
+            data: data.to_string(),
+        });
+        while self.bytes > self.capacity && self.messages.len() > 1 {
+            if let Some(old) = self.messages.pop_front() {
+                self.bytes -= old.data.len();
             }
-            buf.extend(data);
         }
-
-        let _ = self.notifier.send(data.to_vec());
+        self.tip.send_replace(seq);
+        seq
     }
 
-    pub async fn read_all(&self) -> Vec<u8> {
-        let buf = self.buffer.lock().await;
-        let (first, second) = buf.as_slices();
-        let mut out = Vec::with_capacity(buf.len());
-        out.extend_from_slice(first);
-        out.extend_from_slice(second);
+    /// Messages with `seq > after`, oldest first.
+    pub fn read(&self, after: u64, limit: Option<usize>) -> Vec<PipeMessage> {
+        self.messages
+            .iter()
+            .filter(|m| m.seq > after)
+            .take(limit.unwrap_or(usize::MAX))
+            .cloned()
+            .collect()
+    }
+
+    /// Messages after the consumer's cursor; a consumer without a cursor starts after `start`.
+    /// The cursor is registered and advances past the last message returned.
+    pub fn read_consumer(&mut self, consumer: &str, start: u64, limit: Option<usize>) -> Vec<PipeMessage> {
+        let cursor = self.cursor(consumer).unwrap_or(start);
+        let out = self.read(cursor, limit);
+        let advanced = out.last().map_or(cursor, |m| m.seq);
+        self.cursors.insert(consumer.to_string(), advanced);
         out
     }
 
-    pub async fn read_str(&self) -> String {
-        let bytes = self.read_all().await;
-        String::from_utf8_lossy(&bytes).into_owned()
+    /// Sequence number the consumer has read up to; `None` before its first read.
+    pub fn cursor(&self, consumer: &str) -> Option<u64> {
+        self.cursors.get(consumer).copied()
     }
 
-    pub fn subscribe(&self) -> broadcast::Receiver<Vec<u8>> {
-        self.notifier.subscribe()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_virtual_pipe_write_read() {
-        let pipe = VirtualPipe::new("agent_comm".into(), 1024);
-        pipe.write(b"hello from omp").await;
-        pipe.write(b"\nresponse from claude").await;
-
-        let content = pipe.read_str().await;
-        assert_eq!(content, "hello from omp\nresponse from claude");
+    /// Sequence number of the newest message (0 when empty).
+    pub fn last_seq(&self) -> u64 {
+        self.next_seq - 1
     }
 
-    #[tokio::test]
-    async fn test_virtual_pipe_streaming() {
-        let pipe = VirtualPipe::new("stream_pipe".into(), 1024);
-        let mut rx = pipe.subscribe();
+    /// Receiver that observes the newest sequence number after every write.
+    pub fn watch_tip(&self) -> watch::Receiver<u64> {
+        self.tip.subscribe()
+    }
 
-        pipe.write(b"packet_1").await;
-        let received = rx.recv().await.unwrap();
-        assert_eq!(received, b"packet_1");
+    pub fn info(&self) -> PipeInfo {
+        PipeInfo {
+            name: self.name.clone(),
+            messages: self.messages.len(),
+            next_seq: self.next_seq,
+        }
     }
 }

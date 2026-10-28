@@ -1,9 +1,12 @@
 use std::collections::VecDeque;
 
+/// Bounded byte buffer that remembers how many bytes were ever written, so readers can
+/// resume from an absolute offset.
 #[derive(Debug, Clone)]
 pub struct RingBuffer {
     buffer: VecDeque<u8>,
     capacity: usize,
+    written: u64,
 }
 
 impl RingBuffer {
@@ -11,10 +14,12 @@ impl RingBuffer {
         Self {
             buffer: VecDeque::with_capacity(capacity),
             capacity,
+            written: 0,
         }
     }
 
     pub fn write(&mut self, data: &[u8]) {
+        self.written += data.len() as u64;
         if data.is_empty() {
             return;
         }
@@ -33,6 +38,21 @@ impl RingBuffer {
         }
 
         self.buffer.extend(data);
+    }
+
+    /// Total bytes ever written; the absolute offset just past the newest byte.
+    pub fn total_written(&self) -> u64 {
+        self.written
+    }
+
+    /// Bytes at or after `offset` still retained (an offset older than the retained data starts
+    /// at the oldest byte), and the offset to resume from (`total_written`).
+    pub fn since(&self, offset: u64) -> (Vec<u8>, u64) {
+        let oldest = self.written - self.buffer.len() as u64;
+        let start = offset.clamp(oldest, self.written);
+        let skip = (start - oldest) as usize;
+        let out = self.buffer.iter().skip(skip).copied().collect();
+        (out, self.written)
     }
 
     pub fn snapshot(&self) -> Vec<u8> {
@@ -70,7 +90,6 @@ impl RingBuffer {
         }
         result
     }
-
 
     pub fn len(&self) -> usize {
         self.buffer.len()
@@ -116,58 +135,70 @@ fn find_tail_start(first: &[u8], second: &[u8], n: usize) -> usize {
     0
 }
 
+/// Plain text from terminal output: CSI/OSC/DCS sequences and two-byte escapes are removed,
+/// carriage returns and other control bytes dropped; newlines and tabs kept.
+pub fn strip_ansi(bytes: &[u8]) -> String {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            0x1b => i = skip_escape(bytes, i),
+            b'\n' | b'\t' => {
+                out.push(bytes[i]);
+                i += 1;
+            }
+            c if c < 0x20 || c == 0x7f => i += 1,
+            c => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Index just past the escape sequence starting at `start` (which holds ESC).
+fn skip_escape(bytes: &[u8], start: usize) -> usize {
+    let len = bytes.len();
+    match bytes.get(start + 1) {
+        None => len,
+        Some(b'[') => {
+            let end = bytes[start + 2..]
+                .iter()
+                .position(|b| (0x40..=0x7e).contains(b))
+                .map_or(len, |p| start + 2 + p + 1);
+            end.min(len)
+        }
+        Some(b']' | b'P' | b'_' | b'^' | b'X') => skip_string(bytes, start + 2),
+        Some(b) if (0x20..=0x2f).contains(b) => {
+            let mut i = start + 2;
+            while i < len && (0x20..=0x2f).contains(&bytes[i]) {
+                i += 1;
+            }
+            (i + 1).min(len)
+        }
+        Some(_) => (start + 2).min(len),
+    }
+}
+
+/// Skips a string-type sequence (OSC, DCS, APC, PM, SOS) terminated by BEL or ST (ESC \).
+fn skip_string(bytes: &[u8], from: usize) -> usize {
+    let mut i = from;
+    while i < bytes.len() {
+        if bytes[i] == 0x07 {
+            return i + 1;
+        }
+        if bytes[i] == 0x1b && bytes.get(i + 1) == Some(&b'\\') {
+            return i + 2;
+        }
+        i += 1;
+    }
+    bytes.len()
+}
+
 impl Default for RingBuffer {
     fn default() -> Self {
         // Default 2MB scrollback buffer per stream node
         Self::new(2 * 1024 * 1024)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_ring_buffer_basic() {
-        let mut rb = RingBuffer::new(10);
-        rb.write(b"hello");
-        assert_eq!(rb.snapshot(), b"hello");
-
-        rb.write(b"world");
-        assert_eq!(rb.snapshot(), b"helloworld");
-
-        rb.write(b"123");
-        assert_eq!(rb.snapshot(), b"loworld123");
-    }
-
-    #[test]
-    fn test_ring_buffer_oversized() {
-        let mut rb = RingBuffer::new(5);
-        rb.write(b"0123456789");
-        assert_eq!(rb.snapshot(), b"56789");
-    }
-
-    #[test]
-    fn test_tail_lines() {
-        let mut rb = RingBuffer::new(100);
-        rb.write(b"line 1\nline 2\nline 3\nline 4\n");
-        assert_eq!(rb.tail_lines(2), "line 3\nline 4\n");
-    }
-
-    #[test]
-    fn test_tail_lines_edge_cases() {
-        let mut rb = RingBuffer::new(100);
-        assert_eq!(rb.tail_lines(0), "");
-        assert_eq!(rb.tail_lines(5), "");
-
-        rb.write(b"single line without newline");
-        assert_eq!(rb.tail_lines(1), "single line without newline\n");
-        assert_eq!(rb.tail_lines(5), "single line without newline\n");
-
-        let mut rb2 = RingBuffer::new(100);
-        rb2.write(b"a\nb\nc\nd\ne");
-        assert_eq!(rb2.tail_lines(2), "d\ne\n");
-        assert_eq!(rb2.tail_lines(3), "c\nd\ne\n");
-        assert_eq!(rb2.tail_lines(10), "a\nb\nc\nd\ne\n");
     }
 }

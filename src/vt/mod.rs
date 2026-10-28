@@ -2,4 +2,4 @@ pub mod grid;
 pub mod parser;
 
 pub use grid::{Cell, CellStyle, Color, Cursor, Grid};
-pub use parser::{VtHandler, VtScreen};
+pub use parser::{Alert, VtHandler, VtScreen};

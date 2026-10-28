@@ -1,312 +1,373 @@
 use futures_util::{SinkExt, StreamExt};
 use tokio_util::codec::{Framed, LinesCodec};
 
-use crate::ipc::{connect, IpcStream};
-use crate::protocol::{DaemonMessage, NewWindowOpts, NodeInfo, Request, Response, SplitOpts, StreamEvent};
+use crate::ipc::{connect_stream, IpcStream};
 use crate::layout::{Divider, Rect, WindowTab};
+use crate::protocol::{
+    AgentState, DaemonMessage, LayoutPreset, NewWindowOpts, NodeInfo, PipeInfo, PipeMessage, Request, Response,
+    SessionInfo, Side, SpawnOpts, SplitOpts, StreamEvent, WaitCondition, WaitOutcome,
+};
+
+pub type LayoutTuple = (Vec<(String, Rect, bool)>, Vec<Divider>, Vec<WindowTab>);
 
 pub struct Client {
     framed: Framed<IpcStream, LinesCodec>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct AgentReportArgs {
+    pub harness: Option<String>,
+    pub state: Option<AgentState>,
+    pub session_id: Option<String>,
+    pub detail: Option<String>,
+    pub clear: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PipeReadArgs {
+    pub since: Option<u64>,
+    pub consumer: Option<String>,
+    pub wait_ms: Option<u64>,
+    pub limit: Option<usize>,
+}
+
+fn unexpected(op: &str, resp: Response) -> String {
+    match resp {
+        Response::Error(e) => e,
+        other => format!("Invalid response to {}: {:?}", op, other),
+    }
+}
+
 impl Client {
     pub async fn connect(endpoint: &str) -> Result<Self, String> {
-        let stream = connect(endpoint)
+        let stream = connect_stream(endpoint)
             .await
             .map_err(|e| format!("Failed to connect to daemon at '{}': {}", endpoint, e))?;
-        let framed = Framed::new(stream, LinesCodec::new());
-        Ok(Self { framed })
+        Ok(Self {
+            framed: Framed::new(stream, LinesCodec::new()),
+        })
     }
 
     async fn call(&mut self, req: Request) -> Result<Response, String> {
         let req_str = serde_json::to_string(&req).map_err(|e| e.to_string())?;
         self.framed.send(req_str).await.map_err(|e| e.to_string())?;
-
         let line = self
             .framed
             .next()
             .await
             .ok_or_else(|| "Connection closed by daemon".to_string())?
             .map_err(|e| e.to_string())?;
-
-        let msg: DaemonMessage =
-            serde_json::from_str(&line).map_err(|e| format!("Failed to parse response: {}", e))?;
-
-        match msg {
+        match serde_json::from_str(&line).map_err(|e| format!("Failed to parse response: {}", e))? {
             DaemonMessage::Response(resp) => Ok(resp),
             DaemonMessage::Event(_) => Err("Unexpected stream event in request-response".to_string()),
+        }
+    }
+
+    async fn call_ok(&mut self, op: &str, req: Request) -> Result<(), String> {
+        match self.call(req).await? {
+            Response::Ok => Ok(()),
+            other => Err(unexpected(op, other)),
+        }
+    }
+
+    async fn call_node(&mut self, op: &str, req: Request) -> Result<NodeInfo, String> {
+        match self.call(req).await? {
+            Response::Node(info) => Ok(info),
+            other => Err(unexpected(op, other)),
         }
     }
 
     pub async fn ping(&mut self) -> Result<(), String> {
         match self.call(Request::Ping).await? {
             Response::Pong => Ok(()),
-            Response::Error(e) => Err(e),
-            _ => Err("Invalid response to Ping".into()),
+            other => Err(unexpected("Ping", other)),
         }
     }
 
-    pub async fn spawn(
-        &mut self,
-        name: String,
-        command: String,
-        args: Vec<String>,
-        pty: bool,
-        cwd: Option<String>,
-    ) -> Result<NodeInfo, String> {
-        match self
-            .call(Request::Spawn {
-                name,
-                command,
-                args,
-                pty,
-                cwd,
-            })
-            .await?
-        {
-            Response::Node(info) => Ok(info),
-            Response::Error(e) => Err(e),
-            _ => Err("Invalid response to Spawn".into()),
+    pub async fn info(&mut self) -> Result<SessionInfo, String> {
+        match self.call(Request::Info).await? {
+            Response::Session(info) => Ok(info),
+            other => Err(unexpected("Info", other)),
         }
+    }
+
+    pub async fn shutdown(&mut self) -> Result<(), String> {
+        self.call_ok("Shutdown", Request::Shutdown).await
+    }
+
+    pub async fn spawn(&mut self, opts: SpawnOpts) -> Result<NodeInfo, String> {
+        self.call_node("Spawn", Request::Spawn(opts)).await
     }
 
     pub async fn list(&mut self) -> Result<Vec<NodeInfo>, String> {
         match self.call(Request::List).await? {
             Response::NodeList(list) => Ok(list),
-            Response::Error(e) => Err(e),
-            _ => Err("Invalid response to List".into()),
+            other => Err(unexpected("List", other)),
         }
     }
 
-    pub async fn logs(&mut self, name: &str, tail: Option<usize>) -> Result<String, String> {
-        match self
-            .call(Request::Logs {
-                name: name.to_string(),
-                tail,
-            })
-            .await?
-        {
-            Response::Logs(text) => Ok(text),
-            Response::Error(e) => Err(e),
-            _ => Err("Invalid response to Logs".into()),
+    /// Returns `(data, next_offset)`.
+    pub async fn logs(
+        &mut self,
+        name: &str,
+        tail: Option<usize>,
+        plain: bool,
+        since: Option<u64>,
+    ) -> Result<(String, u64), String> {
+        let req = Request::Logs {
+            name: name.to_string(),
+            tail,
+            plain,
+            since,
+        };
+        match self.call(req).await? {
+            Response::LogChunk { data, next } => Ok((data, next)),
+            other => Err(unexpected("Logs", other)),
         }
     }
 
     pub async fn send_input(&mut self, name: &str, data: &str) -> Result<(), String> {
-        match self
-            .call(Request::Send {
-                name: name.to_string(),
-                data: data.to_string(),
-            })
-            .await?
-        {
-            Response::Ok => Ok(()),
-            Response::Error(e) => Err(e),
-            _ => Err("Invalid response to Send".into()),
-        }
+        let req = Request::Send {
+            name: name.to_string(),
+            data: data.to_string(),
+        };
+        self.call_ok("Send", req).await
+    }
+
+    pub async fn send_keys(&mut self, name: &str, keys: Vec<String>, literal: bool) -> Result<(), String> {
+        let req = Request::SendKeys {
+            name: name.to_string(),
+            keys,
+            literal,
+        };
+        self.call_ok("SendKeys", req).await
+    }
+
+    pub async fn paste(&mut self, name: &str, text: &str, submit: bool) -> Result<(), String> {
+        let req = Request::Paste {
+            name: name.to_string(),
+            text: text.to_string(),
+            submit,
+        };
+        self.call_ok("Paste", req).await
     }
 
     pub async fn kill(&mut self, name: &str) -> Result<(), String> {
-        match self
-            .call(Request::Kill {
-                name: name.to_string(),
-            })
-            .await?
-        {
-            Response::Ok => Ok(()),
-            Response::Error(e) => Err(e),
-            _ => Err("Invalid response to Kill".into()),
+        self.call_ok("Kill", Request::Kill { name: name.to_string() }).await
+    }
+
+    pub async fn wait(
+        &mut self,
+        name: &str,
+        condition: WaitCondition,
+        timeout_ms: Option<u64>,
+    ) -> Result<WaitOutcome, String> {
+        let req = Request::Wait {
+            name: name.to_string(),
+            condition,
+            timeout_ms,
+        };
+        match self.call(req).await? {
+            Response::WaitResult(outcome) => Ok(outcome),
+            other => Err(unexpected("Wait", other)),
         }
     }
 
-    pub async fn wait(&mut self, name: &str) -> Result<Option<i32>, String> {
-        match self
-            .call(Request::Wait {
-                name: name.to_string(),
-            })
-            .await?
-        {
-            Response::Exit { code } => Ok(code),
-            Response::Error(e) => Err(e),
-            _ => Err("Invalid response to Wait".into()),
-        }
-    }
     pub async fn screen(&mut self, name: &str) -> Result<String, String> {
-        match self
-            .call(Request::Screen {
-                name: name.to_string(),
-            })
-            .await?
-        {
+        match self.call(Request::Screen { name: name.to_string() }).await? {
             Response::Screen(text) => Ok(text),
-            Response::Error(e) => Err(e),
-            _ => Err("Invalid response to Screen".into()),
+            other => Err(unexpected("Screen", other)),
         }
     }
 
     pub async fn split(&mut self, opts: SplitOpts) -> Result<NodeInfo, String> {
-        match self.call(Request::Split(opts)).await? {
-            Response::Node(info) => Ok(info),
-            Response::Error(e) => Err(e),
-            _ => Err("Invalid response to Split".into()),
-        }
+        self.call_node("Split", Request::Split(opts)).await
     }
 
-    pub async fn layout(
-        &mut self,
-        width: u16,
-        height: u16,
-    ) -> Result<(Vec<(String, Rect, bool)>, Vec<Divider>, Vec<WindowTab>), String> {
+    pub async fn layout(&mut self, width: u16, height: u16) -> Result<LayoutTuple, String> {
         match self.call(Request::Layout { width, height }).await? {
             Response::Layout(rects, dividers, tabs) => Ok((rects, dividers, tabs)),
-            Response::Error(e) => Err(e),
-            _ => Err("Invalid response to Layout".into()),
+            other => Err(unexpected("Layout", other)),
         }
     }
 
     pub async fn new_window(&mut self, opts: NewWindowOpts) -> Result<NodeInfo, String> {
-        match self.call(Request::NewWindow(opts)).await? {
-            Response::Node(info) => Ok(info),
-            Response::Error(e) => Err(e),
-            _ => Err("Invalid response to NewWindow".into()),
-        }
+        self.call_node("NewWindow", Request::NewWindow(opts)).await
     }
 
     pub async fn get_cwd(&mut self, name: &str) -> Result<Option<String>, String> {
         match self.call(Request::GetCwd { name: name.to_string() }).await? {
             Response::Cwd(cwd) => Ok(cwd),
-            Response::Error(e) => Err(e),
-            _ => Err("Invalid response to GetCwd".into()),
+            other => Err(unexpected("GetCwd", other)),
         }
     }
 
     pub async fn next_window(&mut self) -> Result<(), String> {
-        match self.call(Request::NextWindow).await? {
-            Response::Ok => Ok(()),
-            Response::Error(e) => Err(e),
-            _ => Err("Invalid response to NextWindow".into()),
-        }
+        self.call_ok("NextWindow", Request::NextWindow).await
     }
 
     pub async fn prev_window(&mut self) -> Result<(), String> {
-        match self.call(Request::PrevWindow).await? {
-            Response::Ok => Ok(()),
-            Response::Error(e) => Err(e),
-            _ => Err("Invalid response to PrevWindow".into()),
-        }
+        self.call_ok("PrevWindow", Request::PrevWindow).await
+    }
+
+    pub async fn last_window(&mut self) -> Result<(), String> {
+        self.call_ok("LastWindow", Request::LastWindow).await
     }
 
     pub async fn select_window(&mut self, index: usize) -> Result<(), String> {
-        match self.call(Request::SelectWindow { index }).await? {
-            Response::Ok => Ok(()),
-            Response::Error(e) => Err(e),
-            _ => Err("Invalid response to SelectWindow".into()),
-        }
-    }
-    pub async fn focus_next(&mut self) -> Result<(), String> {
-        match self.call(Request::FocusNext).await? {
-            Response::Ok => Ok(()),
-            Response::Error(e) => Err(e),
-            _ => Err("Invalid response to FocusNext".into()),
-        }
+        self.call_ok("SelectWindow", Request::SelectWindow { index }).await
     }
 
-    pub async fn focus_prev(&mut self) -> Result<(), String> {
-        match self.call(Request::FocusPrev).await? {
-            Response::Ok => Ok(()),
-            Response::Error(e) => Err(e),
-            _ => Err("Invalid response to FocusPrev".into()),
-        }
+    pub async fn rename_window(&mut self, index: Option<usize>, name: &str) -> Result<(), String> {
+        let req = Request::RenameWindow {
+            index,
+            name: name.to_string(),
+        };
+        self.call_ok("RenameWindow", req).await
+    }
+
+    pub async fn kill_window(&mut self, index: Option<usize>) -> Result<(), String> {
+        self.call_ok("KillWindow", Request::KillWindow { index }).await
+    }
+
+    pub async fn next_pane(&mut self) -> Result<(), String> {
+        self.call_ok("FocusNext", Request::FocusNext).await
+    }
+
+    pub async fn focus_last(&mut self) -> Result<(), String> {
+        self.call_ok("FocusLast", Request::FocusLast).await
     }
 
     pub async fn focus(&mut self, name: &str) -> Result<(), String> {
-        match self.call(Request::Focus { name: name.to_string() }).await? {
-            Response::Ok => Ok(()),
-            Response::Error(e) => Err(e),
-            _ => Err("Invalid response to Focus".into()),
-        }
+        self.call_ok("Focus", Request::Focus { name: name.to_string() }).await
     }
+
     pub async fn status(&mut self, name: &str) -> Result<NodeInfo, String> {
-        match self.call(Request::Status { name: name.to_string() }).await? {
-            Response::Node(info) => Ok(info),
-            Response::Error(e) => Err(e),
-            _ => Err("Invalid response to Status".into()),
-        }
+        self.call_node("Status", Request::Status { name: name.to_string() }).await
     }
+
     pub async fn resize_pane(&mut self, name: &str, cols: u16, rows: u16) -> Result<(), String> {
-        match self.call(Request::ResizePane { name: name.to_string(), cols, rows }).await? {
-            Response::Ok => Ok(()),
-            Response::Error(e) => Err(e),
-            _ => Err("Invalid response to ResizePane".into()),
-        }
+        let req = Request::ResizePane {
+            name: name.to_string(),
+            cols,
+            rows,
+        };
+        self.call_ok("ResizePane", req).await
+    }
+
+    pub async fn resize_split(&mut self, name: &str, side: Side, cells: u16, viewport: (u16, u16)) -> Result<(), String> {
+        let req = Request::ResizeSplit {
+            name: name.to_string(),
+            side,
+            cells,
+            width: viewport.0,
+            height: viewport.1,
+        };
+        self.call_ok("ResizeSplit", req).await
+    }
+
+    pub async fn swap_pane(&mut self, a: &str, b: &str) -> Result<(), String> {
+        let req = Request::SwapPane {
+            a: a.to_string(),
+            b: b.to_string(),
+        };
+        self.call_ok("SwapPane", req).await
+    }
+
+    pub async fn break_pane(&mut self, name: &str) -> Result<(), String> {
+        self.call_ok("BreakPane", Request::BreakPane { name: name.to_string() }).await
+    }
+
+    pub async fn select_layout(&mut self, preset: Option<LayoutPreset>) -> Result<(), String> {
+        self.call_ok("SelectLayout", Request::SelectLayout { preset }).await
     }
 
     pub async fn create_pipe(&mut self, name: &str, capacity: Option<usize>) -> Result<(), String> {
-        match self.call(Request::CreatePipe { name: name.to_string(), capacity }).await? {
-            Response::Ok => Ok(()),
-            Response::Error(e) => Err(e),
-            _ => Err("Invalid response to CreatePipe".into()),
+        let req = Request::CreatePipe {
+            name: name.to_string(),
+            capacity,
+        };
+        self.call_ok("CreatePipe", req).await
+    }
+
+    /// Returns the sequence number assigned to the message.
+    pub async fn write_pipe(&mut self, name: &str, data: &str) -> Result<u64, String> {
+        let req = Request::WritePipe {
+            name: name.to_string(),
+            data: data.to_string(),
+        };
+        match self.call(req).await? {
+            Response::PipeSeq(seq) => Ok(seq),
+            other => Err(unexpected("WritePipe", other)),
         }
     }
 
-    pub async fn write_pipe(&mut self, name: &str, data: &str) -> Result<(), String> {
-        match self.call(Request::WritePipe { name: name.to_string(), data: data.to_string() }).await? {
-            Response::Ok => Ok(()),
-            Response::Error(e) => Err(e),
-            _ => Err("Invalid response to WritePipe".into()),
+    /// Returns `(messages, next_seq)`.
+    pub async fn read_pipe(&mut self, name: &str, args: PipeReadArgs) -> Result<(Vec<PipeMessage>, u64), String> {
+        let req = Request::ReadPipe {
+            name: name.to_string(),
+            since: args.since,
+            consumer: args.consumer,
+            wait_ms: args.wait_ms,
+            limit: args.limit,
+        };
+        match self.call(req).await? {
+            Response::PipeMessages { messages, next } => Ok((messages, next)),
+            other => Err(unexpected("ReadPipe", other)),
         }
     }
 
-    pub async fn read_pipe(&mut self, name: &str) -> Result<String, String> {
-        match self.call(Request::ReadPipe { name: name.to_string() }).await? {
-            Response::PipeData(text) => Ok(text),
-            Response::Error(e) => Err(e),
-            _ => Err("Invalid response to ReadPipe".into()),
-        }
-    }
-
-    pub async fn list_pipes(&mut self) -> Result<Vec<String>, String> {
+    pub async fn list_pipes(&mut self) -> Result<Vec<PipeInfo>, String> {
         match self.call(Request::ListPipes).await? {
             Response::PipeList(pipes) => Ok(pipes),
-            Response::Error(e) => Err(e),
-            _ => Err("Invalid response to ListPipes".into()),
+            other => Err(unexpected("ListPipes", other)),
         }
     }
 
+    pub async fn agent_report(&mut self, name: &str, args: AgentReportArgs) -> Result<(), String> {
+        let req = Request::AgentReport {
+            name: name.to_string(),
+            harness: args.harness,
+            state: args.state,
+            session_id: args.session_id,
+            detail: args.detail,
+            clear: args.clear,
+        };
+        self.call_ok("AgentReport", req).await
+    }
 
-
-
-    pub async fn stream_logs<F>(&mut self, name: Option<String>, mut handler: F) -> Result<(), String>
+    /// Streams node events; the handler returns false to stop.
+    pub async fn stream_logs<F>(&mut self, name: Option<String>, handler: F) -> Result<(), String>
     where
-        F: FnMut(StreamEvent) -> bool, // returns false to stop
+        F: FnMut(StreamEvent) -> bool,
     {
-        let req = Request::Subscribe { name };
-        let req_str = serde_json::to_string(&req).map_err(|e| e.to_string())?;
-        self.framed.send(req_str).await.map_err(|e| e.to_string())?;
+        self.stream(Request::Subscribe { name }, handler).await
+    }
 
-        // First message is Response::Ok
-        let init_line = self
-            .framed
-            .next()
-            .await
-            .ok_or_else(|| "Connection closed".to_string())?
-            .map_err(|e| e.to_string())?;
+    /// Streams `StreamEvent::Pipe` messages for one pipe; the handler returns false to stop.
+    pub async fn subscribe_pipe<F>(&mut self, name: &str, handler: F) -> Result<(), String>
+    where
+        F: FnMut(StreamEvent) -> bool,
+    {
+        self.stream(Request::SubscribePipe { name: name.to_string() }, handler).await
+    }
 
-        let _init_msg: DaemonMessage =
-            serde_json::from_str(&init_line).map_err(|e| format!("Invalid init response: {}", e))?;
-
+    async fn stream<F>(&mut self, req: Request, mut handler: F) -> Result<(), String>
+    where
+        F: FnMut(StreamEvent) -> bool,
+    {
+        match self.call(req).await? {
+            Response::Ok => {}
+            other => return Err(unexpected("Subscribe", other)),
+        }
         while let Some(line_res) = self.framed.next().await {
             let line = line_res.map_err(|e| e.to_string())?;
-            if line.trim().is_empty() {
-                continue;
-            }
-            if let Ok(DaemonMessage::Event(event)) = serde_json::from_str(&line) {
-                if !handler(event) {
-                    break;
-                }
+            if let Ok(DaemonMessage::Event(event)) = serde_json::from_str(&line)
+                && !handler(event)
+            {
+                break;
             }
         }
-
         Ok(())
     }
 }

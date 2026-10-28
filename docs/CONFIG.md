@@ -1,0 +1,35 @@
+# Configuration
+
+mpx reads TOML from the first of:
+
+1. `$MPX_CONFIG`
+2. `$XDG_CONFIG_HOME/mpx/config.toml`
+3. `%APPDATA%\mpx\config.toml` (Windows)
+4. `~/.config/mpx/config.toml`
+
+A missing file means defaults. Unknown keys are rejected, so typos surface as errors. The daemon reads the file at start-up (restart a session with `mpx kill-server` to apply daemon settings); the TUI reads it when attaching.
+
+```toml
+prefix = "C-b"          # tmux notation: C-a, C-Space, M-b ...
+remain_on_exit = false  # keep panes on screen after their process exits
+history_limit = 64      # exited, removed panes whose logs stay readable
+tmux_compat = false     # export TMUX/TMUX_PANE + the tmux shim in every pane
+
+[agent]
+idle_ms = 1500          # quiet period before a hook-less agent counts as idle
+notify = true           # OSC 9 desktop notification when an off-screen agent needs input
+
+[bind]                  # prefix key -> command line (see KEYBINDINGS.md)
+"M-h" = "select-pane -L"
+"g" = "launch-agent claude --split"
+"r" = "command-prompt -I 'rename-window '"
+
+[[harness]]             # extra or overriding agent harnesses (see AGENT-MANAGER.md)
+name = "aider"
+detect = ["aider"]
+command = ["aider"]
+resume = []
+session_id_args = []
+```
+
+Key names use tmux notation: `C-` (Ctrl), `M-` (Alt), `S-` (Shift) prefixes, plus `Enter`, `Escape`, `Tab`, `BTab`, `Space`, `BSpace`, `Up`/`Down`/`Left`/`Right`, `Home`, `End`, `PageUp`/`PPage`, `PageDown`/`NPage`, `IC`, `DC`, `F1`-`F12`, or a single character (case-sensitive: `H` is Shift-h).
