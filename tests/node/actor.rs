@@ -331,6 +331,7 @@ fn terminal_query_is_answered_on_the_process_input() {
 }
 
 #[test]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn probe_detects_the_foreground_agent_on_refresh() {
     let mut p = pane_with(Some(std::process::id()), self_harness("fake"), 60_000);
     assert_eq!(agent_harness(&mut p), Some("fake".to_string()));
@@ -370,6 +371,7 @@ fn refresh_clears_an_unhooked_agent_that_is_no_longer_detected() {
 }
 
 #[test]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn unhooked_agent_goes_idle_after_its_quiet_period() {
     let mut p = pane_with(Some(std::process::id()), self_harness("claude"), 150);
     p.actor.handle(PaneMsg::Report {
