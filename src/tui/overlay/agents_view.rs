@@ -18,12 +18,15 @@ use crate::tui::render::copy_to_clipboard;
 
 const HINTS: &str = "j/k move  Enter open  r/R resume  n new  m msg  Tab mark  x kill  y yank  p preview  s scope  q close";
 const RESUME_LIMIT: usize = 50;
-const PREVIEW_MIN_WIDTH: u16 = 100;
-const NAME_COLS: usize = 18;
-const HARNESS_COLS: usize = 8;
-const REF_COLS: usize = 14;
-/// Lead glyph (3 cells) plus the fixed columns and their separators.
-const FIXED_COLS: usize = 3 + NAME_COLS + 1 + HARNESS_COLS + 1 + REF_COLS + 1;
+const FRESH_MS: u64 = 3_600_000;
+const PREVIEW_MIN_HEIGHT: u16 = 12;
+const LIST_ROWS: u16 = 5;
+const DETAIL_COLS: usize = 24;
+const HARNESS_COLS: usize = 7;
+const REF_COLS: usize = 8;
+const AGE_COLS: usize = 4;
+/// Selection bar, lead glyph, title gap, harness, id and age columns with their separators.
+const FIXED_COLS: usize = 1 + 3 + 1 + HARNESS_COLS + 1 + REF_COLS + 1 + AGE_COLS;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Slot {
@@ -37,6 +40,7 @@ enum Line {
         title: String,
         glyph: char,
         tone: Tone,
+        count: usize,
     },
     Row(Slot),
 }
@@ -63,6 +67,7 @@ struct Columns {
     reference: String,
     detail: String,
     age: String,
+    fresh: bool,
 }
 
 const LIVE_GROUPS: [AgentState; 4] = [
@@ -134,31 +139,67 @@ fn cursor_line(lines: &[Line], slot: Option<Slot>) -> usize {
         .unwrap_or(0)
 }
 
-fn column_spans(cols: Columns, width: usize) -> Vec<Span> {
-    let age_len = cols.age.chars().count();
-    let detail_w = width.saturating_sub(FIXED_COLS + age_len + 1);
-    vec![
+fn column_spans(cols: Columns, width: usize, selected: bool) -> Vec<Span> {
+    let detail_w = if cols.detail.is_empty() {
+        0
+    } else {
+        DETAIL_COLS + 1
+    };
+    let title_w = width.saturating_sub(FIXED_COLS + detail_w);
+    let bar = if selected {
+        Span::bold("▌", Tone::Accent)
+    } else {
+        Span::plain(" ")
+    };
+    let title = fit(&cols.name, title_w);
+    let title = if selected {
+        Span::bold(title, Tone::Plain)
+    } else {
+        Span::plain(title)
+    };
+    let mut spans = vec![
+        bar,
         cols.lead,
-        Span::plain(format!("{} ", fit(&cols.name, NAME_COLS))),
-        Span::plain(format!("{} ", fit(&cols.harness, HARNESS_COLS))),
+        title,
+        Span::plain(" "),
+        Span::toned(
+            format!("{} ", fit(&cols.harness, HARNESS_COLS)),
+            Tone::Accent,
+        ),
         Span::dim(format!("{} ", fit(&cols.reference, REF_COLS))),
-        Span::dim(format!("{} ", fit(&cols.detail, detail_w))),
-        Span::dim(cols.age),
-    ]
+    ];
+    if detail_w > 0 {
+        spans.push(Span::dim(format!("{} ", fit(&cols.detail, DETAIL_COLS))));
+    }
+    let age = format!("{:>w$}", cols.age, w = AGE_COLS);
+    spans.push(if cols.fresh {
+        Span::plain(age)
+    } else {
+        Span::dim(age)
+    });
+    spans
 }
 
-fn resume_spans(session: &ResumableSession, width: usize) -> Vec<Span> {
-    let age = age_label(now_ms().saturating_sub(session.modified_ms));
+fn resume_spans(
+    session: &ResumableSession,
+    width: usize,
+    show_cwd: bool,
+    selected: bool,
+) -> Vec<Span> {
+    let elapsed = now_ms().saturating_sub(session.modified_ms);
+    let id: String = session.id.chars().take(REF_COLS).collect();
     column_spans(
         Columns {
             lead: Span::dim(" ◌ "),
             name: session.title.clone(),
             harness: session.harness.clone(),
-            reference: session.id.clone(),
-            detail: session.cwd.clone().unwrap_or_default(),
-            age,
+            reference: id,
+            detail: session.cwd.clone().filter(|_| show_cwd).unwrap_or_default(),
+            age: age_label(elapsed),
+            fresh: elapsed < FRESH_MS,
         },
         width,
+        selected,
     )
 }
 
@@ -556,6 +597,7 @@ impl AgentsView {
                 title: section.title,
                 glyph: section.glyph,
                 tone: section.tone,
+                count: section.slots.len(),
             });
             lines.extend(section.slots.into_iter().map(Line::Row));
         }
@@ -598,24 +640,24 @@ impl AgentsView {
     }
 
     fn split_area(&self, area: Rect) -> (Rect, Option<Rect>) {
-        if !self.preview || area.width < PREVIEW_MIN_WIDTH {
+        let filtering = self.mode == Mode::Browse && self.filter.editing;
+        if !self.preview || filtering || area.height < PREVIEW_MIN_HEIGHT {
             return (area, None);
         }
-        let left = area.width * 3 / 5;
+        let top = LIST_ROWS + 2 + u16::from(self.prompt().is_some());
         (
-            Rect::new(area.x, area.y, left, area.height),
+            Rect::new(area.x, area.y, area.width, top),
             Some(Rect::new(
-                area.x + left,
-                area.y,
-                area.width - left,
-                area.height,
+                area.x,
+                area.y + top,
+                area.width,
+                area.height - top,
             )),
         )
     }
 
     fn render_list<W: Write>(&self, out: &mut W, area: Rect) -> io::Result<()> {
-        let title = format!("Agents · {} need you", self.need_count());
-        widgets::draw_box(out, area, &title, HINTS)?;
+        widgets::draw_panel(out, area, &self.list_title(), HINTS)?;
         let prompt = self.prompt();
         let rows = widgets::body(area, prompt.is_some());
         if let Some(text) = prompt {
@@ -634,17 +676,29 @@ impl AgentsView {
                 false,
             );
         }
+        let selected = self.selected();
         let items: Vec<Vec<Span>> = lines
             .iter()
-            .map(|l| self.line_spans(l, rows.width as usize))
+            .map(|l| self.line_spans(l, rows.width as usize, selected))
             .collect();
-        widgets::draw_items(
-            out,
-            rows,
-            &items,
-            cursor_line(&lines, self.selected()),
-            &self.list,
-        )
+        let cursor = cursor_line(&lines, selected);
+        for (row, idx) in self
+            .list
+            .window(cursor, items.len(), rows.height as usize)
+            .enumerate()
+        {
+            widgets::put_row(out, rows, row as u16, &items[idx], false)?;
+        }
+        Ok(())
+    }
+
+    fn list_title(&self) -> String {
+        let slots = self.slots();
+        let place = self
+            .selected()
+            .and_then(|s| slots.iter().position(|x| *x == s))
+            .map_or_else(String::new, |p| format!(" · {}/{}", p + 1, slots.len()));
+        format!("Agents · {} need you{place}", self.need_count())
     }
 
     fn render_harnesses<W: Write>(&self, out: &mut W, area: Rect) -> io::Result<()> {
@@ -656,17 +710,36 @@ impl AgentsView {
         widgets::draw_items(out, area, &items, self.harness_pick, &ListState::default())
     }
 
-    fn line_spans(&self, line: &Line, width: usize) -> Vec<Span> {
+    fn line_spans(&self, line: &Line, width: usize, selected: Option<Slot>) -> Vec<Span> {
         match line {
-            Line::Header { title, glyph, tone } => {
-                vec![Span::toned(format!("{glyph} {title}"), *tone)]
+            Line::Header {
+                title,
+                glyph,
+                tone,
+                count,
+            } => {
+                let (name, scope) = title.split_once(" · ").unwrap_or((title, ""));
+                let mut spans = vec![
+                    Span::plain(" "),
+                    Span::bold(format!("{glyph} {name}"), *tone),
+                ];
+                if !scope.is_empty() {
+                    spans.push(Span::dim(format!(" · {scope}")));
+                }
+                spans.push(Span::dim(format!("  {count}")));
+                spans
             }
-            Line::Row(Slot::Live(i)) => self.live_spans(&self.live[*i], width),
-            Line::Row(Slot::Resume(i)) => resume_spans(&self.resumable[*i], width),
+            Line::Row(slot) => {
+                let on = selected == Some(*slot);
+                match slot {
+                    Slot::Live(i) => self.live_spans(&self.live[*i], width, on),
+                    Slot::Resume(i) => resume_spans(&self.resumable[*i], width, self.scope_all, on),
+                }
+            }
         }
     }
 
-    fn live_spans(&self, agent: &LiveAgent, width: usize) -> Vec<Span> {
+    fn live_spans(&self, agent: &LiveAgent, width: usize, selected: bool) -> Vec<Span> {
         let node = &agent.node;
         let (glyph, tone) = state_mark(group_of(agent));
         let mark = if self.marks.contains(&agent_key(agent)) {
@@ -690,41 +763,114 @@ impl AgentsView {
             reference: agent_key(agent),
             detail,
             age: age_label(now_ms().saturating_sub(since(agent))),
+            fresh: now_ms().saturating_sub(since(agent)) < FRESH_MS,
         };
-        column_spans(cols, width)
+        column_spans(cols, width, selected)
     }
 
     fn render_preview<W: Write>(&self, out: &mut W, area: Rect) -> io::Result<()> {
         let body = widgets::inner(area);
-        let (title, lines) = self.preview_lines(body.height as usize);
-        widgets::draw_box(out, area, &title, "")?;
+        let meta = self.preview_meta();
+        let offset = usize::from(meta.is_some());
+        let lines = self.preview_lines((body.height as usize).saturating_sub(offset));
+        widgets::draw_panel(out, area, "Preview", "")?;
+        if let Some(meta) = meta {
+            widgets::put_row(out, body, 0, &meta, false)?;
+        }
+        if lines.is_empty() && self.selected().is_some() {
+            let hint = [Span::dim("nothing to preview yet")];
+            return widgets::put_row(out, body, offset as u16, &hint, false);
+        }
         for (row, line) in lines.iter().enumerate() {
-            widgets::put_row(out, body, row as u16, &[Span::plain(line.as_str())], false)?;
+            let row = (row + offset) as u16;
+            widgets::put_row(out, body, row, std::slice::from_ref(line), false)?;
         }
         Ok(())
     }
 
-    fn preview_lines(&self, height: usize) -> (String, Vec<String>) {
+    fn preview_meta(&self) -> Option<Vec<Span>> {
+        let (name, rest) = match self.selected()? {
+            Slot::Live(i) => {
+                let node = &self.live[i].node;
+                let harness = node.agent.as_ref().map_or("", |a| a.harness.as_str());
+                (
+                    node.name.clone(),
+                    join_meta(&[harness, node.cwd.as_deref().unwrap_or("")]),
+                )
+            }
+            Slot::Resume(i) => {
+                let s = &self.resumable[i];
+                (
+                    s.title.clone(),
+                    join_meta(&[&s.harness, s.cwd.as_deref().unwrap_or(""), &s.id]),
+                )
+            }
+        };
+        let mut spans = vec![Span::bold(name, Tone::Plain)];
+        if !rest.is_empty() {
+            spans.push(Span::dim(format!(" · {rest}")));
+        }
+        Some(spans)
+    }
+
+    fn preview_lines(&self, height: usize) -> Vec<Span> {
         match self.selected() {
             Some(Slot::Live(i)) => {
-                let agent = &self.live[i];
                 let text = self
                     .screens
-                    .get(&agent_key(agent))
+                    .get(&agent_key(&self.live[i]))
                     .map_or("", String::as_str);
-                (
-                    format!("Preview · {}", agent.node.name),
-                    tail_lines(text, height),
-                )
+                tail_lines(text, height)
+                    .into_iter()
+                    .map(Span::plain)
+                    .collect()
             }
             Some(Slot::Resume(i)) => {
                 let session = &self.resumable[i];
-                (
-                    format!("Preview · {}", session.title),
-                    transcript_preview(session, height),
-                )
+                let label = if session.harness.is_empty() {
+                    "ai"
+                } else {
+                    session.harness.as_str()
+                };
+                let mut chat = chat_lines(&transcript_preview(session, height), label);
+                chat.drain(..chat.len().saturating_sub(height));
+                chat
             }
-            None => ("Preview".to_string(), Vec::new()),
+            None => Vec::new(),
         }
     }
+}
+
+fn join_meta(parts: &[&str]) -> String {
+    let kept: Vec<&str> = parts.iter().copied().filter(|p| !p.is_empty()).collect();
+    kept.join(" · ")
+}
+
+/// Turns `user> ` / `assistant> ` transcript lines into `you ›` / `<label> ›` turns separated by
+/// blank rows, with continuation lines hung under the turn's text; the user's turns are accented.
+fn chat_lines(raw: &[String], label: &str) -> Vec<Span> {
+    let mut out: Vec<Span> = Vec::new();
+    let mut tone = Tone::Plain;
+    let mut indent = 0;
+    for line in raw {
+        let turn = [
+            ("user> ", "you", Tone::Accent),
+            ("assistant> ", label, Tone::Plain),
+        ]
+        .into_iter()
+        .find_map(|(prefix, name, t)| line.strip_prefix(prefix).map(|rest| (name, t, rest)));
+        let text = match turn {
+            Some((name, t, rest)) => {
+                if !out.is_empty() {
+                    out.push(Span::plain(""));
+                }
+                tone = t;
+                indent = name.chars().count() + 3;
+                format!("{name} › {rest}")
+            }
+            None => format!("{}{}", " ".repeat(indent), line.trim_start()),
+        };
+        out.push(Span::toned(text, tone));
+    }
+    out
 }

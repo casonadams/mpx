@@ -45,7 +45,7 @@ fn claude_uses_session_id_cwd_and_summary_title() {
         "\n",
         r#"{"sessionId":"claude-1","cwd":"/work/app","type":"user","message":{"role":"user","content":"ignored"}}"#,
     );
-    let meta = parse_claude_meta(head, "file-stem");
+    let meta = parse_claude_meta(head, "", "file-stem");
     assert_eq!(meta.id, "claude-1");
     assert_eq!(meta.cwd.as_deref(), Some("/work/app"));
     assert_eq!(meta.title, "Refactor the store");
@@ -57,7 +57,7 @@ fn claude_title_falls_back_to_first_prompt_truncated() {
     let head = format!(
         r#"{{"sessionId":"claude-2","cwd":"/a","type":"user","message":{{"role":"user","content":"{long}"}}}}"#
     );
-    let meta = parse_claude_meta(&head, "file-stem");
+    let meta = parse_claude_meta(&head, "", "file-stem");
     assert_eq!(meta.title.chars().count(), 80);
 }
 
@@ -68,13 +68,13 @@ fn claude_skips_injected_context_when_picking_a_prompt() {
         "\n",
         r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Real question"}]}}"#,
     );
-    let meta = parse_claude_meta(head, "stem");
+    let meta = parse_claude_meta(head, "", "stem");
     assert_eq!(meta.title, "Real question");
 }
 
 #[test]
 fn claude_without_any_fields_uses_file_stem_as_id() {
-    let meta = parse_claude_meta("not json at all", "stem-only");
+    let meta = parse_claude_meta("not json at all", "", "stem-only");
     assert_eq!(meta.id, "stem-only");
     assert_eq!(meta.title, "stem-only");
     assert_eq!(meta.cwd, None);
@@ -220,4 +220,24 @@ fn preview_limit_zero_is_empty() {
         )
         .is_empty()
     );
+}
+
+#[test]
+fn claude_title_prefers_the_latest_rename_then_the_latest_generated_title_from_the_tail() {
+    let head =
+        r#"{"sessionId":"c","type":"user","message":{"role":"user","content":"first prompt"}}"#;
+    let generated = concat!(
+        r#"{"type":"ai-title","aiTitle":"Old title","sessionId":"c"}"#,
+        "\n",
+        r#"{"type":"ai-title","aiTitle":"Billing branch review","sessionId":"c"}"#,
+    );
+    assert_eq!(
+        parse_claude_meta(head, generated, "stem").title,
+        "Billing branch review"
+    );
+    let renamed = format!(
+        "{generated}\n{}",
+        r#"{"type":"custom-title","customTitle":"My name","sessionId":"c"}"#
+    );
+    assert_eq!(parse_claude_meta(head, &renamed, "stem").title, "My name");
 }

@@ -346,6 +346,7 @@ impl App {
             return self.say("no active pane");
         }
         let cs = CopyState::enter(self.active_vt().map(|vt| vt.grid()));
+        self.parked_copy.remove(&self.active_pane);
         self.mode = Mode::Copy(cs);
         Flow::Continue
     }

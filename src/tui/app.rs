@@ -82,6 +82,9 @@ pub struct App {
     pub prefix_at: Option<Instant>,
     /// Pane and cell of a left-button press; a drag from it starts a copy-mode selection.
     pub press: Option<(String, usize, usize)>,
+    /// Copy-mode state of panes that are not in the foreground: a pane keeps its scroll position,
+    /// cursor and selection while the prefix is pending or focus moves elsewhere.
+    pub parked_copy: HashMap<String, CopyState>,
     pub vt: HashMap<String, VtScreen>,
     pub pane_dims: HashMap<String, (u16, u16)>,
     /// Byte offset each pane's screen has absorbed; the next output chunk must start there.
@@ -169,6 +172,7 @@ impl App {
             repeat_until: None,
             prefix_at: None,
             press: None,
+            parked_copy: HashMap::new(),
             vt: HashMap::new(),
             pane_dims: HashMap::new(),
             expected: HashMap::new(),
@@ -232,13 +236,14 @@ impl App {
         if !self.layout.sync(&mut self.client, w, layout_h).await {
             return false;
         }
-        self.active_pane = self
+        let focused = self
             .layout
             .raw
             .iter()
             .find(|(.., focused)| *focused)
             .map(|(name, ..)| name.clone())
             .unwrap_or_default();
+        self.follow_focus(focused);
         self.panes = match &self.zoomed {
             Some(name) => vec![(name.clone(), Rect::new(0, 0, w, layout_h), true)],
             None => self.layout.raw.clone(),
@@ -280,6 +285,33 @@ impl App {
 
     pub fn modes_of(&self, name: &str) -> TermModes {
         self.vt.get(name).map(|vt| vt.modes()).unwrap_or_default()
+    }
+
+    /// Makes `focused` the active pane. Copy mode belongs to a pane: leaving the pane parks it and
+    /// arriving at a pane with parked copy state resumes it.
+    fn follow_focus(&mut self, focused: String) {
+        if focused != self.active_pane {
+            self.park_copy();
+        }
+        self.active_pane = focused;
+        if matches!(self.mode, Mode::Normal)
+            && let Some(cs) = self.parked_copy.remove(&self.active_pane)
+        {
+            self.mode = Mode::Copy(cs);
+        }
+        let live: std::collections::HashSet<&str> =
+            self.layout.raw.iter().map(|(n, ..)| n.as_str()).collect();
+        self.parked_copy
+            .retain(|name, _| live.contains(name.as_str()));
+    }
+
+    /// Moves an active copy mode out of the foreground, keyed by the active pane.
+    pub fn park_copy(&mut self) {
+        if matches!(self.mode, Mode::Copy(_))
+            && let Mode::Copy(cs) = std::mem::replace(&mut self.mode, Mode::Normal)
+        {
+            self.parked_copy.insert(self.active_pane.clone(), cs);
+        }
     }
 
     pub fn active_vt(&self) -> Option<&VtScreen> {

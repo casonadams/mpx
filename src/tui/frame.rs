@@ -88,17 +88,32 @@ pub fn pane_view(
     pane: &PaneRect,
     crowd: (usize, bool, bool),
 ) -> PaneView {
+    let copy = match mode {
+        Mode::Copy(cs) if pane.2 => Some(cs),
+        _ => None,
+    };
+    pane_view_with(copy, grid, nodes, pane, crowd)
+}
+
+/// Decorations for one pane given the copy state it is in, if any.
+fn pane_view_with(
+    copy: Option<&CopyState>,
+    grid: &Grid,
+    nodes: &[NodeInfo],
+    pane: &PaneRect,
+    crowd: (usize, bool, bool),
+) -> PaneView {
     let (name, _, focused) = pane;
     let (count, zoomed, dim_inactive) = crowd;
     let dimmed = is_dimmed(count, zoomed, *focused, dim_inactive);
-    match mode {
-        Mode::Copy(cs) if *focused => PaneView {
+    match copy {
+        Some(cs) => PaneView {
             badge: Some(copy_label(cs, grid.history_len())),
             scroll_offset: cs.scroll_offset,
             selection: cs.selection_range(grid),
             dimmed,
         },
-        _ => PaneView {
+        None => PaneView {
             badge: exit_badge_for(nodes, name),
             scroll_offset: 0,
             selection: None,
@@ -124,7 +139,11 @@ fn draw_panes<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
             .vt
             .entry(pane.0.clone())
             .or_insert_with(|| VtScreen::new(rect.width as usize, rect.height as usize));
-        let view = pane_view(&app.mode, vt.grid(), &app.nodes, pane, crowd);
+        let copy = match &app.mode {
+            Mode::Copy(cs) if pane.2 => Some(cs),
+            _ => app.parked_copy.get(&pane.0),
+        };
+        let view = pane_view_with(copy, vt.grid(), &app.nodes, pane, crowd);
         Compositor::draw_pane_content(
             &mut app.canvas,
             out,
@@ -166,7 +185,12 @@ fn status_row(app: &App, out: &mut Vec<u8>) -> io::Result<()> {
         Mode::Copy(cs) if cs.search_prompt.is_some() => {
             let search = cs.search_prompt.as_ref().unwrap();
             let prefix = search.direction.prompt_char();
-            Compositor::draw_command_line(out, &format!("{prefix}{}", search.prompt.text()), y, width)
+            Compositor::draw_command_line(
+                out,
+                &format!("{prefix}{}", search.prompt.text()),
+                y,
+                width,
+            )
         }
         _ => match app.live_message() {
             Some(text) => Compositor::draw_command_line(out, text, y, width),
@@ -185,6 +209,9 @@ fn status_row(app: &App, out: &mut Vec<u8>) -> io::Result<()> {
                     zoomed: app.zoomed.is_some(),
                     copy_pane: match &app.mode {
                         Mode::Copy(_) => Some(app.active_pane.as_str()),
+                        _ if app.parked_copy.contains_key(&app.active_pane) => {
+                            Some(app.active_pane.as_str())
+                        }
                         _ => None,
                     },
                 },
@@ -217,7 +244,7 @@ fn place_cursor<W: Write>(app: &App, out: &mut W) -> io::Result<()> {
             Compositor::position_cursor(out, Rect::new(0, 0, 1, 1), 0, 0, false)
         }
         Mode::Copy(cs) => place_pane_cursor(app, out, Some(cs)),
-        _ => place_pane_cursor(app, out, None),
+        _ => place_pane_cursor(app, out, app.parked_copy.get(&app.active_pane)),
     }
 }
 

@@ -477,8 +477,8 @@ fn agents_preview_panel_shows_when_wide_and_hides_on_p() {
     assert_eq!(view.handle_key(key('p')), OverlayAction::None);
     let hidden = render_to_string(&Overlay::Agents(view), Rect::new(0, 0, 120, 20));
     assert!(!hidden.contains("Preview"));
-    let narrow = render_to_string(&Overlay::Agents(fleet()), Rect::new(0, 0, 99, 20));
-    assert!(!narrow.contains("Preview"));
+    let short = render_to_string(&Overlay::Agents(fleet()), Rect::new(0, 0, 120, 11));
+    assert!(!short.contains("Preview"));
 }
 
 #[test]
@@ -855,7 +855,9 @@ fn draw_tree(view: &TreeView, area: Rect) -> String {
 
 #[test]
 fn agents_render_groups_appear_in_state_order_under_their_headers() {
-    let text = draw_agents(&fleet(), Rect::new(0, 0, 120, 30));
+    let mut view = fleet();
+    view.handle_key(key('p'));
+    let text = draw_agents(&view, Rect::new(0, 0, 120, 30));
     let at: Vec<usize> = ["NEEDS YOU", "WORKING", "IDLE", "EXITED"]
         .iter()
         .map(|title| {
@@ -872,6 +874,7 @@ fn agents_render_groups_appear_in_state_order_under_their_headers() {
 fn agents_render_rows_show_state_glyph_and_mark() {
     let mut view = fleet();
     view.handle_key(code(KeyCode::Tab));
+    view.handle_key(key('p'));
     let text = draw_agents(&view, Rect::new(0, 0, 120, 30));
     assert!(text.contains("+◆ "), "marked needs-input row");
     assert!(text.contains("◆ NEEDS YOU"), "header glyph");
@@ -886,14 +889,14 @@ fn agents_render_rows_show_state_glyph_and_mark() {
 fn agents_render_preview_of_live_agent_without_screen_is_titled() {
     let text = draw_agents(&fleet(), Rect::new(0, 0, 120, 20));
     // Needs-input rows sort oldest first, so `beta` is selected.
-    assert!(text.contains("Preview · beta"));
-    assert!(!text.contains("Preview · alpha"));
+    assert!(text.contains("beta"));
+    assert!(!text.contains("Preview · alpha") && text.contains("Preview"));
 }
 
 #[test]
 fn agents_render_has_no_preview_pane_when_narrow_or_toggled_off() {
-    let narrow = draw_agents(&fleet(), Rect::new(0, 0, 80, 20));
-    assert!(!narrow.contains("Preview"));
+    let short = draw_agents(&fleet(), Rect::new(0, 0, 120, 11));
+    assert!(!short.contains("Preview"));
     let mut view = fleet();
     view.handle_key(key('p'));
     let toggled = draw_agents(&view, Rect::new(0, 0, 120, 20));
@@ -932,4 +935,18 @@ fn help_view_renders_its_entries_directly() {
         .expect("render");
     let text = String::from_utf8_lossy(&buf);
     assert!(text.contains("close overlay"), "{text}");
+}
+
+#[test]
+fn agents_title_shows_selection_position_and_preview_meta_row() {
+    let text = draw_agents(&fleet(), Rect::new(0, 0, 120, 20));
+    assert!(text.contains("Agents · 2 need you · 1/"), "{text}");
+}
+
+#[test]
+fn agents_preview_yields_its_rows_to_the_list_while_filtering() {
+    let mut view = fleet();
+    assert!(draw_agents(&view, Rect::new(0, 0, 120, 20)).contains("Preview"));
+    view.handle_key(key('/'));
+    assert!(!draw_agents(&view, Rect::new(0, 0, 120, 20)).contains("Preview"));
 }

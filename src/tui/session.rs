@@ -75,6 +75,7 @@ impl App {
         self.layout.raw.clear();
         self.zoomed = None;
         self.mode = Mode::Normal;
+        self.parked_copy.clear();
         self.nodes.clear();
         self.focus_pane = None;
         self.active_pane.clear();

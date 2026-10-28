@@ -57,6 +57,8 @@ impl App {
 
     pub async fn copy_key(&mut self, mut cs: CopyState, key: KeyEvent) -> Flow {
         if self.keymap.is_prefix(&key) {
+            self.mode = Mode::Copy(cs);
+            self.park_copy();
             self.enter_prefix();
             return Flow::Continue;
         }

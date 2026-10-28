@@ -17,7 +17,7 @@ Open it with **`Prefix s`**, or start mpx straight into it with **`mpx agents`**
 └─ j/k move  Enter open  r/R resume  n new  m msg  Tab mark  x kill  y id ┘
 ```
 
-On screens at least 100 columns wide, a preview panel shows the selected agent's live screen or the tail of a stored transcript.
+On screens at least 12 rows tall, a preview panel below a five-row scrollable list shows the selected agent's live screen or the tail of a stored transcript.
 
 ---
 

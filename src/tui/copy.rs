@@ -110,6 +110,25 @@ impl CopyState {
         }
     }
 
+    /// A click inside a pane already in copy mode: the cursor and selection anchor move to the
+    /// cell, any selection is dropped and the scroll position stays where it was.
+    pub fn click(&mut self, local_x: usize, local_y: usize, grid: Option<&Grid>) {
+        self.cursor_x = local_x;
+        self.cursor_y = local_y;
+        self.anchor_x = local_x;
+        self.anchor_abs_y = grid.map_or(local_y, |g| g.abs_line(local_y, self.scroll_offset));
+        self.mode = SelectionKind::None;
+    }
+
+    /// Drag to a cell: starts a character selection from the click anchor if none is active.
+    pub fn drag_to(&mut self, local_x: usize, local_y: usize) {
+        if self.mode == SelectionKind::None {
+            self.mode = SelectionKind::Character;
+        }
+        self.cursor_x = local_x;
+        self.cursor_y = local_y;
+    }
+
     /// Copy mode entered by the wheel from the pane's cursor. With scrollback the view scrolls
     /// into history; without it the cursor moves up.
     pub fn from_wheel(grid: Option<&Grid>, hist_len: usize) -> Self {
@@ -273,7 +292,10 @@ fn yank_chars(grid: &Grid, cs: &CopyState, cursor_abs_y: usize) -> String {
     let top = anchor.1.min(cursor.1);
     let bot = anchor.1.max(cursor.1);
     let lines: Vec<Option<Vec<char>>> = (top..=bot)
-        .map(|y| grid.line_cells(y).map(|cells| cells.iter().map(|c| c.c).collect()))
+        .map(|y| {
+            grid.line_cells(y)
+                .map(|cells| cells.iter().map(|c| c.c).collect())
+        })
         .collect();
     char_selection_text(&lines, anchor, cursor)
 }
@@ -294,7 +316,8 @@ pub fn char_selection_text(
         let text = if row_count == 1 {
             row_text(cells, from_col, to_col)
         } else if i == 0 {
-            row_text(cells, from_col, cells.len().saturating_sub(1)).map(|s| s.trim_end().to_string())
+            row_text(cells, from_col, cells.len().saturating_sub(1))
+                .map(|s| s.trim_end().to_string())
         } else if i + 1 == row_count {
             row_text(cells, 0, to_col)
         } else {

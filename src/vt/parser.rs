@@ -37,7 +37,8 @@ impl VtHandler {
                 0 => self.grid.current_style = CellStyle::default(),
                 1 => self.grid.current_style.bold = true,
                 3 => self.grid.current_style.italic = true,
-                4 => self.grid.current_style.underline = true,
+                4 => self.grid.current_style.underline = sub.get(1) != Some(&0),
+                21 => self.grid.current_style.underline = true,
                 7 => self.grid.current_style.reverse = true,
                 22 => self.grid.current_style.bold = false,
                 23 => self.grid.current_style.italic = false,
@@ -125,6 +126,7 @@ impl VtHandler {
                         }
                     }
                 }
+                58 => skip_extended_color(sub, &mut iter),
                 _ => {}
             }
         }
@@ -232,6 +234,24 @@ impl VtHandler {
     }
 }
 
+/// Consumes the arguments of an extended colour (`58;5;n`, `58;2;r;g;b`) whose value is unused.
+fn skip_extended_color<'a>(sub: &[u16], iter: &mut impl Iterator<Item = &'a [u16]>) {
+    if sub.len() > 1 {
+        return;
+    }
+    match iter.next().map(|s| s[0]) {
+        Some(5) => {
+            iter.next();
+        }
+        Some(2) => {
+            for _ in 0..3 {
+                iter.next();
+            }
+        }
+        _ => {}
+    }
+}
+
 fn join_osc(parts: &[&[u8]]) -> String {
     parts
         .iter()
@@ -273,13 +293,12 @@ impl Perform for VtHandler {
         }
     }
 
-    fn csi_dispatch(
-        &mut self,
-        params: &Params,
-        _intermediates: &[u8],
-        _ignore: bool,
-        action: char,
-    ) {
+    fn csi_dispatch(&mut self, params: &Params, intermediates: &[u8], _ignore: bool, action: char) {
+        // `CSI > 4;2 m` (modifyOtherKeys), `CSI > 1 u` (kitty keyboard), `CSI ? 6 n` and similar
+        // private forms share finals with SGR, cursor restore and DSR but mean something else.
+        if !intermediates.is_empty() && !matches!(action, 'c' | 'h' | 'l') {
+            return;
+        }
         match action {
             'H' | 'f' => {
                 let row = params.iter().next().map(|p| p[0] as usize).unwrap_or(1);
@@ -340,7 +359,7 @@ impl Perform for VtHandler {
                 }
             }
             'c' => {
-                if _intermediates == b">" {
+                if intermediates == b">" {
                     // Secondary Device Attributes
                     self.responses.push(b"\x1b[>0;10;0c".to_vec());
                 } else {
@@ -349,12 +368,12 @@ impl Perform for VtHandler {
                 }
             }
             'h' => {
-                if _intermediates == b"?" {
+                if intermediates == b"?" {
                     self.handle_mode(params, true);
                 }
             }
             'l' => {
-                if _intermediates == b"?" {
+                if intermediates == b"?" {
                     self.handle_mode(params, false);
                 }
             }

@@ -128,25 +128,39 @@ pub fn parse_omp_meta(head: &str) -> Option<SessionMeta> {
     Some(meta)
 }
 
-/// Claude transcript: `sessionId`/`cwd` on entries, title from a `summary` entry or the first prompt.
-pub fn parse_claude_meta(head: &str, file_stem: &str) -> SessionMeta {
+/// Claude transcript: `sessionId`/`cwd` on entries. The title is the latest `/rename` title
+/// (`custom-title`), else the latest generated one (`ai-title`), else a `summary` entry, else the
+/// first prompt. Titles are rewritten far past the head, so `tail` is scanned as well.
+pub fn parse_claude_meta(head: &str, tail: &str, file_stem: &str) -> SessionMeta {
     let mut id = None;
     let mut cwd = None;
     let mut summary = None;
-    for v in json_values(head) {
+    let mut ai_title = None;
+    let mut custom_title = None;
+    for v in json_values(head).chain(json_values(tail)) {
         id = id.or_else(|| {
             v.get("sessionId")
                 .and_then(Value::as_str)
                 .map(str::to_string)
         });
         cwd = cwd.or_else(|| v.get("cwd").and_then(Value::as_str).map(str::to_string));
-        if summary.is_none() && v.get("type").and_then(Value::as_str) == Some("summary") {
-            summary = v.get("summary").and_then(Value::as_str).map(truncate_title);
+        let text = |key: &str| {
+            v.get(key)
+                .and_then(Value::as_str)
+                .map(truncate_title)
+                .filter(|t| !t.is_empty())
+        };
+        match v.get("type").and_then(Value::as_str) {
+            Some("custom-title") => custom_title = text("customTitle").or(custom_title),
+            Some("ai-title") => ai_title = text("aiTitle").or(ai_title),
+            Some("summary") => summary = summary.or_else(|| text("summary")),
+            _ => {}
         }
     }
     let id = id.unwrap_or_else(|| file_stem.to_string());
-    let title = summary
-        .filter(|s| !s.is_empty())
+    let title = custom_title
+        .or(ai_title)
+        .or(summary)
         .or_else(|| first_user_prompt(head))
         .unwrap_or_else(|| id.clone());
     SessionMeta { id, title, cwd }
@@ -355,7 +369,10 @@ fn session_from(c: &Candidate) -> Option<ResumableSession> {
     let head = read_window(&c.path, None)?;
     let stem = c.path.file_stem()?.to_string_lossy().into_owned();
     let mut meta = match c.store {
-        SessionStore::Claude => parse_claude_meta(&head, &stem),
+        SessionStore::Claude => {
+            let tail = read_window(&c.path, Some(TAIL_BYTES)).unwrap_or_default();
+            parse_claude_meta(&head, &tail, &stem)
+        }
         SessionStore::Omp => parse_omp_meta(&head)?,
         SessionStore::Codex => parse_codex_meta(&head)?,
         SessionStore::Rho => parse_rho_meta(&head, &stem)?,

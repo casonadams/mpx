@@ -103,19 +103,64 @@ async fn mouse_click_focuses_the_clicked_pane_without_copy_mode() {
 }
 
 #[tokio::test]
-async fn clicking_another_pane_leaves_copy_mode() {
-    let mut h = started(ECHO).await;
+async fn leaving_a_pane_in_copy_mode_keeps_its_view_and_returning_resumes_it() {
+    let mut h = started(&long_output()).await;
+    h.until("scrollback filled", |app| {
+        app.active_vt()
+            .is_some_and(|vt| vt.grid().history_len() > 0)
+    })
+    .await;
+    h.frame().await;
+    h.mouse(MouseEventKind::ScrollUp, 5, 5).await;
+    h.mouse(MouseEventKind::ScrollUp, 5, 5).await;
+    assert!(h.frame().await.contains("COPY -6/"));
+
     split(&mut h.probe, MAIN, "plain", Direction::Horizontal).await;
     h.frame().await;
-    h.prefixed_char('[').await;
-    assert!(matches!(h.app.mode, Mode::Copy(_)));
-
-    let target = h.rect_of("plain");
-    h.mouse(MouseEventKind::Down(MouseButton::Left), target.x, target.y)
-        .await;
-    h.frame().await;
+    h.prefixed_char('o').await;
+    let frame = h.frame().await;
     assert_eq!(h.app.active_pane, "plain");
-    assert!(h.mode_is_normal());
+    assert!(h.mode_is_normal(), "the other pane is not in copy mode");
+    assert!(frame.contains("COPY -6/"), "the left pane keeps its view");
+
+    h.prefixed_char('o').await;
+    assert!(h.frame().await.contains("COPY -6/"));
+    assert_eq!(h.app.active_pane, MAIN);
+    assert!(matches!(h.app.mode, Mode::Copy(_)));
+}
+
+#[tokio::test]
+async fn the_prefix_alone_does_not_end_copy_mode() {
+    let mut h = started(ECHO).await;
+    h.prefixed_char('[').await;
+    h.ctrl('b').await;
+    h.key(KeyCode::Esc).await;
+    assert!(h.frame().await.contains("COPY -0/0"));
+}
+
+#[tokio::test]
+async fn clicking_a_pane_in_copy_mode_keeps_its_scroll_and_selects_nothing() {
+    let mut h = started(&long_output()).await;
+    h.until("scrollback filled", |app| {
+        app.active_vt()
+            .is_some_and(|vt| vt.grid().history_len() > 0)
+    })
+    .await;
+    h.frame().await;
+    h.mouse(MouseEventKind::ScrollUp, 5, 5).await;
+    assert!(h.frame().await.contains("COPY -3/"));
+
+    h.mouse(MouseEventKind::Down(MouseButton::Left), 2, 2).await;
+    h.mouse(MouseEventKind::Up(MouseButton::Left), 2, 2).await;
+    let frame = h.frame().await;
+    assert!(frame.contains("COPY -3/"), "{frame}");
+    assert!(h.clipboard().is_empty());
+
+    h.mouse(MouseEventKind::Down(MouseButton::Left), 2, 2).await;
+    h.mouse(MouseEventKind::Drag(MouseButton::Left), 6, 2).await;
+    h.mouse(MouseEventKind::Up(MouseButton::Left), 6, 2).await;
+    assert!(h.frame().await.contains("VISUAL -3/"));
+    assert_eq!(h.clipboard().len(), 1);
 }
 
 #[tokio::test]
@@ -156,7 +201,10 @@ async fn copy_mode_search_up_and_down_moves_cursor_and_scrolls() {
         "still in copy mode after search"
     );
     if let Mode::Copy(cs) = &h.app.mode {
-        assert!(cs.scroll_offset > 0, "scrolled back to match: {match_frame}");
+        assert!(
+            cs.scroll_offset > 0,
+            "scrolled back to match: {match_frame}"
+        );
         assert_eq!(cs.cursor_x, 0, "cursor at start of 'line 5'");
     }
 

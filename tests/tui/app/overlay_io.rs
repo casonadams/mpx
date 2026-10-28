@@ -171,7 +171,7 @@ async fn agents_refresh_lists_live_agent_with_its_session_and_loads_its_screen()
     assert!(text.contains("WORKING"), "{text}");
     assert!(text.contains("refactoring"), "{text}");
     assert!(text.contains("alpha:%"), "{text}");
-    assert!(text.contains("Preview · worker"), "{text}");
+    assert!(text.contains("worker"), "{text}");
     assert!(text.contains("ready-marker"), "{text}");
 
     let opened = view.handle_key(code(KeyCode::Enter));
@@ -309,9 +309,9 @@ fn transcript_preview_shows_last_messages_of_stored_session() {
     );
     let view = AgentsView::from_data(Vec::new(), vec![session], Vec::new(), None);
     let text = draw_agents(&view, area());
-    assert!(text.contains("Preview · chat"), "{text}");
-    assert!(text.contains("user> how do I resume"), "{text}");
-    assert!(text.contains("assistant> use the picker"), "{text}");
+    assert!(text.contains("chat"), "{text}");
+    assert!(text.contains("you › how do I resume"), "{text}");
+    assert!(text.contains(" › use the picker"), "{text}");
 }
 
 #[test]
@@ -327,12 +327,12 @@ fn transcript_preview_keeps_only_the_lines_that_fit_the_preview_pane() {
         ),
     );
     let view = AgentsView::from_data(Vec::new(), vec![session], Vec::new(), None);
-    // Five rows leave three body rows inside the border.
-    let text = draw_agents(&view, Rect::new(0, 0, 120, 5));
+    // A 15-row overlay leaves a meta row and five body rows: one answer, a question and an answer.
+    let text = draw_agents(&view, Rect::new(0, 0, 120, 15));
     assert!(!text.contains("first question"), "{text}");
-    assert!(text.contains("assistant> first answer"), "{text}");
-    assert!(text.contains("user> second question"), "{text}");
-    assert!(text.contains("assistant> second answer"), "{text}");
+    assert!(text.contains(" › first answer"), "{text}");
+    assert!(text.contains("you › second question"), "{text}");
+    assert!(text.contains(" › second answer"), "{text}");
 }
 
 #[test]
@@ -348,6 +348,6 @@ fn transcript_preview_of_missing_file_is_empty_and_does_not_fail() {
     };
     let view = AgentsView::from_data(Vec::new(), vec![session], Vec::new(), None);
     let text = draw_agents(&view, area());
-    assert!(text.contains("Preview · gone"), "{text}");
-    assert!(!text.contains("> "), "{text}");
+    assert!(text.contains("nothing to preview yet"), "{text}");
+    assert!(!text.contains(" › "), "{text}");
 }

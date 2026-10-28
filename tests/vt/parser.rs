@@ -458,3 +458,29 @@ fn reverse_video_is_set_by_sgr_7_and_cleared_by_27_or_reset() {
         .collect();
     assert_eq!(reverse, [true, false, true, false]);
 }
+
+#[test]
+fn private_csi_forms_do_not_act_as_sgr_or_cursor_restore() {
+    let mut vt = VtScreen::new(20, 5);
+    feed(&mut vt, "\x1b[3;4H\x1b[s\x1b[1;1H");
+    feed(&mut vt, "\x1b[>4;2m\x1b[>1u\x1b[<u\x1b[?6nX");
+    let cell = vt.grid().get_cell(0, 0).unwrap();
+    assert_eq!(cell.c, 'X');
+    assert!(!cell.style.underline);
+    assert_eq!(cursor(&vt), (1, 0));
+    assert!(vt.take_responses().is_empty());
+}
+
+#[test]
+fn underline_sgr_honours_subparameters_and_ignores_underline_colour_arguments() {
+    let mut vt = VtScreen::new(20, 5);
+    feed(
+        &mut vt,
+        "\x1b[4:3mA\x1b[4:0mB\x1b[58;2;4;4;4mC\x1b[58;5;4mD\x1b[24m",
+    );
+    let underlined = |x| vt.grid().get_cell(x, 0).unwrap().style.underline;
+    assert!(underlined(0));
+    assert!(!underlined(1));
+    assert!(!underlined(2));
+    assert!(!underlined(3));
+}

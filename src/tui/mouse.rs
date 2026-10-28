@@ -31,8 +31,9 @@ impl App {
         Flow::Continue
     }
 
-    /// Focuses the pane under the pointer. A click inside the pane being copied moves the selection
-    /// start; anywhere else it only remembers the point, so a later drag can select from it.
+    /// Focuses the pane under the pointer. A click inside a pane in copy mode moves its cursor
+    /// and drops the selection without touching the scroll position; anywhere else it only
+    /// remembers the point, so a later drag can select from it.
     async fn mouse_press(&mut self, col: u16, row: u16) {
         if row >= self.viewport.1 {
             let zoomed = self.zoomed.is_some();
@@ -71,14 +72,18 @@ impl App {
         };
         let (x, y) = local_point(rect, col, row);
         if name != self.active_pane {
+            self.park_copy();
             let _ = self.client.focus(&name).await;
             self.layout.dirty = true;
-            if matches!(self.mode, Mode::Copy(_)) {
-                self.mode = Mode::Normal;
+            self.active_pane = name.clone();
+            self.active_rect = Some(rect);
+            if let Some(cs) = self.parked_copy.remove(&name) {
+                self.mode = Mode::Copy(cs);
             }
-        } else if matches!(self.mode, Mode::Copy(_)) {
+        }
+        if let Mode::Copy(cs) = &mut self.mode {
             let grid = self.vt.get(&name).map(|vt| vt.grid());
-            self.mode = Mode::Copy(CopyState::at_point(x, y, grid));
+            cs.click(x, y, grid);
         }
         self.press = Some((name, x, y));
     }
@@ -95,8 +100,7 @@ impl App {
         }
         if let Mode::Copy(cs) = &mut self.mode {
             let (x, y) = local_point(rect, col, row);
-            cs.cursor_x = x;
-            cs.cursor_y = y;
+            cs.drag_to(x, y);
         }
     }
 

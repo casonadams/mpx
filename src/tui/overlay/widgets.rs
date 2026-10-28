@@ -16,6 +16,7 @@ pub enum Tone {
     Active,
     Plain,
     Failed,
+    Accent,
 }
 
 impl Tone {
@@ -25,6 +26,7 @@ impl Tone {
             Tone::Active => Color::Green,
             Tone::Plain => Color::Reset,
             Tone::Failed => Color::Red,
+            Tone::Accent => Color::Cyan,
         }
     }
 }
@@ -34,6 +36,7 @@ pub struct Span {
     pub text: String,
     pub tone: Tone,
     pub dim: bool,
+    pub bold: bool,
 }
 
 impl Span {
@@ -46,6 +49,7 @@ impl Span {
             text: text.into(),
             tone,
             dim: false,
+            bold: false,
         }
     }
 
@@ -54,6 +58,14 @@ impl Span {
             text: text.into(),
             tone: Tone::Plain,
             dim: true,
+            bold: false,
+        }
+    }
+
+    pub fn bold(text: impl Into<String>, tone: Tone) -> Self {
+        Self {
+            bold: true,
+            ..Self::toned(text, tone)
         }
     }
 }
@@ -172,7 +184,81 @@ fn write_span<W: Write>(out: &mut W, span: &Span, selected: bool, text: &str) ->
     if span.dim {
         queue!(out, SetAttribute(Attribute::Dim))?;
     }
+    if span.bold {
+        queue!(out, SetAttribute(Attribute::Bold))?;
+    }
     queue!(out, Print(text))
+}
+
+/// Box with dim borders, a bold `title` and a dim `footer` in the edge rules.
+pub fn draw_panel<W: Write>(out: &mut W, area: Rect, title: &str, footer: &str) -> io::Result<()> {
+    if area.width < 2 || area.height < 2 {
+        return Ok(());
+    }
+    let inner_w = (area.width - 2) as usize;
+    let blank = " ".repeat(inner_w);
+    let border = |out: &mut W, row: u16, text: &str| -> io::Result<()> {
+        queue!(out, MoveTo(area.x, area.y + row))?;
+        write_span(out, &Span::dim(text), false, text)
+    };
+    for row in 1..area.height - 1 {
+        border(out, row, "│")?;
+        queue!(out, Print(&blank))?;
+        queue!(out, MoveTo(area.x + area.width - 1, area.y + row))?;
+        write_span(out, &Span::dim("│"), false, "│")?;
+    }
+    let title = [Span::bold(title, Tone::Accent)];
+    edge(out, area, 0, ("┌", "┐"), &title)?;
+    edge(out, area, area.height - 1, ("└", "┘"), &hint_spans(footer))?;
+    queue!(out, SetAttribute(Attribute::Reset))
+}
+
+/// `key label  key label` rendered with accented keys and dim labels.
+fn hint_spans(hints: &str) -> Vec<Span> {
+    let mut spans = Vec::new();
+    for (i, hint) in hints.split("  ").filter(|h| !h.is_empty()).enumerate() {
+        let (key, label) = hint.split_once(' ').unwrap_or((hint, ""));
+        spans.push(Span::dim(if i == 0 { "" } else { "  " }));
+        spans.push(Span::toned(key, Tone::Accent));
+        if !label.is_empty() {
+            spans.push(Span::dim(format!(" {label}")));
+        }
+    }
+    spans
+}
+
+fn edge<W: Write>(
+    out: &mut W,
+    area: Rect,
+    row: u16,
+    (left, right): (&str, &str),
+    label: &[Span],
+) -> io::Result<()> {
+    let inner_w = (area.width - 2) as usize;
+    let mut budget = inner_w.saturating_sub(4);
+    let mut clipped = Vec::new();
+    for span in label {
+        let text: String = span.text.chars().take(budget).collect();
+        budget -= text.chars().count();
+        clipped.push(Span {
+            text,
+            ..span.clone()
+        });
+    }
+    let len: usize = clipped.iter().map(|s| s.text.chars().count()).sum();
+    let (rule_a, rule_b, used) = if len == 0 {
+        ("", "", 0)
+    } else {
+        ("─ ", " ", len + 3)
+    };
+    queue!(out, MoveTo(area.x, area.y + row))?;
+    let head = format!("{left}{rule_a}");
+    write_span(out, &Span::dim(head.as_str()), false, &head)?;
+    for span in &clipped {
+        write_span(out, span, false, &span.text)?;
+    }
+    let tail = format!("{rule_b}{}{right}", "─".repeat(inner_w - used));
+    write_span(out, &Span::dim(tail.as_str()), false, &tail)
 }
 
 /// Writes one line of styled spans into row `row` of `area`, clipped and padded to the full width.
