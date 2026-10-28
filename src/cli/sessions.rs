@@ -171,15 +171,22 @@ pub fn daemon_args(r: &Resolved) -> Vec<OsString> {
 
 fn spawn_daemon(r: &Resolved) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    std::process::Command::new(exe)
-        .args(daemon_args(r))
+    let mut cmd = std::process::Command::new(exe);
+    cmd.args(daemon_args(r))
         .env_remove("MPX_PANE")
         .env_remove("MPX_ENDPOINT")
         .env_remove("TMUX")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
+        .stderr(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        cmd.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS);
+    }
+    cmd.spawn()
         .map(|_| ())
         .map_err(|e| format!("Failed to auto-spawn mpx daemon: {e}"))
 }
