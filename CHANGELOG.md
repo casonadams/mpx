@@ -1,5 +1,55 @@
 # Changelog
 
+## [0.2.0](https://github.com/casonadams/mpx/compare/v0.1.2...v0.2.0) (2026-10-28)
+
+
+### ⚠ BREAKING CHANGES
+
+* **tui,vt:** Compositor::draw_shortcut_hud takes a ShortcutLayout, the shortcuts and the prefix; hud_rect is replaced by shortcut_layout. CellStyle gains a `reverse` field.
+* **tui,vt,node:** Grid::cells is removed (use Grid::screen_lines); Compositor::draw_pane_content and Compositor::draw_dividers take a &mut Canvas.
+* library API: daemon::run_daemon takes state_dir and config,
+* protocol Output events gain offset/next, Subscribe gains since, and new Lagged/Agent events; DaemonState::new takes a state directory.
+* `mpx ls` lists sessions (use `mpx list-panes`); Ctrl-a is no longer a leader key; `swap-pane` takes `--source`; the JSON protocol changed.
+
+### Features
+
+* actor daemon, idempotent requests, durable pipes, session restore ([267c3bb](https://github.com/casonadams/mpx/commit/267c3bb9bb2c5d94e1c0ca91024aa5d17e165191))
+* agent manager, tmux parity, and agent-to-agent primitives ([8a9cf73](https://github.com/casonadams/mpx/commit/8a9cf73f41ecb7e0b4faa1325ea3cb5627fbbdd3))
+* **agents:** add rho as built-in agent harness with recovery support ([e840f38](https://github.com/casonadams/mpx/commit/e840f38b73b6ae5978d1217807fb8b15786fb520))
+* **config:** add [style] theming, borders, status line, and dimming options ([492998b](https://github.com/casonadams/mpx/commit/492998b70bbc3eeb6b79987b4a65f1ecf1a93e6b))
+* **tui,vt:** complete delayed shortcut popup, click-to-focus, editor bar fidelity ([f041d34](https://github.com/casonadams/mpx/commit/f041d34e8e8c04bc8e72af027d0a92b338f996f5))
+* **tui:** add copy mode search up (?) and search down (/) ([69a126d](https://github.com/casonadams/mpx/commit/69a126ddc7b9a0640fd5b9eb06036e0b6c105ffc))
+* **tui:** enable switching windows and focusing panes by clicking status bar tabs ([cdc601c](https://github.com/casonadams/mpx/commit/cdc601c391d74a6ef3e4e3c2a7ccbf88f4fb74e8))
+* **tui:** map prefix s to agents, show zoom and copy indicators in status bar, and add tab completion cycling ([06e78b4](https://github.com/casonadams/mpx/commit/06e78b45e606c0ebbdde158fb18ac6272f53aa75))
+* **tui:** restore vertical shortcut popup and clean up web pages ([f22fc2e](https://github.com/casonadams/mpx/commit/f22fc2ed6812f130e743245b1b2cbeb154369d41))
+
+
+### Bug Fixes
+
+* **build:** resolve windows compilation failure in pty and sessions ([e1e341f](https://github.com/casonadams/mpx/commit/e1e341f9ebc61607b68c9be566c0655b9d7b7bd9))
+* **cli,tests:** detach daemon process on Windows and gate Unix-specific e2e tests ([aabdcc7](https://github.com/casonadams/mpx/commit/aabdcc709eabc56444ebaf850adba50614b3bbac))
+* **cli:** refuse and stop daemons from incompatible mpx versions ([429bf73](https://github.com/casonadams/mpx/commit/429bf733b2dc100603c244885280676d24e1420a))
+* **daemon:** keep window names given at creation ([f56f28f](https://github.com/casonadams/mpx/commit/f56f28fcc2ac9e781388e0a17919239692c3ac30))
+* **ipc,tests,ci:** normalize Windows pipe endpoints and add Unix tools to runner PATH ([0652bd4](https://github.com/casonadams/mpx/commit/0652bd4ca5ce0cf7777b3398660233ea8c942e35))
+* **node,cli:** treat killed task as None exit code and match terminal viewport in layout test ([a09c59a](https://github.com/casonadams/mpx/commit/a09c59acf3b696008be05bbba9a8065e5c00a77c))
+* **tests:** gate raw pty input tests to Unix in tui app suite ([b91bb9b](https://github.com/casonadams/mpx/commit/b91bb9bc2a0cbdc8be999243779f207546d3dd54))
+* **tests:** handle unsupported process probe on Windows in node tests ([e72b1ed](https://github.com/casonadams/mpx/commit/e72b1edd88d63aac5f07c75c13a4ac0f0dcd6591))
+* **tests:** resolve Windows test compilation and symlink errors ([bb9b731](https://github.com/casonadams/mpx/commit/bb9b7313098a5114d295f4d1cfb1e7cf8a5cc6a8))
+* **tests:** silence unused logs helper warning on Windows ([a5d02a8](https://github.com/casonadams/mpx/commit/a5d02a870888b15ac2f81d30db522fd616ec9c90))
+* **tests:** use sh instead of /bin/sh in pty basics test for Windows ([8343181](https://github.com/casonadams/mpx/commit/834318117841687abb131d64f91b4ea0c6f9bda7))
+* **tui:** align clock to edge, remove prefix badge, silence apple terminal session restore ([7bf3b98](https://github.com/casonadams/mpx/commit/7bf3b98cd34002afabf8f779f989106e79e2fb88))
+
+
+### Performance Improvements
+
+* **tui,vt,node:** incremental frames, row-rotation scrolling, syscall cwd ([745dc7b](https://github.com/casonadams/mpx/commit/745dc7b285122afb83d00be5c7f6a58c1af5aeba))
+* **vt,buffer,ipc,tui:** optimize scrollback tailing, ring buffer reads, probe concurrency, and copy search ([d6c43be](https://github.com/casonadams/mpx/commit/d6c43be02fec19f1732332eedb50ca6961828506))
+
+
+### Tests
+
+* cover every function in the change blast radius ([93fb026](https://github.com/casonadams/mpx/commit/93fb02624a3d7cb465a1814deed667a18f37c975))
+
 ## [0.1.2](https://github.com/casonadams/mpx/compare/v0.1.1...v0.1.2) (2026-10-26)
 
 
