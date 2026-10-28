@@ -64,7 +64,7 @@ For each pane, the daemon reads the PTY foreground process (comm and argv) to re
 
 ## 5. Workspace
 
-Windows hold binary split trees with ratios. The daemon implements focus history (last pane, last window), swap, break, resize (tmux border semantics), layout presets (even-horizontal, even-vertical, main-vertical, main-horizontal, tiled), sticky window renames, and automatic window names from the focused pane's agent or foreground process. With `remain_on_exit`, an exited pane stays in the layout with its final screen.
+Windows hold binary split trees with ratios. The daemon implements focus history (last pane, last window), swap, break, resize (tmux border semantics), layout presets (even-horizontal, even-vertical, main-vertical, main-horizontal, tiled), sticky window names (set by a rename or given at creation, as with tmux `new-window -n`), and automatic window names from the focused pane's agent or foreground process for windows without one. With `remain_on_exit`, an exited pane stays in the layout with its final screen.
 
 ## 6. Durability
 

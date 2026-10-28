@@ -98,7 +98,7 @@ Timeout exits with `124`, like `timeout(1)`.
 | Command | Description |
 | :--- | :--- |
 | `mpx split [-t pane] [-h \| -v] [-l PERCENT] [-d] [--pty] [--env K=V] [--tmux-compat] CMD...` | Split a pane. `-h` = side by side, `-v` = stacked (tmux semantics); `-d` keeps focus. Help is `--help`. |
-| `mpx new-window [-n name] [-c dir] [-d] [--pty] [--env K=V] [CMD...]` | New window (defaults to the shell). |
+| `mpx new-window [-n name] [-c dir] [-d] [--pty] [--env K=V] [CMD...]` | New window (defaults to the shell). A name given with `-n` stays; windows without one are auto-named. |
 | `mpx kill-window [-t index]` / `mpx rename-window [-t index] <name>` | Close / rename a window. A renamed window stops auto-naming. |
 | `mpx select-window -t <index>` / `mpx last-window` / `mpx last-pane` | Navigation. |
 | `mpx focus <pane>` | Focus a pane (switches window if needed). |

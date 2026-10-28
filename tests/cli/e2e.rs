@@ -363,15 +363,29 @@ fn tmux_multicall_splits_sends_and_captures() {
     });
     assert!(captured, "capture-pane never showed the typed token");
 
-    let window = tmux(&["new-window", "-d", "-P", "-F", "#{window_index}", "cat"]);
+    let window = tmux(&[
+        "new-window",
+        "-d",
+        "-n",
+        "side",
+        "-P",
+        "-F",
+        "#{window_index}:#{window_name}",
+        "cat",
+    ]);
     assert!(
         window.status.success(),
         "{}",
         String::from_utf8_lossy(&window.stderr)
     );
-    assert_eq!(String::from_utf8_lossy(&window.stdout).trim(), "1");
-    let windows = tmux(&["list-windows", "-F", "#{window_index}"]);
-    assert_eq!(String::from_utf8_lossy(&windows.stdout).lines().count(), 2);
+    assert_eq!(String::from_utf8_lossy(&window.stdout).trim(), "1:side");
+    let windows = tmux(&["list-windows", "-F", "#{window_index}:#{window_name}"]);
+    let windows = String::from_utf8_lossy(&windows.stdout).into_owned();
+    assert_eq!(windows.lines().count(), 2, "{windows}");
+    assert!(
+        windows.lines().any(|w| w == "1:side"),
+        "-n names the window even while cat runs in it: {windows}"
+    );
     let active = tmux(&["display-message", "-p", "#{window_index}"]);
     assert_eq!(
         String::from_utf8_lossy(&active.stdout).trim(),

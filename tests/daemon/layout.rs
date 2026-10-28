@@ -107,15 +107,18 @@ async fn rename_is_sticky_against_automatic_naming() {
 }
 
 #[tokio::test]
-async fn window_is_named_after_its_agent_harness() {
+async fn unnamed_window_is_named_after_its_agent_harness() {
     let daemon = start().await;
     let mut client = connect(&daemon.endpoint).await;
     client
-        .new_window(window_opts("shell-win", "agent-pane", true))
+        .new_window(NewWindowOpts {
+            name: None,
+            ..window_opts("", "agent-pane", true)
+        })
         .await
         .unwrap();
     let (_, _, before) = client.layout(80, 24).await.unwrap();
-    assert_eq!(before[0].name, "shell-win");
+    assert_eq!(before[0].name, "cat");
 
     client
         .agent_report(
@@ -130,6 +133,30 @@ async fn window_is_named_after_its_agent_harness() {
         .unwrap();
     let (_, _, after) = client.layout(80, 24).await.unwrap();
     assert_eq!(after[0].name, "claude");
+    client.kill("agent-pane").await.unwrap();
+}
+
+#[tokio::test]
+async fn a_name_given_at_creation_is_kept_against_automatic_naming() {
+    let daemon = start().await;
+    let mut client = connect(&daemon.endpoint).await;
+    client
+        .new_window(window_opts("shell-win", "agent-pane", true))
+        .await
+        .unwrap();
+    client
+        .agent_report(
+            "agent-pane",
+            mpx::client::AgentReportArgs {
+                harness: Some("claude".into()),
+                state: Some(mpx::protocol::AgentState::Working),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let (_, _, tabs) = client.layout(80, 24).await.unwrap();
+    assert_eq!(tabs[0].name, "shell-win");
     client.kill("agent-pane").await.unwrap();
 }
 

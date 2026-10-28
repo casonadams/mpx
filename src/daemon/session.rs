@@ -132,8 +132,12 @@ pub(super) enum Placement {
         percent: Option<u8>,
         focus: bool,
     },
-    /// New window.
-    Window { label: String, focus: bool },
+    /// New window. `named` marks a label the caller chose, which automatic naming keeps.
+    Window {
+        label: String,
+        focus: bool,
+        named: bool,
+    },
 }
 
 enum Next {
@@ -591,10 +595,12 @@ impl Session {
     }
 
     async fn new_window(&mut self, opts: NewWindowOpts) -> Response {
+        let named = opts.name.is_some();
         let label = opts.name.unwrap_or_else(|| basename(&opts.spawn.command));
         let place = Placement::Window {
             label,
             focus: opts.focus,
+            named,
         };
         node_reply(self.add_node(opts.spawn, place).await)
     }
@@ -669,9 +675,17 @@ impl Session {
                 self.workspace
                     .split_pane(target.as_deref(), name.to_string(), dir, percent, focus)
             }
-            Placement::Window { label, focus } => {
+            Placement::Window {
+                label,
+                focus,
+                named,
+            } => {
                 self.workspace
-                    .new_window_with_focus(label, name.to_string(), focus);
+                    .new_window_with_focus(label.clone(), name.to_string(), focus);
+                if named {
+                    let idx = self.workspace.windows.len() - 1;
+                    self.workspace.rename_window(idx, label);
+                }
                 Ok(())
             }
         }
