@@ -6,6 +6,7 @@ use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 
 use super::actor::PaneActor;
+use super::pacing::{Inflight, Pacing};
 use super::pty::{PtyNode, PtyTerminal};
 use super::sink::Sink;
 use super::task::TaskNode;
@@ -65,10 +66,22 @@ pub fn render_logs(
 
 fn history_text(ring: &RingBuffer, rendered: Option<&VtScreen>, tail: Option<usize>) -> String {
     match (rendered, tail) {
-        (Some(vt), _) => vt.scrollback_text(tail),
+        (Some(vt), _) => {
+            let grid = vt.grid();
+            replay_text(&ring.snapshot(), (grid.cols, grid.rows), tail)
+        }
         (None, Some(n)) => ring.tail_lines(n),
         (None, None) => ring.snapshot_str(),
     }
+}
+
+/// Retained output replayed into a fresh screen of `size` (cols, rows), as plain text with
+/// scrollback. The live screen keeps none, so scrolled-off rows cost nothing at output rates;
+/// rendering them is paid only when a plain read asks for them.
+pub fn replay_text(output: &[u8], size: (usize, usize), tail: Option<usize>) -> String {
+    let mut screen = VtScreen::new(size.0, size.1);
+    screen.feed(output);
+    screen.scrollback_text(tail)
 }
 
 /// Messages to a pane actor.
@@ -144,6 +157,8 @@ pub struct PaneCtx {
     pub idle_ms: u64,
     /// Set while session-wide subscribers exist; events are relayed to the session only then.
     pub relay: Arc<AtomicBool>,
+    /// Attached terminals' backlogs; the PTY reader waits while one is behind.
+    pub pacing: Arc<Pacing>,
 }
 
 /// Cheap, cloneable reference to a pane actor.
@@ -247,12 +262,21 @@ impl PaneHandle {
 /// Starts a process and its pane actor.
 pub fn spawn(spec: SpawnSpec, pty: bool, ctx: PaneCtx) -> Result<PaneHandle, NodeError> {
     let (tx, rx) = mpsc::unbounded_channel();
+    let inflight = Arc::new(Inflight::default());
     let (process, terminal): (Box<dyn Process>, Option<PtyTerminal>) = if pty {
-        let node = PtyNode::spawn(&spec, tx.clone())?;
+        let node = PtyNode::spawn(
+            &spec,
+            tx.clone(),
+            Arc::clone(&ctx.pacing),
+            Arc::clone(&inflight),
+        )?;
         let terminal = node.terminal();
         (Box::new(node), Some(terminal))
     } else {
-        (Box::new(TaskNode::spawn(&spec, tx.clone())?), None)
+        (
+            Box::new(TaskNode::spawn(&spec, tx.clone(), Arc::clone(&inflight))?),
+            None,
+        )
     };
     let handle = PaneHandle {
         name: Arc::from(spec.name.as_str()),
@@ -261,6 +285,10 @@ pub fn spawn(spec: SpawnSpec, pty: bool, ctx: PaneCtx) -> Result<PaneHandle, Nod
         pty,
         tx,
     };
-    tokio::spawn(PaneActor::new(&spec, process, terminal, ctx).run(rx));
+    tokio::spawn(
+        PaneActor::new(&spec, process, terminal, ctx)
+            .with_inflight(inflight)
+            .run(rx),
+    );
     Ok(handle)
 }

@@ -3,6 +3,7 @@
 //! only forward messages to the actor.
 pub mod actor;
 pub mod agent;
+pub mod pacing;
 pub mod pane;
 pub mod process;
 pub mod pty;
@@ -37,6 +38,14 @@ pub struct SpawnSpec {
     pub cwd: Option<String>,
     /// Extra environment, applied after the terminal defaults.
     pub env: Vec<(String, String)>,
+}
+
+/// Resolves at `at`, or never without a deadline: a `select!` arm for an optional timer.
+pub async fn sleep_until_opt(at: Option<tokio::time::Instant>) {
+    match at {
+        Some(at) => tokio::time::sleep_until(at).await,
+        None => std::future::pending().await,
+    }
 }
 
 pub fn now_ms() -> u64 {

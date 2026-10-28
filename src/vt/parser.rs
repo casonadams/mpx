@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use vte::{Params, Perform};
 
 use super::grid::{Cell, CellStyle, Color, Grid};
@@ -138,6 +139,7 @@ impl VtHandler {
                 1 => self.modes.app_cursor = set,
                 25 => self.grid.cursor.visible = set,
                 1049 | 1047 | 47 => self.grid.clear_screen(2),
+                69 => self.grid.set_lr_margins_mode(set),
                 1004 => self.modes.focus_events = set,
                 2004 => self.modes.bracketed_paste = set,
                 _ => {}
@@ -337,6 +339,17 @@ impl Perform for VtHandler {
                 self.grid.clear_line(mode);
             }
             'm' => self.handle_sgr(params),
+            // With DECLRMM set, `CSI s` is DECSLRM (left/right margins), not save-cursor.
+            's' if self.grid.lr_margins => {
+                let value = |i: usize| {
+                    params
+                        .iter()
+                        .nth(i)
+                        .map(|p| p[0] as usize)
+                        .filter(|&v| v > 0)
+                };
+                self.grid.set_lr_margins(value(0), value(1));
+            }
             's' => {
                 self.grid.saved_cursor = Some(self.grid.cursor);
             }
@@ -493,6 +506,14 @@ impl VtScreen {
         }
     }
 
+    /// A screen that keeps no scrollback: what a live pane shows. Scrollback lives in the pane's
+    /// retained output and is rebuilt from it on demand, so floods cost no history work.
+    pub fn live(cols: usize, rows: usize) -> Self {
+        let mut screen = Self::new(cols, rows);
+        screen.grid_mut().set_history_limit(0);
+        screen
+    }
+
     pub fn feed(&mut self, bytes: &[u8]) {
         self.parser.advance(&mut self.handler, bytes);
     }
@@ -538,17 +559,17 @@ impl VtScreen {
         let all_rows = grid
             .history
             .iter()
-            .map(Vec::as_slice)
-            .chain(grid.screen_lines());
+            .map(|row| Cow::Owned(row.to_cells(0)))
+            .chain(grid.screen_lines().map(Cow::Borrowed));
 
         let non_blank_from_end = all_rows.rev().skip_while(|row| is_blank_row(row));
 
-        let rows: Vec<&[Cell]> = match tail {
+        let rows: Vec<Cow<'_, [Cell]>> = match tail {
             Some(n) => non_blank_from_end.take(n).collect(),
             None => non_blank_from_end.collect(),
         };
 
-        let lines: Vec<String> = rows.into_iter().rev().map(row_text).collect();
+        let lines: Vec<String> = rows.iter().rev().map(|row| row_text(row)).collect();
         lines.join("\n")
     }
 }

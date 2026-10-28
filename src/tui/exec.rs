@@ -152,7 +152,7 @@ impl App {
             Command::PrevSession => self.step_session(false).await,
             Command::KillServer => self.kill_server().await,
             Command::Zoom => self.toggle_zoom(),
-            Command::CopyMode => self.enter_copy(),
+            Command::CopyMode => self.enter_copy().await,
             Command::Detach => Flow::Quit,
             Command::OpenAgents => self.open_overlay(Overlay::agents()).await,
             Command::OpenTree => self.open_overlay(Overlay::tree()).await,
@@ -347,10 +347,11 @@ impl App {
         Flow::Continue
     }
 
-    fn enter_copy(&mut self) -> Flow {
+    async fn enter_copy(&mut self) -> Flow {
         if self.active_pane.is_empty() {
             return self.say("no active pane");
         }
+        self.load_scrollback(&self.active_pane.clone()).await;
         let cs = CopyState::enter(self.active_vt().map(|vt| vt.grid()));
         self.parked_copy.remove(&self.active_pane);
         self.mode = Mode::Copy(cs);

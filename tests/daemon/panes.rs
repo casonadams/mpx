@@ -57,3 +57,32 @@ async fn ids_keep_increasing_after_nodes_exit() {
     assert_eq!(next.id, 1);
     client.kill("next").await.unwrap();
 }
+
+#[tokio::test]
+async fn an_exited_pane_in_history_claims_no_window_when_its_name_is_reused() {
+    let daemon = start().await;
+    let mut client = connect(&daemon.endpoint).await;
+    let opts = |command: &str| mpx::protocol::NewWindowOpts {
+        name: Some("w".into()),
+        spawn: task("w", command, &[]),
+        focus: true,
+    };
+    client.new_window(opts("true")).await.unwrap();
+    client
+        .wait("w", mpx::protocol::WaitCondition::Exit, Some(2_000))
+        .await
+        .unwrap();
+    client.new_window(opts("cat")).await.unwrap();
+    let nodes: Vec<_> = client
+        .list()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|n| n.name == "w")
+        .collect();
+    assert_eq!(nodes.len(), 2, "{nodes:?}");
+    let (gone, live) = (&nodes[0], &nodes[1]);
+    assert!(!gone.is_running() && gone.window.is_none(), "{gone:?}");
+    assert!(live.is_running() && live.window.is_some(), "{live:?}");
+    client.kill("w").await.unwrap();
+}

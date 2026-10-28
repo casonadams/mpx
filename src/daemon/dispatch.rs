@@ -1,5 +1,5 @@
-//! Request routing for one connection. Requests that wait (timed waits, pipe reads, kill and
-//! shutdown) run here so the session actor never blocks on them.
+//! Request routing for one connection. Requests that wait (timed waits, pipe reads, log reads,
+//! kill and shutdown) run here so the session actor never blocks on them.
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -7,6 +7,7 @@ use super::idempotency::Claim;
 use super::pipes::ReadArgs;
 use super::session::{SessionMsg, reply};
 use super::{DaemonState, KILL_GRACE};
+use crate::node::pane::LogQuery;
 use crate::protocol::{Request, Response};
 
 pub(super) async fn dispatch(state: &Arc<DaemonState>, req: Request) -> Response {
@@ -76,6 +77,12 @@ pub(super) async fn execute(state: &Arc<DaemonState>, req: Request) -> Response 
             condition,
             timeout_ms,
         } => wait(state, &name, condition, timeout_ms).await,
+        Request::Logs {
+            name,
+            tail,
+            plain,
+            since,
+        } => logs(state, &name, LogQuery { tail, plain, since }).await,
         Request::ReadPipe {
             name,
             since,
@@ -148,20 +155,21 @@ async fn kill_window(state: &Arc<DaemonState>, index: Option<usize>) -> Response
     }
 }
 
+/// Asked of the pane directly: a full plain read takes milliseconds, and the session must not
+/// wait on it, as every pane's output queues behind the session while it waits, out of pacing's
+/// sight, and would then reach an attached terminal in one burst that overflows it.
+async fn logs(state: &Arc<DaemonState>, name: &str, query: LogQuery) -> Response {
+    let read = async { state.lookup(name).await?.logs(query).await };
+    reply(read.await, |(data, next)| Response::LogChunk { data, next })
+}
+
 async fn wait(
     state: &Arc<DaemonState>,
     name: &str,
     condition: crate::protocol::WaitCondition,
     timeout_ms: Option<u64>,
 ) -> Response {
-    let handle = match state.lookup(name).await {
-        Ok(handle) => handle,
-        Err(e) => return Response::Error(e),
-    };
-    reply(
-        handle
-            .wait(condition, timeout_ms.map(Duration::from_millis))
-            .await,
-        Response::WaitResult,
-    )
+    let timeout = timeout_ms.map(Duration::from_millis);
+    let waited = async { state.lookup(name).await?.wait(condition, timeout).await };
+    reply(waited.await, Response::WaitResult)
 }

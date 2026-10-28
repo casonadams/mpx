@@ -322,6 +322,13 @@ pub enum Request {
         name: Option<String>,
         #[serde(default)]
         since: Option<u64>,
+        /// Ask for events as binary frames (`wire`); a daemon that agrees answers `BinaryStream`.
+        #[serde(default)]
+        binary: bool,
+        /// Of pane output, send only the active window's: what a TUI shows. Other events still
+        /// come for every pane.
+        #[serde(default)]
+        active_window: bool,
     },
     Screen {
         name: String,
@@ -435,6 +442,8 @@ pub enum Request {
 #[serde(tag = "status", content = "data")]
 pub enum Response {
     Ok,
+    /// Subscribed; events follow as binary frames (`wire`) instead of JSON lines.
+    BinaryStream,
     Pong,
     Session(SessionInfo),
     Node(NodeInfo),

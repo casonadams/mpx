@@ -15,6 +15,18 @@ pub struct Canvas {
     cursor: Option<(u16, u16)>,
     style: Option<CellStyle>,
     status: Vec<u8>,
+    lr_margins: bool,
+}
+
+/// Characters known to take one column: ASCII, and the box drawing and block elements mpx draws its
+/// own borders and dividers with (the layout already assumes those are narrow).
+fn narrow(c: char) -> bool {
+    c.is_ascii() || ('\u{2500}'..='\u{259F}').contains(&c)
+}
+
+/// Whether two rectangles share a cell.
+fn overlaps(a: Rect, b: Rect) -> bool {
+    a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
 }
 
 impl Canvas {
@@ -38,6 +50,90 @@ impl Canvas {
         self.status.clear();
     }
 
+    /// Whether the terminal supports left/right scroll margins (DECLRMM), so regions narrower than
+    /// the screen can be scrolled too.
+    pub fn set_lr_margins(&mut self, supported: bool) {
+        self.lr_margins = supported;
+    }
+
+    /// Scrolls `region` by `lines` (up when positive) on the terminal and in the shadow, so content
+    /// that only moved is not sent again; rows scrolled in are blank. A region narrower than the
+    /// screen needs left/right margins, and only ASCII known on screen in and beside it: the screen
+    /// model has no width table to say where a wide glyph near a margin really sits. Returns false,
+    /// doing nothing, when chrome covers the region, the move is degenerate or cannot be done.
+    pub fn scroll<W: Write>(&mut self, out: &mut W, region: Rect, lines: isize) -> io::Result<bool> {
+        let n = lines.unsigned_abs();
+        let fits = region.height >= 2
+            && region.y + region.height <= self.height
+            && region.x + region.width <= self.width
+            && n < region.height as usize;
+        let covered = self.occluded.is_some_and(|r| overlaps(r, region));
+        if lines == 0 || !fits || covered {
+            return Ok(false);
+        }
+        let full = region.x == 0 && region.width == self.width;
+        if !full && !(self.lr_margins && self.plain_around(region)) {
+            return Ok(false);
+        }
+        let (top, bottom) = (region.y + 1, region.y + region.height);
+        let verb = if lines > 0 { 'S' } else { 'T' };
+        // Default attributes first: the terminal fills scrolled-in cells with the current background.
+        if full {
+            write!(out, "\x1b[0m\x1b[{top};{bottom}r\x1b[{n}{verb}\x1b[r")?;
+        } else {
+            let (left, right) = (region.x + 1, region.x + region.width);
+            write!(
+                out,
+                "\x1b[0m\x1b[?69h\x1b[{top};{bottom}r\x1b[{left};{right}s\x1b[{n}{verb}\x1b[s\x1b[?69l\x1b[r"
+            )?;
+        }
+        self.style = None;
+        self.cursor = None;
+        self.shift(region, lines);
+        Ok(true)
+    }
+
+    /// Moves the shadow of `region` as the terminal just did; scrolled-in cells are known blanks.
+    fn shift(&mut self, region: Rect, lines: isize) {
+        let n = lines.unsigned_abs();
+        let (top, bottom) = (region.y as usize, (region.y + region.height - 1) as usize);
+        let cols = region.x as usize..(region.x + region.width) as usize;
+        let rows: Vec<usize> = if lines > 0 {
+            (top..=bottom).collect()
+        } else {
+            (top..=bottom).rev().collect()
+        };
+        let width = self.width as usize;
+        for y in rows {
+            let from = if lines > 0 {
+                Some(y + n).filter(|&f| f <= bottom)
+            } else {
+                y.checked_sub(n).filter(|&f| f >= top)
+            };
+            let dst = y * width;
+            match from {
+                Some(f) => self
+                    .front
+                    .copy_within(f * width + cols.start..f * width + cols.end, dst + cols.start),
+                None => self.front[dst + cols.start..dst + cols.end].fill(Some(Cell::default())),
+            }
+        }
+    }
+
+    /// Every cell of `region`'s rows from the column before it to the column after it is known to
+    /// the shadow and narrow.
+    fn plain_around(&self, region: Rect) -> bool {
+        let from = region.x.saturating_sub(1) as usize;
+        let to = ((region.x + region.width) as usize + 1).min(self.width as usize);
+        let width = self.width as usize;
+        (region.y..region.y + region.height).all(|y| {
+            let row = y as usize * width;
+            self.front[row + from..row + to]
+                .iter()
+                .all(|cell| cell.is_some_and(|c| narrow(c.c)))
+        })
+    }
+
     /// Writes `cell` at `(x, y)` unless the terminal already shows it there.
     pub fn put<W: Write>(&mut self, out: &mut W, x: u16, y: u16, cell: Cell) -> io::Result<()> {
         if x >= self.width || y >= self.height {
@@ -51,7 +147,7 @@ impl Canvas {
         if self.front[i] == Some(cell) {
             return Ok(());
         }
-        if self.cursor != Some((x, y)) {
+        if self.cursor != Some((x, y)) && !self.bridge(out, x, y)? {
             write!(out, "\x1b[{};{}H", y + 1, x + 1)?;
         }
         self.write_cell(out, cell)?;
@@ -59,6 +155,34 @@ impl Canvas {
         self.cursor = (cell.c.is_ascii() && x + 1 < self.width).then_some((x + 1, y));
         self.front[i] = Some(cell);
         Ok(())
+    }
+
+    /// Moves the cursor right to `(x, y)` by reprinting the cells in between, when the terminal
+    /// already shows them as plain ASCII in the current style and that is shorter than a cursor
+    /// move: a new line in text whose spaces match the blank row under it is then sent as one run
+    /// rather than a jump per word.
+    fn bridge<W: Write>(&mut self, out: &mut W, x: u16, y: u16) -> io::Result<bool> {
+        let Some((from, row)) = self.cursor else {
+            return Ok(false);
+        };
+        let jump = 4 + digits(y + 1) + digits(x + 1);
+        if row != y || from >= x || usize::from(x - from) > jump {
+            return Ok(false);
+        }
+        let start = self.index(from, y);
+        let gap = &self.front[start..start + usize::from(x - from)];
+        let plain = |cell: &Option<Cell>| {
+            cell.is_some_and(|c| c.c.is_ascii() && Some(c.style) == self.style)
+        };
+        let hidden = self
+            .occluded
+            .is_some_and(|r| (from..x).any(|gx| r.contains(gx, y)));
+        if hidden || !gap.iter().all(plain) {
+            return Ok(false);
+        }
+        let text: Vec<u8> = gap.iter().flatten().map(|c| c.c as u8).collect();
+        out.write_all(&text)?;
+        Ok(true)
     }
 
     /// Writes a row of pane cells starting at `(x, y)`. A row holding non-ASCII glyphs, now or as last
@@ -203,4 +327,8 @@ fn write_color<W: Write>(out: &mut W, color: Color, base: u8) -> io::Result<()> 
         Color::BrightWhite => base + 67,
     };
     write!(out, ";{code}")
+}
+
+fn digits(n: u16) -> usize {
+    n.checked_ilog10().map_or(1, |d| d as usize + 1)
 }

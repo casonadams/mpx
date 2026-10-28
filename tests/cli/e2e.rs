@@ -581,3 +581,16 @@ fn logs_follow_prints_a_burst_without_gaps() {
         "gap in {numbers:?}"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn an_auto_started_daemon_leads_its_own_session_so_terminal_hangups_spare_it() {
+    let s = Session::new("sid");
+    let _ = s.run(&["run", "-n", "a", "--pty", "cat"]);
+    let sessions: serde_json::Value =
+        serde_json::from_str(&s.stdout(&["list-sessions", "--json"])).expect("json");
+    let pid = sessions[0]["pid"].as_i64().expect("daemon pid") as libc::pid_t;
+    // SAFETY: getsid only reads the session id of a process.
+    let session = unsafe { libc::getsid(pid) };
+    assert_eq!(session, pid, "the daemon must not share the spawning terminal's session");
+}

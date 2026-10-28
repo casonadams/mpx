@@ -14,6 +14,7 @@ mod daemon {
     mod layout;
     mod lifecycle;
     mod logs;
+    mod pacing;
     mod panes;
     mod pipes;
     mod pipes_core;

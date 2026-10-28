@@ -41,6 +41,7 @@ impl App {
             return self.dispatch(cmd).await;
         }
         self.forward_key(&key).await;
+        self.forwarded = true;
         Flow::Continue
     }
 
@@ -66,8 +67,11 @@ impl App {
         let outcome = apply_key(&mut cs, &key, self.active_vt().map(|vt| vt.grid()), pane);
         match outcome {
             CopyOutcome::Stay => self.mode = Mode::Copy(cs),
-            CopyOutcome::Exit => {}
-            CopyOutcome::Yank(text) => self.clipboard.copy(&text),
+            CopyOutcome::Exit => self.release_scrollback(&self.active_pane.clone()),
+            CopyOutcome::Yank(text) => {
+                self.clipboard.copy(&text);
+                self.release_scrollback(&self.active_pane.clone());
+            }
             CopyOutcome::SearchFailed(query) => {
                 self.say(format!("Pattern not found: {query}"));
                 self.mode = Mode::Copy(cs);

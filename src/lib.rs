@@ -15,5 +15,6 @@ pub mod store;
 pub mod tmux_shim;
 pub mod tui;
 pub mod vt;
+pub mod wire;
 
 pub use protocol::{Request, Response, StreamEvent};

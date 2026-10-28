@@ -2,6 +2,15 @@
 use crate::layout::{Rect, WindowTab};
 use crate::protocol::NodeInfo;
 
+/// The node a pane name stands for: the newest with that name, since an exited process can leave
+/// an older node of the same name in the session's history.
+pub fn node_named<'a>(nodes: &'a [NodeInfo], name: &str) -> Option<&'a NodeInfo> {
+    nodes
+        .iter()
+        .filter(|n| n.name == name)
+        .max_by_key(|n| n.id)
+}
+
 /// `[exited N]` for a pane whose process ended and which is kept on screen.
 pub fn exit_badge(node: &NodeInfo) -> Option<String> {
     if node.is_running() {

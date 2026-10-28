@@ -101,17 +101,22 @@ pub fn find_directional(panes: &[PaneRect], active: &str, side: Side) -> Option<
 
 /// The previous or next pane in layout order, wrapping around.
 pub fn neighbor_pane(panes: &[PaneRect], active: &str, next: bool) -> Option<String> {
-    let len = panes.len();
     let idx = panes.iter().position(|(name, ..)| name == active)?;
-    if len < 2 {
-        return None;
-    }
-    let other = if next {
+    neighbor(panes, idx, next).map(|(name, ..)| name.clone())
+}
+
+/// The item after (`next`) or before the one at `idx`, wrapping around; none without another.
+pub fn neighbor<T>(items: &[T], idx: usize, next: bool) -> Option<&T> {
+    (items.len() > 1).then(|| &items[wrap_step(idx, items.len(), next)])
+}
+
+/// The index after (`next`) or before `idx` in a list of `len` items, wrapping around.
+pub fn wrap_step(idx: usize, len: usize, next: bool) -> usize {
+    if next {
         (idx + 1) % len
     } else {
         (idx + len - 1) % len
-    };
-    Some(panes[other].0.clone())
+    }
 }
 
 /// Panes whose cell size differs from the last size sent to the daemon, as `(name, cols, rows)`.
@@ -129,18 +134,28 @@ pub fn pending_resizes(
         .collect()
 }
 
-/// Loads a pane's scrollback into a fresh screen of the given size. Returns the screen and the
-/// byte offset its contents end at, which is the next offset expected from the event stream.
+/// Rebuilds a pane from its log into a fresh screen of the given size, with scrollback when
+/// `scrollback` is set. Returns the screen and the byte offset its contents end at, which is the
+/// next offset expected from the event stream.
 pub async fn load_pane(
     client: &mut Client,
     name: &str,
-    width: u16,
-    height: u16,
+    (width, height): (u16, u16),
+    scrollback: bool,
 ) -> Option<(VtScreen, u64)> {
     let (logs, next) = client.logs(name, None, false, None).await.ok()?;
-    let mut screen = VtScreen::new(width as usize, height as usize);
+    let mut screen = if scrollback {
+        VtScreen::new(width as usize, height as usize)
+    } else {
+        VtScreen::live(width as usize, height as usize)
+    };
     screen.feed(logs.as_bytes());
     Some((screen, next))
+}
+
+/// Whether a pane's screen holds scrollback (it is in copy mode).
+pub fn has_scrollback(screen: &VtScreen) -> bool {
+    screen.grid().history_limit > 0
 }
 
 /// Resizes panes whose cell size changed and reloads their scrollback into fresh screens,
@@ -155,7 +170,8 @@ pub async fn sync_dims(
     for (name, width, height) in pending_resizes(panes, dims) {
         dims.insert(name.clone(), (width, height));
         let _ = client.resize_pane(&name, width, height).await;
-        if let Some((screen, next)) = load_pane(client, &name, width, height).await {
+        let scrollback = vt.get(&name).is_some_and(has_scrollback);
+        if let Some((screen, next)) = load_pane(client, &name, (width, height), scrollback).await {
             expected.insert(name.clone(), next);
             vt.insert(name, screen);
         }

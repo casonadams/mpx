@@ -9,16 +9,20 @@ use futures_util::{SinkExt, StreamExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::io::AsyncWriteExt;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::codec::{Framed, LinesCodec};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::config::Config;
 use crate::ipc::{AsyncStream, IpcListener};
 use crate::node::pane::PaneHandle;
 use crate::node::sink::Sink;
+use crate::node::now_ms;
+use crate::node::pacing::{Backlog, CloseOnDrop, Pacing};
 use crate::protocol::{DaemonMessage, Request, Response, StreamEvent};
 use crate::store;
+use crate::wire;
 use idempotency::Claim;
 use session::{Filter, SessionMsg};
 
@@ -27,6 +31,8 @@ const SESSION_GONE: &str = "Session is unavailable";
 
 pub struct DaemonState {
     tx: mpsc::UnboundedSender<SessionMsg>,
+    /// Shared with the session's pane readers: attached terminals' backlogs pace their output.
+    pacing: Arc<Pacing>,
     pipes: pipes::PipesHandle,
     shutdown: watch::Sender<bool>,
 }
@@ -47,6 +53,7 @@ impl DaemonState {
         let (tx, rx) = mpsc::unbounded_channel();
         let (ready, ready_rx) = oneshot::channel();
         let (shutdown, _) = watch::channel(false);
+        let pacing = Arc::new(Pacing::default());
         let boot = session::Boot {
             session,
             endpoint,
@@ -55,11 +62,13 @@ impl DaemonState {
             tx: tx.clone(),
             pipes: pipes.clone(),
             ready,
+            pacing: Arc::clone(&pacing),
         };
         tokio::spawn(session::run(boot, rx));
         let _ = ready_rx.await;
         Arc::new(Self {
             tx,
+            pacing,
             pipes,
             shutdown,
         })
@@ -165,17 +174,79 @@ async fn stream_events<S: AsyncStream>(
     framed: &mut Framed<S, LinesCodec>,
     registered: Result<(), String>,
     mut rx: mpsc::Receiver<StreamEvent>,
+    backlog: Option<Arc<Backlog>>,
+    binary: bool,
 ) {
+    let _release = CloseOnDrop(backlog.clone());
     if let Err(e) = registered {
         send_message(framed, &DaemonMessage::Response(Response::Error(e))).await;
         return;
     }
-    if !send_message(framed, &DaemonMessage::Response(Response::Ok)).await {
+    let accepted = if binary {
+        Response::BinaryStream
+    } else {
+        Response::Ok
+    };
+    if !send_message(framed, &DaemonMessage::Response(accepted)).await {
+        return;
+    }
+    if binary {
+        stream_frames(framed.get_mut(), &mut rx, backlog.as_deref()).await;
         return;
     }
     while let Some(event) = rx.recv().await {
         if !send_message(framed, &DaemonMessage::Event(event)).await {
             break;
+        }
+        if let Some(backlog) = &backlog {
+            backlog.sent(now_ms());
+        }
+    }
+}
+
+/// Bytes of frames gathered into one write while more events are already queued.
+const FRAME_BATCH: usize = 256 * 1024;
+
+/// Writes events as length-prefixed binary frames, every event already queued in one write.
+async fn stream_frames<S: AsyncStream>(
+    io: &mut S,
+    rx: &mut mpsc::Receiver<StreamEvent>,
+    backlog: Option<&Backlog>,
+) {
+    let mut buf = Vec::with_capacity(64 * 1024);
+    while let Some(first) = rx.recv().await {
+        buf.clear();
+        let mut count = 0;
+        let mut next = Some(first);
+        while let Some(event) = next.take() {
+            push_frame(&mut buf, &event);
+            count += 1;
+            if buf.len() < FRAME_BATCH {
+                next = rx.try_recv().ok();
+            }
+        }
+        if io.write_all(&buf).await.is_err() {
+            return;
+        }
+        if let Some(backlog) = backlog {
+            let now = now_ms();
+            (0..count).for_each(|_| backlog.sent(now));
+        }
+    }
+}
+
+/// Appends `event` as one frame: a big-endian u32 length, then its payload.
+fn push_frame(buf: &mut Vec<u8>, event: &StreamEvent) {
+    let start = buf.len();
+    buf.extend_from_slice(&[0; 4]);
+    match wire::encode_event(event, buf) {
+        Ok(()) => {
+            let len = (buf.len() - start - 4) as u32;
+            buf[start..start + 4].copy_from_slice(&len.to_be_bytes());
+        }
+        Err(e) => {
+            warn!("dropped an event that cannot be framed: {}", e);
+            buf.truncate(start);
         }
     }
 }
@@ -183,16 +254,24 @@ async fn stream_events<S: AsyncStream>(
 async fn subscribe_node<S: AsyncStream>(
     state: &DaemonState,
     framed: &mut Framed<S, LinesCodec>,
-    name: Option<String>,
-    since: Option<u64>,
+    (name, since): (Option<String>, Option<u64>),
+    active_window: bool,
+    binary: bool,
 ) {
-    let (sink, rx) = Sink::channel();
+    let session_wide = if active_window {
+        Filter::ActiveWindow
+    } else {
+        Filter::Everything
+    };
+    // A session-wide subscriber is an attached terminal: its backlog paces pane output.
+    let backlog = (name.is_none() && since.is_none()).then(|| state.pacing.track(now_ms()));
+    let (sink, rx) = Sink::channel(backlog.clone());
     let registered = match (name, since) {
         (None, Some(_)) => Err("since requires a node name".to_string()),
         (Some(name), since) => state.subscribe_node(name, since, sink).await,
-        (None, None) => state.subscribe(Filter::Everything, sink).await,
+        (None, None) => state.subscribe(session_wide, sink).await,
     };
-    stream_events(framed, registered, rx).await;
+    stream_events(framed, registered, rx, backlog, binary).await;
 }
 
 pub async fn handle_client<S: AsyncStream>(state: Arc<DaemonState>, stream: S) {
@@ -226,14 +305,19 @@ pub async fn handle_client<S: AsyncStream>(state: Arc<DaemonState>, stream: S) {
         };
 
         match req {
-            Request::Subscribe { name, since } => {
-                subscribe_node(&state, &mut framed, name, since).await;
+            Request::Subscribe {
+                name,
+                since,
+                binary,
+                active_window,
+            } => {
+                subscribe_node(&state, &mut framed, (name, since), active_window, binary).await;
                 break;
             }
             Request::SubscribePipe { name } => {
-                let (sink, rx) = Sink::channel();
+                let (sink, rx) = Sink::channel(None);
                 let registered = state.subscribe(Filter::Pipe(name), sink).await;
-                stream_events(&mut framed, registered, rx).await;
+                stream_events(&mut framed, registered, rx, None, false).await;
                 break;
             }
             req => {

@@ -56,6 +56,7 @@ fn pane_with(pid: Option<u32>, harnesses: Vec<Harness>, idle_ms: u64) -> Pane {
         harnesses: Arc::new(harnesses),
         idle_ms,
         relay: Arc::new(AtomicBool::new(false)),
+        pacing: Arc::default(),
     };
     let spec = SpawnSpec {
         name: "pane".to_string(),
@@ -124,7 +125,7 @@ fn wait_msg(
 }
 
 fn subscribe(p: &mut Pane, since: Option<u64>) -> tokio::sync::mpsc::Receiver<StreamEvent> {
-    let (sink, rx) = Sink::channel();
+    let (sink, rx) = Sink::channel(None);
     let (reply, _ack) = oneshot::channel();
     p.actor.handle(PaneMsg::Subscribe { since, sink, reply });
     rx

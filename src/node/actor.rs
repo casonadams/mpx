@@ -5,17 +5,20 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use tokio::sync::mpsc::UnboundedReceiver;
-use tokio::time::{Instant, sleep_until};
+use tokio::time::Instant;
 
 use super::agent::AgentTracker;
+use super::pacing::Inflight;
 use super::pane::{
     InputBuild, LogQuery, Notifier, PaneCtx, PaneMsg, PaneNotice, Reply, TermView, render_logs,
+    replay_text,
 };
 use super::process::{self, detection_names, foreground_name as fg_name};
 use super::pty::PtyTerminal;
 use super::sink::Sink;
 use super::waits::{self, Cond, Observed};
 use super::{Process, SpawnSpec, now_ms};
+use super::sleep_until_opt;
 use crate::agents::{self, Harness};
 use crate::buffer::{RingBuffer, Utf8Stream, strip_ansi};
 use crate::protocol::{NodeInfo, NodeState, PaneId, StreamEvent, WaitOutcome};
@@ -42,6 +45,8 @@ impl Waiter {
 }
 
 pub struct PaneActor {
+    /// Output chunks its reader handed over and this actor has yet to process.
+    inflight: Arc<Inflight>,
     name: String,
     id: PaneId,
     pty: bool,
@@ -87,6 +92,7 @@ impl PaneActor {
         };
         let started_ms = now_ms();
         Self {
+            inflight: Arc::default(),
             name: spec.name.clone(),
             id: spec.id,
             pty,
@@ -97,7 +103,7 @@ impl PaneActor {
             process: Some(process),
             terminal,
             ring: RingBuffer::default(),
-            screen: VtScreen::new(80, 24),
+            screen: VtScreen::live(80, 24),
             utf8: Utf8Stream::default(),
             emitted: 0,
             last_output_ms: started_ms,
@@ -127,9 +133,18 @@ impl PaneActor {
         }
     }
 
+    /// Counts processed output off `inflight`, which the pane's reader waits on.
+    pub fn with_inflight(mut self, inflight: Arc<Inflight>) -> Self {
+        self.inflight = inflight;
+        self
+    }
+
     pub fn handle(&mut self, msg: PaneMsg) {
         match msg {
-            PaneMsg::Output(bytes) => self.on_output(&bytes),
+            PaneMsg::Output(bytes) => {
+                self.on_output(&bytes);
+                self.inflight.done();
+            }
             PaneMsg::Exited(code) => self.on_exit(code),
             PaneMsg::Info { full, reply } => {
                 self.refresh();
@@ -139,9 +154,7 @@ impl PaneActor {
                 self.refresh();
                 let _ = reply.send(self.label());
             }
-            PaneMsg::Logs { query, reply } => {
-                let _ = reply.send(self.logs(&query));
-            }
+            PaneMsg::Logs { query, reply } => self.logs(query, reply),
             PaneMsg::Screen { reply } => {
                 let _ = reply.send(self.screen.snapshot());
             }
@@ -484,8 +497,22 @@ impl PaneActor {
         info
     }
 
-    fn logs(&self, query: &LogQuery) -> (String, u64) {
-        render_logs(&self.ring, self.pty.then_some(&self.screen), query)
+    /// A plain read of a terminal's whole history replays the ring, milliseconds for a full one;
+    /// that runs off the runtime, whose one thread serves every pane.
+    fn logs(&self, query: LogQuery, reply: Reply<(String, u64)>) {
+        if !(self.pty && query.plain && query.since.is_none()) {
+            let _ = reply.send(render_logs(
+                &self.ring,
+                self.pty.then_some(&self.screen),
+                &query,
+            ));
+            return;
+        }
+        let (output, next) = (self.ring.snapshot(), self.ring.total_written());
+        let size = (self.screen.grid().cols, self.screen.grid().rows);
+        tokio::task::spawn_blocking(move || {
+            let _ = reply.send((replay_text(&output, size, query.tail), next));
+        });
     }
 
     fn write_raw(&self, bytes: &[u8]) {
@@ -507,9 +534,3 @@ fn instant_at(target_ms: u64) -> Instant {
     Instant::now() + Duration::from_millis(target_ms.saturating_sub(now_ms()))
 }
 
-async fn sleep_until_opt(at: Option<Instant>) {
-    match at {
-        Some(at) => sleep_until(at).await,
-        None => std::future::pending().await,
-    }
-}

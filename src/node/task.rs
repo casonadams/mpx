@@ -1,10 +1,11 @@
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
+use super::pacing::Inflight;
 use super::pane::PaneMsg;
 use super::{NodeError, Process, SpawnSpec};
 
@@ -16,7 +17,11 @@ pub struct TaskNode {
 
 impl TaskNode {
     /// Starts the command with piped stdio. Output and its exit are sent to `out`.
-    pub fn spawn(spec: &SpawnSpec, out: mpsc::UnboundedSender<PaneMsg>) -> Result<Self, NodeError> {
+    pub fn spawn(
+        spec: &SpawnSpec,
+        out: mpsc::UnboundedSender<PaneMsg>,
+        inflight: Arc<Inflight>,
+    ) -> Result<Self, NodeError> {
         let mut command = Command::new(&spec.command);
         command.args(&spec.args);
         if let Some(dir) = &spec.cwd {
@@ -41,10 +46,10 @@ impl TaskNode {
 
         let mut readers = Vec::new();
         if let Some(stdout) = child.stdout.take() {
-            readers.push(spawn_reader(stdout, out.clone()));
+            readers.push(spawn_reader(stdout, out.clone(), Arc::clone(&inflight)));
         }
         if let Some(stderr) = child.stderr.take() {
-            readers.push(spawn_reader(stderr, out.clone()));
+            readers.push(spawn_reader(stderr, out.clone(), inflight));
         }
 
         let (kill_tx, kill_rx) = oneshot::channel();
@@ -69,16 +74,22 @@ async fn write_stdin(
     }
 }
 
-fn spawn_reader<R>(mut pipe: R, out: mpsc::UnboundedSender<PaneMsg>) -> JoinHandle<()>
+fn spawn_reader<R>(
+    mut pipe: R,
+    out: mpsc::UnboundedSender<PaneMsg>,
+    inflight: Arc<Inflight>,
+) -> JoinHandle<()>
 where
     R: AsyncRead + Unpin + Send + 'static,
 {
     tokio::spawn(async move {
         let mut chunk = [0u8; 4096];
         loop {
+            inflight.wait_for_room_async().await;
             match pipe.read(&mut chunk).await {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
+                    inflight.add();
                     if out.send(PaneMsg::Output(chunk[..n].to_vec())).is_err() {
                         break;
                     }

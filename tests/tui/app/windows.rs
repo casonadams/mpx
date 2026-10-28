@@ -5,7 +5,7 @@ use crossterm::event::KeyCode;
 use mpx::config::Config;
 use mpx::tui::app::{Flow, Mode};
 
-use super::support::{ECHO, Harness, MAIN};
+use super::support::{ECHO, Harness, MAIN, SESSION, connect, wait_for, window};
 
 /// Default bindings that would spawn the user's shell, rebound to run `ECHO`.
 fn echo_config() -> Config {
@@ -171,4 +171,88 @@ async fn detach_binding_quits_the_app() {
     h.frame().await;
     assert_eq!(h.prefixed_char('d').await, Flow::Quit);
     assert!(matches!(h.app.mode, Mode::Normal));
+}
+
+#[tokio::test]
+async fn a_hidden_windows_output_never_reaches_the_tui_and_shows_once_selected() {
+    let mut h = Harness::start(Config::default(), ECHO).await;
+    let mut seed = connect(&h.sandbox.endpoint(SESSION)).await;
+    window(&mut seed, "work", ECHO).await;
+    h.frame().await;
+    seed.select_window(0).await.expect("back to main");
+    h.frame().await;
+    assert_eq!(h.app.active_pane, MAIN);
+    while let Ok(item) = h.rx.try_recv() {
+        h.app.on_stream(Some(item), &mut h.rx).await;
+    }
+    h.app.frame_due = None;
+
+    h.probe.send_input("work", "BEHIND-THE-SCENES").await.expect("send");
+    wait_for(&mut h.probe, "work", "BEHIND-THE-SCENES").await;
+    let quiet = tokio::time::timeout(std::time::Duration::from_millis(150), h.rx.recv()).await;
+    if let Ok(Some(item)) = quiet {
+        h.app.on_stream(Some(item), &mut h.rx).await;
+    }
+    let parsed = h
+        .app
+        .vt
+        .get("work")
+        .is_some_and(|vt| vt.snapshot().contains("BEHIND-THE-SCENES"));
+    assert!(!parsed, "the daemon does not send a hidden window's output");
+    assert_eq!(h.app.frame_due, None, "nothing on screen changed");
+
+    h.prefixed_char('1').await;
+    let shown = h.frame().await;
+    assert!(shown.contains("BEHIND-THE-SCENES"), "rebuilt from the log: {shown}");
+}
+
+/// Applies stream events until `name` has exited, then prepares a frame; false means nothing is
+/// left to show and the TUI ends.
+async fn frame_after_exit(h: &mut Harness, name: &str) -> bool {
+    h.probe.kill(name).await.expect("kill");
+    let gone = name.to_string();
+    h.until("exit delivered", move |app| !app.vt.contains_key(&gone))
+        .await;
+    h.app.layout.dirty = true;
+    h.app.prepare_frame().await
+}
+
+#[tokio::test]
+async fn the_shown_windows_last_pane_exiting_moves_on_to_another_window() {
+    let mut h = Harness::start(Config::default(), ECHO).await;
+    let mut seed = connect(&h.sandbox.endpoint(SESSION)).await;
+    window(&mut seed, "work", ECHO).await;
+    seed.select_window(0).await.expect("back to main");
+    h.frame().await;
+    h.probe.send_input("work", "hidden").await.expect("send");
+    wait_for(&mut h.probe, "work", "hidden").await;
+
+    assert!(frame_after_exit(&mut h, MAIN).await, "another window still has a pane");
+    assert!(h.frame().await.contains("hidden"));
+}
+
+#[tokio::test]
+async fn the_sessions_last_pane_exiting_ends_the_tui() {
+    let mut h = Harness::start(Config::default(), ECHO).await;
+    h.frame().await;
+    assert!(!frame_after_exit(&mut h, MAIN).await);
+}
+
+#[tokio::test]
+async fn a_window_that_flooded_while_hidden_is_rebuilt_when_selected() {
+    let mut h = Harness::start(Config::default(), ECHO).await;
+    let mut seed = connect(&h.sandbox.endpoint(SESSION)).await;
+    let script = "printf READY; read go; seq 1 150000; echo BIG-END; exec cat";
+    window(&mut seed, "bulk", script).await;
+    h.frame().await;
+    seed.select_window(0).await.expect("back to main");
+    h.frame().await;
+
+    h.probe.send_input("bulk", "\r").await.expect("trigger");
+    let log = wait_for(&mut h.probe, "bulk", "BIG-END").await;
+    assert!(log.len() > 512 * 1024, "more than a catch-up's worth: {}", log.len());
+
+    h.prefixed_char('1').await;
+    let shown = h.frame().await;
+    assert!(shown.contains("150000") && shown.contains("BIG-END"), "{shown}");
 }

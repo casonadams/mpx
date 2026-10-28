@@ -2,9 +2,14 @@
 //! checked against that offset. Missing bytes are fetched from the daemon's log.
 
 use super::app::App;
-use super::panes::load_pane;
+use super::panes::{has_scrollback, load_pane};
+use super::status::node_named;
 use crate::protocol::{AgentInfo, StreamEvent};
 use crate::vt::VtScreen;
+
+/// Largest gap a pane coming into view catches up on by reading it; well inside the 2 MB a pane's
+/// log keeps, so the bytes are still there. Larger gaps rebuild the pane from its log.
+const CATCH_UP_MAX: u64 = 512 * 1024;
 
 /// Size of a screen whose pane has not been sized yet.
 const DEFAULT_SIZE: (u16, u16) = (80, 24);
@@ -62,6 +67,10 @@ impl App {
     }
 
     async fn apply_output(&mut self, name: &str, data: &str, offset: u64, next: u64) {
+        if !self.keeps_screen(name) {
+            self.forget_screen(name);
+            return;
+        }
         match plan_output(self.expected.get(name).copied(), offset, next) {
             OutputPlan::Skip => {}
             OutputPlan::Feed => self.feed(name, data, next),
@@ -82,10 +91,60 @@ impl App {
         }
     }
 
+    /// Whether the TUI keeps `name`'s screen up to date: it is on screen, or holds a parked copy
+    /// view. Other panes are rebuilt from their log when they come into view, so output nobody
+    /// sees costs no parsing.
+    pub fn keeps_screen(&self, name: &str) -> bool {
+        self.panes.iter().any(|(pane, ..)| pane == name) || self.parked_copy.contains_key(name)
+    }
+
+    /// Panes that just came into view may have missed output while hidden (the daemon sends only
+    /// the active window's): each is brought up to date.
+    pub async fn refresh_newly_shown(&mut self, before: &[String]) {
+        let fresh: Vec<String> = self
+            .panes
+            .iter()
+            .map(|(name, ..)| name.clone())
+            .filter(|name| !before.contains(name))
+            .collect();
+        for name in fresh {
+            self.bring_up_to_date(&name).await;
+        }
+    }
+
+    /// Nothing missed keeps the screen as it is; a gap the log still holds is fetched and fed; a
+    /// larger one rebuilds the pane from its log (with scrollback for a parked copy view).
+    async fn bring_up_to_date(&mut self, name: &str) {
+        if let Some(expected) = self.expected.get(name).copied() {
+            let Ok((_, end)) = self.client.logs(name, None, false, Some(u64::MAX)).await else {
+                return;
+            };
+            if end <= expected {
+                return;
+            }
+            if end - expected <= CATCH_UP_MAX {
+                self.catch_up(name).await;
+                return;
+            }
+        }
+        if self.parked_copy.contains_key(name) {
+            self.resync_pane(name).await;
+        } else {
+            self.forget_screen(name);
+        }
+    }
+
+    /// Drops a hidden pane's screen; the next frame that shows it reloads it at its size.
+    fn forget_screen(&mut self, name: &str) {
+        self.vt.remove(name);
+        self.expected.remove(name);
+        self.pane_dims.remove(name);
+    }
+
     fn feed(&mut self, name: &str, data: &str, next: u64) {
         self.vt
             .entry(name.to_string())
-            .or_insert_with(|| VtScreen::new(DEFAULT_SIZE.0 as usize, DEFAULT_SIZE.1 as usize))
+            .or_insert_with(|| VtScreen::live(DEFAULT_SIZE.0 as usize, DEFAULT_SIZE.1 as usize))
             .feed(data.as_bytes());
         self.expected.insert(name.to_string(), next);
     }
@@ -103,12 +162,33 @@ impl App {
         }
     }
 
-    /// Rebuilds one pane's screen from its full log at its current size.
+    /// Rebuilds one pane's screen from its full log at its current size, keeping scrollback if it
+    /// had some.
     async fn resync_pane(&mut self, name: &str) {
-        let (width, height) = self.pane_dims.get(name).copied().unwrap_or(DEFAULT_SIZE);
-        if let Some((screen, next)) = load_pane(&mut self.client, name, width, height).await {
+        let scrollback = self.vt.get(name).is_some_and(has_scrollback);
+        self.reload_pane(name, scrollback).await;
+    }
+
+    async fn reload_pane(&mut self, name: &str, scrollback: bool) {
+        let size = self.pane_dims.get(name).copied().unwrap_or(DEFAULT_SIZE);
+        if let Some((screen, next)) = load_pane(&mut self.client, name, size, scrollback).await {
             self.vt.insert(name.to_string(), screen);
             self.expected.insert(name.to_string(), next);
+        }
+    }
+
+    /// Gives `name` its scrollback for copy mode, rebuilt from the pane's log: live panes keep
+    /// none in the TUI.
+    pub async fn load_scrollback(&mut self, name: &str) {
+        if !self.vt.get(name).is_some_and(has_scrollback) {
+            self.reload_pane(name, true).await;
+        }
+    }
+
+    /// Drops `name`'s scrollback once it has left copy mode.
+    pub fn release_scrollback(&mut self, name: &str) {
+        if let Some(vt) = self.vt.get_mut(name) {
+            vt.grid_mut().set_history_limit(0);
         }
     }
 
@@ -124,7 +204,8 @@ impl App {
         if !self.nodes.iter().any(|n| n.name == name) {
             self.refresh_nodes().await;
         }
-        if let Some(node) = self.nodes.iter_mut().find(|n| n.name == name) {
+        let newest = node_named(&self.nodes, name).map(|n| n.id);
+        if let Some(node) = self.nodes.iter_mut().find(|n| Some(n.id) == newest) {
             node.agent = agent;
         }
         self.update_waiting();

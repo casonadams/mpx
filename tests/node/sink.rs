@@ -40,7 +40,7 @@ fn draining_the_queue_rearms_lagged() {
 
 #[test]
 fn overflowing_sink_yields_one_lagged_and_keeps_accepting() {
-    let (mut sink, mut rx) = Sink::channel();
+    let (mut sink, mut rx) = Sink::channel(None);
     for offset in 0..(SUB_QUEUE as u64 + 10) {
         assert!(
             sink.push(output(offset)),

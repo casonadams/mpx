@@ -113,16 +113,53 @@ fn resize_and_invalidate_repaint_everything() {
     );
 }
 
+/// What redrawing the top row as `after` sends once it shows `before`.
+fn redraw_row(before: &str, after: &str) -> String {
+    let mut canvas = Canvas::default();
+    let mut sent = String::new();
+    for text in [before, after] {
+        sent = frame(&mut canvas, None, |c, out| {
+            c.put_row(out, 0, 0, &row(text)).unwrap()
+        });
+    }
+    sent
+}
+
 #[test]
 fn an_ascii_row_sends_only_its_changed_cells() {
+    assert_eq!(redraw_row("hello", "hellO"), "\x1b[1;5H\x1b[0mO");
+}
+
+#[test]
+fn text_over_a_blank_row_goes_out_as_one_run_not_a_jump_per_word() {
+    assert_eq!(
+        redraw_row("          ", "ab cd  efg"),
+        "\x1b[1;1H\x1b[0mab cd  efg"
+    );
+}
+
+#[test]
+fn gaps_longer_than_a_cursor_move_or_in_another_style_are_jumped() {
     let mut canvas = Canvas::default();
+    let bold = Cell {
+        c: ' ',
+        style: CellStyle {
+            bold: true,
+            ..CellStyle::default()
+        },
+    };
     frame(&mut canvas, None, |c, out| {
-        c.put_row(out, 0, 0, &row("hello")).unwrap()
+        c.put_row(out, 0, 0, &row("          ")).unwrap();
+        c.put_row(out, 0, 1, &[cell(' '), bold, cell(' ')]).unwrap();
     });
-    let sent = frame(&mut canvas, None, |c, out| {
-        c.put_row(out, 0, 0, &row("hellO")).unwrap()
+    let far = frame(&mut canvas, None, |c, out| {
+        c.put_row(out, 0, 0, &row("a        b")).unwrap()
     });
-    assert_eq!(sent, "\x1b[1;5H\x1b[0mO");
+    assert_eq!(far, "\x1b[1;1H\x1b[0ma\x1b[1;10Hb");
+    let styled = frame(&mut canvas, None, |c, out| {
+        c.put_row(out, 0, 1, &[cell('a'), bold, cell('b')]).unwrap()
+    });
+    assert_eq!(styled, "\x1b[2;1H\x1b[0ma\x1b[2;3Hb");
 }
 
 #[test]
@@ -174,4 +211,108 @@ fn the_status_row_is_sent_only_when_it_changes() {
     assert!(canvas.status_changed(b"[s] 0:work"));
     canvas.invalidate();
     assert!(canvas.status_changed(b"[s] 0:work"));
+}
+
+#[test]
+fn scrolling_moves_the_shadow_so_moved_rows_are_not_resent() {
+    let mut canvas = Canvas::default();
+    frame(&mut canvas, None, |c, out| {
+        for (y, text) in ["aaaaaaaaaa", "bbbbbbbbbb", "cccccccccc"].iter().enumerate() {
+            c.put_row(out, 0, y as u16, &row(text)).unwrap();
+        }
+    });
+    let sent = frame(&mut canvas, None, |c, out| {
+        assert!(c.scroll(out, Rect::new(0, 0, 10, 3), 1).unwrap());
+        for (y, text) in ["bbbbbbbbbb", "cccccccccc", "dddddddddd"].iter().enumerate() {
+            c.put_row(out, 0, y as u16, &row(text)).unwrap();
+        }
+    });
+    assert!(sent.starts_with("\x1b[0m\x1b[1;3r\x1b[1S\x1b[r"), "{sent:?}");
+    assert!(sent.contains("dddddddddd"), "{sent:?}");
+    assert!(!sent.contains('b') && !sent.contains('c'), "moved rows resent: {sent:?}");
+}
+
+#[test]
+fn scrolling_down_leaves_the_top_rows_to_be_painted() {
+    let mut canvas = Canvas::default();
+    frame(&mut canvas, None, |c, out| {
+        for (y, text) in ["aaaaaaaaaa", "bbbbbbbbbb", "cccccccccc"].iter().enumerate() {
+            c.put_row(out, 0, y as u16, &row(text)).unwrap();
+        }
+    });
+    let sent = frame(&mut canvas, None, |c, out| {
+        assert!(c.scroll(out, Rect::new(0, 0, 10, 3), -1).unwrap());
+        for (y, text) in ["zzzzzzzzzz", "aaaaaaaaaa", "bbbbbbbbbb"].iter().enumerate() {
+            c.put_row(out, 0, y as u16, &row(text)).unwrap();
+        }
+    });
+    assert!(sent.contains("\x1b[1T") && sent.contains("zzzzzzzzzz"), "{sent:?}");
+    assert!(!sent.contains('a') && !sent.contains('b'), "{sent:?}");
+}
+
+#[test]
+fn scrolling_is_refused_under_chrome_and_for_degenerate_moves() {
+    let mut canvas = Canvas::default();
+    let covered = Rect::new(2, 1, 3, 1);
+    let sent = frame(&mut canvas, Some(covered), |c, out| {
+        assert!(!c.scroll(out, Rect::new(0, 0, 10, 3), 1).unwrap());
+        assert!(!c.scroll(out, Rect::new(0, 0, 10, 3), 0).unwrap());
+    });
+    assert!(sent.is_empty(), "{sent:?}");
+    frame(&mut canvas, None, |c, out| {
+        assert!(!c.scroll(out, Rect::new(0, 0, 10, 3), 3).unwrap(), "moving a whole region is a repaint");
+        assert!(!c.scroll(out, Rect::new(0, 2, 10, 1), 1).unwrap(), "a one-row region cannot scroll");
+        assert!(!c.scroll(out, Rect::new(0, 0, 10, 6), 1).unwrap(), "outside the canvas");
+    });
+}
+
+/// A 10x3 frame with rows `0123456789`, `abcdefghij`, `klmnopqrst`.
+fn lettered(canvas: &mut Canvas) {
+    frame(canvas, None, |c, out| {
+        for (y, text) in ["0123456789", "abcdefghij", "klmnopqrst"].iter().enumerate() {
+            c.put_row(out, 0, y as u16, &row(text)).unwrap();
+        }
+    });
+}
+
+#[test]
+fn a_region_beside_the_sidebar_scrolls_inside_left_right_margins() {
+    let mut canvas = Canvas::default();
+    canvas.set_lr_margins(true);
+    lettered(&mut canvas);
+    let sent = frame(&mut canvas, None, |c, out| {
+        assert!(c.scroll(out, Rect::new(4, 0, 6, 3), 1).unwrap());
+        for (y, text) in ["0123efghij", "abcdopqrst", "klmnUVWXYZ"].iter().enumerate() {
+            c.put_row(out, 0, y as u16, &row(text)).unwrap();
+        }
+    });
+    assert!(
+        sent.starts_with("\x1b[0m\x1b[?69h\x1b[1;3r\x1b[5;10s\x1b[1S\x1b[s\x1b[?69l\x1b[r"),
+        "{sent:?}"
+    );
+    assert!(sent.contains("UVWXYZ"), "{sent:?}");
+    for moved in ["efghij", "opqrst", "0123", "abcd", "klmn"] {
+        assert!(!sent.contains(moved), "{moved} was resent: {sent:?}");
+    }
+}
+
+#[test]
+fn a_narrow_region_is_repainted_without_margin_support_or_beside_wide_glyphs() {
+    let mut canvas = Canvas::default();
+    lettered(&mut canvas);
+    let refused = frame(&mut canvas, None, |c, out| {
+        assert!(!c.scroll(out, Rect::new(4, 0, 6, 3), 1).unwrap(), "no margin support");
+    });
+    assert!(refused.is_empty());
+
+    let mut canvas = Canvas::default();
+    canvas.set_lr_margins(true);
+    frame(&mut canvas, None, |c, out| {
+        for (y, text) in ["0123456789", "abc漢efghij", "klmnopqrst"].iter().enumerate() {
+            c.put_row(out, 0, y as u16, &row(text)).unwrap();
+        }
+    });
+    frame(&mut canvas, None, |c, out| {
+        assert!(!c.scroll(out, Rect::new(4, 0, 6, 3), 1).unwrap(), "a wide glyph beside the region");
+    });
 }

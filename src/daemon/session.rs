@@ -8,21 +8,21 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use tokio::sync::{mpsc, oneshot};
-use tokio::time::{Instant, sleep_until};
+use tokio::time::Instant;
 use tracing::warn;
 
 use super::idempotency::{Claim, IdemCache};
 use super::pipes::PipesHandle;
 use super::plan::{self, PaneIdentity};
 use super::snapshot::{PaneRecord, build_snapshot};
+use crate::node::sleep_until_opt;
 use crate::agents::{self, Harness};
 use crate::config::Config;
 use crate::keys::{TermModes, encode_key_names, wrap_paste};
 use crate::layout::{Direction, Workspace};
+use crate::node::pacing::Pacing;
 use crate::node::agent::Report;
-use crate::node::pane::{
-    self, InputBuild, LogQuery, Notifier, PaneCtx, PaneHandle, PaneNotice, TermView,
-};
+use crate::node::pane::{self, InputBuild, Notifier, PaneCtx, PaneHandle, PaneNotice, TermView};
 use crate::node::process::basename;
 use crate::node::sink::Sink;
 use crate::node::{SpawnSpec, now_ms};
@@ -88,16 +88,27 @@ pub(super) enum SessionMsg {
 /// Which session-wide events a subscriber receives.
 pub(super) enum Filter {
     Everything,
+    /// What a TUI shows: output of the active window's panes, and every other pane event.
+    ActiveWindow,
     Pipe(String),
 }
 
 impl Filter {
-    fn accepts(&self, event: &StreamEvent) -> bool {
+    /// Whether `event` goes to this subscriber; `shown` says if a pane is in the active window.
+    fn accepts(&self, event: &StreamEvent, shown: impl Fn(&str) -> bool) -> bool {
         match (self, event) {
             (Filter::Everything, _) => true,
+            (Filter::ActiveWindow, StreamEvent::Output { name, .. }) => shown(name),
+            (Filter::ActiveWindow, StreamEvent::Pipe { .. }) => false,
+            (Filter::ActiveWindow, _) => true,
             (Filter::Pipe(want), StreamEvent::Pipe { name, .. }) => want == name,
             (Filter::Pipe(_), _) => false,
         }
+    }
+
+    /// Session-wide: wants events from every pane, so panes must relay them.
+    fn session_wide(&self) -> bool {
+        matches!(self, Filter::Everything | Filter::ActiveWindow)
     }
 }
 
@@ -110,6 +121,7 @@ pub(super) struct Boot {
     pub tx: mpsc::UnboundedSender<SessionMsg>,
     pub pipes: PipesHandle,
     pub ready: oneshot::Sender<()>,
+    pub pacing: Arc<Pacing>,
 }
 
 pub(super) struct Entry {
@@ -164,6 +176,7 @@ struct Session {
     filters: Vec<(Filter, Sink)>,
     /// Shared with every pane: whether output must be relayed here (session-wide subscribers exist).
     relay: Arc<AtomicBool>,
+    pacing: Arc<Pacing>,
     /// Named subscribers waiting for a pane of that name: name, replay offset, sink.
     pending: Vec<(String, Option<u64>, Sink)>,
     idem: IdemCache<Response>,
@@ -182,6 +195,7 @@ pub(super) async fn run(boot: Boot, mut rx: mpsc::UnboundedReceiver<SessionMsg>)
         tx,
         pipes,
         ready,
+        pacing,
     } = boot;
     let notifier: Notifier = Arc::new(move |notice| {
         let _ = tx.send(SessionMsg::Notice(notice));
@@ -201,6 +215,7 @@ pub(super) async fn run(boot: Boot, mut rx: mpsc::UnboundedReceiver<SessionMsg>)
         pipes,
         filters: Vec::new(),
         relay: Arc::new(AtomicBool::new(false)),
+        pacing,
         pending: Vec::new(),
         idem: IdemCache::default(),
         snapshots: SnapshotStore::in_dir(&state_dir),
@@ -260,7 +275,7 @@ impl Session {
                 sink,
                 reply,
             } => {
-                if matches!(filter, Filter::Everything) {
+                if filter.session_wide() {
                     self.relay.store(true, Ordering::Relaxed);
                 }
                 self.filters.push((filter, sink));
@@ -295,17 +310,17 @@ impl Session {
     }
 
     fn fanout(&mut self, event: &StreamEvent) {
+        let workspace = &self.workspace;
+        let shown = |name: &str| workspace.active_window().is_some_and(|w| w.contains(name));
         self.filters.retain_mut(|(filter, sink)| {
-            if filter.accepts(event) {
+            if filter.accepts(event, shown) {
                 sink.push(event.clone())
             } else {
                 !sink.is_closed()
             }
         });
         self.relay.store(
-            self.filters
-                .iter()
-                .any(|(filter, _)| matches!(filter, Filter::Everything)),
+            self.filters.iter().any(|(filter, _)| filter.session_wide()),
             Ordering::Relaxed,
         );
     }
@@ -327,21 +342,6 @@ impl Session {
             }
             Request::WritePipe { name, data } => self.write_pipe(&name, &data).await,
             Request::ListPipes => Response::PipeList(self.pipes.list().await),
-            req => self.pane_request(req).await,
-        }
-    }
-
-    async fn pane_request(&mut self, req: Request) -> Response {
-        match req {
-            Request::Logs {
-                name,
-                tail,
-                plain,
-                since,
-            } => reply(
-                self.logs(&name, LogQuery { tail, plain, since }).await,
-                |(data, next)| Response::LogChunk { data, next },
-            ),
             req => self.target_request(req).await,
         }
     }
@@ -532,18 +532,20 @@ impl Session {
 
     async fn list(&self) -> Vec<NodeInfo> {
         let mut infos = Vec::new();
-        for entry in self.nodes.values().chain(self.history.iter()) {
+        for entry in self.nodes.values() {
             if let Ok(mut info) = entry.handle.info(true).await {
                 info.window = self.workspace.window_of(entry.handle.name());
                 infos.push(info);
             }
         }
+        // History holds exited panes that left the layout; a live pane may reuse their name.
+        for entry in &self.history {
+            if let Ok(info) = entry.handle.info(true).await {
+                infos.push(info);
+            }
+        }
         infos.sort_by_key(|i| i.id);
         infos
-    }
-
-    async fn logs(&self, name: &str, query: LogQuery) -> Result<(String, u64), String> {
-        self.handle_of(name)?.logs(query).await
     }
 
     async fn screen(&self, name: &str) -> Result<String, String> {
@@ -750,6 +752,7 @@ impl Session {
             harnesses: Arc::clone(&self.harnesses),
             idle_ms: self.config.agent.idle_ms,
             relay: Arc::clone(&self.relay),
+            pacing: Arc::clone(&self.pacing),
         };
         pane::spawn(spec, opts.pty, ctx).map_err(|e| e.to_string())
     }
@@ -1003,13 +1006,6 @@ impl Session {
             }
         }
         build_snapshot(&self.session, now_ms(), clean, &self.workspace, &records)
-    }
-}
-
-async fn sleep_until_opt(at: Option<Instant>) {
-    match at {
-        Some(at) => sleep_until(at).await,
-        None => std::future::pending().await,
     }
 }
 

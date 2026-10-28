@@ -66,7 +66,7 @@ ID     NAME             PID      TYPE     STATUS         COMMAND
 ```bash
 mpx logs [-n LINES | --tail LINES] [--plain] [--since OFFSET] [--json] [-f] <name>
 ```
-- `--plain`: PTY scrollback rendered as text, without escape sequences.
+- `--plain`: PTY scrollback rendered as text, without escape sequences (the pane's retained output, up to 2 MB, replayed at its current width).
 - `--since OFFSET` with `--json`: incremental reads. The response is `{"data": ..., "next": N}`, and you pass `N` back as `--since`.
 - `-f`: prints the history, then streams live output from exactly where the history ended, with no gap or duplicate even while the pane is writing. If the stream falls behind, the missing bytes are re-read from the pane's log.
 

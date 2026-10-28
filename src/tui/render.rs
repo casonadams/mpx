@@ -548,7 +548,6 @@ fn cell_content(
     let cell = ctx
         .grid
         .get_cell_scrolled(col, row, ctx.scroll_offset)
-        .copied()
         .unwrap_or_default();
     if ctx.selection.is_some_and(|s| s.contains_abs(col, abs_row)) {
         highlighted(cell.c)

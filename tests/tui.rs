@@ -14,4 +14,5 @@ mod tui {
     mod sidebar;
     mod status;
     mod stream;
+    mod terminal;
 }

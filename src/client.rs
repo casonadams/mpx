@@ -1,5 +1,6 @@
 use futures_util::{SinkExt, StreamExt};
-use tokio_util::codec::{Framed, LinesCodec};
+use tokio::sync::mpsc;
+use tokio_util::codec::{Framed, FramedRead, LengthDelimitedCodec, LinesCodec};
 
 use crate::ipc::{IpcStream, connect_stream};
 use crate::layout::{Divider, Rect, WindowTab};
@@ -8,6 +9,7 @@ use crate::protocol::{
     PipeMessage, Request, Response, SessionInfo, Side, SpawnOpts, SplitOpts, StreamEvent,
     WaitCondition, WaitOutcome,
 };
+use crate::wire;
 
 pub type LayoutTuple = (Vec<(String, Rect, bool)>, Vec<Divider>, Vec<WindowTab>);
 
@@ -477,8 +479,72 @@ impl Client {
     where
         F: FnMut(StreamEvent) -> bool,
     {
-        self.stream(Request::Subscribe { name, since }, handler)
+        let req = Request::Subscribe {
+            name,
+            since,
+            binary: false,
+            active_window: false,
+        };
+        self.stream(req, handler)
             .await
+    }
+
+    /// Like `stream_logs`, but hands each event, wrapped by `wrap`, to `tx` and waits while it is
+    /// full: a reader that falls behind stops reading, which slows the daemon's delivery instead of
+    /// piling events up in memory. Events come as binary frames (`wire`) when the daemon offers
+    /// them, as JSON lines otherwise. With `active_window`, pane output comes only for the active
+    /// window's panes (a daemon that predates it sends all). Ends when the daemon or `tx`'s
+    /// receiver goes away.
+    pub async fn stream_logs_into<T>(
+        mut self,
+        (name, since): (Option<String>, Option<u64>),
+        active_window: bool,
+        tx: mpsc::Sender<T>,
+        wrap: impl Fn(StreamEvent) -> T,
+    ) -> Result<(), String> {
+        let req = Request::Subscribe {
+            name,
+            since,
+            binary: true,
+            active_window,
+        };
+        match self.call(req).await? {
+            Response::BinaryStream => return self.forward_frames(tx, wrap).await,
+            Response::Ok => {}
+            other => return Err(unexpected("Subscribe", other)),
+        }
+        while let Some(line_res) = self.framed.next().await {
+            let line = line_res.map_err(|e| e.to_string())?;
+            if let Ok(DaemonMessage::Event(event)) = serde_json::from_str(&line)
+                && tx.send(wrap(event)).await.is_err()
+            {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    /// Reads the rest of the connection as binary frames, starting with any bytes already buffered
+    /// after the daemon's answer.
+    async fn forward_frames<T>(
+        self,
+        tx: mpsc::Sender<T>,
+        wrap: impl Fn(StreamEvent) -> T,
+    ) -> Result<(), String> {
+        let parts = self.framed.into_parts();
+        let codec = LengthDelimitedCodec::builder()
+            .max_frame_length(wire::MAX_FRAME)
+            .new_codec();
+        let mut frames = FramedRead::new(parts.io, codec);
+        frames.read_buffer_mut().extend_from_slice(&parts.read_buf);
+        while let Some(frame) = frames.next().await {
+            let frame = frame.map_err(|e| e.to_string())?;
+            let event = wire::decode_event(&frame)?;
+            if tx.send(wrap(event)).await.is_err() {
+                break;
+            }
+        }
+        Ok(())
     }
 
     /// Streams `StreamEvent::Pipe` messages for one pipe; the handler returns false to stop.

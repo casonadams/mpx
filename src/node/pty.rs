@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::mpsc;
 
+use super::pacing::{Inflight, Pacing};
 use super::pane::PaneMsg;
 use super::{NodeError, Process, SpawnSpec};
 
@@ -58,7 +59,12 @@ impl PtyTerminal {
 
 impl PtyNode {
     /// Starts the child on a PTY. Output and its exit are sent to `out`.
-    pub fn spawn(spec: &SpawnSpec, out: mpsc::UnboundedSender<PaneMsg>) -> Result<Self, NodeError> {
+    pub fn spawn(
+        spec: &SpawnSpec,
+        out: mpsc::UnboundedSender<PaneMsg>,
+        pacing: Arc<Pacing>,
+        inflight: Arc<Inflight>,
+    ) -> Result<Self, NodeError> {
         let pair = native_pty_system()
             .openpty(PtySize {
                 rows: ROWS,
@@ -107,7 +113,7 @@ impl PtyNode {
         {
             let out = out.clone();
             std::thread::spawn(move || {
-                pump_output(reader, &out);
+                pump_output(reader, &out, &pacing, &inflight);
                 let _ = eof_tx.send(());
             });
         }
@@ -148,12 +154,20 @@ fn spawn_writer(mut writer: Box<dyn Write + Send>, mut rx: mpsc::UnboundedReceiv
     });
 }
 
-fn pump_output(mut reader: Box<dyn Read + Send>, out: &mpsc::UnboundedSender<PaneMsg>) {
+fn pump_output(
+    mut reader: Box<dyn Read + Send>,
+    out: &mpsc::UnboundedSender<PaneMsg>,
+    pacing: &Pacing,
+    inflight: &Inflight,
+) {
     let mut chunk = [0u8; 4096];
     loop {
+        pacing.wait_for_room();
+        inflight.wait_for_room();
         match reader.read(&mut chunk) {
             Ok(0) | Err(_) => break,
             Ok(n) => {
+                inflight.add();
                 if out.send(PaneMsg::Output(chunk[..n].to_vec())).is_err() {
                     break;
                 }

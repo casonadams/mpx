@@ -63,3 +63,27 @@ fn plain_delta_of_a_terminal_strips_escapes() {
     assert!(!text.contains('\x1b'), "escapes stripped: {text:?}");
     assert!(text.contains("two") && text.contains("three"), "{text:?}");
 }
+
+#[test]
+fn plain_history_reaches_rows_the_live_screen_no_longer_keeps() {
+    let mut ring = RingBuffer::new(4096);
+    let mut live = VtScreen::live(10, 3);
+    for i in 0..12 {
+        let line = format!("row {i:02}\r\n");
+        ring.write(line.as_bytes());
+        live.feed(line.as_bytes());
+    }
+    assert_eq!(live.grid().history_len(), 0);
+    let (text, _) = render_logs(&ring, Some(&live), &query(None, true, None));
+    assert!(text.starts_with("row 00\nrow 01"), "{text:?}");
+    assert!(text.ends_with("row 11"), "{text:?}");
+}
+
+#[test]
+fn plain_history_wraps_at_the_live_screen_width() {
+    let mut ring = RingBuffer::new(1024);
+    ring.write(b"abcdefghij\r\n");
+    let live = VtScreen::new(5, 3);
+    let (text, _) = render_logs(&ring, Some(&live), &query(None, true, None));
+    assert_eq!(text, "abcde\nfghij");
+}

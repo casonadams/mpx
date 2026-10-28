@@ -1,8 +1,8 @@
 # Architecture & Design
 
-`mpx` is a Rust / Tokio daemon per session, plus thin clients: the TUI, the CLI, the stdio MCP server, and the `tmux` shim. All of them speak the same newline-delimited JSON protocol (`src/protocol.rs`) over a Unix domain socket or Windows Named Pipe.
+`mpx` is a Rust / Tokio daemon per session, plus thin clients: the TUI, the CLI, the stdio MCP server, and the `tmux` shim. All of them speak the same newline-delimited JSON protocol (`src/protocol.rs`) over a Unix domain socket or Windows Named Pipe. One exception carries the bulk of the traffic: a subscriber that asks for it (`Subscribe { binary: true }`, which the TUI does) and a daemon that answers `BinaryStream` switch that connection to length-prefixed binary frames (`src/wire.rs`), where pane output is raw bytes instead of escaped JSON; other events stay JSON inside their frame. Either side may be an older mpx: a daemon that ignores the field answers `Ok` and streams JSON lines, so mixed versions keep working. Agents never see this: MCP and the CLI keep their JSON interfaces.
 
-Inside the daemon, state is owned by **actors**: tokio tasks that each own their data outright and are reached only through messages. Nothing on the request or output path is shared behind a lock.
+Inside the daemon, state is owned by **actors**: tokio tasks that each own their data outright and are reached only through messages. Nothing on the request or output path is shared behind a lock. Every mpx process runs its tasks on a single thread: actors pass messages constantly, and across a worker pool each one was a cross-thread wakeup, which cost a flood 40% more CPU. Work that takes milliseconds (replaying a pane's history for a plain read) runs off that thread.
 
 ```mermaid
 graph LR
@@ -24,7 +24,7 @@ P1 -->|numbered events| C
   - exited-pane history and the idempotency cache;
   - the session snapshot.
 
-  Pane exits arrive on the same mailbox as client requests, so every request sees a consistent layout.
+  Pane exits arrive on the same mailbox as client requests, so every request sees a consistent layout. Requests that can take a while are not awaited there: log reads, waits, pipe reads and kills resolve their pane through the session and then talk to it directly, since every pane's output passes through the session on its way to clients and would queue behind a slow request.
 - **Pane actor**, one per pane, owns its process handle, output ring buffer, VT screen, agent state machine, subscribers and pending waits. The blocking PTY reader thread only forwards bytes to it.
 - **Pipes actor** owns the virtual pipes, their consumer cursors and the on-disk pipe logs. Pending timed reads are answered by the write that satisfies them or by their deadline.
 
@@ -48,10 +48,12 @@ A pane's exit is reported only after its output has been fully read, so `wait` o
 
 ## 3. Event stream
 
-Output is kept in a ring buffer addressed by **absolute byte offsets**. Every `Output` event carries `offset` and `next`, the range of the stream it covers. Multi-byte characters split across reads are held back until complete, so each chunk is valid text and consecutive chunks have contiguous offsets.
+Output is kept in a ring buffer addressed by **absolute byte offsets** (the last 2 MB per pane). It is the one source of scrollback: live screens, in the daemon and in the TUI, keep only what is on screen, so a flood costs no history work. Copy mode and plain log reads rebuild scrollback on demand by replaying the ring into a fresh screen at the pane's size. Every `Output` event carries `offset` and `next`, the range of the stream it covers. Multi-byte characters split across reads are held back until complete, so each chunk is valid text and consecutive chunks have contiguous offsets.
 
 - `Subscribe { name, since }`: the pane actor first replays everything from `since`, then switches to live output, atomically. `logs -f` uses this, so history and live output join without a gap or duplicate.
-- **Slow subscribers**: each one has a bounded queue. A subscriber that falls behind gets a single `Lagged` event instead of a silent drop, and the pane is never blocked. Clients then re-read what they missed by offset: the TUI rebuilds affected panes, and `logs -f` re-reads from its last offset.
+- **Slow subscribers**: each one has a bounded queue. A subscriber that falls behind gets a single `Lagged` event instead of a silent drop. Clients then re-read what they missed by offset: the TUI rebuilds affected panes, and `logs -f` re-reads from its last offset.
+- **Pacing** (`src/node/pacing.rs`): output flows at the speed it can be shown, as in a real terminal, so a flood never queues ahead of a keystroke's echo. A pane's reader holds at most a bounded amount of output its actor has not parsed, so requests to a flooding pane (input, Ctrl-C, kill) are answered at once. While an attached TUI is more than a few dozen events behind, PTY readers wait for it to catch up; the TUI reads its stream through a small bounded queue so that it falls behind visibly rather than buffering. A TUI that makes no progress for a second, or detaches, no longer holds any pane, so a stopped client never freezes programs.
+- **Only what is on screen**: the TUI subscribes with `active_window`, so of pane output it receives only the active window's; exits, agent and other events still come for every pane. A pane coming into view asks for its log's end offset: nothing new keeps its screen, a gap the log still holds is fetched and fed, and a larger one rebuilds the pane from its log. Busy panes in other windows cost the TUI nothing.
 - **Agent events**: every agent state change is pushed as an `Agent` event, so the TUI's waiting badge and notifications update immediately.
 
 ## 4. Agent tracking
@@ -86,6 +88,7 @@ A mode state machine (normal, prefix, copy, prompt, confirm, overlay) over a per
 - **Sessions**: the client can switch daemons (`(`, `)`, tree, agent jumps) without restarting.
 - **Overlays**: the agent manager, tree, and help, drawn over the panes.
 - **Rendering**: the TUI keeps a shadow of what the terminal shows and each frame sends only the cells that changed, inside a DEC 2026 synchronized update with autowrap disabled. Rows holding non-ASCII glyphs are reprinted whole when they change, since the screen model has no width table; cells under an overlay are repainted when it closes, and a resize repaints everything. Pane colors, bold/italic/underline and reverse video pass through exactly (basic and bright palette slots are kept apart, and `NO_COLOR` does not strip a program's own colors). Erasing paints the current background (BCE, as `xterm-256color` promises), so editors can fill bars by erasing to the end of a line.
+- **Scrolling**: the screen model records how a pane's rows scrolled since the last frame. The TUI then scrolls those rows on the terminal (DECSTBM + SU/SD) and moves its shadow the same way, so only new lines are sent, as tmux does. A pane narrower than the screen (beside the sidebar or a split) is scrolled through left/right margins (DECLRMM/DECSLRM) when the terminal reports them at startup (DECRQM for mode 69, followed by DA1 so a terminal that does not know the mode costs one round trip), and repainted otherwise. A wrong scroll guess only costs bytes: the cell diff that follows still brings the terminal to the pane's exact contents.
 
 ## 8. Cross-platform IPC
 

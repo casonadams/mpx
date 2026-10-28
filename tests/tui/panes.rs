@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use mpx::layout::Rect;
-use mpx::tui::panes::{PaneRect, neighbor_pane, pending_resizes};
+use mpx::tui::panes::{PaneRect, neighbor_pane, pending_resizes, wrap_step};
 
 fn pane(name: &str, width: u16, height: u16) -> PaneRect {
     (name.to_string(), Rect::new(0, 0, width, height), false)
@@ -42,4 +42,19 @@ fn neighbor_pane_needs_at_least_two_panes() {
     let panes = vec![pane("solo", 10, 10)];
     assert_eq!(neighbor_pane(&panes, "solo", true), None);
     assert_eq!(neighbor_pane(&panes, "missing", true), None);
+}
+
+#[test]
+fn wrap_step_moves_one_place_and_wraps_at_both_ends() {
+    assert_eq!(wrap_step(0, 3, true), 1);
+    assert_eq!(wrap_step(2, 3, true), 0);
+    assert_eq!(wrap_step(0, 3, false), 2);
+    assert_eq!(wrap_step(1, 3, false), 0);
+}
+
+#[test]
+fn a_lone_or_unknown_pane_has_no_neighbor() {
+    let lone: Vec<PaneRect> = vec![("a".to_string(), mpx::layout::Rect::new(0, 0, 10, 5), true)];
+    assert_eq!(neighbor_pane(&lone, "a", true), None);
+    assert_eq!(neighbor_pane(&lone, "zz", true), None);
 }

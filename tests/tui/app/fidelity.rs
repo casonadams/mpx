@@ -86,6 +86,9 @@ async fn frames_keep_the_terminal_identical_to_the_panes() {
         ..Config::default()
     };
     let mut h = Harness::start(config, ECHO).await;
+    // The harness terminal has left/right margins, so panes beside the sidebar or a split scroll
+    // through them; the drawing tests cover terminals without.
+    h.app.canvas.set_lr_margins(true);
     check(&mut h, "attach").await;
 
     let fill = format!("{}FILL-DONE", numbered_lines("main", 40));
@@ -164,4 +167,23 @@ async fn frames_keep_the_terminal_identical_to_the_panes() {
     h.prefixed_char('z').await;
     h.prefixed_char('e').await;
     check(&mut h, "sidebar hidden").await;
+
+    h.prefixed_char('z').await;
+    let zoomed = format!("{}ZOOM-DONE", numbered_lines("zoom", 12));
+    emit(&mut h, MAIN, &zoomed, "ZOOM-DONE").await;
+    check(&mut h, "zoomed pane scrolls on the terminal").await;
+    h.prefixed_char('z').await;
+    check(&mut h, "unzoomed after scrolling").await;
+
+    h.probe.kill("side").await.expect("kill side");
+    split(&mut h.probe, MAIN, "below", Direction::Vertical).await;
+    check(&mut h, "stacked panes").await;
+    let below = format!("{}BELOW-DONE", numbered_lines("below", 9));
+    emit(&mut h, "below", &below, "BELOW-DONE").await;
+    check(&mut h, "lower pane scrolls inside its own rows").await;
+    let above = format!("{}ABOVE-DONE", numbered_lines("above", 9));
+    emit(&mut h, MAIN, &above, "ABOVE-DONE").await;
+    check(&mut h, "upper pane scrolls inside its own rows").await;
+    emit(&mut h, MAIN, VIM_LIKE, "VIM-DONE").await;
+    check(&mut h, "scroll regions inside a stacked pane").await;
 }

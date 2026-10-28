@@ -7,7 +7,7 @@ use super::panes::PaneRect;
 use super::render::{
     Compositor, DividerStyle, RenderPaneContext, SelectionRange, StatusBar, hud_rect, parse_color,
 };
-use super::status::exit_badge;
+use super::status::{exit_badge, node_named};
 use crate::layout::geometry::Rect;
 use crate::protocol::NodeInfo;
 use crate::vt::Color as VtColor;
@@ -24,7 +24,24 @@ pub struct PaneView {
 }
 
 pub fn draw<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
+    let (mut body, mut cursor) = (Vec::new(), Vec::new());
+    draw_body(app, &mut body)?;
+    place_cursor(app, &mut cursor)?;
+    send(out, &body, &cursor)
+}
+
+/// Writes a frame's body and cursor placement in one synchronized update, so it lands at once.
+pub fn send<W: Write>(out: &mut W, body: &[u8], cursor: &[u8]) -> io::Result<()> {
     Compositor::begin_sync(out)?;
+    out.write_all(body)?;
+    out.write_all(cursor)?;
+    Compositor::end_sync(out)?;
+    out.flush()
+}
+
+/// Everything a frame changes on screen but the cursor: nothing at all when no cell, chrome or
+/// overlay changed.
+pub fn draw_body<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
     let (screen_w, layout_h) = app.viewport;
     let screen_h = layout_h + 1;
     let hud = shortcut_popup(app, screen_w, screen_h);
@@ -59,9 +76,7 @@ pub fn draw<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
     if let Mode::Overlay(overlay) = &app.mode {
         overlay.render(out, overlay_area(screen_w, screen_h))?;
     }
-    place_cursor(app, out)?;
-    Compositor::end_sync(out)?;
-    out.flush()
+    Ok(())
 }
 
 /// The shortcut popup's area, once due and when it fits on screen.
@@ -142,6 +157,8 @@ fn draw_sidebar<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
 }
 
 /// Panes are drawn left to right so a row that spills past its pane is repainted over by its neighbor.
+/// A pane whose content scrolled is scrolled on the terminal first, so only the rows that changed
+/// are sent (beside the sidebar or a split too, where the terminal has left/right margins).
 fn draw_panes<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
     let mut panes = drawable(&app.panes);
     panes.sort_by_key(|(_, rect, _)| (rect.x, rect.y));
@@ -157,12 +174,24 @@ fn draw_panes<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
         let vt = app
             .vt
             .entry(pane.0.clone())
-            .or_insert_with(|| VtScreen::new(rect.width as usize, rect.height as usize));
+            .or_insert_with(|| VtScreen::live(rect.width as usize, rect.height as usize));
         let copy = match &app.mode {
             Mode::Copy(cs) if pane.2 => Some(cs),
             _ => app.parked_copy.get(&pane.0),
         };
+        let hint = vt.grid_mut().take_scroll();
         let view = pane_view_with(copy, vt.grid(), &app.nodes, pane, crowd);
+        if let Some(hint) =
+            hint.filter(|h| view.scroll_offset == 0 && h.bottom < rect.height as usize)
+        {
+            let region = Rect::new(
+                rect.x,
+                rect.y + hint.top as u16,
+                rect.width,
+                (hint.bottom - hint.top + 1) as u16,
+            );
+            app.canvas.scroll(out, region, hint.lines)?;
+        }
         Compositor::draw_pane_content(
             &mut app.canvas,
             out,
@@ -239,7 +268,8 @@ fn status_row(app: &App, out: &mut Vec<u8>) -> io::Result<()> {
     }
 }
 
-fn place_cursor<W: Write>(app: &App, out: &mut W) -> io::Result<()> {
+/// Places and shows (or hides) the terminal cursor where the frame wants it.
+pub fn place_cursor<W: Write>(app: &App, out: &mut W) -> io::Result<()> {
     let (width, y) = app.viewport;
     match &app.mode {
         Mode::Prompt(prompt) => Compositor::position_cursor(
@@ -301,7 +331,7 @@ fn copy_label(cs: &CopyState, hist_len: usize) -> String {
 }
 
 fn exit_badge_for(nodes: &[NodeInfo], name: &str) -> Option<String> {
-    nodes.iter().find(|n| n.name == name).and_then(exit_badge)
+    node_named(nodes, name).and_then(exit_badge)
 }
 
 /// Panes other than the focused one dim when several are visible and none is zoomed.

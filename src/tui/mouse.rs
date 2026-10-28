@@ -28,9 +28,9 @@ impl App {
         }
         match ev.kind {
             MouseEventKind::Down(MouseButton::Left) => self.mouse_press(ev.column, ev.row).await,
-            MouseEventKind::Drag(MouseButton::Left) => self.mouse_drag(ev.column, ev.row),
+            MouseEventKind::Drag(MouseButton::Left) => self.mouse_drag(ev.column, ev.row).await,
             MouseEventKind::Up(MouseButton::Left) => self.mouse_release(),
-            MouseEventKind::ScrollUp => self.mouse_scroll_up(),
+            MouseEventKind::ScrollUp => self.mouse_scroll_up().await,
             MouseEventKind::ScrollDown => self.mouse_scroll_down(),
             _ => {}
         }
@@ -98,12 +98,13 @@ impl App {
     }
 
     /// Extends the selection, entering copy mode at the press point on the first drag.
-    fn mouse_drag(&mut self, col: u16, row: u16) {
+    async fn mouse_drag(&mut self, col: u16, row: u16) {
         let Some(rect) = self.active_rect else { return };
         if !matches!(self.mode, Mode::Copy(_)) {
             let Some((name, x, y)) = self.press.clone() else {
                 return;
             };
+            self.load_scrollback(&name).await;
             let grid = self.vt.get(&name).map(|vt| vt.grid());
             self.mode = Mode::Copy(CopyState::at_point(x, y, grid));
         }
@@ -129,7 +130,10 @@ impl App {
         }
     }
 
-    fn mouse_scroll_up(&mut self) {
+    async fn mouse_scroll_up(&mut self) {
+        if !matches!(self.mode, Mode::Copy(_)) {
+            self.load_scrollback(&self.active_pane.clone()).await;
+        }
         let hist_len = self.active_vt().map_or(0, |vt| vt.grid().history_len());
         if let Mode::Copy(cs) = &mut self.mode {
             cs.wheel_up(hist_len);

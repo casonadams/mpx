@@ -1,5 +1,6 @@
 //! Session switching and `[session:]pane` target resolution.
 use super::app::{App, Mode};
+use super::panes::neighbor;
 use crate::client::Client;
 use crate::ipc;
 
@@ -14,17 +15,8 @@ pub fn split_target(target: &str) -> (Option<&str>, &str) {
 /// The session after (`next`) or before `current` in `names`, wrapping around.
 /// `None` when there is no other session.
 pub fn neighbor_session(names: &[String], current: &str, next: bool) -> Option<String> {
-    if names.len() < 2 {
-        return None;
-    }
-    let len = names.len();
     let idx = names.iter().position(|n| n == current).unwrap_or(0);
-    let other = if next {
-        (idx + 1) % len
-    } else {
-        (idx + len - 1) % len
-    };
-    Some(names[other].clone())
+    neighbor(names, idx, next).cloned()
 }
 
 /// Picks the temporary connection when one was opened, otherwise the attached client.

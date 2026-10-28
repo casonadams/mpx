@@ -484,3 +484,49 @@ fn underline_sgr_honours_subparameters_and_ignores_underline_colour_arguments() 
     assert!(!underlined(2));
     assert!(!underlined(3));
 }
+
+/// A 6x4 screen whose rows read `abcdef`, `ghijkl`, `mnopqr`, `stuvwx`.
+fn lettered() -> VtScreen {
+    let mut vt = VtScreen::new(6, 4);
+    feed(&mut vt, "abcdef\r\nghijkl\r\nmnopqr\r\nstuvwx");
+    vt
+}
+
+#[test]
+fn csi_s_saves_the_cursor_unless_left_right_margin_mode_is_on() {
+    let mut vt = lettered();
+    feed(&mut vt, "\x1b[2;3H\x1b[s\x1b[H\x1b[u");
+    assert_eq!(cursor(&vt), (2, 1), "CSI s / CSI u save and restore");
+    feed(&mut vt, "\x1b[?69h\x1b[2;4s\x1b[S");
+    assert_eq!(row(&vt, 0), "ahijef", "with DECLRMM, CSI s set margins 2..4");
+}
+
+#[test]
+fn scrolling_inside_left_right_margins_moves_only_those_columns() {
+    let mut vt = lettered();
+    feed(&mut vt, "\x1b[?69h\x1b[2;3r\x1b[3;5s\x1b[S");
+    assert_eq!(
+        (row(&vt, 0), row(&vt, 1), row(&vt, 2), row(&vt, 3)),
+        ("abcdef".into(), "ghopql".into(), "mn   r".into(), "stuvwx".into())
+    );
+    feed(&mut vt, "\x1b[T");
+    assert_eq!((row(&vt, 1), row(&vt, 2)), ("gh   l".into(), "mnopqr".into()));
+    assert_eq!(vt.grid().history_len(), 0, "a partial scroll keeps nothing");
+}
+
+#[test]
+fn leaving_margin_mode_restores_full_width_scrolling() {
+    let mut vt = lettered();
+    feed(&mut vt, "\x1b[?69h\x1b[3;5s\x1b[?69l\x1b[S");
+    assert_eq!(row(&vt, 0), "ghijkl");
+    assert_eq!(vt.grid().history_len(), 1);
+}
+
+#[test]
+fn delete_and_insert_line_respect_left_right_margins() {
+    let mut vt = lettered();
+    feed(&mut vt, "\x1b[?69h\x1b[1;2s\x1b[2;1H\x1b[M");
+    assert_eq!((row(&vt, 1), row(&vt, 3)), ("mnijkl".into(), "  uvwx".into()));
+    feed(&mut vt, "\x1b[2;1H\x1b[L");
+    assert_eq!(row(&vt, 1), "  ijkl");
+}

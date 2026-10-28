@@ -608,26 +608,26 @@ fn find_forward(
     smart_case: bool,
 ) -> Option<(usize, usize)> {
     if let Some(cells) = grid.line_cells(from_abs_y)
-        && let Some(col) = find_cell_match(cells, query, smart_case, Some(from_x))
+        && let Some(col) = find_cell_match(&cells, query, smart_case, Some(from_x))
     {
         return Some((col, from_abs_y));
     }
     for abs_y in (from_abs_y + 1)..total_lines {
         if let Some(cells) = grid.line_cells(abs_y)
-            && let Some(col) = find_cell_match(cells, query, smart_case, None)
+            && let Some(col) = find_cell_match(&cells, query, smart_case, None)
         {
             return Some((col, abs_y));
         }
     }
     for abs_y in 0..from_abs_y {
         if let Some(cells) = grid.line_cells(abs_y)
-            && let Some(col) = find_cell_match(cells, query, smart_case, None)
+            && let Some(col) = find_cell_match(&cells, query, smart_case, None)
         {
             return Some((col, abs_y));
         }
     }
     if let Some(cells) = grid.line_cells(from_abs_y)
-        && let Some(col) = find_cell_match(cells, query, smart_case, None)
+        && let Some(col) = find_cell_match(&cells, query, smart_case, None)
     {
         return Some((col, from_abs_y));
     }
@@ -642,26 +642,26 @@ fn find_backward(
     smart_case: bool,
 ) -> Option<(usize, usize)> {
     if let Some(cells) = grid.line_cells(from_abs_y)
-        && let Some(col) = rfind_cell_match(cells, query, smart_case, Some(from_x))
+        && let Some(col) = rfind_cell_match(&cells, query, smart_case, Some(from_x))
     {
         return Some((col, from_abs_y));
     }
     for abs_y in (0..from_abs_y).rev() {
         if let Some(cells) = grid.line_cells(abs_y)
-            && let Some(col) = rfind_cell_match(cells, query, smart_case, None)
+            && let Some(col) = rfind_cell_match(&cells, query, smart_case, None)
         {
             return Some((col, abs_y));
         }
     }
     for abs_y in ((from_abs_y + 1)..total_lines).rev() {
         if let Some(cells) = grid.line_cells(abs_y)
-            && let Some(col) = rfind_cell_match(cells, query, smart_case, None)
+            && let Some(col) = rfind_cell_match(&cells, query, smart_case, None)
         {
             return Some((col, abs_y));
         }
     }
     if let Some(cells) = grid.line_cells(from_abs_y)
-        && let Some(col) = rfind_cell_match(cells, query, smart_case, None)
+        && let Some(col) = rfind_cell_match(&cells, query, smart_case, None)
     {
         return Some((col, from_abs_y));
     }

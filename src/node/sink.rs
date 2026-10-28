@@ -1,6 +1,9 @@
 //! Bounded, non-blocking delivery of stream events to one subscriber.
+use std::sync::Arc;
+
 use tokio::sync::mpsc::{self, error::TrySendError};
 
+use super::pacing::Backlog;
 use crate::protocol::StreamEvent;
 
 /// Events a subscriber may hold before overflow starts dropping.
@@ -42,16 +45,19 @@ impl Feed {
 pub struct Sink {
     tx: mpsc::Sender<StreamEvent>,
     feed: Feed,
+    /// Counts delivered events for a terminal whose backlog paces pane output.
+    backlog: Option<Arc<Backlog>>,
 }
 
 impl Sink {
-    /// A sink and the receiver the subscriber reads from.
-    pub fn channel() -> (Sink, mpsc::Receiver<StreamEvent>) {
+    /// A sink and the receiver the subscriber reads from; `backlog` counts what it delivers.
+    pub fn channel(backlog: Option<Arc<Backlog>>) -> (Sink, mpsc::Receiver<StreamEvent>) {
         let (tx, rx) = mpsc::channel(SUB_QUEUE + 1);
         (
             Sink {
                 tx,
                 feed: Feed::default(),
+                backlog,
             },
             rx,
         )
@@ -76,7 +82,13 @@ impl Sink {
 
     fn send(&self, event: StreamEvent) -> bool {
         match self.tx.try_send(event) {
-            Ok(()) | Err(TrySendError::Full(_)) => true,
+            Ok(()) => {
+                if let Some(backlog) = &self.backlog {
+                    backlog.queued();
+                }
+                true
+            }
+            Err(TrySendError::Full(_)) => true,
             Err(TrySendError::Closed(_)) => false,
         }
     }

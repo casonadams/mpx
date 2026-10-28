@@ -68,11 +68,6 @@ async fn mouse_drag_selects_and_release_copies() {
 #[tokio::test]
 async fn mouse_wheel_scrolls_into_history() {
     let mut h = started(&long_output()).await;
-    h.until("scrollback filled", |app| {
-        app.active_vt()
-            .is_some_and(|vt| vt.grid().history_len() > 0)
-    })
-    .await;
     h.frame().await;
 
     h.mouse(MouseEventKind::ScrollUp, 5, 5).await;
@@ -105,11 +100,6 @@ async fn mouse_click_focuses_the_clicked_pane_without_copy_mode() {
 #[tokio::test]
 async fn leaving_a_pane_in_copy_mode_keeps_its_view_and_returning_resumes_it() {
     let mut h = started(&long_output()).await;
-    h.until("scrollback filled", |app| {
-        app.active_vt()
-            .is_some_and(|vt| vt.grid().history_len() > 0)
-    })
-    .await;
     h.frame().await;
     h.mouse(MouseEventKind::ScrollUp, 5, 5).await;
     h.mouse(MouseEventKind::ScrollUp, 5, 5).await;
@@ -141,11 +131,6 @@ async fn the_prefix_alone_does_not_end_copy_mode() {
 #[tokio::test]
 async fn clicking_a_pane_in_copy_mode_keeps_its_scroll_and_selects_nothing() {
     let mut h = started(&long_output()).await;
-    h.until("scrollback filled", |app| {
-        app.active_vt()
-            .is_some_and(|vt| vt.grid().history_len() > 0)
-    })
-    .await;
     h.frame().await;
     h.mouse(MouseEventKind::ScrollUp, 5, 5).await;
     assert!(h.frame().await.contains("COPY -3/"));
@@ -175,11 +160,6 @@ async fn copy_mode_prefix_opens_the_prefix_menu() {
 #[tokio::test]
 async fn copy_mode_search_up_and_down_moves_cursor_and_scrolls() {
     let mut h = started(&long_output()).await;
-    h.until("scrollback filled", |app| {
-        app.active_vt()
-            .is_some_and(|vt| vt.grid().history_len() > 0)
-    })
-    .await;
     h.frame().await;
     h.prefixed_char('[').await;
     assert!(h.frame().await.contains("COPY -0/"));
@@ -215,4 +195,26 @@ async fn copy_mode_search_up_and_down_moves_cursor_and_scrolls() {
     // Press 'q' to leave copy mode
     h.key(KeyCode::Char('q')).await;
     assert!(h.mode_is_normal());
+}
+
+fn history_of(h: &Harness) -> usize {
+    h.app.active_vt().map_or(0, |vt| vt.grid().history_len())
+}
+
+#[tokio::test]
+async fn a_live_pane_keeps_no_scrollback_and_copy_mode_brings_it_back() {
+    let mut h = started(&long_output()).await;
+    h.frame().await;
+    assert_eq!(history_of(&h), 0, "the daemon keeps scrollback, not the live view");
+
+    h.prefixed_char('[').await;
+    assert!(history_of(&h) >= 10, "copy mode rebuilds it from the pane's log");
+    let shown = h.frame().await;
+    assert!(shown.contains("COPY -0/"), "{shown}");
+    assert!(shown.contains("line 40"), "the view is unchanged: {shown}");
+
+    h.key(KeyCode::Char('q')).await;
+    assert!(h.mode_is_normal());
+    assert_eq!(history_of(&h), 0, "leaving copy mode drops it again");
+    assert!(h.frame().await.contains("line 40"));
 }

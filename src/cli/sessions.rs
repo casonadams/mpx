@@ -188,6 +188,19 @@ fn spawn_daemon(r: &Resolved) -> Result<(), String> {
         const DETACHED_PROCESS: u32 = 0x0000_0008;
         cmd.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS);
     }
+    // Its own session, without a controlling terminal: closing the terminal that started it sends
+    // SIGHUP to that terminal's processes, which would otherwise take the daemon and every pane.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: setsid is async-signal-safe and touches nothing shared with the parent.
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            });
+        }
+    }
     cmd.spawn()
         .map(|_| ())
         .map_err(|e| format!("Failed to auto-spawn mpx daemon: {e}"))

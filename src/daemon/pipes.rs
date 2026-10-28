@@ -4,9 +4,10 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use tokio::sync::{mpsc, oneshot};
-use tokio::time::{Instant, sleep_until};
+use tokio::time::Instant;
 use tracing::warn;
 
+use crate::node::sleep_until_opt;
 use crate::node::now_ms;
 use crate::pipe::VirtualPipe;
 use crate::protocol::{PipeInfo, PipeMessage};
@@ -309,9 +310,3 @@ impl PipesCore {
     }
 }
 
-async fn sleep_until_opt(at: Option<Instant>) {
-    match at {
-        Some(at) => sleep_until(at).await,
-        None => std::future::pending().await,
-    }
-}

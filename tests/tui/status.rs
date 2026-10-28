@@ -1,5 +1,8 @@
 use mpx::layout::{Rect, WindowTab};
-use mpx::tui::status::{StatusTarget, clock_12h, clock_hms, restored_notice, status_hit};
+use mpx::protocol::{NodeInfo, NodeState};
+use mpx::tui::status::{
+    StatusTarget, clock_12h, clock_hms, exit_badge, node_named, restored_notice, status_hit,
+};
 
 #[test]
 fn clock_formats_hours_minutes_and_seconds() {
@@ -82,4 +85,22 @@ fn status_hit_detects_clicked_pane_when_no_tabs() {
     assert_eq!(status_hit("sess", &[], &panes, false, 14), Some(StatusTarget::Pane("main")));
     assert_eq!(status_hit("sess", &[], &panes, false, 15), Some(StatusTarget::Pane("worker")));
     assert_eq!(status_hit("sess", &[], &panes, false, 24), Some(StatusTarget::Pane("worker")));
+}
+
+#[test]
+fn a_pane_name_resolves_to_its_newest_node() {
+    let node = |id: u32, running: bool| {
+        let mut n = NodeInfo::new("claude-4".to_string(), true, "claude".to_string());
+        n.id = id;
+        if !running {
+            n.state = NodeState::Exited;
+            n.exit_code = Some(129);
+        }
+        n
+    };
+    let nodes = vec![node(27, false), node(33, true)];
+    let live = node_named(&nodes, "claude-4").expect("found");
+    assert_eq!(live.id, 33);
+    assert_eq!(exit_badge(live), None);
+    assert_eq!(node_named(&nodes, "nope").map(|n| n.id), None);
 }

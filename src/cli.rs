@@ -18,7 +18,12 @@ pub use sessions::{RestoreOutcome, apply_key, daemon_args, restore_session, run_
 /// Process entry point behind the `mpx` binary: tmux multicall, tracing, clap parsing and dispatch.
 /// Returns the process exit code.
 pub fn main_entry(argv: Vec<String>) -> i32 {
-    match tokio::runtime::Runtime::new() {
+    // One thread: mpx's work is actors passing messages, and with a worker pool every message
+    // between them became a cross-thread wakeup. A flood cost the daemon and the TUI 40% more CPU.
+    match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
         Ok(runtime) => runtime.block_on(entry(argv)),
         Err(e) => {
             eprintln!("{e}");

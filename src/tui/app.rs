@@ -1,10 +1,9 @@
-use crossterm::event::{Event, EventStream, KeyEvent, KeyEventKind};
-use futures_util::StreamExt;
-use std::collections::HashMap;
+use crossterm::event::{Event, KeyEvent, KeyEventKind};
+use std::collections::{HashMap, VecDeque};
 use std::io::{BufWriter, stdout};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
+use tokio::sync::mpsc::{self, UnboundedReceiver, unbounded_channel};
 use tokio::task::JoinHandle;
 
 use super::agent::AgentWatch;
@@ -24,6 +23,7 @@ use super::terminal::TerminalGuard;
 use crate::agents::{self, Harness};
 use crate::client::Client;
 use crate::config::Config;
+use crate::node::sleep_until_opt;
 use crate::keys::TermModes;
 use crate::layout::geometry::Rect;
 use crate::protocol::{NewWindowOpts, NodeInfo, SpawnOpts, StreamEvent};
@@ -59,13 +59,31 @@ pub enum Mode {
 /// generation come from a previous session and are dropped.
 pub struct Subscription {
     pub generation: u64,
-    pub tx: UnboundedSender<(u64, StreamEvent)>,
+    pub tx: mpsc::Sender<(u64, StreamEvent)>,
     pub task: Option<JoinHandle<()>>,
 }
 
-pub type StreamRx = UnboundedReceiver<(u64, StreamEvent)>;
+pub type StreamRx = mpsc::Receiver<(u64, StreamEvent)>;
 
-const FRAME_BUDGET: Duration = Duration::from_millis(16);
+/// Stream events the app holds before its subscription stops reading the daemon. Small, so a pane
+/// flooding faster than the app draws is paced by the daemon rather than queued here, ahead of a
+/// keystroke's echo in another pane.
+const STREAM_QUEUE: usize = 64;
+
+/// Window in which at most `FRAMES_PER_BUDGET` frames are drawn for pane output, so a flood cannot
+/// starve input.
+pub const FRAME_BUDGET: Duration = Duration::from_millis(16);
+/// Output frames allowed per budget window: more than one, so a burst that arrives in a few reads
+/// (a pager page) is never held back a whole window between its pieces.
+pub const FRAMES_PER_BUDGET: usize = 4;
+/// Output of the focused pane this soon after a keypress is likely its response (the terminal's
+/// echo, then the program's answer): its frames are drawn at once, past the budget.
+pub const TYPING_WINDOW: Duration = Duration::from_millis(100);
+/// Frames per keypress drawn past the budget, so a flood started by a keypress (Enter on
+/// `cat bigfile`) still cannot starve input.
+pub const TYPING_FRAMES: u8 = 16;
+/// Times output handling yields to let the rest of a burst arrive before its frame.
+const BURST_YIELDS: usize = 4;
 const REPEAT_WINDOW: Duration = Duration::from_millis(500);
 const MESSAGE_TTL: Duration = Duration::from_secs(3);
 const HISTORY_CAP: usize = 100;
@@ -106,7 +124,16 @@ pub struct App {
     pub nodes: Vec<NodeInfo>,
     pub watch: AgentWatch,
     pub sub: Subscription,
-    pub last_render: Option<Instant>,
+    /// When the latest frames that showed new pane output were drawn, oldest first, at most
+    /// `FRAMES_PER_BUDGET` of them.
+    pub output_frames: VecDeque<Instant>,
+    /// When the frame that shows pending pane output is drawn.
+    pub frame_due: Option<Instant>,
+    /// The last key only went to the active pane: nothing on screen changed until it answers.
+    pub forwarded: bool,
+    /// When the last key was pressed, and how many of its frames may still skip the budget.
+    pub last_key: Option<Instant>,
+    pub key_frames: u8,
     /// Directory holding the session sockets, used to discover and switch sessions.
     pub socket_dir: PathBuf,
     /// Fixed screen size (columns, rows) instead of the real terminal's.
@@ -161,7 +188,7 @@ impl App {
         let mut client = Client::connect(endpoint).await?;
         let sub_client = Client::connect(endpoint).await?;
         ensure_running_window(&mut client).await;
-        let (tx, rx) = unbounded_channel();
+        let (tx, rx) = mpsc::channel(STREAM_QUEUE);
         let registry = agents::registry(&config);
         let mut app = App {
             endpoint: endpoint.to_string(),
@@ -195,7 +222,11 @@ impl App {
                 tx,
                 task: None,
             },
-            last_render: None,
+            output_frames: VecDeque::new(),
+            frame_due: None,
+            forwarded: false,
+            last_key: None,
+            key_frames: 0,
             socket_dir,
             fixed_size: size,
             clipboard: Clipboard::System,
@@ -217,7 +248,7 @@ impl App {
     }
 
     /// Replaces the event subscription with one bound to `client`'s session.
-    pub fn subscribe(&mut self, mut client: Client) {
+    pub fn subscribe(&mut self, client: Client) {
         if let Some(task) = self.sub.task.take() {
             task.abort();
         }
@@ -226,7 +257,7 @@ impl App {
         let tx = self.sub.tx.clone();
         self.sub.task = Some(tokio::spawn(async move {
             let _ = client
-                .stream_logs(None, None, |event| tx.send((generation, event)).is_ok())
+                .stream_logs_into((None, None), true, tx, move |event| (generation, event))
                 .await;
         }));
     }
@@ -253,11 +284,13 @@ impl App {
             .map(|(name, ..)| name.clone())
             .unwrap_or_default();
         self.follow_focus(focused);
+        let shown_before: Vec<String> = self.panes.iter().map(|(name, ..)| name.clone()).collect();
         self.panes = match &self.zoomed {
             Some(name) => vec![(name.clone(), Rect::new(side, 0, w - side, layout_h), true)],
             None => self.layout.raw.clone(),
         };
         self.active_rect = self.panes.iter().find(|(.., f)| *f).map(|(_, r, _)| *r);
+        self.refresh_newly_shown(&shown_before).await;
         sync_dims(
             &mut self.client,
             &self.panes,
@@ -339,7 +372,8 @@ impl App {
         }
     }
 
-    /// Applies stream events from the current subscription. Returns Quit when no pane is left.
+    /// Applies stream events from the current subscription. The session ending is noticed when the
+    /// next frame finds no panes in the layout.
     pub async fn on_stream(
         &mut self,
         first: Option<(u64, StreamEvent)>,
@@ -349,20 +383,63 @@ impl App {
             return Flow::Continue;
         };
         let mut batch = vec![first];
-        while let Ok(more) = rx.try_recv() {
-            batch.push(more);
+        drain_into(rx, &mut batch);
+        // The rest of a burst (a pager page arrives in several reads) is often already on its way:
+        // yielding lets it land in this frame instead of a later one, at no timer cost.
+        for _ in 0..BURST_YIELDS {
+            tokio::task::yield_now().await;
+            if !drain_into(rx, &mut batch) {
+                break;
+            }
         }
+        let echo = batch.iter().any(|(_, event)| {
+            matches!(event, StreamEvent::Output { name, .. } if *name == self.active_pane)
+        });
+        // Output of panes nobody sees changes nothing on screen: no frame for it.
+        let shown = batch.iter().any(|(_, event)| match event {
+            StreamEvent::Output { name, .. } => self.keeps_screen(name),
+            _ => true,
+        });
         for (generation, event) in batch {
             if generation == self.sub.generation && self.apply_event(event).await {
                 self.layout.dirty = true;
             }
         }
-        if self.vt.is_empty() {
-            return Flow::Quit;
+        if !shown {
+            return Flow::Continue;
         }
-        wait_for_frame(self.last_render, FRAME_BUDGET).await;
-        self.last_render = Some(Instant::now());
+        let now = Instant::now();
+        // The focused pane's output right after a keypress is likely its response: it goes out at
+        // once, whatever other panes are flooding, for a few frames per keypress.
+        let typing = echo
+            && self.key_frames > 0
+            && self
+                .last_key
+                .is_some_and(|at| now.saturating_duration_since(at) < TYPING_WINDOW);
+        if typing {
+            self.key_frames -= 1;
+        }
+        let window_start = (self.output_frames.len() == FRAMES_PER_BUDGET)
+            .then(|| self.output_frames.front().copied())
+            .flatten();
+        self.frame_due = Some(if typing {
+            now
+        } else {
+            next_frame(window_start, now, self.frame_due)
+        });
         Flow::Continue
+    }
+
+    /// Records a drawn frame: it shows all output received so far. Only a frame that showed new
+    /// output counts against the frame budget; a redraw for a keypress must not delay the output
+    /// that keypress provokes.
+    pub fn drew(&mut self, at: Instant) {
+        if self.frame_due.take().is_some() {
+            self.output_frames.push_back(at);
+            if self.output_frames.len() > FRAMES_PER_BUDGET {
+                self.output_frames.pop_front();
+            }
+        }
     }
 
     pub async fn on_tick(&mut self) -> Flow {
@@ -377,7 +454,11 @@ impl App {
 
     pub async fn on_event(&mut self, ev: Event) -> Flow {
         match ev {
-            Event::Key(key) if key.kind != KeyEventKind::Release => self.on_key(key).await,
+            Event::Key(key) if key.kind != KeyEventKind::Release => {
+                self.last_key = Some(Instant::now());
+                self.key_frames = TYPING_FRAMES;
+                self.on_key(key).await
+            }
             Event::Mouse(mouse) => self.on_mouse(mouse).await,
             Event::Paste(text) => self.on_paste(&text).await,
             Event::FocusGained => self.on_focus(true).await,
@@ -484,12 +565,40 @@ async fn ensure_running_window(client: &mut Client) {
         .await;
 }
 
-async fn wait_for_frame(last_render: Option<Instant>, budget: Duration) {
-    if let Some(last) = last_render
-        && last.elapsed() < budget
-    {
-        tokio::time::sleep(budget.saturating_sub(last.elapsed())).await;
+/// When to draw output that arrived at `now`: a frame already scheduled stands; otherwise at once,
+/// unless the budget is spent: `window_start` is the oldest of the last `FRAMES_PER_BUDGET` output
+/// frames when that many were drawn. No settle delay: events that arrived together are already one
+/// batch, and timers are too coarse (whole milliseconds) to wait for less than that.
+pub fn next_frame(window_start: Option<Instant>, now: Instant, pending: Option<Instant>) -> Instant {
+    if let Some(due) = pending {
+        return due;
     }
+    match window_start {
+        Some(oldest) => now.max(oldest + FRAME_BUDGET),
+        None => now,
+    }
+}
+
+/// Moves every event already queued into `batch`; returns whether there was any.
+fn drain_into(rx: &mut StreamRx, batch: &mut Vec<(u64, StreamEvent)>) -> bool {
+    let before = batch.len();
+    while let Ok(more) = rx.try_recv() {
+        batch.push(more);
+    }
+    batch.len() > before
+}
+
+/// Whether to draw after a wake-up. Pane output waits for its frame unless that frame is already
+/// due (drawn now rather than through a timer, which would add up to a millisecond); a key that
+/// only went to a pane changes nothing until the pane answers; anything else shows at once.
+pub fn needs_redraw(output: bool, forwarded: bool, frame_due: Option<Instant>, now: Instant) -> bool {
+    let due = frame_due.is_some_and(|at| at <= now);
+    due || !(output || forwarded)
+}
+
+/// The earliest of the given deadlines.
+fn earliest(deadlines: impl IntoIterator<Item = Option<Instant>>) -> Option<Instant> {
+    deadlines.into_iter().flatten().min()
 }
 
 /// One wake-up of the event loop; handlers run after the select has released its borrows.
@@ -497,16 +606,23 @@ enum Wake {
     Input(Event),
     Stream(Option<(u64, StreamEvent)>),
     Tick,
-    /// A delayed element is due: the shortcut popup, or a sidebar switch to another session.
+    /// A delayed element is due: pane output's frame, the shortcut popup, or a sidebar switch.
     Due,
 }
 
-/// Resolves at `deadline`, or never without one.
-async fn until(deadline: Option<Instant>) {
-    match deadline {
-        Some(at) => tokio::time::sleep_until(tokio::time::Instant::from_std(at)).await,
-        None => std::future::pending().await,
-    }
+/// Terminal input read on its own thread and handed over a channel. crossterm's async
+/// `EventStream` takes an internal lock on every poll while its reader thread holds it, so the
+/// event loop spun on that lock each time pane output woke it.
+fn terminal_input() -> UnboundedReceiver<Event> {
+    let (tx, rx) = unbounded_channel();
+    std::thread::spawn(move || {
+        while let Ok(event) = crossterm::event::read() {
+            if tx.send(event).is_err() {
+                break;
+            }
+        }
+    });
+    rx
 }
 
 /// Runs the attached TUI until detach, session end or no panes left.
@@ -517,32 +633,49 @@ pub async fn run_tui(
     opts: AppOptions,
 ) -> Result<(), String> {
     let _guard = TerminalGuard::enter().map_err(|e| format!("Failed to enter raw mode: {e}"))?;
+    let margins = super::terminal::query_lr_margins();
     let (mut app, mut stream) = App::open(endpoint, session, start, opts).await?;
-    let mut keys = EventStream::new();
+    app.canvas.set_lr_margins(margins);
+    let mut keys = terminal_input();
     let mut out = BufWriter::with_capacity(64 * 1024, stdout());
+    let mut body = Vec::with_capacity(64 * 1024);
+    let (mut cursor, mut last_cursor) = (Vec::new(), Vec::new());
     let mut tick = tokio::time::interval(Duration::from_secs(1));
+    let mut redraw = true;
     loop {
-        if !app.prepare_frame().await {
-            return Ok(());
+        if redraw {
+            if !app.prepare_frame().await {
+                return Ok(());
+            }
+            body.clear();
+            cursor.clear();
+            let _ = frame::draw_body(&mut app, &mut body);
+            let _ = frame::place_cursor(&app, &mut cursor);
+            // A frame with no changes that leaves the cursor where it is would only be bytes for
+            // the terminal to parse.
+            if !body.is_empty() || cursor != last_cursor {
+                let _ = frame::send(&mut out, &body, &cursor);
+                std::mem::swap(&mut cursor, &mut last_cursor);
+            }
+            app.drew(Instant::now());
         }
-        let _ = frame::draw(&mut app, &mut out);
         let popup = app.hud_deadline().filter(|_| !app.hud_visible());
-        let due = match (popup, app.sidebar.due()) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        };
+        let due = earliest([popup, app.sidebar.due(), app.frame_due]);
         let wake = tokio::select! {
-            Some(Ok(event)) = keys.next() => Wake::Input(event),
+            Some(event) = keys.recv() => Wake::Input(event),
             item = stream.recv() => Wake::Stream(item),
             _ = tick.tick() => Wake::Tick,
-            _ = until(due) => Wake::Due,
+            _ = sleep_until_opt(due.map(tokio::time::Instant::from_std)) => Wake::Due,
         };
+        let output = matches!(wake, Wake::Stream(_));
         let flow = match wake {
             Wake::Input(event) => app.on_event(event).await,
             Wake::Stream(item) => app.on_stream(item, &mut stream).await,
             Wake::Tick => app.on_tick().await,
             Wake::Due => app.on_due().await,
         };
+        let forwarded = std::mem::take(&mut app.forwarded);
+        redraw = needs_redraw(output, forwarded, app.frame_due, Instant::now());
         if flow == Flow::Quit {
             return Ok(());
         }

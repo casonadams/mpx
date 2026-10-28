@@ -26,6 +26,7 @@ fn spawn_task(name: &str, command: &str) -> (PaneHandle, mpsc::UnboundedReceiver
         harnesses: Arc::new(registry(&Config::default())),
         idle_ms: 1_000,
         relay: Arc::new(AtomicBool::new(true)),
+        pacing: Arc::default(),
     };
     let handle = pane::spawn(spec, false, ctx).expect("spawn");
     (handle, rx)
