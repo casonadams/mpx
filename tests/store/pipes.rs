@@ -12,7 +12,7 @@ fn msg(seq: u64, data: &str) -> PipeMessage {
 }
 
 fn store_in(root: &std::path::Path) -> PipeStore {
-    PipeStore::new(root.join("pipes"))
+    PipeStore::in_dir(root)
 }
 
 fn messages(store: &PipeStore, name: &str) -> Vec<PipeMessage> {

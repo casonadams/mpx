@@ -91,12 +91,18 @@ impl Config {
         toml::from_str(text).map_err(|e| e.to_string())
     }
 
-    /// Missing file yields defaults; a malformed file is an error.
+    /// Config from the default location (`Config::path`). Missing file yields defaults; a malformed
+    /// file is an error.
     pub fn load() -> Result<Config, String> {
-        let Some(path) = Self::path() else {
-            return Ok(Config::default());
-        };
-        match std::fs::read_to_string(&path) {
+        match Self::path() {
+            Some(path) => Self::load_file(&path),
+            None => Ok(Config::default()),
+        }
+    }
+
+    /// Config from `path`. Missing file yields defaults; a malformed file is an error.
+    pub fn load_file(path: &std::path::Path) -> Result<Config, String> {
+        match std::fs::read_to_string(path) {
             Ok(text) => Self::parse(&text).map_err(|e| format!("{}: {}", path.display(), e)),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Config::default()),
             Err(e) => Err(format!("{}: {}", path.display(), e)),

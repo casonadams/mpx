@@ -9,6 +9,8 @@ mpx reads TOML from the first of:
 
 A missing file means defaults. Unknown keys are rejected, so typos surface as errors. The daemon reads the file at start-up (restart a session with `mpx kill-server` to apply daemon settings); the TUI reads it when attaching.
 
+`-f FILE` / `--config FILE` (before the command) replaces this list for that invocation; a missing file there means defaults, like the default path.
+
 ```toml
 prefix = "C-b"          # tmux notation: C-a, C-Space, M-b ...
 remain_on_exit = false  # keep panes on screen after their process exits
@@ -46,3 +48,5 @@ Snapshots and durable pipes live outside the runtime directory (which is cleared
 4. `~/.local/state/mpx`
 
 Each session has its own directory there: `snapshot.json` (the latest layout snapshot) and `pipes/` (a message log and metadata file per pipe).
+
+`--state-dir <DIR>` on any command replaces this per-session directory for that invocation.

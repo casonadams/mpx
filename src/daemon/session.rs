@@ -199,7 +199,7 @@ pub(super) async fn run(boot: Boot, mut rx: mpsc::UnboundedReceiver<SessionMsg>)
         relay: Arc::new(AtomicBool::new(false)),
         pending: Vec::new(),
         idem: IdemCache::default(),
-        snapshots: SnapshotStore::new(state_dir.join("snapshot.json")),
+        snapshots: SnapshotStore::in_dir(&state_dir),
         save_due: None,
         shutting_down: false,
     };
@@ -894,7 +894,11 @@ impl Session {
     }
 
     fn restore_snapshot(&mut self, snapshot: &SessionSnapshot) {
-        let plan = plan_restore(snapshot, &self.harnesses);
+        let runtime_dir = std::path::Path::new(&self.endpoint)
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_else(crate::ipc::socket_dir);
+        let plan = plan_restore(snapshot, &self.harnesses, &runtime_dir);
         for window in plan.windows {
             self.restore_window(window);
         }

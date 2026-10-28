@@ -1,5 +1,5 @@
 use super::Commands;
-use super::panes::{default_node_name, pid_label, resolve_name};
+use super::panes::{command_and_args, default_node_name, pid_label, resolve_name};
 use super::resolve::{Resolved, parse_env_pairs};
 use super::sessions::{apply_key, ensure_client};
 use crate::client::Client;
@@ -12,8 +12,7 @@ pub struct NewWindowRequest {
     pub env: Vec<String>,
     pub pty: bool,
     pub focus: bool,
-    pub command: Option<String>,
-    pub args: Vec<String>,
+    pub argv: Vec<String>,
 }
 
 /// Arguments of `mpx resize-pane`.
@@ -46,8 +45,7 @@ pub async fn run(cmd: Commands, r: &Resolved) -> Result<i32, String> {
             env,
             pty,
             detach,
-            command,
-            args,
+            argv,
         } => {
             let req = NewWindowRequest {
                 name,
@@ -55,8 +53,7 @@ pub async fn run(cmd: Commands, r: &Resolved) -> Result<i32, String> {
                 env,
                 pty,
                 focus: !detach,
-                command,
-                args,
+                argv,
             };
             new_window(r, req).await
         }
@@ -135,18 +132,17 @@ pub async fn run(cmd: Commands, r: &Resolved) -> Result<i32, String> {
     }
 }
 
-fn shell_command(command: Option<String>, args: Vec<String>) -> (String, Vec<String>) {
-    match command {
-        Some(cmd) => (cmd, args),
-        None => (
+fn shell_command(argv: Vec<String>) -> (String, Vec<String>) {
+    command_and_args(argv).unwrap_or_else(|| {
+        (
             std::env::var("SHELL").unwrap_or_else(|_| "sh".to_string()),
             Vec::new(),
-        ),
-    }
+        )
+    })
 }
 
 async fn new_window(r: &Resolved, req: NewWindowRequest) -> Result<i32, String> {
-    let (command, args) = shell_command(req.command, req.args);
+    let (command, args) = shell_command(req.argv);
     let node_name = req
         .name
         .clone()

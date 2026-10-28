@@ -6,6 +6,7 @@ mod daemon {
     mod env;
     mod exit_drain;
     mod idempotency;
+    mod idempotency_abandon;
     mod idempotent;
     mod input;
     mod layout;
@@ -13,6 +14,7 @@ mod daemon {
     mod logs;
     mod panes;
     mod pipes;
+    mod pipes_core;
     mod plan;
     mod prompt;
     mod snapshot;

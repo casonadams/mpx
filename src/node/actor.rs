@@ -8,11 +8,13 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::{Instant, sleep_until};
 
 use super::agent::AgentTracker;
-use super::pane::{InputBuild, LogQuery, Notifier, PaneCtx, PaneMsg, PaneNotice, Reply, TermView, render_logs};
+use super::pane::{
+    InputBuild, LogQuery, Notifier, PaneCtx, PaneMsg, PaneNotice, Reply, TermView, render_logs,
+};
 use super::process::{self, detection_names, foreground_name as fg_name};
+use super::pty::PtyTerminal;
 use super::sink::Sink;
 use super::waits::{self, Cond, Observed};
-use super::pty::PtyTerminal;
 use super::{Process, SpawnSpec, now_ms};
 use crate::agents::{self, Harness};
 use crate::buffer::{RingBuffer, Utf8Stream, strip_ansi};
@@ -39,7 +41,7 @@ impl Waiter {
     }
 }
 
-pub(super) struct PaneActor {
+pub struct PaneActor {
     name: String,
     id: PaneId,
     pty: bool,
@@ -71,7 +73,7 @@ pub(super) struct PaneActor {
 }
 
 impl PaneActor {
-    pub(super) fn new(
+    pub fn new(
         spec: &SpawnSpec,
         process: Box<dyn Process>,
         terminal: Option<PtyTerminal>,
@@ -120,12 +122,12 @@ impl PaneActor {
                     Some(msg) => self.handle(msg),
                     None => break,
                 },
-                () = sleep_until_opt(wake) => self.on_timer(),
+                () = sleep_until_opt(wake) => self.on_timer(Instant::now()),
             }
         }
     }
 
-    fn handle(&mut self, msg: PaneMsg) {
+    pub fn handle(&mut self, msg: PaneMsg) {
         match msg {
             PaneMsg::Output(bytes) => self.on_output(&bytes),
             PaneMsg::Exited(code) => self.on_exit(code),
@@ -366,8 +368,7 @@ impl PaneActor {
         due
     }
 
-    fn on_timer(&mut self) {
-        let now = Instant::now();
+    pub fn on_timer(&mut self, now: Instant) {
         self.expire_waiters(now);
         if self.agent.ticks() {
             self.tick_agent();

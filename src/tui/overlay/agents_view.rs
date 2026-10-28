@@ -221,7 +221,7 @@ impl AgentsView {
 
     /// Reloads live agents, the resumable scope and the cached preview of the selected agent.
     pub async fn refresh(&mut self, ctx: &mut OverlayCtx<'_>) {
-        self.live = list_live().await;
+        self.live = list_live(ctx.socket_dir).await;
         self.cwd = ctx.cwd.map(str::to_string);
         self.harnesses = ctx.registry.iter().map(|h| h.name.clone()).collect();
         let scope = if self.scope_all {

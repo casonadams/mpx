@@ -1,5 +1,6 @@
 mod tui {
     mod agent;
+    mod app;
     mod command;
     mod copy;
     mod frame;

@@ -2,6 +2,7 @@ use crossterm::event::{Event, EventStream, KeyEvent, KeyEventKind};
 use futures_util::StreamExt;
 use std::collections::HashMap;
 use std::io::{BufWriter, stdout};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::task::JoinHandle;
@@ -15,6 +16,7 @@ use super::keymap::{self, Keymap};
 use super::overlay::Overlay;
 use super::panes::{LayoutCache, PaneRect, sync_dims};
 use super::prompt::PromptState;
+use super::render::copy_to_clipboard;
 use super::status::{local_utc_offset, restored_notice};
 use super::terminal::TerminalGuard;
 use crate::agents::{self, Harness};
@@ -94,6 +96,38 @@ pub struct App {
     pub watch: AgentWatch,
     pub sub: Subscription,
     pub last_render: Option<Instant>,
+    /// Directory holding the session sockets, used to discover and switch sessions.
+    pub socket_dir: PathBuf,
+    /// Fixed screen size (columns, rows) instead of the real terminal's.
+    pub fixed_size: Option<(u16, u16)>,
+    /// Where yanks go; `Captured` keeps them in memory instead of the system clipboard.
+    pub clipboard: Clipboard,
+}
+
+/// Everything the app reads from its surroundings, so it can run against explicit inputs.
+#[derive(Debug, Clone)]
+pub struct AppOptions {
+    pub config: Config,
+    pub socket_dir: PathBuf,
+    /// Screen size to lay out for; `None` follows the real terminal.
+    pub size: Option<(u16, u16)>,
+}
+
+/// Where yanked text goes: the system clipboard, or a capture list that tests read back.
+#[derive(Debug, Default)]
+pub enum Clipboard {
+    #[default]
+    System,
+    Captured(Vec<String>),
+}
+
+impl Clipboard {
+    pub fn copy(&mut self, text: &str) {
+        match self {
+            Self::System => copy_to_clipboard(text),
+            Self::Captured(texts) => texts.push(text.to_string()),
+        }
+    }
 }
 
 impl App {
@@ -102,8 +136,13 @@ impl App {
         endpoint: &str,
         session: &str,
         start: StartView,
+        opts: AppOptions,
     ) -> Result<(Self, StreamRx), String> {
-        let config = Config::load_or_default();
+        let AppOptions {
+            config,
+            socket_dir,
+            size,
+        } = opts;
         let keymap = keymap::resolve(&config)?;
         let mut client = Client::connect(endpoint).await?;
         let sub_client = Client::connect(endpoint).await?;
@@ -140,6 +179,9 @@ impl App {
                 task: None,
             },
             last_render: None,
+            socket_dir,
+            fixed_size: size,
+            clipboard: Clipboard::System,
         };
         app.subscribe(sub_client);
         app.refresh_nodes().await;
@@ -172,7 +214,9 @@ impl App {
 
     /// Fetches the layout and pane sizes for the next frame. Returns false when nothing is left to show.
     pub async fn prepare_frame(&mut self) -> bool {
-        let (w, h) = crossterm::terminal::size().unwrap_or((80, 24));
+        let (w, h) = self
+            .fixed_size
+            .unwrap_or_else(|| crossterm::terminal::size().unwrap_or((80, 24)));
         let layout_h = h.saturating_sub(1);
         self.viewport = (w, layout_h);
         if !self.layout.sync(&mut self.client, w, layout_h).await {
@@ -377,9 +421,14 @@ enum Wake {
 }
 
 /// Runs the attached TUI until detach, session end or no panes left.
-pub async fn run_tui(endpoint: &str, session: &str, start: StartView) -> Result<(), String> {
+pub async fn run_tui(
+    endpoint: &str,
+    session: &str,
+    start: StartView,
+    opts: AppOptions,
+) -> Result<(), String> {
     let _guard = TerminalGuard::enter().map_err(|e| format!("Failed to enter raw mode: {e}"))?;
-    let (mut app, mut stream) = App::open(endpoint, session, start).await?;
+    let (mut app, mut stream) = App::open(endpoint, session, start, opts).await?;
     let mut keys = EventStream::new();
     let mut out = BufWriter::with_capacity(64 * 1024, stdout());
     let mut tick = tokio::time::interval(Duration::from_secs(1));

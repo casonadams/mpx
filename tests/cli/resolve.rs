@@ -2,8 +2,11 @@ use mpx::cli::{
     nested_attach_refused, parse_agent_state, parse_env_pairs, resolve, resolve_idempotency_key,
     wait_condition, wait_exit_code,
 };
-use mpx::ipc::default_endpoint;
+use mpx::ipc::endpoint_in;
 use mpx::protocol::{AgentState, WaitCondition, WaitOutcome};
+use std::path::Path;
+
+const DIR: &str = "/run/mpx-test";
 
 fn outcome(satisfied: bool, exit_code: Option<i32>) -> WaitOutcome {
     WaitOutcome {
@@ -15,33 +18,42 @@ fn outcome(satisfied: bool, exit_code: Option<i32>) -> WaitOutcome {
 }
 
 #[test]
-fn session_defaults_to_main() {
-    let r = resolve(None, None, None, None);
+fn session_defaults_to_main_in_the_socket_dir() {
+    let r = resolve(None, None, None, None, Path::new(DIR));
     assert_eq!(r.session, "main");
-    assert_eq!(r.endpoint, default_endpoint("main"));
+    assert_eq!(r.endpoint, endpoint_in(Path::new(DIR), "main"));
+    assert_eq!(r.socket_dir, Path::new(DIR));
 }
 
 #[test]
 fn session_flag_beats_environment() {
-    assert_eq!(resolve(Some("a"), None, Some("b"), None).session, "a");
-    assert_eq!(resolve(None, None, Some("b"), None).session, "b");
+    let dir = Path::new(DIR);
+    assert_eq!(resolve(Some("a"), None, Some("b"), None, dir).session, "a");
+    assert_eq!(resolve(None, None, Some("b"), None, dir).session, "b");
 }
 
 #[test]
 fn environment_endpoint_applies_only_without_session_flag() {
+    let dir = Path::new(DIR);
     assert_eq!(
-        resolve(None, None, None, Some("/env.sock")).endpoint,
+        resolve(None, None, None, Some("/env.sock"), dir).endpoint,
         "/env.sock"
     );
     assert_eq!(
-        resolve(Some("a"), None, None, Some("/env.sock")).endpoint,
-        default_endpoint("a")
+        resolve(Some("a"), None, None, Some("/env.sock"), dir).endpoint,
+        endpoint_in(dir, "a")
     );
 }
 
 #[test]
 fn explicit_endpoint_beats_everything() {
-    let r = resolve(Some("a"), Some("/x.sock"), Some("b"), Some("/env.sock"));
+    let r = resolve(
+        Some("a"),
+        Some("/x.sock"),
+        Some("b"),
+        Some("/env.sock"),
+        Path::new(DIR),
+    );
     assert_eq!(r.endpoint, "/x.sock");
     assert_eq!(r.session, "a");
 }

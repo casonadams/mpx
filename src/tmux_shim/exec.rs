@@ -31,6 +31,14 @@ impl EnvTarget {
             endpoint,
         }
     }
+
+    /// Directory of this session's socket, where its sibling sessions live.
+    pub fn socket_dir(&self) -> std::path::PathBuf {
+        std::path::Path::new(&self.endpoint)
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_else(ipc::socket_dir)
+    }
 }
 
 /// Multicall entry point. Returns the process exit code and prints tmux-style output.
@@ -60,7 +68,7 @@ async fn execute(argv: &[String]) -> Result<String, String> {
     }
     let env = EnvTarget::from_env();
     match cmd {
-        "list-sessions" => Ok(list_sessions(&inv)),
+        "list-sessions" => Ok(list_sessions(&inv, &env.socket_dir())),
         "has-session" => has_session(&inv, &env).await,
         _ => {
             let client = Client::connect(&env.endpoint)
@@ -75,9 +83,9 @@ async fn execute(argv: &[String]) -> Result<String, String> {
     }
 }
 
-fn list_sessions(inv: &Invocation) -> String {
+fn list_sessions(inv: &Invocation, socket_dir: &std::path::Path) -> String {
     let fmt = inv.value('F').unwrap_or("#{session_name}");
-    ipc::list_sessions()
+    ipc::list_sessions(socket_dir)
         .iter()
         .map(|s| format!("{}\n", expand(fmt, &session_vars(&s.name, 0, 0))))
         .collect()
@@ -91,7 +99,7 @@ async fn has_session(inv: &Invocation, env: &EnvTarget) -> Result<String, String
     let endpoint = if name == env.session {
         env.endpoint.clone()
     } else {
-        ipc::default_endpoint(name)
+        ipc::endpoint_in(&env.socket_dir(), name)
     };
     let mut client = Client::connect(&endpoint).await?;
     client.ping().await?;

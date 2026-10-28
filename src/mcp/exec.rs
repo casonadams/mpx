@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
@@ -25,15 +26,22 @@ fn ok() -> Value {
     json!({ "ok": true })
 }
 
-/// Performs one typed call against the daemon and returns its JSON result.
-pub async fn execute(client: &mut Client, call: Call) -> Result<Value, String> {
+/// Performs one typed call against the daemon and returns its JSON result. `socket_dir` holds the
+/// session sockets (other sessions are discovered there; runtime files are written next to them).
+/// `config` supplies the agent harness registry.
+pub async fn execute(
+    client: &mut Client,
+    call: Call,
+    socket_dir: &Path,
+    config: &Config,
+) -> Result<Value, String> {
     match call {
-        Call::Agents => Ok(inventory().await),
+        Call::Agents => Ok(inventory(socket_dir, config).await),
         Call::Sessions => {
-            serde_json::to_value(ipc::session_infos().await).map_err(|e| e.to_string())
+            serde_json::to_value(ipc::session_infos(socket_dir).await).map_err(|e| e.to_string())
         }
         Call::Restore => restore(client).await,
-        Call::AgentLaunch(launch) => agent_launch(client, launch).await,
+        Call::AgentLaunch(launch) => agent_launch(client, launch, socket_dir, config).await,
         Call::AgentPrompt(prompt) => agent_prompt(client, prompt).await,
         Call::Split { .. } | Call::NewWindow { .. } | Call::Focus(_) => {
             layout_call(client, call).await
@@ -156,9 +164,9 @@ async fn pipe_call(client: &mut Client, call: Call) -> Result<Value, String> {
     }
 }
 
-async fn inventory() -> Value {
-    let registry = agents::registry(&Config::load_or_default());
-    agents::inventory_json(&registry, INVENTORY_LIMIT).await
+async fn inventory(socket_dir: &Path, config: &Config) -> Value {
+    let registry = agents::registry(config);
+    agents::inventory_json(&registry, INVENTORY_LIMIT, socket_dir).await
 }
 
 /// JSON for `mpx_restore`: whether the snapshot was replayed now or had already been restored.
@@ -183,8 +191,13 @@ async fn split(client: &mut Client, opts: SplitOpts) -> Result<Value, String> {
     Ok(node_json(node))
 }
 
-async fn agent_launch(client: &mut Client, launch: AgentLaunch) -> Result<Value, String> {
-    let registry = agents::registry(&Config::load_or_default());
+async fn agent_launch(
+    client: &mut Client,
+    launch: AgentLaunch,
+    socket_dir: &Path,
+    config: &Config,
+) -> Result<Value, String> {
+    let registry = agents::registry(config);
     let harness = agents::find_harness(&registry, &launch.harness)
         .ok_or_else(|| format!("unknown harness '{}'", launch.harness))?;
     let spec = agents::launch(
@@ -193,6 +206,7 @@ async fn agent_launch(client: &mut Client, launch: AgentLaunch) -> Result<Value,
         LaunchOptions {
             teams: launch.teams,
         },
+        socket_dir,
     );
     let (command, args) = spec
         .argv

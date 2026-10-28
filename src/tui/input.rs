@@ -65,7 +65,7 @@ impl App {
         match outcome {
             CopyOutcome::Stay => self.mode = Mode::Copy(cs),
             CopyOutcome::Exit => {}
-            CopyOutcome::Yank(text) => super::render::copy_to_clipboard(&text),
+            CopyOutcome::Yank(text) => self.clipboard.copy(&text),
         }
         Flow::Continue
     }

@@ -1,23 +1,37 @@
-use crate::ipc::default_endpoint;
+use std::path::{Path, PathBuf};
+
+use crate::config::Config;
+use crate::ipc::endpoint_in;
 use crate::protocol::{AgentState, WaitCondition, WaitOutcome};
+use crate::store;
 
 /// Exit code of `mpx wait` when the timeout elapses first (same as coreutils `timeout`).
 pub const WAIT_TIMEOUT_EXIT: i32 = 124;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Resolved {
     pub session: String,
     pub endpoint: String,
+    /// Directory holding the session sockets (and the runtime files mpx writes next to them).
+    pub socket_dir: PathBuf,
     /// Applied to the next mutating request of the command (`--idempotency-key`).
     pub idempotency_key: Option<String>,
+    /// Config file given with `-f`; an auto-spawned daemon loads the same file.
+    pub config_path: Option<PathBuf>,
+    /// Config the daemon and the agent/MCP commands use.
+    pub config: Config,
+    /// Durable state directory of the session's daemon (`--state-dir`).
+    pub state_dir: PathBuf,
 }
 
-/// Session: `-s` > `$MPX_SESSION` > `main`. Endpoint: `--endpoint` > `$MPX_ENDPOINT` (only when `-s` is absent) > socket of the session.
+/// Session: `-s` > `$MPX_SESSION` > `main`. Endpoint: `--endpoint` > `$MPX_ENDPOINT` (only when `-s` is absent) > the session's socket in `socket_dir`.
+/// The config is the default until the caller loads one with `load_config`.
 pub fn resolve(
     session_flag: Option<&str>,
     endpoint_flag: Option<&str>,
     env_session: Option<&str>,
     env_endpoint: Option<&str>,
+    socket_dir: &Path,
 ) -> Resolved {
     let session = session_flag.or(env_session).unwrap_or("main").to_string();
     let env_ep = if session_flag.is_none() {
@@ -28,11 +42,25 @@ pub fn resolve(
     let endpoint = endpoint_flag
         .or(env_ep)
         .map(str::to_string)
-        .unwrap_or_else(|| default_endpoint(&session));
+        .unwrap_or_else(|| endpoint_in(socket_dir, &session));
+    let state_dir = store::session_dir(&session);
     Resolved {
         session,
         endpoint,
+        socket_dir: socket_dir.to_path_buf(),
         idempotency_key: None,
+        config_path: None,
+        config: Config::default(),
+        state_dir,
+    }
+}
+
+/// Config from the `-f` file when given, else from the default location. A missing file is defaults;
+/// a malformed `-f` file is an error, while a malformed default file only logs a warning.
+pub fn load_config(path: Option<&Path>) -> Result<Config, String> {
+    match path {
+        Some(path) => Config::load_file(path),
+        None => Ok(Config::load_or_default()),
     }
 }
 

@@ -10,6 +10,8 @@ mpx [OPTIONS] [COMMAND]
 
 - `-s, --session <NAME>`: Target session. Default: `$MPX_SESSION`, then `main`.
 - `--endpoint <PATH>`: Daemon socket or Named Pipe. Default: `$MPX_ENDPOINT` when `-s` is not given, else the session socket.
+- `-f, --config <FILE>`: Load this config file instead of the default location (see [CONFIG.md](CONFIG.md)). Like tmux `-f`, it goes before the command. It also applies to the daemon when `mpx` auto-starts it. Default: `$MPX_CONFIG` or the default config path.
+- `--state-dir <DIR>`: Durable state directory of the session's daemon (snapshot and pipes). Default: the session's directory under the state directory (see [CONFIG.md](CONFIG.md#state-directory)). An auto-started daemon uses the same directory.
 - `--idempotency-key <KEY>`: Run this command's mutating request at most once per key. A retry with the same key returns the first result instead of acting twice. Applies to `run`, `split`, `new-window`, `send`, `send-keys`, `paste`, `kill`, `kill-window`, `rename-window`, `pipe write`, `agents new|resume` and `hook`. Keys are kept for 10 minutes and are never read from the environment.
 - `-h, --help` / `-V, --version`.
 
@@ -39,8 +41,11 @@ Commands that take a pane accept its name or its stable id `%N` (tmux style). TU
 
 ### `mpx run`
 ```bash
-mpx run [--name N] [--pty] [--cwd DIR] [--env K=V]... [--remain] [--tmux-compat] -- <COMMAND> [ARGS...]
+mpx run [--name N] [--pty] [--cwd DIR] [--env K=V]... [--remain] [--tmux-compat] <COMMAND> [ARGS...]
 ```
+
+Options go before the command. Everything after `<COMMAND>` belongs to the command, so `mpx run sh -c 'echo hi'` passes `-c` to `sh`. `--` before the command is optional.
+
 - `--pty`: interactive PTY (ConPTY on Windows) instead of a plain pipe.
 - `--remain`: keep the pane on screen after the process exits (`remain_on_exit`).
 - `--tmux-compat`: export `TMUX`/`TMUX_PANE` and put the mpx `tmux` shim first on `PATH` (see [tmux compatibility](#tmux-compatibility)).
@@ -92,7 +97,7 @@ Timeout exits with `124`, like `timeout(1)`.
 
 | Command | Description |
 | :--- | :--- |
-| `mpx split [-t pane] [-h \| -v] [-l PERCENT] [-d] [--pty] [--env K=V] [--tmux-compat] -- CMD...` | Split a pane. `-h` = side by side, `-v` = stacked (tmux semantics); `-d` keeps focus. Help is `--help`. |
+| `mpx split [-t pane] [-h \| -v] [-l PERCENT] [-d] [--pty] [--env K=V] [--tmux-compat] CMD...` | Split a pane. `-h` = side by side, `-v` = stacked (tmux semantics); `-d` keeps focus. Help is `--help`. |
 | `mpx new-window [-n name] [-c dir] [-d] [--pty] [--env K=V] [CMD...]` | New window (defaults to the shell). |
 | `mpx kill-window [-t index]` / `mpx rename-window [-t index] <name>` | Close / rename a window. A renamed window stops auto-naming. |
 | `mpx select-window -t <index>` / `mpx last-window` / `mpx last-pane` | Navigation. |

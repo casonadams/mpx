@@ -1,6 +1,6 @@
 //! AI agent harness registry (claude, omp, codex, ...), resumable session discovery, launch specs
 //! and live-agent listing across mpx sessions.
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -150,9 +150,9 @@ pub fn resumable_json(session: &ResumableSession) -> Value {
     })
 }
 
-/// `{live, resumable}`: agents running in reachable sessions and the most recent stored sessions.
-pub async fn inventory_json(registry: &[Harness], limit: usize) -> Value {
-    let live: Vec<Value> = list_live().await.iter().map(live_json).collect();
+/// `{live, resumable}`: agents running in the sessions of `socket_dir` and the most recent stored sessions.
+pub async fn inventory_json(registry: &[Harness], limit: usize, socket_dir: &Path) -> Value {
+    let live: Vec<Value> = list_live(socket_dir).await.iter().map(live_json).collect();
     let resumable: Vec<Value> = scan_resumable(registry, None, limit)
         .iter()
         .map(resumable_json)
@@ -160,10 +160,10 @@ pub async fn inventory_json(registry: &[Harness], limit: usize) -> Value {
     json!({ "live": live, "resumable": resumable })
 }
 
-/// Nodes with agent info from every reachable mpx session.
-pub async fn list_live() -> Vec<LiveAgent> {
+/// Nodes with agent info from every reachable mpx session whose socket is in `socket_dir`.
+pub async fn list_live(socket_dir: &Path) -> Vec<LiveAgent> {
     let mut out = Vec::new();
-    for ep in crate::ipc::list_sessions() {
+    for ep in crate::ipc::list_sessions(socket_dir) {
         let Ok(Ok(mut client)) =
             tokio::time::timeout(PROBE_TIMEOUT, Client::connect(&ep.endpoint)).await
         else {

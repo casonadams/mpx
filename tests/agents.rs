@@ -3,5 +3,6 @@ mod agents {
     mod launch;
     mod registry;
     mod sessions;
+    mod transcript;
     mod walk;
 }

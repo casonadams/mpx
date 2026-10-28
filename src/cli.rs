@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use clap::{Parser, Subcommand};
 
 mod agents;
@@ -11,7 +13,50 @@ pub use resolve::{
     Resolved, nested_attach_refused, parse_agent_state, parse_env_pairs, resolve,
     resolve_idempotency_key, wait_condition, wait_exit_code,
 };
-pub use sessions::{RestoreOutcome, apply_key, restore_session, run};
+pub use sessions::{RestoreOutcome, apply_key, daemon_args, restore_session, run_cli};
+
+/// Process entry point behind the `mpx` binary: tmux multicall, tracing, clap parsing and dispatch.
+/// Returns the process exit code.
+pub fn main_entry(argv: Vec<String>) -> i32 {
+    match tokio::runtime::Runtime::new() {
+        Ok(runtime) => runtime.block_on(entry(argv)),
+        Err(e) => {
+            eprintln!("{e}");
+            1
+        }
+    }
+}
+
+/// True when the binary was invoked as `tmux` (symlink or copy in the shim directory).
+fn is_tmux_invocation(argv0: Option<&String>) -> bool {
+    argv0
+        .and_then(|a| std::path::Path::new(a).file_name())
+        .is_some_and(|name| name == "tmux" || name == "tmux.exe")
+}
+
+async fn entry(argv: Vec<String>) -> i32 {
+    if is_tmux_invocation(argv.first()) {
+        return crate::tmux_shim::run(argv[1..].to_vec()).await;
+    }
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .try_init();
+    let cli = match Cli::try_parse_from(argv) {
+        Ok(cli) => cli,
+        Err(e) => {
+            let code = e.exit_code();
+            let _ = e.print();
+            return code;
+        }
+    };
+    match run_cli(cli).await {
+        Ok(code) => code,
+        Err(message) => {
+            eprintln!("{message}");
+            1
+        }
+    }
+}
 
 #[derive(Parser, Debug)]
 #[command(
@@ -27,6 +72,14 @@ pub struct Cli {
     /// Daemon endpoint (default: $MPX_ENDPOINT when -s is not given, else the session socket)
     #[arg(long, global = true)]
     pub endpoint: Option<String>,
+
+    /// Config file to load instead of the default location (tmux -f; give it before the command)
+    #[arg(short = 'f', long = "config", value_name = "FILE")]
+    pub config: Option<PathBuf>,
+
+    /// Durable state directory of the daemon (default: the session's directory under the state dir)
+    #[arg(long = "state-dir", global = true, value_name = "DIR")]
+    pub state_dir: Option<PathBuf>,
 
     /// Run the mutating request of this command at most once per KEY (safe retries)
     #[arg(long = "idempotency-key", global = true, value_name = "KEY")]
@@ -105,12 +158,14 @@ pub enum Commands {
         #[arg(long = "tmux-compat")]
         tmux_compat: bool,
 
-        /// Command to execute
-        command: String,
-
-        /// Arguments for the command
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<String>,
+        /// Command to execute, then its arguments; options after the command are its own
+        #[arg(
+            required = true,
+            trailing_var_arg = true,
+            allow_hyphen_values = true,
+            value_name = "COMMAND"
+        )]
+        argv: Vec<String>,
     },
 
     /// Read or stream logs from a node
@@ -258,12 +313,14 @@ pub enum Commands {
         #[arg(short = 'd', long = "detach", alias = "no-focus")]
         detach: bool,
 
-        /// Command to execute
-        command: String,
-
-        /// Arguments for the command
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<String>,
+        /// Command to execute, then its arguments; options after the command are its own
+        #[arg(
+            required = true,
+            trailing_var_arg = true,
+            allow_hyphen_values = true,
+            value_name = "COMMAND"
+        )]
+        argv: Vec<String>,
     },
 
     /// Create a window with a new pane (tmux new-window)
@@ -289,12 +346,13 @@ pub enum Commands {
         #[arg(short = 'd', long = "detach")]
         detach: bool,
 
-        /// Command to execute (defaults to the shell)
-        command: Option<String>,
-
-        /// Arguments for the command
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<String>,
+        /// Command to execute (defaults to the shell), then its arguments; options after the command are its own
+        #[arg(
+            trailing_var_arg = true,
+            allow_hyphen_values = true,
+            value_name = "COMMAND"
+        )]
+        argv: Vec<String>,
     },
 
     /// Close a window (defaults to the active window)

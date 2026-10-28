@@ -12,7 +12,7 @@ fn first_claim_runs_and_a_repeat_waits_for_its_response() {
         panic!("a repeat while running waits");
     };
     assert!(waiting.try_recv().is_err(), "no response yet");
-    cache.finish("k", "done".to_string(), 2);
+    IdemCache::finish(&mut cache, "k", "done".to_string(), 2);
     assert_eq!(waiting.try_recv().unwrap(), Some("done".to_string()));
 }
 
@@ -20,7 +20,7 @@ fn first_claim_runs_and_a_repeat_waits_for_its_response() {
 fn finished_key_replays_its_response_within_the_ttl() {
     let mut cache = IdemCache::<String>::default();
     cache.begin("k", 0);
-    cache.finish("k", "done".to_string(), 10);
+    IdemCache::finish(&mut cache, "k", "done".to_string(), 10);
     let Claim::Cached(value) = cache.begin("k", 10 + TTL_MS - 1) else {
         panic!("repeat within the TTL is cached");
     };
@@ -31,7 +31,7 @@ fn finished_key_replays_its_response_within_the_ttl() {
 fn key_is_forgotten_after_the_ttl() {
     let mut cache = IdemCache::<String>::default();
     cache.begin("k", 0);
-    cache.finish("k", "done".to_string(), 10);
+    IdemCache::finish(&mut cache, "k", "done".to_string(), 10);
     assert!(is_run(&cache.begin("k", 10 + TTL_MS)));
 }
 
@@ -53,7 +53,7 @@ fn bounded_keys_evict_the_oldest_finished_first() {
     for i in 0..MAX_KEYS + 5 {
         let key = format!("k{i}");
         assert!(is_run(&cache.begin(&key, 0)));
-        cache.finish(&key, key.clone(), 0);
+        IdemCache::finish(&mut cache, &key, key.clone(), 0);
     }
     assert_eq!(cache.len(), MAX_KEYS);
     assert!(is_run(&cache.begin("k0", 0)), "oldest key was evicted");

@@ -52,14 +52,18 @@ fn sample() -> SessionSnapshot {
     }
 }
 
+fn session_dir(dir: &tempfile::TempDir) -> std::path::PathBuf {
+    dir.path().join("session")
+}
+
 fn snapshot_file(dir: &tempfile::TempDir) -> std::path::PathBuf {
-    dir.path().join("session").join("snapshot.json")
+    session_dir(dir).join("snapshot.json")
 }
 
 #[test]
 fn save_then_load_round_trips() {
     let dir = tempfile::tempdir().unwrap();
-    let store = SnapshotStore::new(snapshot_file(&dir));
+    let store = SnapshotStore::in_dir(&session_dir(&dir));
     store.save(&sample()).unwrap();
     assert_eq!(store.load().unwrap(), Some(sample()));
 }

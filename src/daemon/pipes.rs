@@ -24,7 +24,8 @@ pub struct ReadArgs {
 
 type ReadReply = oneshot::Sender<Result<(Vec<PipeMessage>, u64), String>>;
 
-enum PipeMsg {
+/// Messages to the pipes actor.
+pub enum PipeMsg {
     Create {
         name: String,
         capacity: Option<usize>,
@@ -111,23 +112,21 @@ struct PendingRead {
 
 /// Starts the pipes actor. With a store (persisting), pipes saved on disk are loaded first.
 pub fn spawn(store: Option<PipeStore>) -> PipesHandle {
-    let mut pipes = HashMap::new();
-    if let Some(store) = &store {
-        for stored in store.load_all() {
-            let pipe = restore_pipe(stored);
-            pipes.insert(pipe.name().to_string(), pipe);
+    let (tx, rx) = mpsc::unbounded_channel();
+    tokio::spawn(run(PipesCore::new(store), rx));
+    PipesHandle { tx }
+}
+
+async fn run(mut core: PipesCore, mut rx: mpsc::UnboundedReceiver<PipeMsg>) {
+    loop {
+        tokio::select! {
+            msg = rx.recv() => match msg {
+                Some(msg) => core.handle(msg),
+                None => break,
+            },
+            () = sleep_until_opt(core.next_deadline()) => core.expire(Instant::now()),
         }
     }
-    let (tx, rx) = mpsc::unbounded_channel();
-    tokio::spawn(
-        PipesActor {
-            pipes,
-            store,
-            pending: Vec::new(),
-        }
-        .run(rx),
-    );
-    PipesHandle { tx }
 }
 
 fn restore_pipe(stored: StoredPipe) -> VirtualPipe {
@@ -158,27 +157,31 @@ fn ensure<'a>(
     })
 }
 
-struct PipesActor {
+/// The state and transitions of the pipes actor, without its mailbox or clock. `spawn` drives it.
+pub struct PipesCore {
     pipes: HashMap<String, VirtualPipe>,
     store: Option<PipeStore>,
     pending: Vec<PendingRead>,
 }
 
-impl PipesActor {
-    async fn run(mut self, mut rx: mpsc::UnboundedReceiver<PipeMsg>) {
-        loop {
-            let wake = self.pending.iter().map(|p| p.deadline).min();
-            tokio::select! {
-                msg = rx.recv() => match msg {
-                    Some(msg) => self.handle(msg),
-                    None => break,
-                },
-                () = sleep_until_opt(wake) => self.expire(Instant::now()),
+impl PipesCore {
+    /// Pipes saved in `store` are loaded first.
+    pub fn new(store: Option<PipeStore>) -> Self {
+        let mut pipes = HashMap::new();
+        if let Some(store) = &store {
+            for stored in store.load_all() {
+                let pipe = restore_pipe(stored);
+                pipes.insert(pipe.name().to_string(), pipe);
             }
+        }
+        Self {
+            pipes,
+            store,
+            pending: Vec::new(),
         }
     }
 
-    fn handle(&mut self, msg: PipeMsg) {
+    pub fn handle(&mut self, msg: PipeMsg) {
         match msg {
             PipeMsg::Create {
                 name,
@@ -197,6 +200,24 @@ impl PipesActor {
             PipeMsg::List { reply } => {
                 let _ = reply.send(self.pipes.values().map(VirtualPipe::info).collect());
             }
+        }
+    }
+
+    /// The earliest deadline among pending timed reads.
+    pub fn next_deadline(&self) -> Option<Instant> {
+        self.pending.iter().map(|p| p.deadline).min()
+    }
+
+    /// Answers the pending reads whose deadline has passed at `now`.
+    pub fn expire(&mut self, now: Instant) {
+        let (due, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut self.pending)
+            .into_iter()
+            .partition(|p| p.deadline <= now);
+        self.pending = waiting;
+        for pending in due {
+            let _ = pending
+                .reply
+                .send(self.read_now(&pending.name, &pending.args));
         }
     }
 
@@ -249,18 +270,6 @@ impl PipesActor {
             .partition(|p| p.name == name && self.ready(name, p.base));
         self.pending = waiting;
         for pending in ready {
-            let _ = pending
-                .reply
-                .send(self.read_now(&pending.name, &pending.args));
-        }
-    }
-
-    fn expire(&mut self, now: Instant) {
-        let (due, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut self.pending)
-            .into_iter()
-            .partition(|p| p.deadline <= now);
-        self.pending = waiting;
-        for pending in due {
             let _ = pending
                 .reply
                 .send(self.read_now(&pending.name, &pending.args));

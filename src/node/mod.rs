@@ -1,7 +1,7 @@
 //! Panes. Each pane is an actor (`pane`) that owns its process handle, output buffer, screen,
 //! agent state, subscribers and waiters. Blocking PTY reads and child waits run on threads that
 //! only forward messages to the actor.
-mod actor;
+pub mod actor;
 pub mod agent;
 pub mod pane;
 pub mod process;

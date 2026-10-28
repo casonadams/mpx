@@ -1,6 +1,6 @@
 mod dispatch;
 pub mod idempotency;
-mod pipes;
+pub mod pipes;
 pub mod plan;
 mod session;
 pub mod snapshot;
@@ -42,7 +42,7 @@ impl DaemonState {
     ) -> Arc<Self> {
         let pipe_store = config
             .persist_pipes
-            .then(|| store::PipeStore::new(state_dir.join("pipes")));
+            .then(|| store::PipeStore::in_dir(&state_dir));
         let pipes = pipes::spawn(pipe_store);
         let (tx, rx) = mpsc::unbounded_channel();
         let (ready, ready_rx) = oneshot::channel();
@@ -251,13 +251,14 @@ pub async fn handle_client<S: AsyncStream>(state: Arc<DaemonState>, stream: S) {
     }
 }
 
-/// Serves `endpoint` for `session`, keeping durable state under the session's state directory.
-pub async fn run_daemon(endpoint: &str, session: &str) -> std::io::Result<()> {
-    run_daemon_in(endpoint, session, &store::session_dir(session)).await
-}
-
-/// Serves `endpoint` for `session`, keeping durable state under `state_dir`.
-pub async fn run_daemon_in(endpoint: &str, session: &str, state_dir: &Path) -> std::io::Result<()> {
+/// Serves `endpoint` for `session` with `config`, keeping durable state under `state_dir`
+/// (normally `store::session_dir(session)`).
+pub async fn run_daemon(
+    endpoint: &str,
+    session: &str,
+    state_dir: &Path,
+    config: Config,
+) -> std::io::Result<()> {
     #[cfg(unix)]
     let listener = IpcListener::bind(endpoint)?;
     #[cfg(windows)]
@@ -267,7 +268,7 @@ pub async fn run_daemon_in(endpoint: &str, session: &str, state_dir: &Path) -> s
     let state = DaemonState::new(
         session.to_string(),
         endpoint.to_string(),
-        Config::load_or_default(),
+        config,
         state_dir.to_path_buf(),
     )
     .await;

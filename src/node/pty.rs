@@ -27,7 +27,12 @@ pub struct PtyTerminal {
 
 impl PtyTerminal {
     pub fn resize(&self, cols: u16, rows: u16) {
-        if let Some(master) = self.master.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        if let Some(master) = self
+            .master
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+        {
             let _ = master.resize(PtySize {
                 rows: rows.max(1),
                 cols: cols.max(1),

@@ -41,7 +41,7 @@ impl App {
         if name == self.session {
             return Ok(());
         }
-        let endpoint = ipc::default_endpoint(name);
+        let endpoint = ipc::endpoint_in(&self.socket_dir, name);
         let not_running = || format!("session '{name}' is not running");
         let client = Client::connect(&endpoint)
             .await
@@ -97,7 +97,7 @@ impl App {
         match session.filter(|s| *s != self.session.as_str()) {
             None => Ok((None, pane.to_string())),
             Some(other) => {
-                let endpoint = ipc::default_endpoint(other);
+                let endpoint = ipc::endpoint_in(&self.socket_dir, other);
                 let client = Client::connect(&endpoint)
                     .await
                     .map_err(|_| format!("session '{other}' is not running"))?;

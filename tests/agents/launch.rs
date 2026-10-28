@@ -1,6 +1,9 @@
 use std::path::Path;
 
-use mpx::agents::{LaunchEnv, LaunchOptions, find_harness, launch_with, registry};
+use mpx::agents::{
+    LaunchEnv, LaunchOptions, claude_settings_json, find_harness, launch, launch_with,
+    omp_extension_source, registry,
+};
 use mpx::config::{Config, HarnessConfig};
 
 const EXE: &str = "/opt/mpx/bin/mpx";
@@ -188,4 +191,100 @@ fn custom_harness_substitutes_id_in_session_args() {
     let id = value_after(&spec.argv, "--id").expect("--id present");
     assert_eq!(spec.argv, ["tool", "run", "--id", id]);
     assert!(uuid::Uuid::parse_str(id).is_ok());
+}
+
+fn exe_path() -> std::path::PathBuf {
+    std::env::current_exe().expect("current exe")
+}
+
+#[test]
+fn omp_launch_writes_the_extension_for_the_current_exe() {
+    let runtime = tempfile::tempdir().expect("temp dir");
+    let spec = launch(
+        &harness("omp"),
+        None,
+        LaunchOptions::default(),
+        runtime.path(),
+    );
+    let hook = runtime.path().join("hooks").join("omp-agent.js");
+    assert!(spec.argv.contains(&format!("--hook={}", hook.display())));
+    let source = std::fs::read_to_string(&hook).expect("extension file");
+    assert_eq!(source, omp_extension_source(&exe_path()));
+}
+
+#[test]
+fn relaunch_keeps_an_unchanged_extension_file() {
+    let runtime = tempfile::tempdir().expect("temp dir");
+    let hook = runtime.path().join("hooks").join("omp-agent.js");
+    launch(
+        &harness("omp"),
+        None,
+        LaunchOptions::default(),
+        runtime.path(),
+    );
+    let mut perms = std::fs::metadata(&hook)
+        .expect("hook metadata")
+        .permissions();
+    perms.set_readonly(true);
+    std::fs::set_permissions(&hook, perms).expect("make read-only");
+    let spec = launch(
+        &harness("omp"),
+        None,
+        LaunchOptions::default(),
+        runtime.path(),
+    );
+    assert!(spec.argv.contains(&format!("--hook={}", hook.display())));
+    let source = std::fs::read_to_string(&hook).expect("extension file");
+    assert_eq!(source, omp_extension_source(&exe_path()));
+}
+
+#[test]
+fn claude_launch_registers_hooks_and_a_fresh_session_id() {
+    let runtime = tempfile::tempdir().expect("temp dir");
+    let spec = launch(
+        &harness("claude"),
+        None,
+        LaunchOptions::default(),
+        runtime.path(),
+    );
+    let id = spec.session_id.as_deref().expect("fresh session id");
+    assert!(uuid::Uuid::parse_str(id).is_ok());
+    assert_eq!(value_after(&spec.argv, "--session-id"), Some(id));
+    let settings = claude_settings_json(&exe_path());
+    assert_eq!(
+        value_after(&spec.argv, "--settings"),
+        Some(settings.as_str())
+    );
+}
+
+#[test]
+fn claude_launch_resume_applies_the_template_and_keeps_the_id() {
+    let runtime = tempfile::tempdir().expect("temp dir");
+    let spec = launch(
+        &harness("claude"),
+        Some("sess-42"),
+        LaunchOptions::default(),
+        runtime.path(),
+    );
+    assert_eq!(spec.argv[..3].to_vec(), ["claude", "--resume", "sess-42"]);
+    assert_eq!(spec.session_id.as_deref(), Some("sess-42"));
+}
+
+#[test]
+fn launches_name_their_harness_in_the_environment() {
+    let runtime = tempfile::tempdir().expect("temp dir");
+    let claude = launch(
+        &harness("claude"),
+        None,
+        LaunchOptions::default(),
+        runtime.path(),
+    );
+    let omp = launch(
+        &harness("omp"),
+        None,
+        LaunchOptions::default(),
+        runtime.path(),
+    );
+    assert_eq!(env_value(&claude, "MPX_AGENT_HARNESS"), Some("claude"));
+    assert_eq!(env_value(&omp, "MPX_AGENT_HARNESS"), Some("omp"));
 }

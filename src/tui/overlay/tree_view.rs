@@ -116,7 +116,7 @@ impl TreeView {
     /// Reloads every reachable session; sessions that fail to answer are skipped.
     pub async fn refresh(&mut self, ctx: &mut OverlayCtx<'_>) {
         let mut sessions = Vec::new();
-        for endpoint in list_sessions() {
+        for endpoint in list_sessions(ctx.socket_dir) {
             if let Some(session) = load_session(&endpoint.endpoint).await {
                 sessions.push(session);
             }

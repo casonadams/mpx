@@ -126,11 +126,12 @@ fn harness_args(h: &Harness, env: &LaunchEnv, opts: LaunchOptions) -> Vec<String
     }
 }
 
-/// Launch spec built from the running binary and, for omp, the extension file written to the runtime dir.
-pub fn launch(h: &Harness, resume: Option<&str>, opts: LaunchOptions) -> LaunchSpec {
+/// Launch spec built from the running binary and, for omp, the extension file written to
+/// `<runtime_dir>/hooks`.
+pub fn launch(h: &Harness, resume: Option<&str>, opts: LaunchOptions, runtime_dir: &Path) -> LaunchSpec {
     let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("mpx"));
     let hook = if h.name == "omp" {
-        omp_hook_file()
+        omp_hook_file(runtime_dir)
     } else {
         None
     };

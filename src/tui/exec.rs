@@ -208,7 +208,10 @@ impl App {
     }
 
     async fn step_session(&mut self, next: bool) -> Flow {
-        let names: Vec<String> = ipc::list_sessions().into_iter().map(|s| s.name).collect();
+        let names: Vec<String> = ipc::list_sessions(&self.socket_dir)
+            .into_iter()
+            .map(|s| s.name)
+            .collect();
         match neighbor_session(&names, &self.session, next) {
             Some(name) => self.go_session(&name).await,
             None => self.say("no other session"),
@@ -377,6 +380,7 @@ impl App {
             config: &self.config,
             registry: &self.registry,
             cwd: cwd.as_deref(),
+            socket_dir: &self.socket_dir,
         };
         overlay.refresh(&mut ctx).await;
         self.mode = Mode::Overlay(overlay);

@@ -7,6 +7,7 @@ pub mod widgets;
 
 use crossterm::event::KeyEvent;
 use std::io::{self, Write};
+use std::path::Path;
 
 use crate::agents::Harness;
 use crate::client::Client;
@@ -33,6 +34,8 @@ pub struct OverlayCtx<'a> {
     pub registry: &'a [Harness],
     /// Working directory of the active pane.
     pub cwd: Option<&'a str>,
+    /// Directory holding the session sockets, used to discover other sessions.
+    pub socket_dir: &'a Path,
 }
 
 #[derive(Debug, Clone, PartialEq)]

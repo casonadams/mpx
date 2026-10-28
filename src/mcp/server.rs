@@ -1,10 +1,12 @@
 use std::io::{self, BufRead, Write};
+use std::path::PathBuf;
 
 use serde_json::{Value, json};
 
 use super::exec::execute;
 use super::tools::{parse_call, tool_list};
 use crate::client::Client;
+use crate::config::Config;
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
 const METHOD_NOT_FOUND: i64 = -32601;
@@ -13,11 +15,20 @@ const PARSE_ERROR: i64 = -32700;
 pub struct McpServer {
     endpoint: String,
     session: String,
+    socket_dir: PathBuf,
+    config: Config,
 }
 
 impl McpServer {
-    pub fn new(endpoint: String, session: String) -> Self {
-        Self { endpoint, session }
+    /// `socket_dir` holds the session sockets; it is where other sessions are discovered. `config`
+    /// supplies the agent harness registry.
+    pub fn new(endpoint: String, session: String, socket_dir: PathBuf, config: Config) -> Self {
+        Self {
+            endpoint,
+            session,
+            socket_dir,
+            config,
+        }
     }
 
     /// Serves JSON-RPC over stdin/stdout until stdin closes.
@@ -99,7 +110,7 @@ impl McpServer {
     async fn call_tool(&self, name: &str, args: &Value) -> Result<Value, String> {
         let call = parse_call(name, args)?;
         let mut client = Client::connect(&self.endpoint).await?;
-        execute(&mut client, call).await
+        execute(&mut client, call, &self.socket_dir, &self.config).await
     }
 }
 

@@ -42,6 +42,13 @@ pub fn default_node_name(command: &str) -> String {
         .unwrap_or_else(|| "task".to_string())
 }
 
+/// The command and its arguments from an `argv` positional, or `None` when it is empty.
+pub fn command_and_args(argv: Vec<String>) -> Option<(String, Vec<String>)> {
+    let mut argv = argv.into_iter();
+    let command = argv.next()?;
+    Some((command, argv.collect()))
+}
+
 pub fn pid_label(pid: Option<u32>) -> String {
     pid.map(|p| p.to_string()).unwrap_or_else(|| "-".into())
 }
@@ -90,9 +97,10 @@ pub async fn run(cmd: Commands, r: &Resolved) -> Result<i32, String> {
             env,
             remain,
             tmux_compat,
-            command,
-            args,
+            argv,
         } => {
+            let (command, args) =
+                command_and_args(argv).ok_or_else(|| "no command given".to_string())?;
             let req = RunRequest {
                 name,
                 pty,
@@ -183,10 +191,11 @@ pub async fn run(cmd: Commands, r: &Resolved) -> Result<i32, String> {
             pty,
             tmux_compat,
             detach,
-            command,
-            args,
+            argv,
             ..
         } => {
+            let (command, args) =
+                command_and_args(argv).ok_or_else(|| "no command given".to_string())?;
             let req = SplitRequest {
                 target,
                 name,

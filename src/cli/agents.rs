@@ -6,7 +6,6 @@ use super::sessions::{apply_key, ensure_client};
 use crate::agents::{
     self, Harness, LaunchOptions, claude_settings_json, find_harness, find_unique_by_prefix,
 };
-use crate::config::Config;
 use crate::layout::Direction;
 use crate::protocol::{NewWindowOpts, SpawnOpts, SplitOpts};
 use crate::tui::{StartView, run_tui};
@@ -50,8 +49,8 @@ pub async fn agents(
         }
         Some(AgentCommands::Resume { prefix }) => resume(r, &prefix).await,
         None if json => {
-            let registry = agents::registry(&Config::load_or_default());
-            let inventory = agents::inventory_json(&registry, LIST_LIMIT).await;
+            let registry = agents::registry(&r.config);
+            let inventory = agents::inventory_json(&registry, LIST_LIMIT, &r.socket_dir).await;
             println!(
                 "{}",
                 serde_json::to_string_pretty(&inventory).map_err(|e| e.to_string())?
@@ -60,14 +59,15 @@ pub async fn agents(
         }
         None => {
             ensure_client(r).await?;
-            let _ = run_tui(&r.endpoint, &r.session, StartView::Agents).await;
+            let options = super::sessions::tui_options(r);
+            let _ = run_tui(&r.endpoint, &r.session, StartView::Agents, options).await;
             Ok(0)
         }
     }
 }
 
 async fn launch(r: &Resolved, req: LaunchRequest) -> Result<i32, String> {
-    let registry = agents::registry(&Config::load_or_default());
+    let registry = agents::registry(&r.config);
     let harness = find_harness(&registry, &req.harness)
         .ok_or_else(|| format!("unknown harness '{}'", req.harness))?
         .clone();
@@ -75,7 +75,7 @@ async fn launch(r: &Resolved, req: LaunchRequest) -> Result<i32, String> {
 }
 
 async fn resume(r: &Resolved, prefix: &str) -> Result<i32, String> {
-    let registry = agents::registry(&Config::load_or_default());
+    let registry = agents::registry(&r.config);
     let found = agents::scan_resumable(&registry, None, RESUME_SCAN_LIMIT);
     let session = find_unique_by_prefix(found, prefix)?;
     let harness = find_harness(&registry, &session.harness)
@@ -97,6 +97,7 @@ async fn start(r: &Resolved, harness: &Harness, req: &LaunchRequest) -> Result<i
         harness,
         req.resume.as_deref(),
         LaunchOptions { teams: req.teams },
+        &r.socket_dir,
     );
     let (command, args) = spec
         .argv

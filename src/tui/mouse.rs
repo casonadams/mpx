@@ -3,7 +3,6 @@ use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
 use super::app::{App, Flow, Mode};
 use super::copy::CopyState;
-use super::render::copy_to_clipboard;
 use crate::layout::geometry::Rect;
 
 /// Cell position inside `rect`, clamped to its edges.
@@ -71,7 +70,7 @@ impl App {
         }
         let text = cs.yank_text(grid);
         if !text.trim().is_empty() {
-            copy_to_clipboard(&text);
+            self.clipboard.copy(&text);
         }
     }
 

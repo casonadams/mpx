@@ -14,8 +14,9 @@ impl SnapshotStore {
         Self { path }
     }
 
-    pub fn for_session(session: &str) -> Self {
-        Self::new(super::session_dir(session).join(SNAPSHOT_FILE))
+    /// The snapshot file inside a session state directory (`<state_dir>/snapshot.json`).
+    pub fn in_dir(state_dir: &Path) -> Self {
+        Self::new(state_dir.join(SNAPSHOT_FILE))
     }
 
     pub fn path(&self) -> &Path {

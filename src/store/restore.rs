@@ -1,12 +1,16 @@
+use std::path::Path;
+
 use crate::agents::{self, Harness, LaunchOptions, LaunchSpec, find_harness};
 use crate::protocol::SpawnOpts;
 use crate::store::{PaneSnapshot, RestorePlan, SessionSnapshot, WindowPlan, WindowSnapshot};
 
 /// Restores PTY panes with their original command in their last cwd; agents with a known session id
 /// are resumed through their harness, other agents start fresh; non-PTY task panes are not restored.
-/// Windows left without panes are dropped.
-pub fn plan_restore(snapshot: &SessionSnapshot, harnesses: &[Harness]) -> RestorePlan {
-    plan_restore_with(snapshot, harnesses, agents::launch)
+/// Windows left without panes are dropped. Harness runtime files are written under `runtime_dir`.
+pub fn plan_restore(snapshot: &SessionSnapshot, harnesses: &[Harness], runtime_dir: &Path) -> RestorePlan {
+    plan_restore_with(snapshot, harnesses, |h, resume, opts| {
+        agents::launch(h, resume, opts, runtime_dir)
+    })
 }
 
 /// `plan_restore` with the agent launcher injected, so the plan is computed without I/O.

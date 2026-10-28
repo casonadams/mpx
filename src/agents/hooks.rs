@@ -137,10 +137,10 @@ pub fn omp_extension_source(exe: &Path) -> String {
     OMP_EXTENSION.replace("__MPX_EXE__", &exe_literal)
 }
 
-/// Writes the omp extension into the runtime dir (only when its content changed) and returns its path.
-pub fn omp_hook_file() -> Option<PathBuf> {
+/// Writes the omp extension into `<runtime_dir>/hooks` (only when its content changed) and returns its path.
+pub fn omp_hook_file(runtime_dir: &Path) -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
-    let dir = crate::ipc::socket_dir().join("hooks");
+    let dir = runtime_dir.join("hooks");
     std::fs::create_dir_all(&dir).ok()?;
     let path = dir.join("omp-agent.js");
     let source = omp_extension_source(&exe);

@@ -1,29 +1,40 @@
+use std::ffi::OsString;
 use std::io::ErrorKind;
 use std::time::Duration;
 
 use super::agents;
 use super::panes;
 use super::render;
-use super::resolve::{Resolved, nested_attach_refused, resolve, resolve_idempotency_key};
+use super::resolve::{
+    Resolved, load_config, nested_attach_refused, resolve, resolve_idempotency_key,
+};
 use super::{Cli, Commands, PipeCommands};
 use crate::client::{Client, PipeReadArgs};
 use crate::daemon::run_daemon;
 use crate::ipc;
 use crate::mcp::McpServer;
+use crate::store;
+use crate::tui::app::AppOptions;
 use crate::tui::status::{clock_hms, local_utc_offset};
 use crate::tui::{StartView, run_tui};
 
 const SPAWN_RETRIES: u32 = 20;
 const SHUTDOWN_POLLS: u32 = 20;
 
-pub async fn run(cli: Cli) -> Result<i32, String> {
+pub async fn run_cli(cli: Cli) -> Result<i32, String> {
     let mut target = resolve(
         cli.session.as_deref(),
         cli.endpoint.as_deref(),
         env_var("MPX_SESSION").as_deref(),
         env_var("MPX_ENDPOINT").as_deref(),
+        &ipc::socket_dir(),
     );
     target.idempotency_key = resolve_idempotency_key(cli.idempotency_key.as_deref());
+    target.config = load_config(cli.config.as_deref())?;
+    target.config_path = cli.config;
+    if let Some(dir) = cli.state_dir {
+        target.state_dir = dir;
+    }
     let command = cli.command.unwrap_or(Commands::Attach {
         target: None,
         force: false,
@@ -38,21 +49,21 @@ fn env_var(key: &str) -> Option<String> {
 async fn dispatch(command: Commands, r: Resolved) -> Result<i32, String> {
     match command {
         Commands::Daemon => {
-            run_daemon(&r.endpoint, &r.session)
+            run_daemon(&r.endpoint, &r.session, &r.state_dir, r.config)
                 .await
                 .map_err(|e| e.to_string())?;
             Ok(0)
         }
         Commands::KillServer => kill_server(&r).await,
         Commands::Attach { target, force } => attach(&r, target, force).await,
-        Commands::ListSessions { json } => list_sessions(json).await,
+        Commands::ListSessions { json } => list_sessions(&r, json).await,
         Commands::ListPanes { json } => list_panes(&r, json).await,
         Commands::HasSession { target } => has_session(&r, target.as_deref()).await,
         Commands::Pipe { command } => pipe(&r, command).await,
         Commands::Restore => restore(&r).await,
         Commands::Mcp => {
             ensure_client(&r).await?;
-            McpServer::new(r.endpoint, r.session)
+            McpServer::new(r.endpoint, r.session, r.socket_dir, r.config)
                 .run_stdio()
                 .await
                 .map_err(|e| format!("MCP error: {e}"))?;
@@ -113,14 +124,29 @@ async fn clear_stale_socket(endpoint: &str) {
 #[cfg(not(unix))]
 async fn clear_stale_socket(_endpoint: &str) {}
 
+/// Arguments that make an auto-spawned daemon serve this session with the same endpoint, config and
+/// state directory as this command.
+pub fn daemon_args(r: &Resolved) -> Vec<OsString> {
+    let mut args: Vec<OsString> = vec![
+        "--session".into(),
+        r.session.as_str().into(),
+        "--endpoint".into(),
+        r.endpoint.as_str().into(),
+        "--state-dir".into(),
+        r.state_dir.as_os_str().to_owned(),
+    ];
+    if let Some(path) = &r.config_path {
+        args.push("-f".into());
+        args.push(path.as_os_str().to_owned());
+    }
+    args.push("daemon".into());
+    args
+}
+
 fn spawn_daemon(r: &Resolved) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     std::process::Command::new(exe)
-        .arg("--session")
-        .arg(&r.session)
-        .arg("--endpoint")
-        .arg(&r.endpoint)
-        .arg("daemon")
+        .args(daemon_args(r))
         .env_remove("MPX_PANE")
         .env_remove("MPX_ENDPOINT")
         .env_remove("TMUX")
@@ -197,12 +223,21 @@ fn target_resolved(current: &Resolved, target: &str) -> Resolved {
     let endpoint = if target == current.session {
         current.endpoint.clone()
     } else {
-        ipc::default_endpoint(target)
+        ipc::endpoint_in(&current.socket_dir, target)
+    };
+    let state_dir = if target == current.session {
+        current.state_dir.clone()
+    } else {
+        store::session_dir(target)
     };
     Resolved {
         session: target.to_string(),
         endpoint,
+        socket_dir: current.socket_dir.clone(),
         idempotency_key: None,
+        config_path: current.config_path.clone(),
+        config: current.config.clone(),
+        state_dir,
     }
 }
 
@@ -217,7 +252,13 @@ async fn attach(r: &Resolved, target: Option<String>, force: bool) -> Result<i32
         None => r.clone(),
     };
     ensure_client(&target).await?;
-    let _ = run_tui(&target.endpoint, &target.session, StartView::Panes).await;
+    let _ = run_tui(
+        &target.endpoint,
+        &target.session,
+        StartView::Panes,
+        tui_options(&target),
+    )
+    .await;
     Ok(0)
 }
 
@@ -233,8 +274,8 @@ pub async fn has_session(r: &Resolved, target: Option<&str>) -> Result<i32, Stri
     })
 }
 
-async fn list_sessions(json: bool) -> Result<i32, String> {
-    let infos = ipc::session_infos().await;
+async fn list_sessions(r: &Resolved, json: bool) -> Result<i32, String> {
+    let infos = ipc::session_infos(&r.socket_dir).await;
     if json {
         println!(
             "{}",
@@ -362,4 +403,13 @@ async fn pipe_subscribe(client: &mut Client, name: &str) -> Result<String, Strin
         .await
         .map_err(|e| format!("Pipe subscribe error: {e}"))?;
     Ok(String::new())
+}
+
+/// What the attached TUI needs from this invocation: its config, socket directory and the real terminal size.
+pub fn tui_options(r: &Resolved) -> AppOptions {
+    AppOptions {
+        config: r.config.clone(),
+        socket_dir: r.socket_dir.clone(),
+        size: None,
+    }
 }

@@ -840,3 +840,96 @@ fn help_render_shows_entries_and_title() {
     assert!(text.contains("Help"));
     assert!(text.contains("close overlay"));
 }
+
+fn draw_agents(view: &AgentsView, area: Rect) -> String {
+    let mut buf: Vec<u8> = Vec::new();
+    view.render(&mut buf, area).expect("render");
+    String::from_utf8_lossy(&buf).into_owned()
+}
+
+fn draw_tree(view: &TreeView, area: Rect) -> String {
+    let mut buf: Vec<u8> = Vec::new();
+    view.render(&mut buf, area).expect("render");
+    String::from_utf8_lossy(&buf).into_owned()
+}
+
+#[test]
+fn agents_render_groups_appear_in_state_order_under_their_headers() {
+    let text = draw_agents(&fleet(), Rect::new(0, 0, 120, 30));
+    let at: Vec<usize> = ["NEEDS YOU", "WORKING", "IDLE", "EXITED"]
+        .iter()
+        .map(|title| {
+            text.find(title)
+                .unwrap_or_else(|| panic!("{title} missing"))
+        })
+        .collect();
+    assert!(at.windows(2).all(|w| w[0] < w[1]), "{at:?}");
+    assert!(text.contains("◆ NEEDS YOU"));
+    assert!(text.contains("Agents · 2 need you"));
+}
+
+#[test]
+fn agents_render_rows_show_state_glyph_and_mark() {
+    let mut view = fleet();
+    view.handle_key(code(KeyCode::Tab));
+    let text = draw_agents(&view, Rect::new(0, 0, 120, 30));
+    assert!(text.contains("+◆ "), "marked needs-input row");
+    assert!(text.contains("◆ NEEDS YOU"), "header glyph");
+    assert!(text.contains("● "), "working row");
+    assert!(text.contains("○ "), "idle row");
+    assert!(text.contains("✕ "), "exited row");
+    assert!(text.contains("eps"));
+    assert!(text.contains("dead"));
+}
+
+#[test]
+fn agents_render_preview_of_live_agent_without_screen_is_titled() {
+    let text = draw_agents(&fleet(), Rect::new(0, 0, 120, 20));
+    // Needs-input rows sort oldest first, so `beta` is selected.
+    assert!(text.contains("Preview · beta"));
+    assert!(!text.contains("Preview · alpha"));
+}
+
+#[test]
+fn agents_render_has_no_preview_pane_when_narrow_or_toggled_off() {
+    let narrow = draw_agents(&fleet(), Rect::new(0, 0, 80, 20));
+    assert!(!narrow.contains("Preview"));
+    let mut view = fleet();
+    view.handle_key(key('p'));
+    let toggled = draw_agents(&view, Rect::new(0, 0, 120, 20));
+    assert!(!toggled.contains("Preview"));
+}
+
+#[test]
+fn tree_render_shows_expanded_and_collapsed_arrows() {
+    let mut view = tree();
+    let expanded = draw_tree(&view, Rect::new(0, 0, 80, 30));
+    assert!(expanded.contains("▾ main *"), "{expanded}");
+    assert!(expanded.contains("▾ 0: shell *"), "{expanded}");
+    assert!(expanded.contains("▾ work"), "{expanded}");
+    assert_eq!(act(&mut view, "work", key('h')), OverlayAction::None);
+    let collapsed = draw_tree(&view, Rect::new(0, 0, 80, 30));
+    assert!(collapsed.contains("▸ work"), "{collapsed}");
+    assert!(!collapsed.contains("▾ work"), "{collapsed}");
+    assert!(!collapsed.contains("vim"), "{collapsed}");
+}
+
+#[test]
+fn tree_render_shows_collapsed_window_arrow_and_hides_its_panes() {
+    let mut view = tree();
+    assert_eq!(act(&mut view, "logs", key('h')), OverlayAction::None);
+    let text = draw_tree(&view, Rect::new(0, 0, 80, 30));
+    assert!(text.contains("▸ 1: logs"), "{text}");
+    assert!(!text.contains("tail"), "{text}");
+    assert!(text.contains("▾ 0: shell *"), "{text}");
+}
+
+#[test]
+fn help_view_renders_its_entries_directly() {
+    let view = HelpView::new(help_entries());
+    let mut buf: Vec<u8> = Vec::new();
+    view.render(&mut buf, Rect::new(0, 0, 60, 10))
+        .expect("render");
+    let text = String::from_utf8_lossy(&buf);
+    assert!(text.contains("close overlay"), "{text}");
+}

@@ -1,6 +1,4 @@
-#[cfg(unix)]
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tokio::io::{AsyncRead, AsyncWrite};
 
 pub trait AsyncStream: AsyncRead + AsyncWrite + Unpin + Send + 'static {}
@@ -23,15 +21,20 @@ pub fn socket_dir() -> PathBuf {
 }
 
 pub fn default_endpoint(session: &str) -> String {
+    endpoint_in(&socket_dir(), session)
+}
+
+/// Endpoint of `session` whose sockets live in `dir` (Windows named pipes ignore `dir`).
+pub fn endpoint_in(dir: &Path, session: &str) -> String {
     #[cfg(unix)]
     {
-        socket_dir()
-            .join(format!("{}.sock", session))
+        dir.join(format!("{}.sock", session))
             .to_string_lossy()
             .into_owned()
     }
     #[cfg(windows)]
     {
+        let _ = dir;
         format!(r"\\.\pipe\mpx-{}", session)
     }
 }
@@ -42,14 +45,14 @@ pub struct SessionEndpoint {
     pub endpoint: String,
 }
 
-/// Session endpoints discovered in the socket directory (or `\\.\pipe\` on Windows), sorted by name.
+/// Session endpoints found in `dir` (the pipe namespace on Windows), sorted by name.
 /// Liveness is not checked.
-pub fn list_sessions() -> Vec<SessionEndpoint> {
-    sessions_from_names(entry_names())
+pub fn list_sessions(dir: &Path) -> Vec<SessionEndpoint> {
+    sessions_from_names(dir, entry_names(dir))
 }
 
-/// Maps directory entry names to session endpoints: unique, sorted, non-session entries dropped.
-pub fn sessions_from_names<I, S>(names: I) -> Vec<SessionEndpoint>
+/// Maps directory entry names to session endpoints in `dir`: unique, sorted, non-session entries dropped.
+pub fn sessions_from_names<I, S>(dir: &Path, names: I) -> Vec<SessionEndpoint>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
@@ -61,7 +64,7 @@ where
     sessions
         .into_iter()
         .map(|name| SessionEndpoint {
-            endpoint: default_endpoint(&name),
+            endpoint: endpoint_in(dir, &name),
             name,
         })
         .collect()
@@ -77,11 +80,12 @@ fn session_name(entry: &str) -> Option<&str> {
     entry.strip_prefix("mpx-").filter(|n| !n.is_empty())
 }
 
-fn entry_names() -> Vec<String> {
-    #[cfg(unix)]
-    let dir = socket_dir();
+fn entry_names(dir: &Path) -> Vec<String> {
     #[cfg(windows)]
-    let dir = PathBuf::from(r"\\.\pipe\");
+    let dir = {
+        let _ = dir;
+        Path::new(r"\\.\pipe\")
+    };
     std::fs::read_dir(dir)
         .map(|rd| {
             rd.flatten()
@@ -197,10 +201,10 @@ pub async fn connect_stream(endpoint: &str) -> std::io::Result<IpcStream> {
     tokio::net::windows::named_pipe::ClientOptions::new().open(endpoint)
 }
 
-/// Info of every session that answers within a short timeout, sorted by name.
-pub async fn session_infos() -> Vec<crate::protocol::SessionInfo> {
+/// Info of every session in `dir` that answers within a short timeout, sorted by name.
+pub async fn session_infos(dir: &Path) -> Vec<crate::protocol::SessionInfo> {
     let mut out = Vec::new();
-    for ep in list_sessions() {
+    for ep in list_sessions(dir) {
         let probe = async {
             let mut client = crate::client::Client::connect(&ep.endpoint).await.ok()?;
             client.info().await.ok()

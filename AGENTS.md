@@ -11,13 +11,26 @@
   be reached through the public API, extract it into a pure `pub` function in
   its domain module instead of testing private internals.
 - **Fast and in-memory**: Pure-logic tests do no disk, network, or process
-  I/O; feed in-memory strings and byte slices (`< 500ms` per test). The only
-  exception is end-to-end daemon, PTY, and CLI tests under `tests/daemon/` and
-  `tests/cli/`, which may bind a socket in a temp dir and spawn child processes,
-  and on-disk persistence tests under `tests/store/`, which may read and write a
-  temp dir. Never touch the real state or runtime directories in tests: pass
-  temp paths explicitly instead of setting process-wide environment variables.
-  Bound every wait with a timeout and keep each test under 2s.
+  I/O; feed in-memory strings and byte slices (`< 500ms` per test). Tests whose
+  subject *is* I/O may use real I/O, confined to temp dirs and in-process test
+  daemons:
+  - `tests/daemon/` and `tests/cli/`: end-to-end daemon, PTY and CLI tests
+    (temp-dir sockets, child processes);
+  - `tests/store/`: on-disk persistence in a temp dir;
+  - `tests/tui/app/`: app-level TUI tests driving `tui::App` against an
+    in-process daemon in a temp dir (no real terminal);
+  - any module's tests may read or write a temp file passed explicitly to the
+    function under test, and may introspect the test's own process.
+
+  Never touch the real state, runtime, or config directories or the user's
+  sessions: thread paths through function parameters (`socket_dir`,
+  `state_dir`, `AppOptions`) instead of setting process-wide environment
+  variables. Bound every wait with a timeout and keep each test under 2s.
+- **Coverage**: Every function in the blast radius of a change must be reached
+  by a test (`ripwire-rs . --test-gate` reports `untested="0"`; it exits 4
+  whenever the change has tests to run, which is expected). When a function
+  reads global state (environment, real directories, the terminal), make that
+  input a parameter so tests can reach it.
 - **Behavior, not wiring**: Assert consumer-visible behavior (outputs, state
   transitions, boundaries, errors). No tests of forwarding, copies, or
   incidental defaults.

@@ -12,9 +12,9 @@ use super::task::TaskNode;
 use super::waits::Cond;
 use super::{NodeError, Process, SpawnSpec};
 use crate::agents::Harness;
+use crate::buffer::{RingBuffer, strip_ansi};
 use crate::keys::TermModes;
 use crate::node::agent::Report;
-use crate::buffer::{RingBuffer, strip_ansi};
 use crate::protocol::{NodeInfo, PaneId, StreamEvent, WaitCondition, WaitOutcome};
 use crate::vt::VtScreen;
 
@@ -39,7 +39,11 @@ pub struct LogQuery {
 
 /// Text for `query` from a pane's retained output, plus the offset to pass as `since` next time.
 /// `screen` is the pane's terminal, when it has one.
-pub fn render_logs(ring: &RingBuffer, screen: Option<&VtScreen>, query: &LogQuery) -> (String, u64) {
+pub fn render_logs(
+    ring: &RingBuffer,
+    screen: Option<&VtScreen>,
+    query: &LogQuery,
+) -> (String, u64) {
     match query.since {
         Some(offset) => {
             let (bytes, next) = ring.since(offset);
@@ -51,7 +55,10 @@ pub fn render_logs(ring: &RingBuffer, screen: Option<&VtScreen>, query: &LogQuer
         }
         None => {
             let rendered = screen.filter(|_| query.plain);
-            (history_text(ring, rendered, query.tail), ring.total_written())
+            (
+                history_text(ring, rendered, query.tail),
+                ring.total_written(),
+            )
         }
     }
 }

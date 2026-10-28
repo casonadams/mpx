@@ -35,8 +35,9 @@ impl PipeStore {
         Self { dir }
     }
 
-    pub fn for_session(session: &str) -> Self {
-        Self::new(super::session_dir(session).join("pipes"))
+    /// The pipe store inside a session state directory (`<state_dir>/pipes`).
+    pub fn in_dir(state_dir: &Path) -> Self {
+        Self::new(state_dir.join("pipes"))
     }
 
     pub fn dir(&self) -> &Path {
