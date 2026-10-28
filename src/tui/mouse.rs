@@ -34,6 +34,33 @@ impl App {
     /// Focuses the pane under the pointer. A click inside the pane being copied moves the selection
     /// start; anywhere else it only remembers the point, so a later drag can select from it.
     async fn mouse_press(&mut self, col: u16, row: u16) {
+        if row >= self.viewport.1 {
+            let zoomed = self.zoomed.is_some();
+            if let Some(target) = super::status::status_hit(
+                &self.session,
+                &self.layout.tabs,
+                &self.panes,
+                zoomed,
+                col as usize,
+            ) {
+                match target {
+                    super::status::StatusTarget::Window(idx) => {
+                        self.zoomed = None;
+                        let _ = self.client.select_window(idx).await;
+                        self.layout.dirty = true;
+                    }
+                    super::status::StatusTarget::Pane(name) => {
+                        if name != self.active_pane {
+                            self.zoomed = None;
+                            let _ = self.client.focus(name).await;
+                            self.layout.dirty = true;
+                        }
+                    }
+                }
+            }
+            return;
+        }
+
         let Some((name, rect)) = self
             .panes
             .iter()

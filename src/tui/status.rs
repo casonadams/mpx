@@ -1,4 +1,5 @@
 //! Pure status-line helpers: exit badges, agent badge text and the OSC 9 notification sequence.
+use crate::layout::{Rect, WindowTab};
 use crate::protocol::NodeInfo;
 
 /// `[exited N]` for a pane whose process ended and which is kept on screen.
@@ -69,4 +70,51 @@ pub fn restored_notice(restored_ms: u64, utc_offset_secs: i64) -> String {
         "restored session from {}",
         clock_hms(restored_ms, utc_offset_secs)
     )
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StatusTarget<'a> {
+    Window(usize),
+    Pane(&'a str),
+}
+
+/// Identifies which window tab or pane name on the status line was clicked at `col`.
+pub fn status_hit<'a>(
+    session: &str,
+    tabs: &'a [WindowTab],
+    panes: &'a [(String, Rect, bool)],
+    zoomed: bool,
+    col: usize,
+) -> Option<StatusTarget<'a>> {
+    let mut offset = format!("[{session}] ").chars().count();
+    if tabs.is_empty() {
+        for (i, (name, _, is_focused)) in panes.iter().enumerate() {
+            let flag = match (*is_focused, zoomed) {
+                (true, true) => "*Z",
+                (true, false) => "*",
+                (false, _) => "-",
+            };
+            let text = format!("{}:{}{} ", i, name, flag);
+            let len = text.chars().count();
+            if col >= offset && col < offset + len {
+                return Some(StatusTarget::Pane(name.as_str()));
+            }
+            offset += len;
+        }
+    } else {
+        for tab in tabs {
+            let flag = match (tab.is_active, zoomed) {
+                (true, true) => "*Z",
+                (true, false) => "*",
+                (false, _) => "-",
+            };
+            let text = format!("{}:{}{} ", tab.index, tab.name, flag);
+            let len = text.chars().count();
+            if col >= offset && col < offset + len {
+                return Some(StatusTarget::Window(tab.index));
+            }
+            offset += len;
+        }
+    }
+    None
 }
