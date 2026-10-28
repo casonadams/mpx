@@ -19,7 +19,7 @@ struct Daemon {
 /// A daemon that reports each connection's handler task, so a test can tear one down mid-flight.
 async fn start_tracked() -> Daemon {
     let dir = tempfile::tempdir().expect("tempdir");
-    let endpoint = dir.path().join("mpx.sock").to_string_lossy().into_owned();
+    let endpoint = mpx::ipc::endpoint_in(dir.path(), SESSION);
     #[allow(unused_mut)]
     let mut listener = IpcListener::bind(&endpoint).expect("bind");
     let state = DaemonState::new(

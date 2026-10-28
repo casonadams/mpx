@@ -24,7 +24,7 @@ pub fn default_endpoint(session: &str) -> String {
     endpoint_in(&socket_dir(), session)
 }
 
-/// Endpoint of `session` whose sockets live in `dir` (Windows named pipes ignore `dir`).
+/// Endpoint of `session` whose sockets live in `dir`.
 pub fn endpoint_in(dir: &Path, session: &str) -> String {
     #[cfg(unix)]
     {
@@ -34,8 +34,12 @@ pub fn endpoint_in(dir: &Path, session: &str) -> String {
     }
     #[cfg(windows)]
     {
-        let _ = dir;
-        format!(r"\\.\pipe\mpx-{}", session)
+        if dir == socket_dir() {
+            format!(r"\\.\pipe\mpx-{}", session)
+        } else {
+            let hash = fnv1a_64(dir.to_string_lossy().as_bytes());
+            format!(r"\\.\pipe\mpx-{hash:08x}-{}", session)
+        }
     }
 }
 
@@ -59,7 +63,7 @@ where
 {
     let sessions: std::collections::BTreeSet<String> = names
         .into_iter()
-        .filter_map(|n| session_name(n.as_ref()).map(str::to_string))
+        .filter_map(|n| session_name(dir, n.as_ref()).map(str::to_string))
         .collect();
     sessions
         .into_iter()
@@ -71,13 +75,35 @@ where
 }
 
 #[cfg(unix)]
-fn session_name(entry: &str) -> Option<&str> {
+fn session_name<'a>(_dir: &Path, entry: &'a str) -> Option<&'a str> {
     entry.strip_suffix(".sock").filter(|n| !n.is_empty())
 }
 
 #[cfg(windows)]
-fn session_name(entry: &str) -> Option<&str> {
-    entry.strip_prefix("mpx-").filter(|n| !n.is_empty())
+fn session_name<'a>(dir: &Path, entry: &'a str) -> Option<&'a str> {
+    if dir == socket_dir() {
+        let name = entry.strip_prefix("mpx-")?;
+        if name.len() > 9
+            && name.as_bytes()[8] == b'-'
+            && name[..8].chars().all(|c| c.is_ascii_hexdigit())
+        {
+            return None;
+        }
+        if name.is_empty() {
+            None
+        } else {
+            Some(name)
+        }
+    } else {
+        let hash = fnv1a_64(dir.to_string_lossy().as_bytes());
+        let prefix = format!("mpx-{hash:08x}-");
+        let rest = entry.strip_prefix(&prefix)?;
+        if rest.is_empty() {
+            None
+        } else {
+            Some(rest)
+        }
+    }
 }
 
 fn entry_names(dir: &Path) -> Vec<String> {
@@ -154,6 +180,41 @@ pub async fn connect_stream(endpoint: &str) -> std::io::Result<IpcStream> {
 }
 
 #[cfg(windows)]
+fn fnv1a_64(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    for &b in bytes {
+        hash ^= b as u64;
+        hash = hash.wrapping_mul(0x100000001b3u64);
+    }
+    hash
+}
+
+#[cfg(windows)]
+fn pipe_name(endpoint: &str) -> String {
+    if endpoint.starts_with(r"\\.\pipe\") {
+        endpoint.to_string()
+    } else {
+        let hash = fnv1a_64(endpoint.as_bytes());
+        let sanitized: String = endpoint
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        let tail = if sanitized.len() > 32 {
+            &sanitized[sanitized.len() - 32..]
+        } else {
+            &sanitized
+        };
+        format!(r"\\.\pipe\mpx-{hash:016x}-{tail}")
+    }
+}
+
+#[cfg(windows)]
 pub struct IpcListener {
     pipe_name: String,
     server: tokio::net::windows::named_pipe::NamedPipeServer,
@@ -162,7 +223,7 @@ pub struct IpcListener {
 #[cfg(windows)]
 impl IpcListener {
     pub fn bind(endpoint: &str) -> std::io::Result<Self> {
-        let pipe_name = endpoint.to_string();
+        let pipe_name = pipe_name(endpoint);
         let server = tokio::net::windows::named_pipe::ServerOptions::new()
             .first_pipe_instance(true)
             .create(&pipe_name)?;
@@ -189,8 +250,9 @@ pub type IpcStream = tokio::net::windows::named_pipe::NamedPipeClient;
 
 #[cfg(windows)]
 pub async fn connect_stream(endpoint: &str) -> std::io::Result<IpcStream> {
+    let pipe_name = pipe_name(endpoint);
     for _ in 0..50 {
-        match tokio::net::windows::named_pipe::ClientOptions::new().open(endpoint) {
+        match tokio::net::windows::named_pipe::ClientOptions::new().open(&pipe_name) {
             Ok(client) => return Ok(client),
             Err(e) if e.raw_os_error() == Some(231) => {
                 tokio::time::sleep(std::time::Duration::from_millis(20)).await;
@@ -198,7 +260,7 @@ pub async fn connect_stream(endpoint: &str) -> std::io::Result<IpcStream> {
             Err(e) => return Err(e),
         }
     }
-    tokio::net::windows::named_pipe::ClientOptions::new().open(endpoint)
+    tokio::net::windows::named_pipe::ClientOptions::new().open(&pipe_name)
 }
 
 /// Info of every session in `dir` that answers within a short timeout, sorted by name.

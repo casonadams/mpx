@@ -29,6 +29,10 @@ jobs:
         with:
           key: ${{ matrix.os }}
 
+      - name: Add Unix tools to PATH on Windows
+        if: runner.os == 'Windows'
+        run: echo "C:\Program Files\Git\usr\bin" >> $env:GITHUB_PATH
+
       - name: Check
         run: cargo check
 

@@ -34,7 +34,7 @@ pub async fn start_on(state_dir: &Path, config: Config) -> TestDaemon {
 }
 
 async fn serve(dir: TempDir, state_dir: &Path, config: Config) -> TestDaemon {
-    let endpoint = dir.path().join("mpx.sock").to_string_lossy().into_owned();
+    let endpoint = mpx::ipc::endpoint_in(dir.path(), SESSION);
     #[allow(unused_mut)]
     let mut listener = IpcListener::bind(&endpoint).expect("bind");
     let state = DaemonState::new(

@@ -53,11 +53,7 @@ impl Fixture {
     }
 
     pub fn endpoint(&self) -> String {
-        self.dir
-            .path()
-            .join("s.sock")
-            .to_string_lossy()
-            .into_owned()
+        mpx::ipc::endpoint_in(self.dir.path(), "t")
     }
 
     /// `args` behind the isolation flags: this session's config, state dir and socket.

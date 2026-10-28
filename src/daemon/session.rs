@@ -909,10 +909,13 @@ impl Session {
     }
 
     fn restore_snapshot(&mut self, snapshot: &SessionSnapshot) {
+        #[cfg(unix)]
         let runtime_dir = std::path::Path::new(&self.endpoint)
             .parent()
             .map(std::path::Path::to_path_buf)
             .unwrap_or_else(crate::ipc::socket_dir);
+        #[cfg(windows)]
+        let runtime_dir = crate::ipc::socket_dir();
         let plan = plan_restore(snapshot, &self.harnesses, &runtime_dir);
         for window in plan.windows {
             self.restore_window(window);

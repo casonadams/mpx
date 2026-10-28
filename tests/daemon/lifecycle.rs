@@ -7,7 +7,7 @@ use mpx::protocol::{NodeState, SpawnOpts};
 #[tokio::test]
 async fn shutdown_kills_nodes_and_run_daemon_returns() {
     let dir = tempfile::tempdir().unwrap();
-    let endpoint = dir.path().join("mpx.sock").to_string_lossy().into_owned();
+    let endpoint = mpx::ipc::endpoint_in(dir.path(), "shut");
     let state_dir = dir.path().join("state");
     let server = tokio::spawn({
         let endpoint = endpoint.clone();
