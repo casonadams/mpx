@@ -43,10 +43,16 @@ impl PtyTerminal {
     }
 
     /// Process group leader of the terminal, i.e. the program the user is running in it.
+    #[cfg(unix)]
     pub fn foreground_pid(&self) -> Option<u32> {
         let master = self.master.lock().unwrap_or_else(|e| e.into_inner());
         let leader = master.as_ref()?.process_group_leader()?;
         u32::try_from(leader).ok().filter(|p| *p > 0)
+    }
+
+    #[cfg(not(unix))]
+    pub fn foreground_pid(&self) -> Option<u32> {
+        None
     }
 }
 

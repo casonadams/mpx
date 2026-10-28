@@ -1,4 +1,5 @@
 use std::ffi::OsString;
+#[cfg(unix)]
 use std::io::ErrorKind;
 use std::time::Duration;
 
