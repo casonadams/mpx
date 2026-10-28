@@ -170,19 +170,32 @@ fn argv(_pid: u32) -> Option<Vec<String>> {
 
 #[cfg(target_os = "macos")]
 pub fn cwd_of(pid: u32) -> Option<String> {
-    let output = std::process::Command::new("lsof")
-        .args(["-p", &pid.to_string(), "-a", "-d", "cwd", "-Fn"])
-        .output()
-        .ok()?;
-    let text = String::from_utf8_lossy(&output.stdout);
-    for line in text.lines() {
-        if let Some(path) = line.strip_prefix('n')
-            && std::path::Path::new(path).is_dir()
-        {
-            return Some(path.to_string());
-        }
+    let mut info = std::mem::MaybeUninit::<libc::proc_vnodepathinfo>::zeroed();
+    let size = std::mem::size_of::<libc::proc_vnodepathinfo>() as libc::c_int;
+    // SAFETY: `info` is a zeroed proc_vnodepathinfo of exactly `size` bytes, the buffer this flavor fills.
+    let written = unsafe {
+        libc::proc_pidinfo(
+            pid as libc::c_int,
+            libc::PROC_PIDVNODEPATHINFO,
+            0,
+            info.as_mut_ptr().cast(),
+            size,
+        )
+    };
+    if written != size {
+        return None;
     }
-    None
+    // SAFETY: zero-initialized above and fully written by the kernel.
+    let info = unsafe { info.assume_init() };
+    let path: Vec<u8> = info
+        .pvi_cdir
+        .vip_path
+        .as_flattened()
+        .iter()
+        .take_while(|&&c| c != 0)
+        .map(|&c| c as u8)
+        .collect();
+    (!path.is_empty()).then(|| String::from_utf8_lossy(&path).into_owned())
 }
 
 #[cfg(target_os = "linux")]

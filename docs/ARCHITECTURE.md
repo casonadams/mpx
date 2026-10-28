@@ -85,7 +85,7 @@ A mode state machine (normal, prefix, copy, prompt, confirm, overlay) over a per
 - **Stream integrity**: per-pane expected offsets. A gap is filled from the pane's log; `Lagged` rebuilds the panes from their logs.
 - **Sessions**: the client can switch daemons (`(`, `)`, tree, agent jumps) without restarting.
 - **Overlays**: the agent manager, tree, and help, drawn over the panes.
-- **Rendering**: DEC 2026 synchronized updates, differential SGR, and autowrap disabled on the status row.
+- **Rendering**: the TUI keeps a shadow of what the terminal shows and each frame sends only the cells that changed, inside a DEC 2026 synchronized update with autowrap disabled. Rows holding non-ASCII glyphs are reprinted whole when they change, since the screen model has no width table; cells under an overlay are repainted when it closes, and a resize repaints everything. Pane colors and bold/italic/underline pass through exactly (basic and bright palette slots are kept apart, and `NO_COLOR` does not strip a program's own colors).
 
 ## 8. Cross-platform IPC
 

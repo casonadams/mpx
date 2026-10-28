@@ -1,9 +1,88 @@
-use mpx::vt::Grid;
+use mpx::vt::{Cell, Grid};
 
 fn write_str(grid: &mut Grid, text: &str) {
     for c in text.chars() {
         grid.put_char(c);
     }
+}
+
+/// A grid whose rows read `r0`, `r1`, ... with the cursor left on the last row.
+fn numbered(cols: usize, rows: usize) -> Grid {
+    let mut grid = Grid::new(cols, rows);
+    for i in 0..rows {
+        grid.move_cursor(0, i);
+        write_str(&mut grid, &format!("r{i}"));
+    }
+    grid
+}
+
+fn screen(grid: &Grid) -> Vec<String> {
+    grid.screen_lines().map(text).collect()
+}
+
+fn text(row: &[Cell]) -> String {
+    row.iter()
+        .map(|cell| cell.c)
+        .collect::<String>()
+        .trim_end()
+        .to_string()
+}
+
+#[test]
+fn full_history_drops_its_oldest_rows_first() {
+    let mut grid = numbered(4, 2);
+    grid.history_limit = 2;
+    for _ in 0..4 {
+        grid.newline();
+    }
+    let kept: Vec<String> = grid.history.iter().map(|row| text(row)).collect();
+    assert_eq!(
+        kept,
+        ["", ""],
+        "r0 and r1 were evicted by the two blank rows after them"
+    );
+    assert_eq!(screen(&grid), ["", ""]);
+
+    let mut grid = numbered(4, 3);
+    grid.history_limit = 2;
+    grid.scroll_up(3);
+    let kept: Vec<String> = grid.history.iter().map(|row| text(row)).collect();
+    assert_eq!(kept, ["r1", "r2"]);
+}
+
+#[test]
+fn scrolling_a_region_leaves_rows_outside_it_and_history_alone() {
+    let mut grid = numbered(4, 5);
+    grid.scroll_top = 1;
+    grid.scroll_bottom = 3;
+    grid.scroll_up(1);
+    assert_eq!(screen(&grid), ["r0", "r2", "r3", "", "r4"]);
+    assert!(grid.history.is_empty());
+
+    grid.scroll_down(2);
+    assert_eq!(screen(&grid), ["r0", "", "", "r2", "r4"]);
+}
+
+#[test]
+fn insert_and_delete_lines_shift_from_the_cursor_to_the_region_bottom() {
+    let mut grid = numbered(4, 5);
+    grid.scroll_bottom = 3;
+    grid.move_cursor(0, 1);
+    grid.insert_lines(1);
+    assert_eq!(screen(&grid), ["r0", "", "r1", "r2", "r4"]);
+    grid.delete_lines(2);
+    assert_eq!(screen(&grid), ["r0", "r2", "", "", "r4"]);
+    assert!(grid.history.is_empty());
+}
+
+#[test]
+fn resize_keeps_the_top_left_and_blanks_new_space() {
+    let mut grid = numbered(4, 3);
+    grid.resize(2, 2);
+    assert_eq!(screen(&grid), ["r0", "r1"]);
+    grid.resize(5, 4);
+    assert_eq!(screen(&grid), ["r0", "r1", "", ""]);
+    assert_eq!(grid.screen_lines().map(<[Cell]>::len).max(), Some(5));
 }
 
 #[test]

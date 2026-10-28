@@ -28,9 +28,13 @@
   variables. Bound every wait with a timeout and keep each test under 2s.
 - **Coverage**: Every function in the blast radius of a change must be reached
   by a test (`ripwire-rs . --test-gate` reports `untested="0"`; it exits 4
-  whenever the change has tests to run, which is expected). When a function
-  reads global state (environment, real directories, the terminal), make that
-  input a parameter so tests can reach it.
+  whenever the change has tests to run, which is expected). Pass untracked
+  files explicitly (`--test-gate=<files>`). The static graph cannot follow
+  channel-dispatched actor messages or the `tmux` argv0 subprocess; for rows
+  it still flags, prove execution with `cargo llvm-cov` (count > 0) and add a
+  behavior test for any function that never runs. When a function reads
+  global state (environment, real directories, the terminal), make that input
+  a parameter so tests can reach it.
 - **Behavior, not wiring**: Assert consumer-visible behavior (outputs, state
   transitions, boundaries, errors). No tests of forwarding, copies, or
   incidental defaults.
@@ -41,6 +45,22 @@
   has no tmux precedent, follow vim: `h/j/k/l` movement, `gg`/`G`,
   `Ctrl-d`/`Ctrl-u`, `/` search with `n`/`N`, `:` commands (`:split`,
   `:vsplit`, `:q`), `y` yank, `Esc`/`q` close.
+
+## Rendering and the terminal model
+
+- vim/nvim rendering has broken before from TUI and VT changes; treat any
+  change to `src/tui/{canvas,render,frame}.rs` or `src/vt/` as high risk.
+- `tests/tui/app/fidelity.rs` must keep passing: after every frame, each pane
+  region of the harness terminal must equal that pane's own screen. Extend it
+  when adding a render path (it covers scroll regions, IL/DL, the alternate
+  screen, overlays, the HUD, zoom and non-ASCII rows).
+- App tests assert on what the harness terminal shows (`Harness::frame()`,
+  `Harness::cursor()`), never on raw frame bytes: frames are incremental.
+- The screen model has no width table: never assume where the terminal cursor
+  lands after a non-ASCII glyph. Rows with non-ASCII are reprinted whole.
+- Before finishing a rendering change, run real `vim` and `nvim` (syntax,
+  scrolling, splits, visual mode, wide characters, an mpx split and overlay)
+  in an isolated session and compare against the previous build.
 
 ## Verification
 

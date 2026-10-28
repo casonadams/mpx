@@ -512,7 +512,7 @@ impl VtScreen {
     pub fn scrollback_text(&self, tail: Option<usize>) -> String {
         let grid = &self.handler.grid;
         let history = grid.history.iter().map(|row| row_text(row));
-        let visible = grid.cells.chunks(grid.cols).map(row_text);
+        let visible = grid.screen_lines().map(row_text);
         let mut lines: Vec<String> = history.chain(visible).collect();
         while lines.last().is_some_and(String::is_empty) {
             lines.pop();

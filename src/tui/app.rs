@@ -8,6 +8,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::task::JoinHandle;
 
 use super::agent::AgentWatch;
+use super::canvas::Canvas;
 use super::command::Command;
 use super::copy::CopyState;
 use super::exec::default_shell;
@@ -102,6 +103,8 @@ pub struct App {
     pub fixed_size: Option<(u16, u16)>,
     /// Where yanks go; `Captured` keeps them in memory instead of the system clipboard.
     pub clipboard: Clipboard,
+    /// What the terminal currently shows, so frames send only changed cells.
+    pub canvas: Canvas,
 }
 
 /// Everything the app reads from its surroundings, so it can run against explicit inputs.
@@ -182,6 +185,7 @@ impl App {
             socket_dir,
             fixed_size: size,
             clipboard: Clipboard::System,
+            canvas: Canvas::default(),
         };
         app.subscribe(sub_client);
         app.refresh_nodes().await;
@@ -327,6 +331,7 @@ impl App {
             Event::FocusLost => self.on_focus(false).await,
             Event::Resize(..) => {
                 self.layout.dirty = true;
+                self.canvas.invalidate();
                 Flow::Continue
             }
             _ => Flow::Continue,

@@ -17,6 +17,7 @@ use mpx::layout::geometry::Rect;
 use mpx::protocol::{NewWindowOpts, SpawnOpts, SplitOpts, WaitCondition};
 use mpx::tui::app::{App, AppOptions, Clipboard, Flow, Mode, StartView, StreamRx};
 use mpx::tui::frame;
+use mpx::vt::{Cursor, VtScreen};
 
 pub const SESSION: &str = "test";
 pub const MAIN: &str = "main";
@@ -150,6 +151,8 @@ pub struct Harness {
     pub rx: StreamRx,
     /// Separate connection to the main session, for reading daemon state.
     pub probe: Client,
+    /// The terminal the app draws on; keeps its contents across frames like a real one.
+    pub terminal: VtScreen,
 }
 
 impl Harness {
@@ -175,11 +178,14 @@ impl Harness {
             .expect("attach app");
         app.clipboard = Clipboard::Captured(Vec::new());
         let probe = connect(&endpoint).await;
+        let mut terminal = VtScreen::new(SIZE.0 as usize, SIZE.1 as usize);
+        terminal.feed(b"\x1b[?7l");
         Self {
             sandbox,
             app,
             rx,
             probe,
+            terminal,
         }
     }
 
@@ -227,13 +233,20 @@ impl Harness {
         .await
     }
 
-    /// Refreshes layout (as the event loop does on each wake-up) and draws one frame, returning its bytes as text.
+    /// Refreshes layout (as the event loop does on each wake-up), draws one frame onto the terminal
+    /// and returns the text the terminal then shows.
     pub async fn frame(&mut self) -> String {
         self.app.layout.dirty = true;
         assert!(self.app.prepare_frame().await, "nothing to draw");
         let mut out = Vec::new();
         frame::draw(&mut self.app, &mut out).expect("draw");
-        String::from_utf8_lossy(&out).into_owned()
+        self.terminal.feed(&out);
+        self.terminal.snapshot()
+    }
+
+    /// The terminal's cursor after the last frame.
+    pub fn cursor(&self) -> Cursor {
+        self.terminal.grid().cursor
     }
 
     /// Applies pane output until `ready` holds for the app; fails after a bounded wait.

@@ -1,4 +1,5 @@
 use mpx::layout::{Divider, Rect, WindowTab};
+use mpx::tui::canvas::Canvas;
 use mpx::tui::render::{
     Compositor, RenderPaneContext, SelectionRange, StatusBar, status_left, status_right,
 };
@@ -15,23 +16,33 @@ fn pane_ctx<'a>(grid: &'a Grid, rect: Rect, dimmed: bool) -> RenderPaneContext<'
     }
 }
 
-#[test]
-fn pane_content_draws_cell_text() {
+fn draw_pane(grid: &Grid, dimmed: bool) -> String {
+    let mut canvas = Canvas::default();
+    canvas.begin(10, 5, None);
     let mut buf = Vec::new();
-    let mut grid = Grid::new(10, 5);
-    grid.put_char('A');
-    Compositor::draw_pane_content(&mut buf, pane_ctx(&grid, Rect::new(0, 0, 10, 5), false))
-        .unwrap();
-    assert!(String::from_utf8_lossy(&buf).contains('A'));
+    Compositor::draw_pane_content(
+        &mut canvas,
+        &mut buf,
+        pane_ctx(grid, Rect::new(0, 0, 10, 5), dimmed),
+    )
+    .unwrap();
+    String::from_utf8_lossy(&buf).into_owned()
 }
 
 #[test]
-fn pane_content_draws_dimmed_cell_text() {
-    let mut buf = Vec::new();
+fn pane_content_draws_cell_text() {
+    let mut grid = Grid::new(10, 5);
+    grid.put_char('A');
+    let out = draw_pane(&grid, false);
+    assert!(out.contains("\x1b[0mA"), "{out:?}");
+}
+
+#[test]
+fn dimmed_pane_draws_default_text_grey() {
     let mut grid = Grid::new(10, 5);
     grid.put_char('Z');
-    Compositor::draw_pane_content(&mut buf, pane_ctx(&grid, Rect::new(0, 0, 10, 5), true)).unwrap();
-    assert!(String::from_utf8_lossy(&buf).contains('Z'));
+    let out = draw_pane(&grid, true);
+    assert!(out.contains("\x1b[0;90mZ"), "{out:?}");
 }
 
 #[test]
@@ -155,6 +166,8 @@ fn dividers_render_junction_connector() {
         },
     ];
     let active_rect = Some(Rect::new(41, 11, 39, 13));
-    Compositor::draw_dividers(&mut buf, &dividers, active_rect).unwrap();
+    let mut canvas = Canvas::default();
+    canvas.begin(80, 24, None);
+    Compositor::draw_dividers(&mut canvas, &mut buf, &dividers, active_rect).unwrap();
     assert!(String::from_utf8_lossy(&buf).contains('┬'));
 }

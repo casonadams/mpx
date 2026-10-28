@@ -54,9 +54,10 @@ async fn cursor_is_placed_at_the_active_panes_cursor() {
         app.active_vt().is_some_and(|vt| vt.grid().cursor.x == 5)
     })
     .await;
-    let drawn = h.frame().await;
-    assert!(drawn.contains("\x1b[1;6H"), "cursor at column 6, row 1");
-    assert!(drawn.contains("\x1b[?25h"), "cursor shown");
+    h.frame().await;
+    let cursor = h.cursor();
+    assert_eq!((cursor.x, cursor.y), (5, 0), "cursor at column 6, row 1");
+    assert!(cursor.visible, "cursor shown");
 }
 
 #[tokio::test]
@@ -67,8 +68,10 @@ async fn command_prompt_row_shows_text_and_places_cursor_on_it() {
     h.type_str("ab").await;
     let drawn = h.frame().await;
     assert!(drawn.contains(":ab"));
-    assert!(
-        drawn.contains("\x1b[30;4H"),
+    let cursor = h.cursor();
+    assert_eq!(
+        (cursor.x, cursor.y),
+        (3, 29),
         "cursor after two characters on the last row"
     );
 }
@@ -91,10 +94,8 @@ async fn prefix_shows_the_shortcut_menu_and_help_hides_the_cursor() {
     assert!(h.frame().await.contains("new window"));
 
     h.key(KeyCode::Char('?')).await;
-    assert!(
-        h.frame().await.contains("\x1b[?25l"),
-        "overlay hides the cursor"
-    );
+    h.frame().await;
+    assert!(!h.cursor().visible, "overlay hides the cursor");
     h.key(KeyCode::Esc).await;
     assert!(h.mode_is_normal());
 }

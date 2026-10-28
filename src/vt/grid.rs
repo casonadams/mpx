@@ -67,7 +67,8 @@ impl Default for Cursor {
 pub struct Grid {
     pub cols: usize,
     pub rows: usize,
-    pub cells: Vec<Cell>,
+    /// One vector of `cols` cells per screen row, so scrolling moves rows instead of cells.
+    lines: Vec<Vec<Cell>>,
     pub cursor: Cursor,
     pub saved_cursor: Option<Cursor>,
     pub scroll_top: usize,
@@ -81,11 +82,10 @@ impl Grid {
     pub fn new(cols: usize, rows: usize) -> Self {
         let cols = cols.max(1);
         let rows = rows.max(1);
-        let cells = vec![Cell::default(); cols * rows];
         Self {
             cols,
             rows,
-            cells,
+            lines: vec![vec![Cell::default(); cols]; rows],
             cursor: Cursor::default(),
             saved_cursor: None,
             scroll_top: 0,
@@ -101,43 +101,29 @@ impl Grid {
         if new_cols == self.cols && new_rows == self.rows {
             return;
         }
-        let mut new_cells = vec![Cell::default(); new_cols * new_rows];
-        let copy_cols = self.cols.min(new_cols);
-        let copy_rows = self.rows.min(new_rows);
-        for y in 0..copy_rows {
-            for x in 0..copy_cols {
-                new_cells[y * new_cols + x] = self.cells[y * self.cols + x];
-            }
+        self.lines.resize_with(new_rows, Vec::new);
+        for line in &mut self.lines {
+            line.resize(new_cols, Cell::default());
         }
         self.cols = new_cols;
         self.rows = new_rows;
-        self.cells = new_cells;
         self.scroll_top = 0;
         self.scroll_bottom = new_rows.saturating_sub(1);
         self.cursor.x = self.cursor.x.min(new_cols.saturating_sub(1));
         self.cursor.y = self.cursor.y.min(new_rows.saturating_sub(1));
     }
 
-    #[inline]
-    fn index(&self, x: usize, y: usize) -> usize {
-        y * self.cols + x
+    /// The visible rows, top to bottom.
+    pub fn screen_lines(&self) -> impl Iterator<Item = &[Cell]> {
+        self.lines.iter().map(Vec::as_slice)
     }
 
     pub fn get_cell(&self, x: usize, y: usize) -> Option<&Cell> {
-        if x < self.cols && y < self.rows {
-            Some(&self.cells[self.index(x, y)])
-        } else {
-            None
-        }
+        self.lines.get(y).and_then(|line| line.get(x))
     }
 
     pub fn get_cell_mut(&mut self, x: usize, y: usize) -> Option<&mut Cell> {
-        if x < self.cols && y < self.rows {
-            let idx = self.index(x, y);
-            Some(&mut self.cells[idx])
-        } else {
-            None
-        }
+        self.lines.get_mut(y).and_then(|line| line.get_mut(x))
     }
     pub fn history_len(&self) -> usize {
         self.history.len()
@@ -177,13 +163,7 @@ impl Grid {
             self.history.get(abs_line).cloned()
         } else {
             let live_y = abs_line - total_hist;
-            if live_y < self.rows {
-                let start = live_y * self.cols;
-                let end = start + self.cols;
-                Some(self.cells[start..end].to_vec())
-            } else {
-                None
-            }
+            self.lines.get(live_y).cloned()
         }
     }
 
@@ -223,66 +203,48 @@ impl Grid {
         }
     }
 
+    /// Scrolls the region up by `count` rows; rows leaving a region that starts at the top of the
+    /// screen move into history.
     pub fn scroll_up(&mut self, count: usize) {
         if count == 0 || self.scroll_top >= self.scroll_bottom {
             return;
         }
-
-        let top = self.scroll_top;
-        let bottom = self.scroll_bottom;
-        let cols = self.cols;
-        let window_height = bottom - top + 1;
-        let actual_count = count.min(window_height);
-
-        if top == 0 {
-            for row in 0..actual_count {
-                let start = row * cols;
-                let end = start + cols;
-                let mut line = if self.history.len() >= self.history_limit {
-                    let mut recycled = self.history.pop_front().unwrap_or_default();
-                    recycled.clear();
-                    recycled
-                } else {
-                    Vec::with_capacity(cols)
-                };
-                line.extend_from_slice(&self.cells[start..end]);
-                self.history.push_back(line);
+        let (top, bottom) = (self.scroll_top, self.scroll_bottom);
+        let n = count.min(bottom - top + 1);
+        self.lines[top..=bottom].rotate_left(n);
+        for y in bottom + 1 - n..=bottom {
+            if top == 0 {
+                let blank = self.blank_line();
+                let gone = std::mem::replace(&mut self.lines[y], blank);
+                self.history.push_back(gone);
+            } else {
+                self.lines[y].fill(Cell::default());
             }
         }
+    }
 
-        if actual_count < window_height {
-            let src_start = (top + actual_count) * cols;
-            let src_end = (bottom + 1) * cols;
-            let dst_start = top * cols;
-            self.cells.copy_within(src_start..src_end, dst_start);
-        }
-
-        let clear_start = (bottom + 1 - actual_count) * cols;
-        let clear_end = (bottom + 1) * cols;
-        self.cells[clear_start..clear_end].fill(Cell::default());
+    /// A blank row for the screen, reusing the oldest history row once history is full.
+    fn blank_line(&mut self) -> Vec<Cell> {
+        let mut line = if self.history.len() >= self.history_limit {
+            self.history.pop_front().unwrap_or_default()
+        } else {
+            Vec::with_capacity(self.cols)
+        };
+        line.clear();
+        line.resize(self.cols, Cell::default());
+        line
     }
 
     pub fn scroll_down(&mut self, count: usize) {
         if count == 0 || self.scroll_top >= self.scroll_bottom {
             return;
         }
-
-        let top = self.scroll_top;
-        let bottom = self.scroll_bottom;
-        let cols = self.cols;
-        let window_height = bottom - top + 1;
-        let actual_count = count.min(window_height);
-
-        if actual_count < window_height {
-            let src_start = top * cols;
-            let src_end = (bottom + 1 - actual_count) * cols;
-            let dst_start = (top + actual_count) * cols;
-            self.cells.copy_within(src_start..src_end, dst_start);
+        let (top, bottom) = (self.scroll_top, self.scroll_bottom);
+        let n = count.min(bottom - top + 1);
+        self.lines[top..=bottom].rotate_right(n);
+        for line in &mut self.lines[top..top + n] {
+            line.fill(Cell::default());
         }
-
-        let clear_start = top * cols;
-        let clear_end = (top + actual_count) * cols;
-        self.cells[clear_start..clear_end].fill(Cell::default());
     }
 
     pub fn delete_lines(&mut self, count: usize) {
@@ -316,9 +278,7 @@ impl Grid {
     }
 
     fn cursor_row_mut(&mut self) -> &mut [Cell] {
-        let cols = self.cols;
-        let base = self.cursor.y * cols;
-        &mut self.cells[base..base + cols]
+        &mut self.lines[self.cursor.y]
     }
 
     pub fn erase_chars(&mut self, count: usize) {
@@ -347,31 +307,13 @@ impl Grid {
     }
 
     pub fn clear_line(&mut self, mode: usize) {
-        let y = self.cursor.y;
         let cols = self.cols;
+        let x = self.cursor.x;
+        let row = self.cursor_row_mut();
         match mode {
-            0 => {
-                // Clear from cursor to end of line
-                for x in self.cursor.x..cols {
-                    let idx = self.index(x, y);
-                    self.cells[idx] = Cell::default();
-                }
-            }
-            1 => {
-                // Clear from beginning of line to cursor
-                let limit = (self.cursor.x + 1).min(cols);
-                for x in 0..limit {
-                    let idx = self.index(x, y);
-                    self.cells[idx] = Cell::default();
-                }
-            }
-            2 => {
-                // Clear entire line
-                for x in 0..cols {
-                    let idx = self.index(x, y);
-                    self.cells[idx] = Cell::default();
-                }
-            }
+            0 => row[x.min(cols)..].fill(Cell::default()),
+            1 => row[..(x + 1).min(cols)].fill(Cell::default()),
+            2 => row.fill(Cell::default()),
             _ => {}
         }
     }
@@ -379,29 +321,20 @@ impl Grid {
     pub fn clear_screen(&mut self, mode: usize) {
         match mode {
             0 => {
-                // Clear from cursor to end of screen
                 self.clear_line(0);
-                for y in (self.cursor.y + 1)..self.rows {
-                    for x in 0..self.cols {
-                        let idx = self.index(x, y);
-                        self.cells[idx] = Cell::default();
-                    }
+                for line in &mut self.lines[self.cursor.y + 1..] {
+                    line.fill(Cell::default());
                 }
             }
             1 => {
-                // Clear from beginning of screen to cursor
-                for y in 0..self.cursor.y {
-                    for x in 0..self.cols {
-                        let idx = self.index(x, y);
-                        self.cells[idx] = Cell::default();
-                    }
+                for line in &mut self.lines[..self.cursor.y] {
+                    line.fill(Cell::default());
                 }
                 self.clear_line(1);
             }
             2 | 3 => {
-                // Clear entire screen
-                for cell in &mut self.cells {
-                    *cell = Cell::default();
+                for line in &mut self.lines {
+                    line.fill(Cell::default());
                 }
                 self.cursor.x = 0;
                 self.cursor.y = 0;
@@ -417,13 +350,9 @@ impl Grid {
 
     pub fn render_plain(&self) -> String {
         let mut out = String::with_capacity(self.rows * (self.cols + 1));
-        for y in 0..self.rows {
-            let mut line = String::with_capacity(self.cols);
-            for x in 0..self.cols {
-                let cell = &self.cells[self.index(x, y)];
-                line.push(cell.c);
-            }
-            out.push_str(line.trim_end());
+        for line in &self.lines {
+            let text: String = line.iter().map(|cell| cell.c).collect();
+            out.push_str(text.trim_end());
             out.push('\n');
         }
         while out.ends_with("\n\n") {

@@ -4,7 +4,7 @@ use std::io::{self, Write};
 use super::app::{App, Mode};
 use super::copy::{CopyState, SelectionKind};
 use super::panes::PaneRect;
-use super::render::{Compositor, RenderPaneContext, SelectionRange, StatusBar};
+use super::render::{Compositor, RenderPaneContext, SelectionRange, StatusBar, hud_rect};
 use super::status::exit_badge;
 use crate::layout::geometry::Rect;
 use crate::protocol::NodeInfo;
@@ -22,13 +22,16 @@ pub struct PaneView {
 
 pub fn draw<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
     Compositor::begin_sync(out)?;
-    draw_panes(app, out)?;
-    if app.zoomed.is_none() && !app.layout.dividers.is_empty() {
-        Compositor::draw_dividers(out, &app.layout.dividers, app.active_rect)?;
-    }
-    draw_status_row(app, out)?;
     let (screen_w, layout_h) = app.viewport;
     let screen_h = layout_h + 1;
+    app.canvas
+        .begin(screen_w, layout_h, occluded(&app.mode, screen_w, screen_h));
+    draw_panes(app, out)?;
+    if app.zoomed.is_none() && !app.layout.dividers.is_empty() {
+        Compositor::draw_dividers(&mut app.canvas, out, &app.layout.dividers, app.active_rect)?;
+    }
+    app.canvas.finish(out)?;
+    draw_status_row(app, out)?;
     if matches!(app.mode, Mode::Prefix) {
         Compositor::draw_shortcut_hud(out, screen_w, screen_h)?;
     }
@@ -38,6 +41,15 @@ pub fn draw<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
     place_cursor(app, out)?;
     Compositor::end_sync(out)?;
     out.flush()
+}
+
+/// Screen area chrome covers this frame; pane cells under it are left to the chrome.
+fn occluded(mode: &Mode, screen_w: u16, screen_h: u16) -> Option<Rect> {
+    match mode {
+        Mode::Prefix => hud_rect(screen_w, screen_h),
+        Mode::Overlay(_) => Some(overlay_area(screen_w, screen_h)),
+        _ => None,
+    }
 }
 
 /// Panes with cells to paint; zero-sized panes are skipped.
@@ -76,8 +88,10 @@ pub fn pane_view(
     }
 }
 
+/// Panes are drawn left to right so a row that spills past its pane is repainted over by its neighbor.
 fn draw_panes<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
-    let panes = drawable(&app.panes);
+    let mut panes = drawable(&app.panes);
+    panes.sort_by_key(|(_, rect, _)| (rect.x, rect.y));
     let crowd = (app.panes.len(), app.zoomed.is_some());
     for pane in &panes {
         let (_, rect, _) = pane;
@@ -87,6 +101,7 @@ fn draw_panes<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
             .or_insert_with(|| VtScreen::new(rect.width as usize, rect.height as usize));
         let view = pane_view(&app.mode, vt.grid(), &app.nodes, pane, crowd);
         Compositor::draw_pane_content(
+            &mut app.canvas,
             out,
             RenderPaneContext {
                 rect: *rect,
@@ -102,7 +117,17 @@ fn draw_panes<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
 }
 
 /// Bottom row: the command line while typing or confirming, else a live message, else the status bar.
-fn draw_status_row<W: Write>(app: &App, out: &mut W) -> io::Result<()> {
+/// Sent only when it differs from the row already on screen.
+fn draw_status_row<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
+    let mut row = Vec::new();
+    status_row(app, &mut row)?;
+    if app.canvas.status_changed(&row) {
+        out.write_all(&row)?;
+    }
+    Ok(())
+}
+
+fn status_row(app: &App, out: &mut Vec<u8>) -> io::Result<()> {
     let (width, y) = app.viewport;
     match &app.mode {
         Mode::Prompt(prompt) => {

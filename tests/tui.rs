@@ -1,6 +1,7 @@
 mod tui {
     mod agent;
     mod app;
+    mod canvas;
     mod command;
     mod copy;
     mod frame;

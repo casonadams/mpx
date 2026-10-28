@@ -244,23 +244,91 @@ fn print_config_emits_claude_hook_settings() {
     assert!(json["hooks"]["SessionEnd"].is_array());
 }
 
+/// Runs the binary as `tmux` (argv0 multicall) against `s`, creating the symlink on first use.
+fn tmux(s: &Session, args: &[&str]) -> Output {
+    let shim_dir = s.runtime.join("bin");
+    let link = shim_dir.join("tmux");
+    if !link.exists() {
+        std::fs::create_dir_all(&shim_dir).expect("bin dir");
+        std::os::unix::fs::symlink(BIN, &link).expect("symlink");
+    }
+    Command::new(&link)
+        .args(args)
+        .env("MPX_ENDPOINT", s.endpoint())
+        .env("MPX_SESSION", &s.name)
+        .env_remove("TMUX")
+        .output()
+        .expect("run tmux")
+}
+
+fn stdout(out: &Output) -> String {
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+#[test]
+fn tmux_multicall_lists_resizes_and_lays_out_panes() {
+    let s = Session::new("tl");
+    let _ = s.run(&["run", "-n", "base", "--pty", "cat"]);
+    assert!(tmux(&s, &["has-session"]).status.success());
+    assert!(!tmux(&s, &["has-session", "-t", "nosuch"]).status.success());
+
+    let watcher = "trap 'stty size' WINCH; while :; do sleep 0.05; done";
+    let split = tmux(
+        &s,
+        &[
+            "split-window",
+            "-h",
+            "-d",
+            "-P",
+            "-F",
+            "#{pane_id}",
+            watcher,
+        ],
+    );
+    let pane = stdout(&split);
+    let panes = stdout(&tmux(&s, &["list-panes", "-F", "#{pane_id}"]));
+    assert_eq!(panes.lines().count(), 2, "{panes}");
+    assert!(panes.lines().any(|p| p == pane), "{panes}");
+
+    assert!(
+        tmux(&s, &["resize-pane", "-t", &pane, "-x", "30"])
+            .status
+            .success()
+    );
+    let resized = (0..40).any(|_| {
+        std::thread::sleep(Duration::from_millis(50));
+        stdout(&tmux(&s, &["capture-pane", "-p", "-t", &pane])).contains(" 30")
+    });
+    assert!(resized, "the pane program never saw 30 columns");
+
+    let widths = |s: &Session| stdout(&tmux(s, &["list-panes", "-F", "#{pane_width}"]));
+    let side_by_side = widths(&s);
+    assert!(
+        tmux(&s, &["select-layout", "even-vertical"])
+            .status
+            .success()
+    );
+    let stacked = widths(&s);
+    assert_ne!(stacked, side_by_side);
+    assert_eq!(
+        stacked
+            .lines()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        1,
+        "{stacked}"
+    );
+
+    let bogus = tmux(&s, &["select-layout", "bogus"]);
+    assert!(!bogus.status.success());
+    assert!(String::from_utf8_lossy(&bogus.stderr).contains("unknown layout"));
+}
+
 #[test]
 fn tmux_multicall_splits_sends_and_captures() {
     let s = Session::new("tm");
     let _ = s.run(&["run", "-n", "base", "--pty", "cat"]);
-    let shim_dir = s.runtime.join("bin");
-    std::fs::create_dir_all(&shim_dir).expect("bin dir");
-    let link = shim_dir.join("tmux");
-    std::os::unix::fs::symlink(BIN, &link).expect("symlink");
-    let tmux = |args: &[&str]| {
-        Command::new(&link)
-            .args(args)
-            .env("MPX_ENDPOINT", s.endpoint())
-            .env("MPX_SESSION", &s.name)
-            .env_remove("TMUX")
-            .output()
-            .expect("run tmux")
-    };
+    let tmux = |args: &[&str]| tmux(&s, args);
     let split = tmux(&[
         "split-window",
         "-h",
@@ -294,6 +362,22 @@ fn tmux_multicall_splits_sends_and_captures() {
             .contains("shim-token")
     });
     assert!(captured, "capture-pane never showed the typed token");
+
+    let window = tmux(&["new-window", "-d", "-P", "-F", "#{window_index}", "cat"]);
+    assert!(
+        window.status.success(),
+        "{}",
+        String::from_utf8_lossy(&window.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&window.stdout).trim(), "1");
+    let windows = tmux(&["list-windows", "-F", "#{window_index}"]);
+    assert_eq!(String::from_utf8_lossy(&windows.stdout).lines().count(), 2);
+    let active = tmux(&["display-message", "-p", "#{window_index}"]);
+    assert_eq!(
+        String::from_utf8_lossy(&active.stdout).trim(),
+        "0",
+        "-d keeps the current window active"
+    );
 }
 
 #[test]

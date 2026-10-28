@@ -1,13 +1,15 @@
 use crossterm::{
     cursor::{Hide, MoveTo, Show},
-    execute,
+    queue,
     style::{Color, Print, ResetColor, SetBackgroundColor, SetForegroundColor},
 };
 use std::io::{self, Write};
 
+use super::canvas::Canvas;
 use super::status::agent_badge;
 use crate::layout::{Divider, WindowTab, geometry::Rect};
 use crate::vt::grid::Grid;
+use crate::vt::{Cell, CellStyle, Color as VtColor};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SelectionRange {
@@ -82,37 +84,47 @@ pub struct StatusBar<'a> {
     pub y: u16,
 }
 
-fn divider_char_color(x: u16, y: u16, rect: Option<Rect>) -> Color {
+fn divider_color(x: u16, y: u16, rect: Option<Rect>) -> VtColor {
     if let Some(r) = rect {
         let is_left = x + 1 == r.x && y + 1 >= r.y && y <= r.y + r.height;
         let is_right = x == r.x + r.width && y + 1 >= r.y && y <= r.y + r.height;
         let is_top = y + 1 == r.y && x + 1 >= r.x && x <= r.x + r.width;
         let is_bottom = y == r.y + r.height && x + 1 >= r.x && x <= r.x + r.width;
         if is_left || is_right || is_top || is_bottom {
-            return Color::Green;
+            return VtColor::BrightGreen;
         }
     }
-    Color::DarkGrey
+    VtColor::BrightBlack
 }
 
-fn junction_char(up: bool, down: bool, left: bool, right: bool) -> &'static str {
-    match (up, down, left, right) {
-        (true, true, true, true) => "┼",
-        (true, true, true, false) => "┤",
-        (true, true, false, true) => "├",
-        (false, true, true, true) => "┬",
-        (true, false, true, true) => "┴",
-        (false, true, false, true) => "┌",
-        (false, true, true, false) => "┐",
-        (true, false, false, true) => "└",
-        (true, false, true, false) => "┘",
-        (true, true, false, false) => "│",
-        (false, false, true, true) => "─",
-        _ => "┼",
+fn divider_cell(div: &Divider, (x, y): (u16, u16), all: &[Divider], active: Option<Rect>) -> Cell {
+    Cell {
+        c: get_divider_char(div, x, y, all),
+        style: CellStyle {
+            fg: Some(divider_color(x, y, active)),
+            ..CellStyle::default()
+        },
     }
 }
 
-fn get_divider_char(div: &Divider, x: u16, y: u16, all: &[Divider]) -> &'static str {
+fn junction_char(up: bool, down: bool, left: bool, right: bool) -> char {
+    match (up, down, left, right) {
+        (true, true, true, true) => '┼',
+        (true, true, true, false) => '┤',
+        (true, true, false, true) => '├',
+        (false, true, true, true) => '┬',
+        (true, false, true, true) => '┴',
+        (false, true, false, true) => '┌',
+        (false, true, true, false) => '┐',
+        (true, false, false, true) => '└',
+        (true, false, true, false) => '┘',
+        (true, true, false, false) => '│',
+        (false, false, true, true) => '─',
+        _ => '┼',
+    }
+}
+
+fn get_divider_char(div: &Divider, x: u16, y: u16, all: &[Divider]) -> char {
     let has_v = all
         .iter()
         .any(|d| d.is_vertical && d.x == x && (y + 1 >= d.y && y <= d.y + d.length));
@@ -131,60 +143,32 @@ fn get_divider_char(div: &Divider, x: u16, y: u16, all: &[Divider]) -> &'static 
             .any(|d| !d.is_vertical && d.y == y && (d.x == x + 1 || d.x + d.length > x));
         junction_char(up, down, left, right)
     } else if div.is_vertical {
-        "│"
+        '│'
     } else {
-        "─"
+        '─'
     }
 }
 
-fn render_vertical_divider<W: Write>(
-    w: &mut W,
-    div: &Divider,
-    all_dividers: &[Divider],
-    active_rect: Option<Rect>,
-    cur_color: &mut Option<Color>,
-) -> io::Result<()> {
-    for y in div.y..(div.y + div.length) {
-        let color = divider_char_color(div.x, y, active_rect);
-        if *cur_color != Some(color) {
-            execute!(w, SetForegroundColor(color))?;
-            *cur_color = Some(color);
+/// Cells a divider covers, top to bottom or left to right.
+fn divider_cells(div: &Divider) -> impl Iterator<Item = (u16, u16)> + '_ {
+    (0..div.length).map(move |i| {
+        if div.is_vertical {
+            (div.x, div.y + i)
+        } else {
+            (div.x + i, div.y)
         }
-        let ch = get_divider_char(div, div.x, y, all_dividers);
-        execute!(w, MoveTo(div.x, y), Print(ch))?;
-    }
-    Ok(())
-}
-
-fn render_horizontal_divider<W: Write>(
-    w: &mut W,
-    div: &Divider,
-    all_dividers: &[Divider],
-    active_rect: Option<Rect>,
-    cur_color: &mut Option<Color>,
-) -> io::Result<()> {
-    for x in div.x..(div.x + div.length) {
-        let color = divider_char_color(x, div.y, active_rect);
-        if *cur_color != Some(color) {
-            execute!(w, SetForegroundColor(color))?;
-            *cur_color = Some(color);
-        }
-        let ch = get_divider_char(div, x, div.y, all_dividers);
-        execute!(w, MoveTo(x, div.y), Print(ch))?;
-    }
-    Ok(())
+    })
 }
 
 pub struct Compositor;
 
 impl Compositor {
-    /// Renders terminal pane content directly into its bounding box with optional visual selection, scroll offset, and badge
-    /// Renders terminal pane content directly into its bounding box
-    pub fn draw_pane_content<W: Write>(w: &mut W, ctx: RenderPaneContext<'_>) -> io::Result<()> {
-        if ctx.rect.width == 0 || ctx.rect.height == 0 {
-            return Ok(());
-        }
-
+    /// Draws a pane's cells (with selection, scroll offset and badge) into its rect on `canvas`.
+    pub fn draw_pane_content<W: Write>(
+        canvas: &mut Canvas,
+        w: &mut W,
+        ctx: RenderPaneContext<'_>,
+    ) -> io::Result<()> {
         let badge_chars = ctx.badge.map(|b| b.chars().collect::<Vec<char>>());
         let badge_info = badge_chars.as_ref().and_then(|chars| {
             if (ctx.rect.width as usize) > chars.len() + 1 {
@@ -194,30 +178,32 @@ impl Compositor {
                 None
             }
         });
-
+        let mut cells = Vec::with_capacity(ctx.rect.width as usize);
         for row in 0..ctx.rect.height as usize {
-            render_row_cells(w, row, &ctx, badge_info)?;
+            let abs_row = ctx.grid.abs_line(row, ctx.scroll_offset);
+            cells.clear();
+            cells.extend(
+                (0..ctx.rect.width as usize)
+                    .map(|col| cell_content(col, row, abs_row, &ctx, badge_info)),
+            );
+            canvas.put_row(w, ctx.rect.x, ctx.rect.y + row as u16, &cells)?;
         }
-
-        execute!(w, ResetColor)?;
         Ok(())
     }
 
-    /// Renders clean tmux-style single-line dividers between panes with green active pane highlighting
+    /// Draws tmux-style single-line dividers on `canvas`, highlighting the active pane's edges.
     pub fn draw_dividers<W: Write>(
+        canvas: &mut Canvas,
         w: &mut W,
         dividers: &[Divider],
         active_rect: Option<Rect>,
     ) -> io::Result<()> {
-        let mut cur_color: Option<Color> = None;
         for div in dividers {
-            if div.is_vertical {
-                render_vertical_divider(w, div, dividers, active_rect, &mut cur_color)?;
-            } else {
-                render_horizontal_divider(w, div, dividers, active_rect, &mut cur_color)?;
+            for pos in divider_cells(div) {
+                let cell = divider_cell(div, pos, dividers, active_rect);
+                canvas.put(w, pos.0, pos.1, cell)?;
             }
         }
-        execute!(w, ResetColor)?;
         Ok(())
     }
 
@@ -227,7 +213,7 @@ impl Compositor {
         let right = status_right(bar, &get_current_time());
         let total_chars = left.chars().count() + right.chars().count();
         let pad_len = (bar.width as usize).saturating_sub(total_chars + 1);
-        execute!(
+        queue!(
             w,
             MoveTo(0, bar.y),
             SetBackgroundColor(Color::DarkGreen),
@@ -248,7 +234,7 @@ impl Compositor {
     ) -> io::Result<()> {
         let line: String = text.chars().take(width as usize).collect();
         let pad = (width as usize).saturating_sub(line.chars().count());
-        execute!(
+        queue!(
             w,
             MoveTo(0, y),
             SetBackgroundColor(Color::Black),
@@ -260,13 +246,10 @@ impl Compositor {
     }
     /// Floating popup listing the prefix shortcuts, anchored bottom-right above the status row.
     pub fn draw_shortcut_hud<W: Write>(w: &mut W, screen_w: u16, screen_h: u16) -> io::Result<()> {
-        let box_w: u16 = 30;
-        let box_h: u16 = (HUD_ITEMS.len() as u16 + 2).min(screen_h.saturating_sub(2));
-        if box_w >= screen_w || box_h < 4 {
+        let Some(area) = hud_rect(screen_w, screen_h) else {
             return Ok(());
-        }
-        let box_x = screen_w.saturating_sub(box_w + 2);
-        let box_y = screen_h.saturating_sub(box_h + 1);
+        };
+        let (box_x, box_y, box_w, box_h) = (area.x, area.y, area.width, area.height);
         draw_hud_header(w, box_x, box_y, box_w)?;
         for (i, (key, desc)) in HUD_ITEMS.iter().take((box_h - 2) as usize).enumerate() {
             draw_hud_row(w, (box_x, box_y + 1 + i as u16), box_w, key, desc)?;
@@ -287,7 +270,7 @@ impl Compositor {
         );
         let badge_x = (rect.x + rect.width).saturating_sub(text.len() as u16 + 1);
         if badge_x >= rect.x {
-            execute!(
+            queue!(
                 w,
                 MoveTo(badge_x, rect.y),
                 SetBackgroundColor(Color::Rgb {
@@ -322,7 +305,7 @@ impl Compositor {
         visible: bool,
     ) -> io::Result<()> {
         if !visible {
-            execute!(w, Hide)?;
+            queue!(w, Hide)?;
             return Ok(());
         }
 
@@ -333,7 +316,7 @@ impl Compositor {
             .min((pane_rect.y + pane_rect.height).saturating_sub(1) as usize)
             as u16;
 
-        execute!(w, MoveTo(cx, cy), Show)?;
+        queue!(w, MoveTo(cx, cy), Show)?;
         Ok(())
     }
 }
@@ -374,6 +357,18 @@ pub fn status_right(bar: &StatusBar<'_>, clock: &str) -> String {
     right
 }
 
+/// Where the prefix HUD sits: bottom-right above the status row; `None` when the screen is too small.
+pub fn hud_rect(screen_w: u16, screen_h: u16) -> Option<Rect> {
+    let box_w: u16 = 30;
+    let box_h: u16 = (HUD_ITEMS.len() as u16 + 2).min(screen_h.saturating_sub(2));
+    if box_w >= screen_w || box_h < 4 {
+        return None;
+    }
+    let box_x = screen_w.saturating_sub(box_w + 2);
+    let box_y = screen_h.saturating_sub(box_h + 1);
+    Some(Rect::new(box_x, box_y, box_w, box_h))
+}
+
 const HUD_ITEMS: &[(&str, &str)] = &[
     ("c", "new window"),
     ("p", "previous window"),
@@ -393,7 +388,7 @@ const HUD_ITEMS: &[(&str, &str)] = &[
 ];
 
 fn draw_hud_header<W: Write>(w: &mut W, x: u16, y: u16, box_w: u16) -> io::Result<()> {
-    execute!(
+    queue!(
         w,
         MoveTo(x, y),
         SetBackgroundColor(Color::Black),
@@ -412,7 +407,7 @@ fn draw_hud_row<W: Write>(
     key: &str,
     desc: &str,
 ) -> io::Result<()> {
-    execute!(
+    queue!(
         w,
         MoveTo(x, y),
         SetBackgroundColor(Color::Black),
@@ -427,7 +422,7 @@ fn draw_hud_row<W: Write>(
     )?;
     let used = 2 + 2 + 3 + 18;
     let pad = (box_w as usize).saturating_sub(used + 1);
-    execute!(
+    queue!(
         w,
         Print(" ".repeat(pad)),
         SetForegroundColor(Color::DarkCyan),
@@ -439,7 +434,7 @@ fn draw_hud_row<W: Write>(
 fn draw_hud_footer<W: Write>(w: &mut W, x: u16, y: u16, box_w: u16) -> io::Result<()> {
     let footer_text = " ESC close ";
     let dash_count = (box_w as usize).saturating_sub(footer_text.len() + 2);
-    execute!(
+    queue!(
         w,
         MoveTo(x, y),
         SetBackgroundColor(Color::Black),
@@ -462,121 +457,71 @@ fn cell_content(
     abs_row: usize,
     ctx: &RenderPaneContext<'_>,
     badge_info: Option<(usize, &[char])>,
-) -> (char, Color, Color) {
+) -> Cell {
     if row == 0
         && let Some((b_start, b_chars)) = badge_info
         && col >= b_start
         && col < b_start + b_chars.len()
     {
-        return (
-            b_chars[col - b_start],
-            Color::Black,
-            Color::Rgb {
-                r: 255,
-                g: 140,
-                b: 0,
-            },
-        );
+        return highlighted(b_chars[col - b_start]);
     }
-
     let cell = ctx
         .grid
         .get_cell_scrolled(col, row, ctx.scroll_offset)
         .copied()
         .unwrap_or_default();
     if ctx.selection.is_some_and(|s| s.contains_abs(col, abs_row)) {
-        (
-            cell.c,
-            Color::Black,
-            Color::Rgb {
-                r: 255,
-                g: 140,
-                b: 0,
+        highlighted(cell.c)
+    } else if ctx.dimmed {
+        Cell {
+            c: cell.c,
+            style: CellStyle {
+                fg: Some(dim(cell.style.fg)),
+                ..cell.style
             },
-        )
+        }
     } else {
-        let fg = cell.style.fg.map(convert_color).unwrap_or(Color::Reset);
-        let bg = cell.style.bg.map(convert_color).unwrap_or(Color::Reset);
-        if ctx.dimmed {
-            (cell.c, dim_color(fg), bg)
-        } else {
-            (cell.c, fg, bg)
-        }
+        cell
     }
 }
 
-fn render_row_cells<W: Write>(
-    w: &mut W,
-    row: usize,
-    ctx: &RenderPaneContext<'_>,
-    badge_info: Option<(usize, &[char])>,
-) -> io::Result<()> {
-    let abs_row = ctx.grid.abs_line(row, ctx.scroll_offset);
-    let screen_y = ctx.rect.y + row as u16;
-    execute!(w, MoveTo(ctx.rect.x, screen_y))?;
-    let mut cur_fg: Option<Color> = None;
-    let mut cur_bg: Option<Color> = None;
-
-    for col in 0..ctx.rect.width as usize {
-        let (ch, fg, bg) = cell_content(col, row, abs_row, ctx, badge_info);
-        if cur_fg != Some(fg) {
-            execute!(w, SetForegroundColor(fg))?;
-            cur_fg = Some(fg);
-        }
-        if cur_bg != Some(bg) {
-            execute!(w, SetBackgroundColor(bg))?;
-            cur_bg = Some(bg);
-        }
-        execute!(w, Print(ch))?;
-    }
-    execute!(w, ResetColor)?;
-    Ok(())
-}
-
-fn convert_color(c: crate::vt::grid::Color) -> Color {
-    match c {
-        crate::vt::grid::Color::Black => Color::Black,
-        crate::vt::grid::Color::Red => Color::Red,
-        crate::vt::grid::Color::Green => Color::Green,
-        crate::vt::grid::Color::Yellow => Color::Yellow,
-        crate::vt::grid::Color::Blue => Color::Blue,
-        crate::vt::grid::Color::Magenta => Color::Magenta,
-        crate::vt::grid::Color::Cyan => Color::Cyan,
-        crate::vt::grid::Color::White => Color::White,
-        crate::vt::grid::Color::BrightBlack => Color::DarkGrey,
-        crate::vt::grid::Color::BrightRed => Color::Red,
-        crate::vt::grid::Color::BrightGreen => Color::Green,
-        crate::vt::grid::Color::BrightYellow => Color::Yellow,
-        crate::vt::grid::Color::BrightBlue => Color::Blue,
-        crate::vt::grid::Color::BrightMagenta => Color::Magenta,
-        crate::vt::grid::Color::BrightCyan => Color::Cyan,
-        crate::vt::grid::Color::BrightWhite => Color::White,
-        crate::vt::grid::Color::Indexed(i) => Color::AnsiValue(i),
-        crate::vt::grid::Color::Rgb(r, g, b) => Color::Rgb { r, g, b },
-    }
-}
-
-fn dim_color(c: Color) -> Color {
-    match c {
-        Color::Reset | Color::White | Color::Grey => Color::DarkGrey,
-        Color::Rgb { r, g, b } => Color::Rgb {
-            r: (r as u16 * 140 / 255) as u8,
-            g: (g as u16 * 140 / 255) as u8,
-            b: (b as u16 * 140 / 255) as u8,
+/// Black on orange, for badges and copy-mode selection.
+fn highlighted(c: char) -> Cell {
+    Cell {
+        c,
+        style: CellStyle {
+            fg: Some(VtColor::Black),
+            bg: Some(VtColor::Rgb(255, 140, 0)),
+            ..CellStyle::default()
         },
-        Color::Red => Color::DarkRed,
-        Color::Green => Color::DarkGreen,
-        Color::Yellow => Color::DarkYellow,
-        Color::Blue => Color::DarkBlue,
-        Color::Magenta => Color::DarkMagenta,
-        Color::Cyan => Color::DarkCyan,
-        other => other,
+    }
+}
+
+/// Foreground of an unfocused pane: default and white turn grey, bright colors their normal shade.
+fn dim(fg: Option<VtColor>) -> VtColor {
+    match fg {
+        None | Some(VtColor::White | VtColor::BrightWhite) => VtColor::BrightBlack,
+        Some(VtColor::Rgb(r, g, b)) => VtColor::Rgb(
+            (r as u16 * 140 / 255) as u8,
+            (g as u16 * 140 / 255) as u8,
+            (b as u16 * 140 / 255) as u8,
+        ),
+        Some(VtColor::BrightRed) => VtColor::Red,
+        Some(VtColor::BrightGreen) => VtColor::Green,
+        Some(VtColor::BrightYellow) => VtColor::Yellow,
+        Some(VtColor::BrightBlue) => VtColor::Blue,
+        Some(VtColor::BrightMagenta) => VtColor::Magenta,
+        Some(VtColor::BrightCyan) => VtColor::Cyan,
+        Some(other) => other,
     }
 }
 
 fn get_current_time() -> String {
     let now = crate::node::now_ms();
-    format!(" {}", super::status::clock_12h(now, super::status::local_utc_offset(now)))
+    format!(
+        " {}",
+        super::status::clock_12h(now, super::status::local_utc_offset(now))
+    )
 }
 
 pub fn copy_to_clipboard(text: &str) {
