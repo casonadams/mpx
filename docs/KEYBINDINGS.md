@@ -44,7 +44,7 @@ Only the configured prefix is intercepted. `Ctrl-a` reaches your shell unless yo
 | Key | Command | Description |
 | :--- | :--- | :--- |
 | `s` | `agents` | [Agent manager](AGENT-MANAGER.md) |
-| `w` | `choose-tree` | Session → window → pane tree |
+| `w` | `choose-tree` | Sessions: session → window → pane tree with preview |
 | `(` / `)` | `prev-session` / `next-session` | Switch sessions |
 | `A` | `next-attention` | Jump to the agent that has waited longest for input, in any session |
 | `d` / `q` | `detach-client` | Detach (daemon and panes keep running) |
@@ -91,7 +91,7 @@ Custom bindings map a key to any of these command lines; see [CONFIG.md](CONFIG.
 All overlays use the same motions: `j`/`k` (or arrows), `gg`/`G`, `Ctrl-d`/`Ctrl-u`, `/` filter (fuzzy; `Enter` keeps the filter, `Esc` clears it), and `q`/`Esc` to close.
 
 - **Agent manager** (`Prefix s`): see [AGENT-MANAGER.md](AGENT-MANAGER.md).
-- **Tree** (`Prefix w`): `l`/`Right`/`Enter` expands or selects, `h`/`Left` collapses, `x` kills the selected pane, window or session (asks y/n). Selecting switches session and window as needed.
+- **Sessions** (`Prefix w`): every session, window and pane, with the current session first. Pane rows show the running program, working directory and time since last output; session and window rows count waiting (`◆`), working (`●`) and exited (`✕`) panes, even when collapsed. `l`/`Right`/`Enter` expands or selects, `h`/`Left` collapses, `/` filters by name, program or directory, `x` kills the selected pane, window or session (asks y/n), `p` toggles a preview of the selected pane. Selecting switches session and window as needed.
 - **Help** (`Prefix ?`): every active binding and its command.
 
 ---

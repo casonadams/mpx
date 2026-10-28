@@ -12,7 +12,9 @@ use crate::layout::Rect;
 use crate::protocol::AgentState;
 use crate::tui::command::Command;
 use crate::tui::overlay::nav::{Filter, FilterEvent, ListState, has_ctrl};
-use crate::tui::overlay::widgets::{self, Span, Tone, age_label, fit, now_ms, state_mark};
+use crate::tui::overlay::widgets::{
+    self, Span, Tone, age_label, fit, join_meta, now_ms, state_mark, tail_lines,
+};
 use crate::tui::overlay::{OverlayAction, OverlayCtx};
 use crate::tui::render::copy_to_clipboard;
 
@@ -121,15 +123,6 @@ fn live_fields(agent: &LiveAgent) -> Vec<&str> {
         fields.push(info.detail.as_deref().unwrap_or(""));
     }
     fields
-}
-
-fn tail_lines(text: &str, max: usize) -> Vec<String> {
-    let mut lines: Vec<&str> = text.lines().collect();
-    while lines.last().is_some_and(|l| l.trim().is_empty()) {
-        lines.pop();
-    }
-    let start = lines.len().saturating_sub(max);
-    lines[start..].iter().map(|l| l.to_string()).collect()
 }
 
 fn cursor_line(lines: &[Line], slot: Option<Slot>) -> usize {
@@ -645,15 +638,8 @@ impl AgentsView {
             return (area, None);
         }
         let top = LIST_ROWS + 2 + u16::from(self.prompt().is_some());
-        (
-            Rect::new(area.x, area.y, area.width, top),
-            Some(Rect::new(
-                area.x,
-                area.y + top,
-                area.width,
-                area.height - top,
-            )),
-        )
+        let (list, preview) = widgets::split_rows(area, top);
+        (list, Some(preview))
     }
 
     fn render_list<W: Write>(&self, out: &mut W, area: Rect) -> io::Result<()> {
@@ -769,23 +755,10 @@ impl AgentsView {
     }
 
     fn render_preview<W: Write>(&self, out: &mut W, area: Rect) -> io::Result<()> {
-        let body = widgets::inner(area);
         let meta = self.preview_meta();
-        let offset = usize::from(meta.is_some());
-        let lines = self.preview_lines((body.height as usize).saturating_sub(offset));
-        widgets::draw_panel(out, area, "Preview", "")?;
-        if let Some(meta) = meta {
-            widgets::put_row(out, body, 0, &meta, false)?;
-        }
-        if lines.is_empty() && self.selected().is_some() {
-            let hint = [Span::dim("nothing to preview yet")];
-            return widgets::put_row(out, body, offset as u16, &hint, false);
-        }
-        for (row, line) in lines.iter().enumerate() {
-            let row = (row + offset) as u16;
-            widgets::put_row(out, body, row, std::slice::from_ref(line), false)?;
-        }
-        Ok(())
+        let lines = self.preview_lines(widgets::preview_height(area, meta.is_some()));
+        let hint = self.selected().map(|_| "nothing to preview yet");
+        widgets::draw_preview(out, area, meta, &lines, hint)
     }
 
     fn preview_meta(&self) -> Option<Vec<Span>> {
@@ -839,11 +812,6 @@ impl AgentsView {
             None => Vec::new(),
         }
     }
-}
-
-fn join_meta(parts: &[&str]) -> String {
-    let kept: Vec<&str> = parts.iter().copied().filter(|p| !p.is_empty()).collect();
-    kept.join(" · ")
 }
 
 /// Turns `user> ` / `assistant> ` transcript lines into `you ›` / `<label> ›` turns separated by

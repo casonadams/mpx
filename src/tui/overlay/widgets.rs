@@ -114,6 +114,74 @@ pub fn fit(text: &str, width: usize) -> String {
     }
 }
 
+/// Replaces a leading `home` directory with `~`.
+pub fn short_path(path: &str, home: Option<&str>) -> String {
+    let rest = home
+        .filter(|h| !h.is_empty())
+        .and_then(|h| path.strip_prefix(h));
+    match rest {
+        Some("") => "~".to_string(),
+        Some(r) if r.starts_with(['/', '\\']) => format!("~{r}"),
+        _ => path.to_string(),
+    }
+}
+
+/// Last `max` lines of `text`, ignoring trailing blank lines.
+pub fn tail_lines(text: &str, max: usize) -> Vec<String> {
+    let mut lines: Vec<&str> = text.lines().collect();
+    while lines.last().is_some_and(|l| l.trim().is_empty()) {
+        lines.pop();
+    }
+    let start = lines.len().saturating_sub(max);
+    lines[start..].iter().map(|l| l.to_string()).collect()
+}
+
+/// Non-empty `parts` joined with ` · `.
+pub fn join_meta(parts: &[&str]) -> String {
+    let kept: Vec<&str> = parts.iter().copied().filter(|p| !p.is_empty()).collect();
+    kept.join(" · ")
+}
+
+/// Splits `area` into the first `top` rows and the rest.
+pub fn split_rows(area: Rect, top: u16) -> (Rect, Rect) {
+    let top = top.min(area.height);
+    (
+        Rect::new(area.x, area.y, area.width, top),
+        Rect::new(area.x, area.y + top, area.width, area.height - top),
+    )
+}
+
+/// Content rows a preview panel in `area` leaves for lines under an optional meta row.
+pub fn preview_height(area: Rect, meta: bool) -> usize {
+    (inner(area).height as usize).saturating_sub(usize::from(meta))
+}
+
+/// `Preview` panel: an optional meta row, then `lines`, or `empty_hint` when there are none.
+pub fn draw_preview<W: Write>(
+    out: &mut W,
+    area: Rect,
+    meta: Option<Vec<Span>>,
+    lines: &[Span],
+    empty_hint: Option<&str>,
+) -> io::Result<()> {
+    let body = inner(area);
+    let offset = u16::from(meta.is_some());
+    draw_panel(out, area, "Preview", "")?;
+    if let Some(meta) = meta {
+        put_row(out, body, 0, &meta, false)?;
+    }
+    if lines.is_empty() {
+        if let Some(hint) = empty_hint {
+            put_row(out, body, offset, &[Span::dim(hint)], false)?;
+        }
+        return Ok(());
+    }
+    for (row, line) in lines.iter().enumerate() {
+        put_row(out, body, row as u16 + offset, std::slice::from_ref(line), false)?;
+    }
+    Ok(())
+}
+
 /// Interior of a bordered box.
 pub fn inner(area: Rect) -> Rect {
     Rect::new(

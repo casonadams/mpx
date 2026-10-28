@@ -7,7 +7,7 @@ use mpx::protocol::{AgentInfo, AgentState, NodeInfo, NodeState};
 use mpx::tui::command::Command;
 use mpx::tui::overlay::nav::fuzzy_match;
 use mpx::tui::overlay::tree_view::session_from_snapshot;
-use mpx::tui::overlay::widgets::age_label;
+use mpx::tui::overlay::widgets::{age_label, short_path};
 use mpx::tui::overlay::{
     AgentsView, HelpEntry, HelpView, Overlay, OverlayAction, TreePane, TreeSession, TreeView,
     TreeWindow,
@@ -496,6 +496,11 @@ fn pane(name: &str, id: u32, agent: Option<AgentState>, active: bool) -> TreePan
         id,
         agent,
         active,
+        program: name.to_string(),
+        cwd: None,
+        running: true,
+        exit_code: None,
+        last_output_ms: 0,
     }
 }
 
@@ -504,6 +509,7 @@ fn tree() -> TreeView {
         vec![
             TreeSession {
                 name: "main".to_string(),
+                endpoint: String::new(),
                 windows: vec![
                     TreeWindow {
                         index: 0,
@@ -524,6 +530,7 @@ fn tree() -> TreeView {
             },
             TreeSession {
                 name: "work".to_string(),
+                endpoint: String::new(),
                 windows: vec![TreeWindow {
                     index: 0,
                     name: "edit".to_string(),
@@ -745,6 +752,31 @@ fn session_snapshot_places_panes_in_their_window_and_marks_focus() {
     assert!(!session.windows[1].panes[0].active);
 }
 
+#[test]
+fn session_snapshot_prefers_foreground_program_and_keeps_exit_status() {
+    let mut shell = NodeInfo::new("a".to_string(), true, "/bin/zsh -l".to_string());
+    shell.window = Some(0);
+    shell.cwd = Some("/tmp".to_string());
+    let mut editor = shell.clone();
+    editor.name = "b".to_string();
+    editor.foreground = Some("nvim".to_string());
+    editor.state = NodeState::Exited;
+    editor.exit_code = Some(1);
+    let tabs = vec![WindowTab {
+        index: 0,
+        name: "w0".to_string(),
+        is_active: true,
+    }];
+    let session = session_from_snapshot("main".to_string(), &[shell, editor], &tabs, None);
+    let panes = &session.windows[0].panes;
+    assert_eq!(panes[0].program, "zsh");
+    assert_eq!(panes[0].cwd.as_deref(), Some("/tmp"));
+    assert!(panes[0].running);
+    assert_eq!(panes[1].program, "nvim");
+    assert!(!panes[1].running);
+    assert_eq!(panes[1].exit_code, Some(1));
+}
+
 fn help_entries() -> Vec<HelpEntry> {
     [
         ("j/k", "move selection"),
@@ -831,7 +863,7 @@ fn tree_render_shows_session_and_pane_names() {
     let text = render_to_string(&Overlay::Tree(tree()), Rect::new(0, 0, 60, 20));
     assert!(text.contains("main"));
     assert!(text.contains("claude"));
-    assert!(text.contains("Tree · 2 sessions"));
+    assert!(text.contains("Sessions · 2"));
 }
 
 #[test]
@@ -847,10 +879,16 @@ fn draw_agents(view: &AgentsView, area: Rect) -> String {
     String::from_utf8_lossy(&buf).into_owned()
 }
 
+/// Screen text after drawing the tree, so assertions ignore styling escapes.
 fn draw_tree(view: &TreeView, area: Rect) -> String {
     let mut buf: Vec<u8> = Vec::new();
     view.render(&mut buf, area).expect("render");
-    String::from_utf8_lossy(&buf).into_owned()
+    let mut screen = mpx::vt::VtScreen::new(
+        usize::from(area.x + area.width),
+        usize::from(area.y + area.height),
+    );
+    screen.feed(&buf);
+    screen.snapshot()
 }
 
 #[test]
@@ -906,9 +944,10 @@ fn agents_render_has_no_preview_pane_when_narrow_or_toggled_off() {
 #[test]
 fn tree_render_shows_expanded_and_collapsed_arrows() {
     let mut view = tree();
+    view.handle_key(key('p'));
     let expanded = draw_tree(&view, Rect::new(0, 0, 80, 30));
-    assert!(expanded.contains("▾ main *"), "{expanded}");
-    assert!(expanded.contains("▾ 0: shell *"), "{expanded}");
+    assert!(expanded.contains("▾ main"), "{expanded}");
+    assert!(expanded.contains("▾ 0 shell"), "{expanded}");
     assert!(expanded.contains("▾ work"), "{expanded}");
     assert_eq!(act(&mut view, "work", key('h')), OverlayAction::None);
     let collapsed = draw_tree(&view, Rect::new(0, 0, 80, 30));
@@ -920,11 +959,12 @@ fn tree_render_shows_expanded_and_collapsed_arrows() {
 #[test]
 fn tree_render_shows_collapsed_window_arrow_and_hides_its_panes() {
     let mut view = tree();
+    view.handle_key(key('p'));
     assert_eq!(act(&mut view, "logs", key('h')), OverlayAction::None);
     let text = draw_tree(&view, Rect::new(0, 0, 80, 30));
-    assert!(text.contains("▸ 1: logs"), "{text}");
+    assert!(text.contains("▸ 1 logs"), "{text}");
     assert!(!text.contains("tail"), "{text}");
-    assert!(text.contains("▾ 0: shell *"), "{text}");
+    assert!(text.contains("▾ 0 shell"), "{text}");
 }
 
 #[test]
@@ -949,4 +989,136 @@ fn agents_preview_yields_its_rows_to_the_list_while_filtering() {
     assert!(draw_agents(&view, Rect::new(0, 0, 120, 20)).contains("Preview"));
     view.handle_key(key('/'));
     assert!(!draw_agents(&view, Rect::new(0, 0, 120, 20)).contains("Preview"));
+}
+
+/// `main` (current, listed second) has an agent waiting, an exited build and a pane under home.
+fn busy_tree() -> TreeView {
+    let mut waiting = pane("claude", 4, Some(AgentState::NeedsInput), false);
+    waiting.cwd = Some("/home/me/src/mpx".to_string());
+    let mut build = pane("build", 5, None, false);
+    build.running = false;
+    build.exit_code = Some(2);
+    let mut shell = pane("zsh", 3, None, true);
+    shell.program = "nvim".to_string();
+    TreeView::from_data(
+        vec![
+            TreeSession {
+                name: "work".to_string(),
+                endpoint: String::new(),
+                windows: vec![TreeWindow {
+                    index: 0,
+                    name: "edit".to_string(),
+                    active: true,
+                    panes: vec![pane("vim", 9, None, true)],
+                }],
+            },
+            TreeSession {
+                name: "main".to_string(),
+                endpoint: String::new(),
+                windows: vec![TreeWindow {
+                    index: 0,
+                    name: "dev".to_string(),
+                    active: true,
+                    panes: vec![shell, waiting, build],
+                }],
+            },
+        ],
+        "main",
+    )
+    .with_home(Some("/home/me"))
+}
+
+/// Screen row containing `needle`.
+fn row_with<'a>(text: &'a str, needle: &str) -> &'a str {
+    text.lines()
+        .find(|l| l.contains(needle))
+        .unwrap_or_else(|| panic!("no row with {needle}:\n{text}"))
+}
+
+#[test]
+fn tree_lists_the_current_session_first() {
+    assert_eq!(busy_tree().labels()[0], "main");
+}
+
+#[test]
+fn tree_title_counts_sessions_and_agents_waiting() {
+    let text = draw_tree(&busy_tree(), Rect::new(0, 0, 100, 12));
+    assert!(text.contains("Sessions · 2 · 1 need you"), "{text}");
+    let quiet = draw_tree(&tree(), Rect::new(0, 0, 100, 12));
+    assert!(!quiet.contains("need you"), "{quiet}");
+}
+
+#[test]
+fn tree_marks_current_session_active_window_and_focused_pane_distinctly() {
+    let text = draw_tree(&busy_tree(), Rect::new(0, 0, 100, 12));
+    assert!(row_with(&text, "▾ main").contains("current"), "{text}");
+    assert!(!row_with(&text, "▾ work").contains("current"), "{text}");
+    assert!(row_with(&text, "0 dev").contains("active"), "{text}");
+    assert!(row_with(&text, "zsh").contains('›'), "{text}");
+    assert!(!row_with(&text, "claude").contains('›'), "{text}");
+}
+
+#[test]
+fn tree_pane_rows_show_program_short_cwd_state_and_exit_code() {
+    let text = draw_tree(&busy_tree(), Rect::new(0, 0, 100, 12));
+    assert!(row_with(&text, "zsh").contains("nvim"), "{text}");
+    let claude = row_with(&text, "claude");
+    assert!(claude.contains('◆') && claude.contains("~/src/mpx"), "{text}");
+    let build = row_with(&text, "build");
+    assert!(build.contains('✕') && build.contains("exit 2"), "{text}");
+}
+
+#[test]
+fn tree_collapsed_session_rolls_up_waiting_agents_and_exits() {
+    let mut view = busy_tree();
+    view.handle_key(key('p'));
+    assert_eq!(act(&mut view, "main", key('h')), OverlayAction::None);
+    let text = draw_tree(&view, Rect::new(0, 0, 100, 12));
+    let main = row_with(&text, "▸ main");
+    assert!(main.contains("◆1") && main.contains("✕1"), "{text}");
+    assert!(main.contains("1 window · 3 panes"), "{text}");
+    assert!(!text.contains("claude"), "{text}");
+}
+
+#[test]
+fn tree_narrow_rows_drop_the_detail_column() {
+    let mut view = busy_tree();
+    view.handle_key(key('p'));
+    let text = draw_tree(&view, Rect::new(0, 0, 60, 12));
+    assert!(!text.contains("3 panes"), "{text}");
+    assert!(row_with(&text, "build").contains("exit 2"), "{text}");
+}
+
+#[test]
+fn tree_filter_matches_pane_program_and_directory() {
+    let mut view = busy_tree();
+    view.handle_key(key('/'));
+    "nvim".chars().for_each(|c| {
+        view.handle_key(key(c));
+    });
+    assert_eq!(view.labels(), vec!["main", "dev", "zsh"]);
+    view.handle_key(code(KeyCode::Esc));
+    view.handle_key(key('/'));
+    "src/mpx".chars().for_each(|c| {
+        view.handle_key(key(c));
+    });
+    assert_eq!(view.labels(), vec!["main", "dev", "claude"]);
+}
+
+#[test]
+fn tree_preview_names_the_pane_a_session_row_would_show() {
+    let text = draw_tree(&busy_tree(), Rect::new(0, 0, 100, 20));
+    let meta = row_with(&text, "main:%3");
+    assert!(meta.contains("zsh") && meta.contains("nvim"), "{text}");
+    assert!(text.contains("nothing to preview yet"), "{text}");
+}
+
+#[test]
+fn short_path_replaces_only_a_whole_home_prefix() {
+    let home = Some("/home/me");
+    assert_eq!(short_path("/home/me", home), "~");
+    assert_eq!(short_path("/home/me/src", home), "~/src");
+    assert_eq!(short_path("/home/meow", home), "/home/meow");
+    assert_eq!(short_path("/tmp", home), "/tmp");
+    assert_eq!(short_path("/home/me/src", None), "/home/me/src");
 }

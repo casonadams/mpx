@@ -130,10 +130,16 @@ fn draw_agents(view: &AgentsView, area: Rect) -> String {
     String::from_utf8_lossy(&buf).into_owned()
 }
 
+/// Screen text after drawing the tree, so assertions ignore styling escapes.
 fn draw_tree(view: &TreeView, area: Rect) -> String {
     let mut buf: Vec<u8> = Vec::new();
     view.render(&mut buf, area).expect("render");
-    String::from_utf8_lossy(&buf).into_owned()
+    let mut screen = mpx::vt::VtScreen::new(
+        usize::from(area.x + area.width),
+        usize::from(area.y + area.height),
+    );
+    screen.feed(&buf);
+    screen.snapshot()
 }
 
 fn transcript(dir: &Path, lines: &str) -> ResumableSession {
@@ -260,8 +266,8 @@ async fn tree_refresh_loads_every_reachable_session_with_its_windows_and_panes()
     assert!(!labels.contains(&"ghost".to_string()), "{labels:?}");
 
     let text = draw_tree(&tree, Rect::new(0, 0, 120, 30));
-    assert!(text.contains("Tree · 2 sessions"), "{text}");
-    assert!(text.contains("▾ alpha *"), "{text}");
+    assert!(text.contains("Sessions · 2"), "{text}");
+    assert!(text.contains("current"), "{text}");
     assert!(text.contains("▾ beta"), "{text}");
 }
 
@@ -350,4 +356,33 @@ fn transcript_preview_of_missing_file_is_empty_and_does_not_fail() {
     let text = draw_agents(&view, area());
     assert!(text.contains("nothing to preview yet"), "{text}");
     assert!(!text.contains(" › "), "{text}");
+}
+
+#[tokio::test]
+async fn tree_preview_shows_the_selected_sessions_focused_pane_and_toggles_off() {
+    let fleet = start_fleet().await;
+    let registry = harness_registry();
+    let config = Config::default();
+    let mut client = Client::connect(&fleet.alpha).await.expect("connect");
+    let mut ctx = OverlayCtx {
+        client: &mut client,
+        session: "alpha",
+        config: &config,
+        registry: &registry,
+        cwd: None,
+        socket_dir: fleet.dir.path(),
+    };
+    let mut tree = TreeView::default();
+    tree.refresh(&mut ctx).await;
+    assert_eq!(tree.labels()[0], "alpha");
+
+    let text = draw_tree(&tree, Rect::new(0, 0, 120, 30));
+    assert!(text.contains("alpha:%"), "{text}");
+    assert!(text.contains("ready-marker"), "{text}");
+
+    tree.handle_key(key('p'));
+    tree.refresh(&mut ctx).await;
+    let text = draw_tree(&tree, Rect::new(0, 0, 120, 30));
+    assert!(!text.contains("Preview"), "{text}");
+    assert!(!text.contains("ready-marker"), "{text}");
 }
