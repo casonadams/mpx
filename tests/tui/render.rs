@@ -1,10 +1,7 @@
-use mpx::config::Config;
 use mpx::layout::{Divider, Rect, WindowTab};
 use mpx::tui::canvas::Canvas;
-use mpx::tui::keymap::{Shortcut, resolve};
 use mpx::tui::render::{
-    Compositor, RenderPaneContext, SelectionRange, StatusBar, shortcut_layout, status_left,
-    status_right,
+    Compositor, RenderPaneContext, SelectionRange, StatusBar, hud_rect, status_left, status_right,
 };
 use mpx::vt::grid::Grid;
 
@@ -142,40 +139,24 @@ fn command_line_prints_text_on_its_row() {
     assert!(String::from_utf8_lossy(&buf).contains(":split"));
 }
 
-fn default_shortcuts() -> Vec<Shortcut> {
-    resolve(&Config::default()).expect("keymap").shortcuts()
-}
-
 #[test]
-fn shortcut_popup_fits_every_binding_above_the_status_row() {
-    let shortcuts = default_shortcuts();
-    let small = shortcut_layout(&shortcuts, 80, 24).expect("fits 80x24");
-    assert!(small.rows * small.columns >= shortcuts.len(), "{small:?}");
-    assert!(
-        small.rect.y + small.rect.height <= 23,
-        "clear of the status row"
-    );
-    let wide = shortcut_layout(&shortcuts, 200, 50).expect("fits 200x50");
-    assert!(wide.columns > small.columns && wide.rows < small.rows);
-    assert_eq!(shortcut_layout(&shortcuts, 20, 4), None);
-}
-
-#[test]
-fn shortcut_popup_draws_the_prefix_and_bindings() {
-    let shortcuts = default_shortcuts();
-    let layout = shortcut_layout(&shortcuts, 80, 24).expect("layout");
+fn shortcut_hud_lists_split_and_escape_hint() {
     let mut buf = Vec::new();
-    Compositor::draw_shortcut_hud(&mut buf, &layout, &shortcuts, "C-b").unwrap();
+    Compositor::draw_shortcut_hud(&mut buf, 80, 24).unwrap();
     let out = String::from_utf8_lossy(&buf);
-    for text in [
-        "C-b",
-        "agent manager",
-        "split side by side",
-        "0-9",
-        "? all keys",
-    ] {
-        assert!(out.contains(text), "missing {text}");
-    }
+    assert!(out.contains("╭"));
+    assert!(out.contains("split vertical"));
+    assert!(out.contains("split horizontal"));
+    assert!(out.contains("ESC"));
+}
+
+#[test]
+fn hud_rect_places_box_bottom_right() {
+    let rect = hud_rect(80, 24).expect("fits 80x24");
+    assert_eq!(rect.width, 30);
+    assert_eq!(rect.x, 80 - 32);
+    assert_eq!(rect.y + rect.height, 23);
+    assert_eq!(hud_rect(20, 10), None);
 }
 
 #[test]

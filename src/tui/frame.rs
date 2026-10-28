@@ -3,11 +3,8 @@ use std::io::{self, Write};
 
 use super::app::{App, Mode};
 use super::copy::{CopyState, SelectionKind};
-use super::keymap::Shortcut;
 use super::panes::PaneRect;
-use super::render::{
-    Compositor, RenderPaneContext, SelectionRange, ShortcutLayout, StatusBar, shortcut_layout,
-};
+use super::render::{Compositor, RenderPaneContext, SelectionRange, StatusBar, hud_rect};
 use super::status::exit_badge;
 use crate::layout::geometry::Rect;
 use crate::protocol::NodeInfo;
@@ -30,7 +27,7 @@ pub fn draw<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
     let hud = shortcut_popup(app, screen_w, screen_h);
     let covered = match &app.mode {
         Mode::Overlay(_) => Some(overlay_area(screen_w, screen_h)),
-        _ => hud.as_ref().map(|(_, layout)| layout.rect),
+        _ => hud,
     };
     app.canvas.begin(screen_w, layout_h, covered);
     draw_panes(app, out)?;
@@ -39,9 +36,8 @@ pub fn draw<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
     }
     app.canvas.finish(out)?;
     draw_status_row(app, out)?;
-    if let Some((shortcuts, layout)) = &hud {
-        let prefix = app.keymap.prefix().display();
-        Compositor::draw_shortcut_hud(out, layout, shortcuts, &prefix)?;
+    if hud.is_some() {
+        Compositor::draw_shortcut_hud(out, screen_w, screen_h)?;
     }
     if let Mode::Overlay(overlay) = &app.mode {
         overlay.render(out, overlay_area(screen_w, screen_h))?;
@@ -51,18 +47,12 @@ pub fn draw<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
     out.flush()
 }
 
-/// The keymap's shortcuts and where they go, once the popup is due and fits on screen.
-fn shortcut_popup(
-    app: &App,
-    screen_w: u16,
-    screen_h: u16,
-) -> Option<(Vec<Shortcut>, ShortcutLayout)> {
+/// The shortcut popup's area, once due and when it fits on screen.
+fn shortcut_popup(app: &App, screen_w: u16, screen_h: u16) -> Option<Rect> {
     if !app.hud_visible() {
         return None;
     }
-    let shortcuts = app.keymap.shortcuts();
-    let layout = shortcut_layout(&shortcuts, screen_w, screen_h)?;
-    Some((shortcuts, layout))
+    hud_rect(screen_w, screen_h)
 }
 
 /// Panes with cells to paint; zero-sized panes are skipped.

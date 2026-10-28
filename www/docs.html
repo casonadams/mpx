@@ -36,13 +36,13 @@
     </div>
   </header>
 
-  <main class="container" style="max-width: 900px;">
+  <main class="container docs-content">
     <h1>mpx Documentation</h1>
-    <p class="lead" style="margin-bottom: 2.5rem; color: var(--text-muted);">
+    <p class="lead" style="color: var(--text-muted);">
       An ultra-performant, zero-overhead terminal and stream multiplexer engineered in Rust for humans and autonomous AI coding agents.
     </p>
 
-    <div class="telemetry-banner" style="margin: 0 0 2.5rem 0;">
+    <div class="telemetry-banner" style="margin: 0 0 2rem 0;">
       <strong>100% Local & Zero Telemetry</strong>: Offline-by-design. Zero analytics, zero network calls, zero telemetry, and zero model training. Complete data sovereignty.
     </div>
 
@@ -56,62 +56,68 @@ mpx
 mpx -s dev</code></pre>
     </section>
 
-    <hr style="border: 0; border-top: 1px solid var(--border); margin: 3rem 0;">
+    <hr>
 
     <section id="shortcuts">
       <h2>TUI Keybindings & Navigation</h2>
       <p><strong><code>Ctrl-b</code></strong> is the prefix (configurable, e.g. <code>prefix = "C-a"</code> in <code>~/.config/mpx/config.toml</code>). Press it twice to send it to the program. When tmux has no precedent, bindings follow vim.</p>
 
       <h3>Windows (Tabs)</h3>
-      <table>
-        <thead>
-          <tr><th>Shortcut</th><th>Action</th><th>Description</th></tr>
-        </thead>
-        <tbody>
-          <tr><td><code>Prefix + c</code></td><td>New Window</td><td>Spawns a new window tab running default shell and focuses it</td></tr>
-          <tr><td><code>Prefix + n</code></td><td>Next Window</td><td>Switch to the next window tab</td></tr>
-          <tr><td><code>Prefix + p</code></td><td>Previous Window</td><td>Switch to the previous window tab</td></tr>
-          <tr><td><code>Prefix + 0..9</code></td><td>Select Window</td><td>Jump directly to window tab by index</td></tr>
-          <tr><td><code>Prefix + ^</code></td><td>Last Window</td><td>Previously active window</td></tr>
-          <tr><td><code>Prefix + ,</code> / <code>&amp;</code></td><td>Rename / Kill Window</td><td>Rename via the prompt; kill asks y/n</td></tr>
-        </tbody>
-      </table>
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr><th>Shortcut</th><th>Action</th><th>Description</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>Prefix + c</code></td><td>New Window</td><td>Spawns a new window tab running default shell and focuses it</td></tr>
+            <tr><td><code>Prefix + n</code></td><td>Next Window</td><td>Switch to the next window tab</td></tr>
+            <tr><td><code>Prefix + p</code></td><td>Previous Window</td><td>Switch to the previous window tab</td></tr>
+            <tr><td><code>Prefix + 0..9</code></td><td>Select Window</td><td>Jump directly to window tab by index</td></tr>
+            <tr><td><code>Prefix + ^</code></td><td>Last Window</td><td>Previously active window</td></tr>
+            <tr><td><code>Prefix + ,</code> / <code>&amp;</code></td><td>Rename / Kill Window</td><td>Rename via the prompt; kill asks y/n</td></tr>
+          </tbody>
+        </table>
+      </div>
 
       <h3>Panes (Splits)</h3>
-      <table>
-        <thead>
-          <tr><th>Shortcut</th><th>Action</th><th>Description</th></tr>
-        </thead>
-        <tbody>
-          <tr><td><code>Prefix + %</code> or <code>Prefix + |</code></td><td>Split Vertical</td><td>Split active window vertically (side-by-side columns, divider │)</td></tr>
-          <tr><td><code>Prefix + "</code> or <code>Prefix + -</code></td><td>Split Horizontal</td><td>Split active window horizontally (top-and-bottom rows, divider ─)</td></tr>
-          <tr><td><code>Prefix + h</code> / <code>Left</code></td><td>Focus Left</td><td>Geometric directional focus move left</td></tr>
-          <tr><td><code>Prefix + j</code> / <code>Down</code></td><td>Focus Down</td><td>Geometric directional focus move down</td></tr>
-          <tr><td><code>Prefix + k</code> / <code>Up</code></td><td>Focus Up</td><td>Geometric directional focus move up</td></tr>
-          <tr><td><code>Prefix + l</code> / <code>Right</code></td><td>Focus Right</td><td>Geometric directional focus move right</td></tr>
-          <tr><td><code>Prefix + o</code> / <code>Tab</code> / <code>;</code></td><td>Next / Last Pane</td><td>Cycle panes or return to the previous one</td></tr>
-          <tr><td><code>Prefix + H J K L</code></td><td>Resize</td><td>Move the border 5 cells (repeatable for 500 ms)</td></tr>
-          <tr><td><code>Prefix + z</code></td><td>Toggle Zoom</td><td>Maximize active pane to 100% full screen (press again to un-zoom)</td></tr>
-          <tr><td><code>Prefix + x</code> / <code>!</code></td><td>Kill / Break Pane</td><td>Kill asks y/n; break moves the pane to its own window</td></tr>
-          <tr><td><code>Prefix + { }</code> / <code>Space</code></td><td>Swap / Layout</td><td>Swap with neighbour; cycle layout presets</td></tr>
-          <tr><td><code>Prefix + d</code></td><td>Detach</td><td>Cleanly detach back to host terminal (leaves daemon running)</td></tr>
-        </tbody>
-      </table>
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr><th>Shortcut</th><th>Action</th><th>Description</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>Prefix + %</code> or <code>Prefix + |</code></td><td>Split Vertical</td><td>Split active window vertically (side-by-side columns, divider │)</td></tr>
+            <tr><td><code>Prefix + "</code> or <code>Prefix + -</code></td><td>Split Horizontal</td><td>Split active window horizontally (top-and-bottom rows, divider ─)</td></tr>
+            <tr><td><code>Prefix + h</code> / <code>Left</code></td><td>Focus Left</td><td>Geometric directional focus move left</td></tr>
+            <tr><td><code>Prefix + j</code> / <code>Down</code></td><td>Focus Down</td><td>Geometric directional focus move down</td></tr>
+            <tr><td><code>Prefix + k</code> / <code>Up</code></td><td>Focus Up</td><td>Geometric directional focus move up</td></tr>
+            <tr><td><code>Prefix + l</code> / <code>Right</code></td><td>Focus Right</td><td>Geometric directional focus move right</td></tr>
+            <tr><td><code>Prefix + o</code> / <code>Tab</code> / <code>;</code></td><td>Next / Last Pane</td><td>Cycle panes or return to the previous one</td></tr>
+            <tr><td><code>Prefix + H J K L</code></td><td>Resize</td><td>Move the border 5 cells (repeatable for 500 ms)</td></tr>
+            <tr><td><code>Prefix + z</code></td><td>Toggle Zoom</td><td>Maximize active pane to 100% full screen (press again to un-zoom)</td></tr>
+            <tr><td><code>Prefix + x</code> / <code>!</code></td><td>Kill / Break Pane</td><td>Kill asks y/n; break moves the pane to its own window</td></tr>
+            <tr><td><code>Prefix + { }</code> / <code>Space</code></td><td>Swap / Layout</td><td>Swap with neighbour; cycle layout presets</td></tr>
+            <tr><td><code>Prefix + d</code></td><td>Detach</td><td>Cleanly detach back to host terminal (leaves daemon running)</td></tr>
+          </tbody>
+        </table>
+      </div>
 
       <h3>Sessions, Agents &amp; Prompt</h3>
-      <table>
-        <thead>
-          <tr><th>Shortcut</th><th>Action</th><th>Description</th></tr>
-        </thead>
-        <tbody>
-          <tr><td><code>Prefix + a</code></td><td>Agent Manager</td><td>All AI agents across sessions grouped by state, plus resumable sessions</td></tr>
-          <tr><td><code>Prefix + A</code></td><td>Next Attention</td><td>Jump to the agent that has waited longest for input</td></tr>
-          <tr><td><code>Prefix + s</code> / <code>w</code></td><td>Tree</td><td>Sessions, windows and panes with vim navigation</td></tr>
-          <tr><td><code>Prefix + ( )</code></td><td>Switch Session</td><td>Previous / next session</td></tr>
-          <tr><td><code>Prefix + :</code></td><td>Command Prompt</td><td>tmux commands with vim aliases (<code>:vsplit</code>, <code>:tabnew</code>, <code>:q</code>)</td></tr>
-          <tr><td><code>Prefix + ?</code></td><td>Key List</td><td>Searchable list of every binding</td></tr>
-        </tbody>
-      </table>
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr><th>Shortcut</th><th>Action</th><th>Description</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>Prefix + a</code></td><td>Agent Manager</td><td>All AI agents across sessions grouped by state, plus resumable sessions</td></tr>
+            <tr><td><code>Prefix + A</code></td><td>Next Attention</td><td>Jump to the agent that has waited longest for input</td></tr>
+            <tr><td><code>Prefix + s</code> / <code>w</code></td><td>Tree</td><td>Sessions, windows and panes with vim navigation</td></tr>
+            <tr><td><code>Prefix + ( )</code></td><td>Switch Session</td><td>Previous / next session</td></tr>
+            <tr><td><code>Prefix + :</code></td><td>Command Prompt</td><td>tmux commands with vim aliases (<code>:vsplit</code>, <code>:tabnew</code>, <code>:q</code>)</td></tr>
+            <tr><td><code>Prefix + ?</code></td><td>Key List</td><td>Searchable list of every binding</td></tr>
+          </tbody>
+        </table>
+      </div>
 
       <h3>Mouse Mode</h3>
       <ul>
@@ -122,35 +128,37 @@ mpx -s dev</code></pre>
       </ul>
     </section>
 
-    <hr style="border: 0; border-top: 1px solid var(--border); margin: 3rem 0;">
+    <hr>
 
     <section id="copy-mode">
       <h2>Vi Copy / Visual Mode</h2>
       <p>Enter copy mode with <strong><code>Prefix + [</code></strong> or by scrolling up with the mouse wheel. Navigate with a live movable cursor across up to <strong>100,000 lines of scrollback history</strong>:</p>
 
-      <table>
-        <thead>
-          <tr><th>Key</th><th>Function</th></tr>
-        </thead>
-        <tbody>
-          <tr><td><code>h, j, k, l</code></td><td>Move cursor left, down, up, right (scrolls into history when reaching row 0)</td></tr>
-          <tr><td><code>0</code> / <code>^</code></td><td>Jump to beginning of row</td></tr>
-          <tr><td><code>$</code></td><td>Jump to end of row</td></tr>
-          <tr><td><code>w</code> / <code>b</code></td><td>Jump forward / backward by word</td></tr>
-          <tr><td><code>Ctrl-u</code> / <code>PageUp</code></td><td>Scroll up half page (15 lines)</td></tr>
-          <tr><td><code>Ctrl-d</code> / <code>PageDown</code></td><td>Scroll down half page (15 lines)</td></tr>
-          <tr><td><code>g</code></td><td>Jump to the very beginning of the 100,000 line scrollback history</td></tr>
-          <tr><td><code>G</code></td><td>Jump to bottom live prompt</td></tr>
-          <tr><td><code>v</code></td><td>Begin character-wise visual selection (<code>[VISUAL]</code>)</td></tr>
-          <tr><td><code>V</code> (Shift-V)</td><td><strong>Full-row visual line selection</strong> (<code>[VISUAL LINE]</code>, highlights entire row across history)</td></tr>
-          <tr><td><code>y</code> / <code>Enter</code></td><td><strong>Yank selection</strong> to system clipboard (via <code>pbcopy</code> / OSC 52) and exit copy mode</td></tr>
-          <tr><td><code>Esc</code></td><td>Clear visual selection; second Esc exits copy mode</td></tr>
-          <tr><td><code>q</code></td><td>Exit copy mode</td></tr>
-        </tbody>
-      </table>
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr><th>Key</th><th>Function</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>h, j, k, l</code></td><td>Move cursor left, down, up, right (scrolls into history when reaching row 0)</td></tr>
+            <tr><td><code>0</code> / <code>^</code></td><td>Jump to beginning of row</td></tr>
+            <tr><td><code>$</code></td><td>Jump to end of row</td></tr>
+            <tr><td><code>w</code> / <code>b</code></td><td>Jump forward / backward by word</td></tr>
+            <tr><td><code>Ctrl-u</code> / <code>PageUp</code></td><td>Scroll up half page (15 lines)</td></tr>
+            <tr><td><code>Ctrl-d</code> / <code>PageDown</code></td><td>Scroll down half page (15 lines)</td></tr>
+            <tr><td><code>g</code></td><td>Jump to the very beginning of the 100,000 line scrollback history</td></tr>
+            <tr><td><code>G</code></td><td>Jump to bottom live prompt</td></tr>
+            <tr><td><code>v</code></td><td>Begin character-wise visual selection (<code>[VISUAL]</code>)</td></tr>
+            <tr><td><code>V</code> (Shift-V)</td><td><strong>Full-row visual line selection</strong> (<code>[VISUAL LINE]</code>, highlights entire row across history)</td></tr>
+            <tr><td><code>y</code> / <code>Enter</code></td><td><strong>Yank selection</strong> to system clipboard (via <code>pbcopy</code> / OSC 52) and exit copy mode</td></tr>
+            <tr><td><code>Esc</code></td><td>Clear visual selection; second Esc exits copy mode</td></tr>
+            <tr><td><code>q</code></td><td>Exit copy mode</td></tr>
+          </tbody>
+        </table>
+      </div>
     </section>
 
-    <hr style="border: 0; border-top: 1px solid var(--border); margin: 3rem 0;">
+    <hr>
 
     <section id="mcp">
       <h2>Model Context Protocol (MCP) Server</h2>
@@ -181,7 +189,7 @@ mpx -s dev</code></pre>
       </ul>
     </section>
 
-    <hr style="border: 0; border-top: 1px solid var(--border); margin: 3rem 0;">
+    <hr>
 
     <section id="pipes">
       <h2>Inter-Agent Virtual Pipes</h2>
@@ -196,14 +204,14 @@ mpx pipe read agent_bus --consumer reviewer --wait 30000
 mpx pipe subscribe agent_bus</code></pre>
     </section>
 
-    <hr style="border: 0; border-top: 1px solid var(--border); margin: 3rem 0;">
+    <hr>
 
     <section id="restore">
       <h2>Session Restore</h2>
       <p>The daemon snapshots each session's layout as it changes. After a crash or reboot, the next start brings back the windows, splits and working directories, and agents resume their conversations through their harness. After a deliberate <code>mpx kill-server</code>, run <code>mpx restore</code> to bring the layout back.</p>
     </section>
 
-    <hr style="border: 0; border-top: 1px solid var(--border); margin: 3rem 0;">
+    <hr>
 
     <section id="cli">
       <h2>CLI Command Reference</h2>

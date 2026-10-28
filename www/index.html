@@ -21,7 +21,6 @@
           <line x1="18" y1="6" x2="18" y2="16" stroke="#d29922" stroke-width="1.5" stroke-dasharray="2 2"/>
         </svg>
         mpx
-        <span class="tag">v0.1.0</span>
       </a>
 
       <nav>
@@ -156,86 +155,97 @@ Your branch is up to date with 'origin/main'.
     <section id="comparison" class="container">
       <h2 class="section-title">Why mpx? The Paradigm Shift</h2>
       <p class="section-desc">From legacy 1990s PTY scraping to unified stream execution nodes.</p>
-
-      <table>
-        <thead>
-          <tr>
-            <th>Dimension</th>
-            <th>tmux</th>
-            <th>zellij</th>
-            <th>mpx</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td><strong>Language & Core</strong></td>
-            <td>C (libevent)</td>
-            <td>Rust (multi-thread actor + async-std)</td>
-            <td><strong>Rust (Tokio async)</strong></td>
-          </tr>
-          <tr>
-            <td><strong>Idle Memory</strong></td>
-            <td>~5 MB</td>
-            <td>~60–120 MB</td>
-            <td><strong>~5 MB</strong></td>
-          </tr>
-          <tr>
-            <td><strong>WASM Runtime</strong></td>
-            <td>None</td>
-            <td>Yes (wasmer/WASI bloat)</td>
-            <td><strong>None (Zero Bloat)</strong></td>
-          </tr>
-          <tr>
-            <td><strong>Agent Automation</strong></td>
-            <td><code>send-keys</code> & <code>capture-pane</code> text scraping</td>
-            <td>WASM Plugin API / CLI</td>
-            <td><strong>Native Stdio MCP + Socket JSON-RPC</strong></td>
-          </tr>
-          <tr>
-            <td><strong>Process Supervision</strong></td>
-            <td>Interactive PTY login shells only</td>
-            <td>PTY + WASM Plugins</td>
-            <td><strong>PTY + Pipe Tasks + Virtual Channels</strong></td>
-          </tr>
-          <tr>
-            <td><strong>Stream Storage</strong></td>
-            <td>2D cell grid only</td>
-            <td>2D cell grid only</td>
-            <td><strong>Dual Buffer (Raw Stream + 2D Grid)</strong></td>
-          </tr>
-          <tr>
-            <td><strong>Native Windows</strong></td>
-            <td>Cygwin / WSL required</td>
-            <td>WSL required</td>
-            <td><strong>Native (Named Pipes + ConPTY)</strong></td>
-          </tr>
-          <tr>
-            <td><strong>Data Sovereignty</strong></td>
-            <td>None</td>
-            <td>None</td>
-            <td><strong>100% Offline (Zero Telemetry)</strong></td>
-          </tr>
-        </tbody>
-      </table>
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Dimension</th>
+              <th>tmux</th>
+              <th>zellij</th>
+              <th>mpx</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Language & Core</strong></td>
+              <td>C (libevent)</td>
+              <td>Rust (multi-thread actor + async-std)</td>
+              <td><strong>Rust (Tokio async)</strong></td>
+            </tr>
+            <tr>
+              <td><strong>Idle Memory</strong></td>
+              <td>~5 MB</td>
+              <td>~60–120 MB</td>
+              <td><strong>~5 MB</strong></td>
+            </tr>
+            <tr>
+              <td><strong>WASM Runtime</strong></td>
+              <td>None</td>
+              <td>Yes (wasmer/WASI bloat)</td>
+              <td><strong>None (Zero Bloat)</strong></td>
+            </tr>
+            <tr>
+              <td><strong>Agent Automation</strong></td>
+              <td><code>send-keys</code> & <code>capture-pane</code> text scraping</td>
+              <td>WASM Plugin API / CLI</td>
+              <td><strong>Native Stdio MCP + Socket JSON-RPC</strong></td>
+            </tr>
+            <tr>
+              <td><strong>Process Supervision</strong></td>
+              <td>Interactive PTY login shells only</td>
+              <td>PTY + WASM Plugins</td>
+              <td><strong>PTY + Pipe Tasks + Virtual Channels</strong></td>
+            </tr>
+            <tr>
+              <td><strong>Stream Storage</strong></td>
+              <td>2D cell grid only</td>
+              <td>2D cell grid only</td>
+              <td><strong>Dual Buffer (Raw Stream + 2D Grid)</strong></td>
+            </tr>
+            <tr>
+              <td><strong>Native Windows</strong></td>
+              <td>Cygwin / WSL required</td>
+              <td>WSL required</td>
+              <td><strong>Native (Named Pipes + ConPTY)</strong></td>
+            </tr>
+            <tr>
+              <td><strong>Data Sovereignty</strong></td>
+              <td>None</td>
+              <td>None</td>
+              <td><strong>100% Offline (Zero Telemetry)</strong></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </section>
 
     <section id="install" class="container">
       <h2 class="section-title">Installation</h2>
       <p class="section-desc">Get started in seconds on macOS, Linux, or Windows.</p>
 
-      <h3>Homebrew (macOS & Linux)</h3>
-      <pre><code>brew install casonadams/tap/mpx</code></pre>
+      <div class="install-grid">
+        <div class="install-card">
+          <h3>Homebrew (macOS &amp; Linux)</h3>
+          <p>Official tap repository</p>
+          <pre><code>brew install casonadams/tap/mpx</code></pre>
+        </div>
 
-      <h3>Cargo (crates.io)</h3>
-      <pre><code>cargo install mpx</code></pre>
+        <div class="install-card">
+          <h3>Cargo (crates.io)</h3>
+          <p>Build directly from source</p>
+          <pre><code>cargo install mpx</code></pre>
+        </div>
 
-      <h3>Prebuilt Static Binaries</h3>
-      <p>Download cross-platform binaries directly from GitHub Releases:</p>
-      <ul>
-        <li><strong>macOS (Apple Silicon & Intel)</strong>: <code>.tar.gz</code></li>
-        <li><strong>Linux (x86_64 & aarch64)</strong>: <code>.tar.gz</code>, <code>.deb</code>, <code>.rpm</code></li>
-        <li><strong>Windows (x86_64)</strong>: <code>.zip</code> (native ConPTY + Named Pipes)</li>
-      </ul>
+        <div class="install-card">
+          <h3>Prebuilt Static Binaries</h3>
+          <p>Cross-platform releases from GitHub</p>
+          <ul>
+            <li><strong>macOS</strong>: Apple Silicon &amp; Intel (<code>.tar.gz</code>)</li>
+            <li><strong>Linux</strong>: x86_64 &amp; aarch64 (<code>.tar.gz</code>, <code>.deb</code>, <code>.rpm</code>)</li>
+            <li><strong>Windows</strong>: Native ConPTY (<code>.zip</code>)</li>
+          </ul>
+        </div>
+      </div>
     </section>
   </main>
 
