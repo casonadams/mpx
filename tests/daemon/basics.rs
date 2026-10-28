@@ -50,7 +50,7 @@ async fn pty_output_is_captured() {
 async fn interactive_pty_shell_runs_input() {
     let daemon = start().await;
     let mut client = connect(&daemon.endpoint).await;
-    client.spawn(pty("shell", "/bin/sh", &[])).await.unwrap();
+    client.spawn(pty("shell", "sh", &[])).await.unwrap();
     client
         .send_input("shell", "echo PTY_INTERACTIVE_OK\r\n")
         .await
