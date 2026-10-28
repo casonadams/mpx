@@ -100,13 +100,14 @@ async fn wait_child(
         }
     };
     let status = tokio::select! {
-        status = child.wait() => status.ok(),
+        status = child.wait() => status.ok().and_then(|s| s.code()),
         () = kill_signal => {
             let _ = child.start_kill();
-            child.wait().await.ok()
+            let _ = child.wait().await;
+            None
         }
     };
-    let code = status.and_then(|s| s.code());
+    let code = status;
     for reader in readers {
         let _ = tokio::time::timeout(Duration::from_millis(500), reader).await;
     }

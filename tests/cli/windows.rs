@@ -8,10 +8,11 @@ struct Geometry {
     h: u16,
 }
 
-/// Every laid-out pane as (name, geometry, focused), at a fixed 80x24 screen.
+/// Every laid-out pane as (name, geometry, focused), at the terminal's screen size (or 80x24).
 fn layout(f: &Fixture) -> Vec<(String, Geometry, bool)> {
+    let (w, h) = crossterm::terminal::size().unwrap_or((80, 24));
     f.query(|mut c| async move {
-        let (rects, _, _) = c.layout(80, 24).await.expect("layout");
+        let (rects, _, _) = c.layout(w, h).await.expect("layout");
         rects
             .into_iter()
             .map(|(name, r, focused)| {
