@@ -31,7 +31,8 @@ fn key(c: char) -> KeyEvent {
 
 async fn start_daemon(dir: &Path, session: &str) -> String {
     let endpoint = endpoint_in(dir, session);
-    let listener = IpcListener::bind(&endpoint).expect("bind");
+    #[allow(unused_mut)]
+    let mut listener = IpcListener::bind(&endpoint).expect("bind");
     let state = DaemonState::new(
         session.to_string(),
         endpoint.clone(),

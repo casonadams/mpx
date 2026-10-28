@@ -20,7 +20,8 @@ struct Daemon {
 async fn start_tracked() -> Daemon {
     let dir = tempfile::tempdir().expect("tempdir");
     let endpoint = dir.path().join("mpx.sock").to_string_lossy().into_owned();
-    let listener = IpcListener::bind(&endpoint).expect("bind");
+    #[allow(unused_mut)]
+    let mut listener = IpcListener::bind(&endpoint).expect("bind");
     let state = DaemonState::new(
         SESSION.to_string(),
         endpoint.clone(),

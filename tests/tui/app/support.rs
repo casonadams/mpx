@@ -65,7 +65,8 @@ impl Sandbox {
     /// Starts an in-process daemon for `session` on its socket in the socket dir.
     pub async fn serve(&self, session: &str, config: &Config) {
         let endpoint = self.endpoint(session);
-        let listener = IpcListener::bind(&endpoint).expect("bind socket");
+        #[allow(unused_mut)]
+        let mut listener = IpcListener::bind(&endpoint).expect("bind socket");
         let state = DaemonState::new(
             session.to_string(),
             endpoint,

@@ -1,4 +1,5 @@
 mod daemon {
+    #[cfg(unix)]
     mod agent_events;
     mod agents;
     mod basics;

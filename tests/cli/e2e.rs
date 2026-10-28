@@ -247,10 +247,13 @@ fn print_config_emits_claude_hook_settings() {
 /// Runs the binary as `tmux` (argv0 multicall) against `s`, creating the symlink on first use.
 fn tmux(s: &Session, args: &[&str]) -> Output {
     let shim_dir = s.runtime.join("bin");
-    let link = shim_dir.join("tmux");
+    let link = shim_dir.join(if cfg!(windows) { "tmux.exe" } else { "tmux" });
     if !link.exists() {
         std::fs::create_dir_all(&shim_dir).expect("bin dir");
+        #[cfg(unix)]
         std::os::unix::fs::symlink(BIN, &link).expect("symlink");
+        #[cfg(windows)]
+        std::fs::copy(BIN, &link).expect("copy tmux.exe");
     }
     Command::new(&link)
         .args(args)
