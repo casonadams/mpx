@@ -250,7 +250,7 @@ async fn a_window_that_flooded_while_hidden_is_rebuilt_when_selected() {
     seed.select_window(0).await.expect("back to main");
     h.frame().await;
 
-    h.probe.send_input("bulk", "\r").await.expect("trigger");
+    h.probe.send_input("bulk", "\n").await.expect("trigger");
     let log = wait_for(&mut h.probe, "bulk", "BIG-END").await;
     assert!(log.len() > 512 * 1024, "more than a catch-up's worth: {}", log.len());
 

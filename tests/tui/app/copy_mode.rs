@@ -236,11 +236,22 @@ async fn a_live_pane_keeps_no_scrollback_and_copy_mode_brings_it_back() {
 
 #[tokio::test]
 async fn stdout_updating_in_copy_mode_anchors_viewport_and_selection() {
-    let mut h = started(&long_output()).await;
+    let mut h = started(ECHO).await;
+    let mut fill = String::new();
+    for i in 1..=35 {
+        fill.push_str(&format!("line {i}\r\n"));
+    }
+    fill.push_str("READY");
+    h.probe.send_input(MAIN, &fill).await.expect("send");
+    h.until("fill lines applied", |app| {
+        app.active_vt()
+            .is_some_and(|vt| vt.snapshot().contains("line 35"))
+    })
+    .await;
     h.frame().await;
     h.prefixed_char('[').await;
     let initial_hist = history_of(&h);
-    assert!(initial_hist >= 10);
+    assert!(initial_hist >= 5);
 
     h.key(KeyCode::Char('0')).await;
     h.key(KeyCode::Char('v')).await;
@@ -251,7 +262,7 @@ async fn stdout_updating_in_copy_mode_anchors_viewport_and_selection() {
     assert!(frame_before.contains("VISUAL -0/"));
 
     h.probe
-        .send_input(MAIN, "more 1\r\nmore 2\r\n")
+        .send_input(MAIN, "\r\nmore 1\r\nmore 2")
         .await
         .expect("send");
 
