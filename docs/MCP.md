@@ -65,7 +65,7 @@ Pane arguments accept a node name or a pane id `%N`.
 | Tool | Parameters | Description |
 | :--- | :--- | :--- |
 | `mpx_agents` | | Live agents across all sessions (harness, state, session id, detail) plus resumable stored sessions. |
-| `mpx_agent_launch` | `harness`, `resume`, `cwd`, `split`, `teams`, `name` | Start `claude`, `omp`, `codex`, `rho`, or a configured harness, optionally resuming a session. |
+| `mpx_agent_launch` | `harness`, `resume`, `cwd`, `split`, `teams`, `name` | Start `claude`, `omp`, `codex`, `rho`, `antigravity`, `opencode`, or a configured harness, optionally resuming a session. |
 | `mpx_peers` | `all` (default false) | `you` (your own `session:pane`, to tell yourself apart), and the other agents whose working directory is in your repository (every agent with `all`): `agent` (`session:pane`), harness, state, terminal title, `task` (latest prompt), `last_reply`, `cwd` and `recent_edits` (last 30 minutes, newest first). |
 | `mpx_agent_prompt` | `name` (pane, or `session:pane` for another session), `text`, `wait` (default true), `timeout` (default 120 s) | Paste and submit a prompt to an agent pane, wait until the agent settles again (idle, needs input or exited, after the prompt; a slow start does not count as done), and return `{reply, text, state, satisfied}`: `reply` is the agent's final answer when its harness reports it (Claude Code, oh-my-pi), `text` its screen. `satisfied` is false on timeout. An agent waiting for its user (a question or a permission prompt) is not sent anything, so the prompt cannot answer it; the call fails and can be retried once the agent works again. |
 

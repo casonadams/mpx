@@ -9,10 +9,13 @@ fn with_harness(entry: HarnessConfig) -> Config {
 }
 
 #[test]
-fn builtins_are_claude_omp_codex_and_rho() {
+fn builtins_are_claude_omp_codex_rho_antigravity_and_opencode() {
     let reg = registry(&Config::default());
     let names: Vec<&str> = reg.iter().map(|h| h.name.as_str()).collect();
-    assert_eq!(names, ["claude", "omp", "codex", "rho"]);
+    assert_eq!(
+        names,
+        ["claude", "omp", "codex", "rho", "antigravity", "opencode"]
+    );
 }
 
 #[test]
@@ -40,7 +43,7 @@ fn config_entry_with_new_name_is_appended() {
         ..HarnessConfig::default()
     });
     let reg = registry(&cfg);
-    assert_eq!(reg.len(), 5);
+    assert_eq!(reg.len(), 7);
     assert_eq!(reg.last().map(|h| h.name.as_str()), Some("gemini"));
     assert_eq!(reg.last().and_then(|h| h.store), None);
 }
@@ -69,6 +72,26 @@ fn detect_matches_basename_case_insensitively() {
         Some("rho")
     );
     assert_eq!(detect(&reg, "rho").map(|h| h.name.as_str()), Some("rho"));
+    assert_eq!(
+        detect(&reg, "antigravity").map(|h| h.name.as_str()),
+        Some("antigravity")
+    );
+    assert_eq!(
+        detect(&reg, "/usr/local/bin/agy").map(|h| h.name.as_str()),
+        Some("antigravity")
+    );
+    assert_eq!(
+        detect(&reg, "agy").map(|h| h.name.as_str()),
+        Some("antigravity")
+    );
+    assert_eq!(
+        detect(&reg, "/usr/local/bin/opencode").map(|h| h.name.as_str()),
+        Some("opencode")
+    );
+    assert_eq!(
+        detect(&reg, "opencode").map(|h| h.name.as_str()),
+        Some("opencode")
+    );
 }
 
 #[test]
@@ -92,5 +115,22 @@ fn detect_uses_aliases_from_config() {
     assert_eq!(
         detect(&reg, "2.1.308").map(|h| h.name.as_str()),
         Some("claude")
+    );
+}
+
+#[test]
+fn find_harness_matches_by_name_or_detect_alias() {
+    let reg = registry(&Config::default());
+    assert_eq!(
+        find_harness(&reg, "antigravity").map(|h| h.name.as_str()),
+        Some("antigravity")
+    );
+    assert_eq!(
+        find_harness(&reg, "agy").map(|h| h.name.as_str()),
+        Some("antigravity")
+    );
+    assert_eq!(
+        find_harness(&reg, "opencode").map(|h| h.name.as_str()),
+        Some("opencode")
     );
 }

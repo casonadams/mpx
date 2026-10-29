@@ -149,7 +149,7 @@ All commands available in `[bind]` can also be run interactively from the comman
 
 ### Agent Harnesses (`[[harness]]`)
 
-mpx includes built-in harnesses for popular autonomous agents: `claude`, `omp`, `codex`, and `rho`.
+mpx includes built-in harnesses for popular autonomous agents: `claude`, `omp`, `codex`, `rho`, `antigravity`, and `opencode`.
 
 You can define **any number of additional harnesses** by specifying multiple `[[harness]]` sections in `config.toml`. You can also override a built-in harness by using the same `name`.
 

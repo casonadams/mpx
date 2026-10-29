@@ -1,6 +1,6 @@
 use mpx::agents::{
-    lookup_rho_cwd, parse_claude_meta, parse_codex_meta, parse_omp_meta, parse_preview,
-    parse_rho_meta,
+    lookup_rho_cwd, parse_claude_meta, parse_codex_meta, parse_omp_meta, parse_opencode_meta,
+    parse_preview, parse_rho_meta,
 };
 
 const OMP_HEAD: &str = concat!(
@@ -153,6 +153,33 @@ fn rho_cwd_lookup_from_last_sessions_file() {
         Some("/projects/mpx")
     );
     assert_eq!(lookup_rho_cwd(&sess_file, "unknown"), None);
+}
+
+#[test]
+fn opencode_session_meta_parses_fields_and_fallbacks() {
+    let full = r#"{"id":"ses_4a309","projectID":"proj1","directory":"/p/lighten","title":"Fix navbar"}"#;
+    let meta = parse_opencode_meta(full, "file-stem").expect("opencode session");
+    assert_eq!(meta.id, "ses_4a309");
+    assert_eq!(meta.title, "Fix navbar");
+    assert_eq!(meta.cwd.as_deref(), Some("/p/lighten"));
+
+    let minimal = r#"{"id":"ses_123","version":"1.0"}"#;
+    let meta2 = parse_opencode_meta(minimal, "file-stem").expect("minimal opencode");
+    assert_eq!(meta2.id, "ses_123");
+    assert_eq!(meta2.title, "ses_123");
+    assert_eq!(meta2.cwd, None);
+
+    let from_stem = r#"{"projectID":"proj_abc","title":"Working branch"}"#;
+    let meta3 = parse_opencode_meta(from_stem, "ses_stem").expect("stem fallback");
+    assert_eq!(meta3.id, "ses_stem");
+    assert_eq!(meta3.title, "Working branch");
+}
+
+#[test]
+fn opencode_non_opencode_json_is_none() {
+    assert!(parse_opencode_meta("{}", "stem").is_none());
+    assert!(parse_opencode_meta(r#"{"unknown":"data"}"#, "stem").is_none());
+    assert!(parse_opencode_meta("", "stem").is_none());
 }
 
 #[test]

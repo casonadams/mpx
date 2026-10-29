@@ -176,7 +176,7 @@ fn kill_server_is_safe_without_a_daemon() {
 /// Asserts that `out` ended with `code` and said `needle` on stderr.
 fn assert_fails(out: &Output, code: i32, needle: &str) {
     assert_eq!(out.status.code(), Some(code));
-    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stderr = mpx::buffer::strip_ansi(&out.stderr);
     assert!(stderr.contains(needle), "{stderr}");
 }
 

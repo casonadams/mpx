@@ -21,7 +21,8 @@ pub use hooks::{
 };
 pub use sessions::{
     SessionMeta, Visit, lookup_rho_cwd, parse_claude_meta, parse_codex_meta, parse_omp_meta,
-    parse_preview, parse_rho_meta, scan_resumable, transcript_preview, visit_entry,
+    parse_opencode_meta, parse_preview, parse_rho_meta, scan_resumable, transcript_preview,
+    visit_entry,
 };
 
 const PROBE_TIMEOUT: Duration = Duration::from_millis(300);
@@ -37,6 +38,8 @@ pub enum SessionStore {
     Codex,
     /// `~/.config/rho/sessions/<id>.jsonl`
     Rho,
+    /// `~/.local/share/opencode/storage/session/<project-id>/<id>.json`
+    Opencode,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -104,9 +107,16 @@ pub fn state_label(state: AgentState) -> &'static str {
     }
 }
 
-/// Harness with exactly this name.
+/// Harness with this name, falling back to any harness whose `detect` list matches `name`.
 pub fn find_harness<'a>(registry: &'a [Harness], name: &str) -> Option<&'a Harness> {
-    registry.iter().find(|h| h.name == name)
+    registry
+        .iter()
+        .find(|h| h.name == name)
+        .or_else(|| {
+            registry
+                .iter()
+                .find(|h| h.detect.iter().any(|d| d.eq_ignore_ascii_case(name)))
+        })
 }
 
 /// The single resumable session whose id starts with `prefix`; errors when none or several match.

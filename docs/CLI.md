@@ -140,7 +140,7 @@ The daemon saves a snapshot of the session's layout whenever it changes: windows
 
 What comes back:
 - PTY panes run their original command in their last directory.
-- Agent panes with a known session id are resumed through their harness (`claude --resume <id>`, `omp --resume <id>`, `rho --resume <id>`); other agents start fresh.
+- Agent panes with a known session id are resumed through their harness (`claude --resume <id>`, `omp --resume <id>`, `rho --resume <id>`, `agy --conversation <id>`, `opencode --session <id>`); other agents start fresh.
 - Plain `mpx run` task panes (no `--pty`) are not restarted, because they are jobs, not workspace.
 
 Snapshots live in the state directory (see [CONFIG.md](CONFIG.md#state-directory)).
@@ -154,7 +154,7 @@ See the **[Agent Manager guide](AGENT-MANAGER.md)**.
 | :--- | :--- |
 | `mpx agents` | Attach with the agent manager open. |
 | `mpx agents --json` | `{live, resumable}`: live agents across all sessions with state, plus stored sessions you can resume. |
-| `mpx agents new <harness> [--resume ID] [--split] [--teams] [--cwd DIR] [--name N]` | Launch `claude`, `omp`, `codex`, `rho`, or a configured harness. |
+| `mpx agents new <harness> [--resume ID] [--split] [--teams] [--cwd DIR] [--name N]` | Launch `claude`, `omp`, `codex`, `rho`, `antigravity`, `opencode`, or a configured harness. |
 | `mpx agents resume <id-prefix>` | Find a stored session in any harness store and resume it in a new window. |
 | `mpx hook <harness> [event]` | Called by harness hooks; reads the event JSON on stdin and reports agent state for `$MPX_PANE`. Exits 0 silently outside mpx. |
 | `mpx hook print-config claude` | Print the Claude Code `settings.json` hooks block for agents started outside `mpx agents new`. |

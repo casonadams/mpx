@@ -53,6 +53,22 @@ fn builtin() -> Vec<Harness> {
             session_id_args: Vec::new(),
             store: Some(SessionStore::Rho),
         },
+        Harness {
+            name: "antigravity".into(),
+            detect: strings(&["antigravity", "agy"]),
+            command: strings(&["agy"]),
+            resume: strings(&["agy", "--conversation", "{id}"]),
+            session_id_args: Vec::new(),
+            store: None,
+        },
+        Harness {
+            name: "opencode".into(),
+            detect: strings(&["opencode"]),
+            command: strings(&["opencode"]),
+            resume: strings(&["opencode", "--session", "{id}"]),
+            session_id_args: Vec::new(),
+            store: Some(SessionStore::Opencode),
+        },
     ]
 }
 

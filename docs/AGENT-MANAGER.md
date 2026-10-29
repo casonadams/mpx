@@ -1,6 +1,6 @@
 # Agent Manager
 
-mpx tracks AI coding agents (Claude Code, oh-my-pi, Codex, rho, or any configured harness) running in its panes. It shows which ones need you, jumps between them across sessions, resumes stored sessions, and launches new ones.
+mpx tracks AI coding agents (Claude Code, oh-my-pi, Codex, rho, Antigravity, OpenCode, or any configured harness) running in its panes. It shows which ones need you, jumps between them across sessions, resumes stored sessions, and launches new ones.
 
 Open it with **`Prefix s`**, or start mpx straight into it with **`mpx agents`**.
 
@@ -63,7 +63,7 @@ Typing into an agent that needs input moves it back to working.
 2. **Terminal signals.** A bell or an OSC 9/777 notification from an agent pane means it needs input.
 3. **Output activity.** Without hooks, an agent is working while it produces output and idle after `agent.idle_ms` (default 1500 ms) of quiet.
 
-Agents are recognized by the foreground process of their pane (`claude`, `omp`, `codex`, `rho`, or a configured name), including Claude Code's versioned binary and scripts run by interpreters.
+Agents are recognized by the foreground process of their pane (`claude`, `omp`, `codex`, `rho`, `antigravity`, `agy`, `opencode`, or a configured name), including Claude Code's versioned binary and scripts run by interpreters.
 
 ---
 
@@ -75,6 +75,8 @@ Agents are recognized by the foreground process of their pane (`claude`, `omp`, 
 | oh-my-pi | `~/.omp/agent/sessions/<cwd>/<ts>_<id>.jsonl` | `omp --resume <id>` |
 | Codex | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | `codex resume <id>` |
 | rho | `~/.config/rho/sessions/<id>.jsonl` | `rho --resume <id>` |
+| antigravity | - | `agy --conversation <id>` |
+| opencode | `~/.local/share/opencode/storage/session/<project>/<id>.json` | `opencode --session <id>` |
 
 Only the head of each file is read for the title, id and working directory, so listing stays fast.
 
@@ -115,4 +117,4 @@ resume = []                         # argv with {id}; empty means not resumable
 session_id_args = []                # argv appended to pre-assign an id ({id})
 ```
 
-A `[[harness]]` entry with a built-in name (`claude`, `omp`, `codex`, `rho`) replaces that harness's launch settings. See [CONFIG.md](CONFIG.md).
+A `[[harness]]` entry with a built-in name (`claude`, `omp`, `codex`, `rho`, `antigravity`, `opencode`) replaces that harness's launch settings. See [CONFIG.md](CONFIG.md).

@@ -105,6 +105,43 @@ fn rho_resume_uses_resume_flag() {
 }
 
 #[test]
+fn antigravity_and_opencode_launch_and_resume() {
+    let fresh_agy = launch_with(
+        &harness("antigravity"),
+        None,
+        LaunchOptions::default(),
+        &env_none(),
+    );
+    assert_eq!(fresh_agy.argv, ["agy"]);
+    assert_eq!(fresh_agy.session_id, None);
+
+    let res_agy = launch_with(
+        &harness("antigravity"),
+        Some("c1"),
+        LaunchOptions::default(),
+        &env_none(),
+    );
+    assert_eq!(res_agy.argv, ["agy", "--conversation", "c1"]);
+
+    let fresh_opencode = launch_with(
+        &harness("opencode"),
+        None,
+        LaunchOptions::default(),
+        &env_none(),
+    );
+    assert_eq!(fresh_opencode.argv, ["opencode"]);
+    assert_eq!(fresh_opencode.session_id, None);
+
+    let res_opencode = launch_with(
+        &harness("opencode"),
+        Some("s1"),
+        LaunchOptions::default(),
+        &env_none(),
+    );
+    assert_eq!(res_opencode.argv, ["opencode", "--session", "s1"]);
+}
+
+#[test]
 fn every_launch_sets_the_harness_env() {
     let spec = launch_with(&harness("omp"), None, LaunchOptions::default(), &env_none());
     assert_eq!(env_value(&spec, "MPX_AGENT_HARNESS"), Some("omp"));

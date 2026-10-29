@@ -16,6 +16,7 @@ const TITLE_CHARS: usize = 80;
 const CLAUDE_OMP_DEPTH: usize = 1;
 const CODEX_DEPTH: usize = 3;
 const RHO_DEPTH: usize = 0;
+const OPENCODE_DEPTH: usize = 1;
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SessionMeta {
@@ -219,6 +220,35 @@ pub fn parse_rho_meta(head: &str, file_stem: &str) -> Option<SessionMeta> {
     Some(SessionMeta { id, title, cwd })
 }
 
+/// OpenCode session: JSON object with id, directory (cwd), and title.
+pub fn parse_opencode_meta(head: &str, file_stem: &str) -> Option<SessionMeta> {
+    let value: Value = serde_json::from_str(head)
+        .ok()
+        .or_else(|| serde_json::Deserializer::from_str(head).into_iter::<Value>().next()?.ok())?;
+    let is_opencode = value.get("projectID").is_some()
+        || value.get("version").is_some()
+        || file_stem.starts_with("ses_");
+    if !is_opencode {
+        return None;
+    }
+    let id = value
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| file_stem.to_string());
+    let cwd = value
+        .get("directory")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let title = value
+        .get("title")
+        .and_then(Value::as_str)
+        .map(truncate_title)
+        .filter(|t| !t.is_empty())
+        .unwrap_or_else(|| id.clone());
+    Some(SessionMeta { id, title, cwd })
+}
+
 fn format_message(role: &str, body: &str) -> Vec<String> {
     let mut lines = body.lines();
     let Some(first) = lines.next() else {
@@ -294,8 +324,14 @@ fn modified_ms(entry: &std::fs::DirEntry) -> u64 {
         .map_or(0, |d| d.as_millis() as u64)
 }
 
-/// Collects `*.jsonl` files exactly `max_depth` directories below `root`.
-fn collect_files(dir: &Path, depth: usize, max_depth: usize, out: &mut Vec<(PathBuf, u64)>) {
+/// Collects session files with extension `ext` exactly `max_depth` directories below `root`.
+fn collect_files(
+    dir: &Path,
+    depth: usize,
+    max_depth: usize,
+    ext: &str,
+    out: &mut Vec<(PathBuf, u64)>,
+) {
     let entries: Vec<std::fs::DirEntry> = std::fs::read_dir(dir)
         .map(|rd| rd.flatten().collect())
         .unwrap_or_default();
@@ -304,12 +340,19 @@ fn collect_files(dir: &Path, depth: usize, max_depth: usize, out: &mut Vec<(Path
         let kind = entry.file_type().ok();
         let is_dir = kind.is_some_and(|k| k.is_dir());
         let is_file = kind.is_some_and(|k| k.is_file());
-        let is_jsonl = path.extension().is_some_and(|e| e == "jsonl");
-        match visit_entry(is_dir, is_file, is_jsonl, depth, max_depth) {
-            Visit::Recurse => collect_files(&path, depth + 1, max_depth, out),
+        let is_match = path.extension().is_some_and(|e| e == ext);
+        match visit_entry(is_dir, is_file, is_match, depth, max_depth) {
+            Visit::Recurse => collect_files(&path, depth + 1, max_depth, ext, out),
             Visit::Keep => out.push((path, modified_ms(&entry))),
             Visit::Skip => {}
         }
+    }
+}
+
+fn store_extension(store: SessionStore) -> &'static str {
+    match store {
+        SessionStore::Opencode => "json",
+        _ => "jsonl",
     }
 }
 
@@ -327,6 +370,15 @@ fn store_root(store: SessionStore) -> Option<(PathBuf, usize)> {
                 .map(PathBuf::from)
                 .unwrap_or_else(|| home.join(".config"));
             (config_dir.join("rho").join("sessions"), RHO_DEPTH)
+        }
+        SessionStore::Opencode => {
+            let data_dir = std::env::var_os("XDG_DATA_HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| home.join(".local").join("share"));
+            (
+                data_dir.join("opencode").join("storage").join("session"),
+                OPENCODE_DEPTH,
+            )
         }
     })
 }
@@ -353,7 +405,7 @@ fn candidates(harness: &Harness, store: SessionStore) -> Vec<Candidate> {
         return Vec::new();
     };
     let mut files = Vec::new();
-    collect_files(&root, 0, depth, &mut files);
+    collect_files(&root, 0, depth, store_extension(store), &mut files);
     files
         .into_iter()
         .map(|(path, modified_ms)| Candidate {
@@ -376,6 +428,7 @@ fn session_from(c: &Candidate) -> Option<ResumableSession> {
         SessionStore::Omp => parse_omp_meta(&head)?,
         SessionStore::Codex => parse_codex_meta(&head)?,
         SessionStore::Rho => parse_rho_meta(&head, &stem)?,
+        SessionStore::Opencode => parse_opencode_meta(&head, &stem)?,
     };
     if meta.cwd.is_none() && c.store == SessionStore::Rho {
         meta.cwd = lookup_rho_cwd(&c.path, &meta.id);
