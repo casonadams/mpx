@@ -291,6 +291,14 @@ async fn agent_prompt(client: &mut Client, call: PromptCall) -> Result<Value, St
     } = call;
     let timeout = Duration::from_secs(timeout_secs);
     let before = client.status(&name).await?.agent;
+    // An agent waiting for its user may be showing a permission prompt: pasted text would answer
+    // it, approving or refusing something no one read.
+    if before.as_ref().is_some_and(|a| a.state == AgentState::NeedsInput) {
+        return Err(format!(
+            "{name} is waiting for its user (a question or a permission prompt); \
+             not sending, so this text cannot answer it. Try again once it is working or idle."
+        ));
+    }
     apply_key(client, key.as_deref());
     client.paste(&name, &text, true).await?;
     if !wait {
@@ -308,8 +316,15 @@ async fn agent_prompt(client: &mut Client, call: PromptCall) -> Result<Value, St
             (None, outcome.satisfied)
         }
     };
+    // The agent's own final answer when its harness reports one (it settled after the prompt, so
+    // it is this answer); the screen, which keeps only what is left in view, as well.
+    let reply = match satisfied {
+        true => client.status(&name).await?.agent.and_then(|a| a.focus.reply),
+        false => None,
+    };
     let screen = client.screen(&name).await?;
     Ok(json!({
+        "reply": reply,
         "text": screen,
         "state": state.map(state_label),
         "satisfied": satisfied,

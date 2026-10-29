@@ -55,7 +55,9 @@ const OMP_HOOKS: [(&str, Meaning); 9] = [
 const CLAUDE_FILE_TOOLS: &str = "Read|Edit|Write|MultiEdit|NotebookEdit";
 const EDIT_TOOLS: [&str; 4] = ["Edit", "Write", "MultiEdit", "NotebookEdit"];
 /// Longest task or reply text kept for other agents to read.
-const FOCUS_CHARS: usize = 240;
+pub const FOCUS_CHARS: usize = 240;
+/// Longest final reply kept: what `mpx_agent_prompt` hands back to the agent that asked.
+const REPLY_CHARS: usize = 4000;
 
 const REPORT_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -95,13 +97,17 @@ fn str_field(v: &Value, key: &str) -> Option<String> {
 
 /// `text` on one line with whitespace runs collapsed, cut to `max` characters with `…`.
 pub fn clip(text: &str, max: usize) -> String {
-    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if flat.chars().count() <= max {
-        return flat;
+    cut(&text.split_whitespace().collect::<Vec<_>>().join(" "), max)
+}
+
+/// `text` cut to `max` characters, ending in `…` when it was longer.
+fn cut(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
     }
-    let mut cut: String = flat.chars().take(max.saturating_sub(1)).collect();
-    cut.push('…');
-    cut
+    let mut out: String = text.chars().take(max.saturating_sub(1)).collect();
+    out.push('…');
+    out
 }
 
 /// The file a Claude Code tool call works on: `file_path`, or `notebook_path` for notebooks.
@@ -176,9 +182,9 @@ impl Payload<'_> {
         })
     }
 
-    /// The agent finished its run (its last reply under `key`): idle.
+    /// The agent finished its run (its last reply under `key`, kept with its lines): idle.
     fn finished(&self, key: &str) -> Option<HookReport> {
-        let reply = self.focus(key);
+        let reply = str_field(self.0, key).map(|t| cut(t.trim(), REPLY_CHARS));
         Some(HookReport {
             reply,
             ..self.report(Some(AgentState::Idle))

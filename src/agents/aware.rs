@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use super::hooks::{FOCUS_CHARS, clip};
 use super::{LiveAgent, list_live, state_label, title_of};
 use crate::protocol::{AgentState, EDIT_WINDOW_MS};
 
@@ -324,7 +325,7 @@ pub fn peers_json(live: Vec<LiveAgent>, me: &Me, all: bool, now_ms: u64) -> Valu
                 "state": state_label(info.map_or(AgentState::Idle, |i| i.state)),
                 "title": title_of(&a.node),
                 "task": info.and_then(|i| i.focus.task.clone()),
-                "last_reply": info.and_then(|i| i.focus.reply.clone()),
+                "last_reply": info.and_then(|i| i.focus.reply.as_deref()).map(|r| clip(r, FOCUS_CHARS)),
                 "cwd": a.node.cwd,
                 "recent_edits": edits,
             })

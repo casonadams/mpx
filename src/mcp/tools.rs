@@ -293,7 +293,7 @@ pub const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "mpx_agent_prompt",
-        desc: "Send a prompt to an agent pane, wait for it to go idle or need input, and return the screen.",
+        desc: "Send a prompt to an agent pane, wait for it to go idle or need input, and return its answer (`reply`, from agents whose harness reports it, such as Claude Code and oh-my-pi) and its screen (`text`).",
         props: &[
             prop(
                 "name",

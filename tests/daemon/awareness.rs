@@ -206,3 +206,22 @@ async fn mpx_agent_prompt_reaches_an_agent_in_another_session() {
     assert_eq!(v["submitted"], true, "{v}");
     logs_until(&mut p.alpha_client, "a", "hello-peer").await;
 }
+
+#[tokio::test]
+async fn mpx_agent_prompt_does_not_type_into_an_agent_waiting_for_its_user() {
+    let mut p = pair().await;
+    let waiting = AgentReportArgs {
+        state: Some(AgentState::NeedsInput),
+        ..AgentReportArgs::default()
+    };
+    report(&mut p.alpha_client, "a", waiting).await;
+    let v = mcp_call(
+        &p,
+        "mpx_agent_prompt",
+        json!({ "name": "alpha:a", "text": "approve-this", "wait": false }),
+    )
+    .await;
+    assert!(v.to_string().contains("waiting for its user"), "{v}");
+    let (logs, _) = p.alpha_client.logs("a", None, false, None).await.expect("logs");
+    assert!(!logs.contains("approve-this"), "nothing typed into the pane");
+}
