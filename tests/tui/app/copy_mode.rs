@@ -233,3 +233,53 @@ async fn a_live_pane_keeps_no_scrollback_and_copy_mode_brings_it_back() {
     assert_eq!(history_of(&h), 0, "leaving copy mode drops it again");
     assert!(h.frame().await.contains("line 40"));
 }
+
+#[tokio::test]
+async fn stdout_updating_in_copy_mode_anchors_viewport_and_selection() {
+    let mut h = started(&long_output()).await;
+    h.frame().await;
+    h.prefixed_char('[').await;
+    let initial_hist = history_of(&h);
+    assert!(initial_hist >= 10);
+
+    h.key(KeyCode::Char('0')).await;
+    h.key(KeyCode::Char('v')).await;
+    for _ in 0..4 {
+        h.key(KeyCode::Char('l')).await;
+    }
+    let frame_before = h.frame().await;
+    assert!(frame_before.contains("VISUAL -0/"));
+
+    h.probe
+        .send_input(MAIN, "more 1\r\nmore 2\r\n")
+        .await
+        .expect("send");
+
+    h.until("output absorbed into history", move |app| {
+        app.active_vt()
+            .is_some_and(|vt| vt.grid().history_len() >= initial_hist + 2)
+    })
+    .await;
+
+    let frame = h.frame().await;
+    assert!(
+        frame.contains("VISUAL -2/"),
+        "badge reflects increased scroll offset: {frame}"
+    );
+    assert!(frame.contains("READY"), "viewport still shows READY: {frame}");
+
+    h.key(KeyCode::Char('y')).await;
+    assert_eq!(
+        h.clipboard(),
+        ["READY"],
+        "selection remained on READY despite stdout updates"
+    );
+
+    h.key(KeyCode::Char('q')).await;
+    assert!(h.mode_is_normal());
+    let live_frame = h.frame().await;
+    assert!(
+        live_frame.contains("more 2"),
+        "leaving copy mode shows live screen: {live_frame}"
+    );
+}

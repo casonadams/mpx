@@ -1,7 +1,7 @@
 //! Gap-free pane output: each screen tracks the byte offset it has absorbed, and every event is
 //! checked against that offset. Missing bytes are fetched from the daemon's log.
 
-use super::app::App;
+use super::app::{App, Mode};
 use super::panes::{has_scrollback, load_pane};
 use super::status::node_named;
 use crate::protocol::{AgentInfo, StreamEvent};
@@ -74,12 +74,33 @@ impl App {
             self.forget_screen(name);
             return;
         }
+        let old_hist = self
+            .vt
+            .get(name)
+            .map(|v| v.grid().history_len())
+            .unwrap_or(0);
         match plan_output(self.expected.get(name).copied(), offset, next) {
             OutputPlan::Skip => {}
             OutputPlan::Feed => self.feed(name, data, next),
             OutputPlan::Fetch => {
                 self.catch_up(name).await;
                 self.apply_after_fetch(name, data, offset, next).await;
+            }
+        }
+        let new_hist = self
+            .vt
+            .get(name)
+            .map(|v| v.grid().history_len())
+            .unwrap_or(0);
+        if new_hist > old_hist {
+            let pushed = new_hist - old_hist;
+            if self.active_pane == name
+                && let Mode::Copy(cs) = &mut self.mode
+            {
+                cs.scroll_offset = (cs.scroll_offset + pushed).min(new_hist);
+            }
+            if let Some(cs) = self.parked_copy.get_mut(name) {
+                cs.scroll_offset = (cs.scroll_offset + pushed).min(new_hist);
             }
         }
     }
