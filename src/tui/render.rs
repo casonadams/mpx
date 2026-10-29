@@ -464,7 +464,8 @@ const HUD_ITEMS: &[(&str, &str)] = &[
     ("[", "copy mode"),
     ("x", "kill pane"),
     ("d", "detach"),
-    ("a", "agent manager"),
+    ("s", "agents"),
+    ("w", "sessions"),
     ("?", "help"),
 ];
 

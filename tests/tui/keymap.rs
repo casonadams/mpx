@@ -101,9 +101,19 @@ fn default_bindings_resolve_to_commands() {
         Some(Command::SelectWindow { index: 3 })
     );
     assert_eq!(command_of(&keymap, &key('z')), Some(Command::Zoom));
-    assert_eq!(command_of(&keymap, &key('s')), Some(Command::OpenAgents));
+    assert_eq!(
+        command_of(&keymap, &key('s')),
+        Some(Command::OpenPalette {
+            tab: Some(mpx::tui::command::PaletteTab::Agents),
+        })
+    );
     assert_eq!(command_of(&keymap, &key('a')), None);
-    assert_eq!(command_of(&keymap, &key('w')), Some(Command::OpenTree));
+    assert_eq!(
+        command_of(&keymap, &key('w')),
+        Some(Command::OpenPalette {
+            tab: Some(mpx::tui::command::PaletteTab::Sessions),
+        })
+    );
     assert_eq!(command_of(&keymap, &key('Z')), None);
 }
 

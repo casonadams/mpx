@@ -123,7 +123,7 @@ async fn frames_keep_the_terminal_identical_to_the_panes() {
 
     h.prefixed_char('?').await;
     h.frame().await;
-    h.key(KeyCode::Char('q')).await;
+    h.key(KeyCode::Esc).await;
     check(&mut h, "help overlay closed").await;
 
     h.ctrl('b').await;
@@ -170,7 +170,7 @@ async fn frames_keep_the_terminal_identical_to_the_panes() {
 
     h.prefixed_char('?').await;
     h.frame().await;
-    h.key(KeyCode::Char('q')).await;
+    h.key(KeyCode::Esc).await;
     check(&mut h, "overlay closed over the rail").await;
     let dot = h.terminal.grid().get_cell(0, 0).map(|c| c.c);
     assert_eq!(dot, Some('●'), "rail repainted after the overlay");

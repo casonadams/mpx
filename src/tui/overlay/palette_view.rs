@@ -70,10 +70,13 @@ pub const BUILTIN_COMMANDS: &[(&str, &str, &str, &str)] = &[
     ("next-attention", "Next Attention", "A", "Jump to the next agent needing user input"),
     ("next-agent", "Next Agent", "M-j", "Switch focus to the next live agent"),
     ("prev-agent", "Previous Agent", "M-k", "Switch focus to the previous live agent"),
-    ("agents", "Agent Manager", "s", "Open the agent sessions view"),
-    ("choose-tree", "Window / Session Tree", "w", "Open the sessions, windows, and panes tree"),
+    ("palette agents", "Agent Manager", "s", "Open the agent sessions palette tab"),
+    ("palette sessions", "Window / Session Tree", "w", "Open the sessions and panes palette tab"),
+    ("palette help", "Keymap Help", "?", "Open the key bindings help palette tab"),
     ("sidebar", "Toggle Sidebar", "e", "Toggle the agent sidebar rail"),
-    ("list-keys", "Keymap Help", "?", "Open the key bindings help overlay"),
+    ("agents", "Agent Manager (Deep)", "", "Open the classic agent manager overlay with preview"),
+    ("choose-tree", "Window Tree (Deep)", "", "Open the classic sessions, windows, and panes tree"),
+    ("list-keys", "Keymap Help (Deep)", "", "Open the classic key bindings cheat sheet"),
     ("command-prompt", "Command Prompt", ":", "Open the command prompt"),
 ];
 

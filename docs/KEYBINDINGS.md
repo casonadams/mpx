@@ -44,8 +44,8 @@ Only the configured prefix is intercepted. `Ctrl-a` reaches your shell unless yo
 
 | Key | Command | Description |
 | :--- | :--- | :--- |
-| `s` | `agents` | [Agent manager](AGENT-MANAGER.md) |
-| `w` | `choose-tree` | Sessions: session → window → pane tree with preview |
+| `s` | `palette agents` | [Agent manager](AGENT-MANAGER.md) (Agents tab in palette; `:agents` for classic view) |
+| `w` | `palette sessions` | Sessions & panes (Sessions tab in palette; `:choose-tree` for classic tree) |
 | `e` | `sidebar` | Focus the [agents rail](#agents-rail), expanding it; again collapses it |
 | `(` / `)` | `prev-session` / `next-session` | Switch sessions |
 | `A` | `next-attention` | Jump to the agent that has waited longest for input, in any session |
@@ -57,7 +57,7 @@ Only the configured prefix is intercepted. `Ctrl-a` reaches your shell unless yo
 | :--- | :--- | :--- |
 | `Ctrl-Space` (no prefix) | `palette` | Open the unified command palette |
 | `:` | `command-prompt` | Command line on the status row |
-| `?` | `list-keys` | Searchable key list |
+| `?` | `palette help` | Searchable key list (Help tab in palette; `:list-keys` for classic cheat sheet) |
 | `[` | `copy-mode` | Vi copy mode |
 
 ---

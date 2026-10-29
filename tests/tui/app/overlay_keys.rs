@@ -32,8 +32,6 @@ async fn tree_overlay_enter_runs_the_selected_window_command() {
 
     h.prefixed_char('w').await;
     h.key(KeyCode::Down).await;
-    h.key(KeyCode::Down).await;
-    h.key(KeyCode::Down).await;
     h.key(KeyCode::Enter).await;
     assert!(h.mode_is_normal());
     h.frame().await;
