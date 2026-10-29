@@ -1,37 +1,83 @@
-//! Agents sidebar: a toggleable left column listing every agent by session. Moving the highlight
-//! shows that agent's pane live in the pane area to its right.
+//! Agents rail: while any agent runs, a thin left column with one state dot per agent, the
+//! focused pane's agent in reverse video. Alt-j / Alt-k step through the agents; focused
+//! (`prefix e`) it expands over the panes, without resizing them, and moving the highlight shows
+//! that agent's pane live.
 use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyCode, KeyEvent};
 
 use super::agent::AgentKey;
 use super::app::{App, Flow, Mode};
+use super::keymap::Table;
 use super::overlay::nav::ListState;
 use super::overlay::widgets::{age_label, fit, join_meta, now_ms, state_mark};
 use crate::agents::{self, LiveAgent};
 use crate::protocol::{AgentState, NodeInfo};
 use crate::vt::{Cell, CellStyle, Color};
 
-/// Columns the sidebar takes, its border included.
+/// Columns the expanded list takes, its border included; it is drawn over the panes.
 pub const SIDEBAR_COLS: u16 = 34;
-/// Narrowest pane area the sidebar leaves; on smaller screens it stays hidden.
+/// Columns the collapsed rail takes beside the panes: a dot and a border.
+pub const RAIL_COLS: u16 = 2;
+/// Narrowest pane area the rail leaves; on smaller screens it stays hidden.
 const MIN_PANE_COLS: u16 = 40;
 /// How long the highlight rests on another session's agent before the view switches there.
 pub const SWITCH_DELAY: Duration = Duration::from_millis(150);
 const AGE_COLS: usize = 4;
 /// Bar, gap, state glyph and gap ahead of an agent's text.
 const INDENT: usize = 4;
-const HINTS: &str = "j/k move  ⏎ open  q hide";
+const HINTS: &str = "j/k move  ⏎ open  esc close";
 const DIM: Option<Color> = Some(Color::BrightBlack);
 const ACCENT: Option<Color> = Some(Color::Cyan);
 
-/// Columns the sidebar takes on a screen `screen_w` wide; 0 when hidden or there is no room.
-pub fn width(visible: bool, screen_w: u16) -> u16 {
-    if visible && screen_w >= SIDEBAR_COLS + MIN_PANE_COLS {
-        SIDEBAR_COLS
+/// Columns the rail takes beside the panes on a screen `screen_w` wide: none without agents or
+/// room.
+pub fn rail_width(has_agents: bool, screen_w: u16) -> u16 {
+    if has_agents && screen_w >= RAIL_COLS + MIN_PANE_COLS {
+        RAIL_COLS
     } else {
         0
     }
+}
+
+/// The collapsed rail: one state dot per agent, sessions apart by a blank row, the agent shown in
+/// the focused pane in reverse video. Returns the rows and the agent on each.
+pub fn rail_rows(
+    agents: &[LiveAgent],
+    active: Option<&AgentKey>,
+    height: u16,
+    border: Color,
+) -> (Vec<Vec<Cell>>, Vec<Option<AgentKey>>) {
+    let mut keys: Vec<Option<AgentKey>> = Vec::new();
+    let mut dots: Vec<Cell> = Vec::new();
+    for (i, agent) in agents.iter().enumerate() {
+        if i > 0 && agents[i - 1].session != agent.session {
+            keys.push(None);
+            dots.push(Cell::default());
+        }
+        let key = key_of(agent);
+        let state = state_of(&agent.node);
+        dots.push(Cell {
+            c: state_mark(state).0,
+            style: CellStyle {
+                fg: state_color(state),
+                reverse: active == Some(&key),
+                ..CellStyle::default()
+            },
+        });
+        keys.push(Some(key));
+    }
+    keys.resize(height as usize, None);
+    dots.resize(height as usize, Cell::default());
+    let edge = Cell {
+        c: '│',
+        style: CellStyle {
+            fg: Some(border),
+            ..CellStyle::default()
+        },
+    };
+    let rows = dots.into_iter().map(|dot| vec![dot, edge]).collect();
+    (rows, keys)
 }
 
 /// An agent's headline: its terminal title without leading status glyphs, else its pane name.
@@ -235,16 +281,18 @@ pub fn scroll_top(top: usize, first: usize, height: usize, len: usize) -> usize 
     top
 }
 
-/// Sidebar state kept by the app between frames.
+/// Rail state kept by the app between frames.
 #[derive(Default)]
 pub struct Sidebar {
-    pub visible: bool,
     /// Agents of every reachable session, in display order.
     pub agents: Vec<LiveAgent>,
     /// The highlighted agent while the sidebar has focus.
     pub selected: Option<AgentKey>,
     /// Another session's agent to show once its delay has passed.
     pub pending: Option<(AgentKey, Instant)>,
+    /// The rail had focus when the prefix was pressed: it stays expanded, and `prefix e`
+    /// collapses it.
+    pub resume: bool,
     list: ListState,
     top: usize,
     /// Agent under each drawn row, for mouse clicks.
@@ -259,6 +307,19 @@ impl Sidebar {
     /// When a pending switch to another session is due.
     pub fn due(&self) -> Option<Instant> {
         self.pending.as_ref().map(|(_, at)| *at)
+    }
+
+    /// The agent `from` steps to: the next or previous one, wrapping around; the first or last
+    /// when `from` is not listed.
+    pub fn step_from(&self, from: Option<&AgentKey>, next: bool) -> Option<AgentKey> {
+        let keys = self.keys();
+        let at = from.and_then(|from| keys.iter().position(|k| k == from));
+        let idx = match at {
+            Some(idx) => super::panes::wrap_step(idx, keys.len(), next),
+            None if next => 0,
+            None => keys.len().checked_sub(1)?,
+        };
+        keys.get(idx).cloned()
     }
 
     /// Highlights `active` when it is a listed agent, else keeps a still-listed selection, else
@@ -356,20 +417,35 @@ pub fn render(view: &View, top: usize, (width, height): (u16, u16), border: Colo
 }
 
 impl App {
-    /// Shows the sidebar with focus, or hides it when shown.
+    /// Focuses the rail, expanding it; `prefix e` again collapses it.
     pub async fn toggle_sidebar(&mut self) -> Flow {
-        if self.sidebar.visible {
-            self.sidebar.visible = false;
-            self.sidebar.pending = None;
+        if matches!(self.mode, Mode::Sidebar) || self.sidebar.resume {
+            self.mode = Mode::Normal;
             return Flow::Continue;
         }
-        self.sidebar.visible = true;
-        if self.sidebar_width() == 0 {
-            self.sidebar.visible = false;
-            return self.say("screen too narrow for the sidebar");
-        }
         self.refresh_sidebar().await;
+        if self.sidebar.agents.is_empty() {
+            return self.say("no agents running");
+        }
+        if self.sidebar_width() == 0 {
+            return self.say("screen too narrow for the agents rail");
+        }
         self.focus_sidebar();
+        Flow::Continue
+    }
+
+    /// Shows the next or previous agent (Alt-j / Alt-k) without focusing the rail.
+    pub async fn step_agent(&mut self, next: bool) -> Flow {
+        let from = match (&self.sidebar.pending, matches!(self.mode, Mode::Sidebar)) {
+            (Some((pending, _)), _) => Some(pending.clone()),
+            (None, true) => self.sidebar.selected.clone(),
+            (None, false) => Some((self.session.clone(), self.active_pane.clone())),
+        };
+        let Some(key) = self.sidebar.step_from(from.as_ref(), next) else {
+            return self.say("no agents running");
+        };
+        self.sidebar.selected = Some(key);
+        self.show_selected().await;
         Flow::Continue
     }
 
@@ -389,8 +465,14 @@ impl App {
 
     pub async fn sidebar_key(&mut self, key: KeyEvent) -> Flow {
         if self.keymap.is_prefix(&key) {
+            self.sidebar.resume = true;
             self.enter_prefix();
             return Flow::Continue;
+        }
+        if let Some(binding) = self.keymap.lookup(Table::Root, &key) {
+            let cmd = binding.command.clone();
+            self.mode = Mode::Sidebar;
+            return self.dispatch(cmd).await;
         }
         if let Some(moved) = self.sidebar.motion(key) {
             if moved {
@@ -400,13 +482,11 @@ impl App {
             return Flow::Continue;
         }
         match key.code {
-            KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right | KeyCode::Esc => {
-                self.flush_pending().await;
-            }
-            KeyCode::Char('q') => {
-                self.flush_pending().await;
-                self.sidebar.visible = false;
-            }
+            KeyCode::Enter
+            | KeyCode::Char('l')
+            | KeyCode::Right
+            | KeyCode::Esc
+            | KeyCode::Char('q') => self.leave_sidebar().await,
             _ => self.mode = Mode::Sidebar,
         }
         Flow::Continue
@@ -431,6 +511,13 @@ impl App {
             self.flush_pending().await;
         }
         Flow::Continue
+    }
+
+    /// Collapses the rail and hands the keys to the agent it shows, switching to another session
+    /// first if the highlight is waiting to.
+    pub async fn leave_sidebar(&mut self) {
+        self.mode = Mode::Normal;
+        self.flush_pending().await;
     }
 
     async fn flush_pending(&mut self) {
@@ -465,13 +552,34 @@ impl App {
         }
     }
 
-    /// Columns the sidebar takes on the current screen.
+    /// Columns the rail takes beside the panes on the current screen.
     pub fn sidebar_width(&self) -> u16 {
-        width(self.sidebar.visible, self.viewport.0)
+        rail_width(!self.sidebar.agents.is_empty(), self.viewport.0)
     }
 
-    /// Rows for the frame being drawn, highlighting the selection while focused and the
-    /// attached pane otherwise.
+    /// Columns the expanded list covers, or 0 while it is collapsed.
+    pub fn expanded_width(&self) -> u16 {
+        let focused = matches!(self.mode, Mode::Sidebar) || self.sidebar.resume;
+        if self.sidebar_width() == 0 || !focused {
+            return 0;
+        }
+        SIDEBAR_COLS.min(self.viewport.0)
+    }
+
+    /// The collapsed rail's rows for the frame being drawn; the reverse dot is the shown agent,
+    /// or the one a step is about to switch sessions to.
+    pub fn rail(&mut self, border: Color) -> Vec<Vec<Cell>> {
+        let shown = match &self.sidebar.pending {
+            Some((key, _)) => key.clone(),
+            None => (self.session.clone(), self.active_pane.clone()),
+        };
+        let (rows, keys) = rail_rows(&self.sidebar.agents, Some(&shown), self.viewport.1, border);
+        self.sidebar.rows = keys;
+        rows
+    }
+
+    /// The expanded list's rows for the frame being drawn, highlighting the selection while
+    /// focused or peeking and the attached pane otherwise.
     pub fn sidebar_rows(&mut self, border: Color) -> Vec<Vec<Cell>> {
         let focused = matches!(self.mode, Mode::Sidebar);
         let active = (self.session.clone(), self.active_pane.clone());
@@ -480,8 +588,7 @@ impl App {
         } else {
             Some(active)
         };
-        let (screen_w, height) = self.viewport;
-        let size = (width(self.sidebar.visible, screen_w), height);
+        let size = (self.expanded_width(), self.viewport.1);
         let view = View {
             agents: &self.sidebar.agents,
             current: &self.session,

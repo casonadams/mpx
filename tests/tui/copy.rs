@@ -27,6 +27,7 @@ fn fresh_at_origin() -> CopyState {
         mode: SelectionKind::None,
         search_prompt: None,
         last_search: None,
+        wheel_exit: false,
     }
 }
 
@@ -160,18 +161,13 @@ fn wheel_up_without_history_moves_the_cursor_only() {
 }
 
 #[test]
-fn wheel_down_returns_to_live_screen_then_moves_cursor_down_within_the_pane() {
+fn wheel_down_scrolls_back_and_says_when_the_live_screen_shows() {
     let mut cs = fresh_at_origin();
     cs.scroll_offset = 4;
-    cs.wheel_down(10);
+    assert!(!cs.wheel_down());
     assert_eq!(cs.scroll_offset, 1);
-    cs.wheel_down(10);
+    assert!(cs.wheel_down());
     assert_eq!(cs.scroll_offset, 0);
-    cs.wheel_down(10);
-    assert_eq!(cs.cursor_y, WHEEL_STEP);
-    cs.cursor_y = 8;
-    cs.wheel_down(10);
-    assert_eq!(cs.cursor_y, 9, "cursor stops on the last pane row");
 }
 
 #[test]

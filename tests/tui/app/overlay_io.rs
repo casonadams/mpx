@@ -380,6 +380,14 @@ async fn tree_preview_shows_the_selected_sessions_focused_pane_and_toggles_off()
     assert!(text.contains("alpha:%"), "{text}");
     assert!(text.contains("ready-marker"), "{text}");
 
+    tree.handle_key(key('G'));
+    tree.follow_selection().await;
+    let text = draw_tree(&tree, Rect::new(0, 0, 120, 30));
+    assert!(text.contains("beta:%"), "the preview follows the cursor: {text}");
+    tree.handle_key(key('g'));
+    tree.handle_key(key('g'));
+    tree.follow_selection().await;
+
     tree.handle_key(key('p'));
     tree.refresh(&mut ctx).await;
     let text = draw_tree(&tree, Rect::new(0, 0, 120, 30));

@@ -72,6 +72,13 @@ impl Overlay {
         }
     }
 
+    /// Brings anything that depends on the selection up to date after a key moved it.
+    pub async fn follow_selection(&mut self) {
+        if let Overlay::Tree(view) = self {
+            view.follow_selection().await;
+        }
+    }
+
     pub fn handle_key(&mut self, key: KeyEvent) -> OverlayAction {
         match self {
             Overlay::Agents(view) => view.handle_key(key),

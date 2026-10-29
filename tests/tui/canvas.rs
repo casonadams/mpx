@@ -316,3 +316,21 @@ fn a_narrow_region_is_repainted_without_margin_support_or_beside_wide_glyphs() {
         assert!(!c.scroll(out, Rect::new(4, 0, 6, 3), 1).unwrap(), "a wide glyph beside the region");
     });
 }
+
+#[test]
+fn every_covered_region_is_skipped_and_repainted_once_uncovered() {
+    let mut canvas = Canvas::default();
+    let full = |c: &mut Canvas, out: &mut Vec<u8>| {
+        for y in 0..3 {
+            c.put_row(out, 0, y, &row("abcdefghij")).unwrap();
+        }
+    };
+    frame(&mut canvas, None, full);
+    canvas.begin(10, 3, [Rect::new(0, 0, 2, 3), Rect::new(6, 1, 3, 1)]);
+    let mut covered = Vec::new();
+    full(&mut canvas, &mut covered);
+    assert!(covered.is_empty(), "nothing drawn under either region");
+    let after = frame(&mut canvas, None, full);
+    assert_eq!(after.matches("ab").count(), 3, "the left region repainted: {after:?}");
+    assert!(after.contains("ghi"), "the popup region repainted: {after:?}");
+}

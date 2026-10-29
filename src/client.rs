@@ -52,6 +52,10 @@ pub enum Handshake {
 
 fn unexpected(op: &str, resp: Response) -> String {
     match resp {
+        // A daemon from an older mpx does not know the request.
+        Response::Error(e) if e.contains("unknown variant") => format!(
+            "{op} needs a newer daemon: restart this session (mpx kill-server, then mpx restore)"
+        ),
         Response::Error(e) => e,
         other => format!("Invalid response to {}: {:?}", op, other),
     }
@@ -395,6 +399,10 @@ impl Client {
             },
         )
         .await
+    }
+
+    pub async fn spread_layout(&mut self) -> Result<(), String> {
+        self.call_ok("SpreadLayout", Request::SpreadLayout).await
     }
 
     pub async fn select_layout(&mut self, preset: Option<LayoutPreset>) -> Result<(), String> {

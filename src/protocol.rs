@@ -78,6 +78,9 @@ pub struct NodeInfo {
     /// Input modes the program in a terminal pane has set (absent from daemons that predate it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub modes: Option<TermModes>,
+    /// Size (cols, rows) of a terminal pane's PTY (absent from daemons that predate it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<(u16, u16)>,
 }
 
 impl NodeInfo {
@@ -99,6 +102,7 @@ impl NodeInfo {
             window: None,
             agent: None,
             modes: None,
+            size: None,
         }
     }
 
@@ -376,6 +380,8 @@ pub enum Request {
         /// `None` cycles to the next preset.
         preset: Option<LayoutPreset>,
     },
+    /// Spreads the active window's panes evenly, keeping their arrangement (`select-layout -E`).
+    SpreadLayout,
     NewWindow(NewWindowOpts),
     NextWindow,
     PrevWindow,

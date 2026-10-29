@@ -18,16 +18,10 @@ fn exited(name: &str, code: Option<i32>) -> NodeInfo {
 }
 
 fn copy_at(scroll: usize) -> Mode {
-    Mode::Copy(CopyState {
-        cursor_x: 0,
-        cursor_y: 0,
-        scroll_offset: scroll,
-        anchor_x: 0,
-        anchor_abs_y: 0,
-        mode: SelectionKind::Line,
-        search_prompt: None,
-        last_search: None,
-    })
+    let mut state = CopyState::enter(None);
+    state.scroll_offset = scroll;
+    state.mode = SelectionKind::Line;
+    Mode::Copy(state)
 }
 
 #[test]

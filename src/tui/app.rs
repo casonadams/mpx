@@ -1,4 +1,4 @@
-use crossterm::event::{Event, KeyEvent, KeyEventKind};
+use crossterm::event::{Event, KeyEvent, KeyEventKind, MouseEventKind};
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufWriter, stdout};
 use std::path::PathBuf;
@@ -14,10 +14,10 @@ use super::exec::default_shell;
 use super::frame;
 use super::keymap::{self, Keymap};
 use super::overlay::Overlay;
-use super::panes::{LayoutCache, PaneRect, sync_dims};
+use super::panes::{BorderGrab, LayoutCache, PaneRect, resized_elsewhere, sync_dims};
 use super::prompt::PromptState;
 use super::render::copy_to_clipboard;
-use super::sidebar::{self, Sidebar};
+use super::sidebar::Sidebar;
 use super::status::{local_utc_offset, restored_notice};
 use super::terminal::TerminalGuard;
 use crate::agents::{self, Harness};
@@ -103,6 +103,8 @@ pub struct App {
     pub prefix_at: Option<Instant>,
     /// Pane and cell of a left-button press; a drag from it starts a copy-mode selection.
     pub press: Option<(String, usize, usize)>,
+    /// A split border held with the mouse: dragging moves it.
+    pub border_drag: Option<BorderGrab>,
     /// Copy-mode state of panes that are not in the foreground: a pane keeps its scroll position,
     /// cursor and selection while the prefix is pending or focus moves elsewhere.
     pub parked_copy: HashMap<String, CopyState>,
@@ -203,6 +205,7 @@ impl App {
             repeat_until: None,
             prefix_at: None,
             press: None,
+            border_drag: None,
             parked_copy: HashMap::new(),
             vt: HashMap::new(),
             pane_dims: HashMap::new(),
@@ -269,7 +272,7 @@ impl App {
             .unwrap_or_else(|| crossterm::terminal::size().unwrap_or((80, 24)));
         let layout_h = h.saturating_sub(1);
         self.viewport = (w, layout_h);
-        let side = sidebar::width(self.sidebar.visible, w);
+        let side = self.sidebar_width();
         if side == 0 && matches!(self.mode, Mode::Sidebar) {
             self.mode = Mode::Normal;
         }
@@ -291,6 +294,19 @@ impl App {
         };
         self.active_rect = self.panes.iter().find(|(.., f)| *f).map(|(_, r, _)| *r);
         self.refresh_newly_shown(&shown_before).await;
+        if self.focus_pane.as_deref() != Some(self.active_pane.as_str()) {
+            self.recheck_size(&self.active_pane.clone()).await;
+        }
+        // While a border is dragged, panes are drawn at their new places as they are: resizing
+        // their terminals and rebuilding their screens waits for the release.
+        if self.border_drag.is_none() {
+            self.sync_pane_sizes().await;
+        }
+        self.route_focus().await;
+        true
+    }
+
+    async fn sync_pane_sizes(&mut self) {
         sync_dims(
             &mut self.client,
             &self.panes,
@@ -299,8 +315,18 @@ impl App {
             &mut self.expected,
         )
         .await;
-        self.route_focus().await;
-        true
+    }
+
+    /// A pane coming into focus gets its size checked: if something else resized its terminal,
+    /// the next sync sends the right size again and the program reflows.
+    /// Only on focus: two clients of different sizes attached to one session would otherwise
+    /// take a pane back and forth.
+    async fn recheck_size(&mut self, name: &str) {
+        if let Ok(info) = self.client.status(name).await {
+            for name in resized_elsewhere(&self.pane_dims, &[info]) {
+                self.pane_dims.remove(&name);
+            }
+        }
     }
 
     /// Sends focus-out to the previously active pane and focus-in to the new one, where enabled.
@@ -579,6 +605,24 @@ pub fn next_frame(window_start: Option<Instant>, now: Instant, pending: Option<I
     }
 }
 
+/// The last of a run of mouse drags already queued after `first`, and the first queued event that
+/// is not part of the run, to handle next. A fast drag sends many motions; only the latest
+/// position matters.
+pub fn latest_drag(first: Event, mut queued: impl FnMut() -> Option<Event>) -> (Event, Option<Event>) {
+    let is_drag = |ev: &Event| matches!(ev, Event::Mouse(m) if matches!(m.kind, MouseEventKind::Drag(_)));
+    if !is_drag(&first) {
+        return (first, None);
+    }
+    let mut last = first;
+    while let Some(next) = queued() {
+        if !is_drag(&next) {
+            return (last, Some(next));
+        }
+        last = next;
+    }
+    (last, None)
+}
+
 /// Moves every event already queued into `batch`; returns whether there was any.
 fn drain_into(rx: &mut StreamRx, batch: &mut Vec<(u64, StreamEvent)>) -> bool {
     let before = batch.len();
@@ -613,6 +657,27 @@ enum Wake {
 /// Terminal input read on its own thread and handed over a channel. crossterm's async
 /// `EventStream` takes an internal lock on every poll while its reader thread holds it, so the
 /// event loop spun on that lock each time pane output woke it.
+/// Terminal input, with a run of queued mouse drags merged into its last position.
+struct Input {
+    rx: UnboundedReceiver<Event>,
+    /// The event that ended the last merged run, handed out next.
+    held: Option<Event>,
+}
+
+impl Input {
+    /// Takes the held event, if any, without waiting: it then completes in the same poll, so
+    /// `select!` never drops it.
+    async fn recv(&mut self) -> Option<Event> {
+        let first = match self.held.take() {
+            Some(event) => event,
+            None => self.rx.recv().await?,
+        };
+        let (event, next) = latest_drag(first, || self.rx.try_recv().ok());
+        self.held = next;
+        Some(event)
+    }
+}
+
 fn terminal_input() -> UnboundedReceiver<Event> {
     let (tx, rx) = unbounded_channel();
     std::thread::spawn(move || {
@@ -636,7 +701,10 @@ pub async fn run_tui(
     let margins = super::terminal::query_lr_margins();
     let (mut app, mut stream) = App::open(endpoint, session, start, opts).await?;
     app.canvas.set_lr_margins(margins);
-    let mut keys = terminal_input();
+    let mut keys = Input {
+        rx: terminal_input(),
+        held: None,
+    };
     let mut out = BufWriter::with_capacity(64 * 1024, stdout());
     let mut body = Vec::with_capacity(64 * 1024);
     let (mut cursor, mut last_cursor) = (Vec::new(), Vec::new());

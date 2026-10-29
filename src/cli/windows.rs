@@ -108,7 +108,9 @@ pub async fn run(cmd: Commands, r: &Resolved) -> Result<i32, String> {
                 .map_err(|e| format!("break-pane error: {e}"))?;
             Ok(0)
         }
-        Commands::SelectLayout { preset } => select_layout(r, preset.as_deref()).await,
+        Commands::SelectLayout { preset, spread } => {
+            select_layout(r, preset.as_deref(), spread).await
+        }
         Commands::ResizePane {
             target,
             left,
@@ -185,7 +187,15 @@ async fn swap(r: &Resolved, source: &str, target: &str) -> Result<i32, String> {
     Ok(0)
 }
 
-async fn select_layout(r: &Resolved, preset: Option<&str>) -> Result<i32, String> {
+async fn select_layout(r: &Resolved, preset: Option<&str>, spread: bool) -> Result<i32, String> {
+    if spread {
+        let mut client = ensure_client(r).await?;
+        client
+            .spread_layout()
+            .await
+            .map_err(|e| format!("select-layout error: {e}"))?;
+        return Ok(0);
+    }
     let preset = match preset {
         Some(name) => {
             Some(LayoutPreset::parse(name).ok_or_else(|| format!("unknown layout: {name}"))?)

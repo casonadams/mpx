@@ -273,3 +273,65 @@ async fn panes_split_or_focused_from_outside_are_laid_out_without_waiting_for_a_
     h.until("the focus change is laid out", |app| app.layout.dirty)
         .await;
 }
+
+#[tokio::test]
+async fn dragging_a_border_with_the_mouse_resizes_the_panes_beside_it() {
+    use crossterm::event::{MouseButton, MouseEventKind};
+    let mut h = start().await;
+    split(&mut h.probe, MAIN, "side", Direction::Horizontal).await;
+    h.frame().await;
+    let before = width_of(&h, MAIN);
+    let border = h.rect_of(MAIN).x + before;
+    h.mouse(MouseEventKind::Down(MouseButton::Left), border, 3).await;
+    h.frame().await;
+    h.mouse(MouseEventKind::Drag(MouseButton::Left), border + 3, 3).await;
+    h.frame().await;
+    h.mouse(MouseEventKind::Drag(MouseButton::Left), border + 6, 4).await;
+    h.frame().await;
+    let height = h.rect_of(MAIN).height;
+    let size = h.probe.status(MAIN).await.expect("status").size;
+    assert_eq!(size, Some((before, height)), "not while dragging");
+    h.mouse(MouseEventKind::Up(MouseButton::Left), border + 6, 4).await;
+    h.frame().await;
+    let width = width_of(&h, MAIN);
+    assert!(width.abs_diff(before + 6) <= 1, "{before} -> {width}");
+    let size = h.probe.status(MAIN).await.expect("status").size;
+    assert_eq!(size, Some((width, height)), "on release");
+    assert!(h.mode_is_normal(), "a border drag selects nothing");
+}
+
+#[tokio::test]
+async fn focusing_a_pane_resized_elsewhere_gives_it_back_its_size() {
+    let mut h = start().await;
+    split(&mut h.probe, MAIN, "side", Direction::Horizontal).await;
+    h.frame().await;
+    let rect = h.rect_of("side");
+    h.probe.resize_pane("side", 30, 8).await.expect("resize elsewhere");
+    h.prefixed_char('o').await;
+    h.frame().await;
+    assert_eq!(h.app.active_pane, "side");
+    let size = h.probe.status("side").await.expect("status").size;
+    assert_eq!(size, Some((rect.width, rect.height)));
+}
+
+#[tokio::test]
+async fn prefix_space_cycles_layouts_and_prefix_equals_spreads_panes() {
+    let mut h = start().await;
+    split(&mut h.probe, MAIN, "side", Direction::Horizontal).await;
+    h.frame().await;
+    for _ in 0..2 {
+        h.prefixed(KeyCode::Char(' ')).await;
+        h.frame().await;
+    }
+    assert_eq!(h.rect_of(MAIN).x, h.rect_of("side").x, "stacked after two cycles");
+
+    h.probe
+        .resize_split(MAIN, mpx::protocol::Side::Down, 8, h.app.pane_viewport())
+        .await
+        .expect("uneven");
+    h.frame().await;
+    assert!(h.rect_of(MAIN).height > h.rect_of("side").height + 1);
+    h.prefixed_char('=').await;
+    h.frame().await;
+    assert!(h.rect_of(MAIN).height.abs_diff(h.rect_of("side").height) <= 1);
+}

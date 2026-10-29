@@ -145,28 +145,39 @@ async fn frames_keep_the_terminal_identical_to_the_panes() {
     .await;
     check(&mut h, "redraw after overlays").await;
 
-    h.prefixed_char('e').await;
-    check(&mut h, "sidebar shown").await;
+    let working = mpx::client::AgentReportArgs {
+        harness: Some("claude".to_string()),
+        state: Some(mpx::protocol::AgentState::Working),
+        ..Default::default()
+    };
+    h.probe.agent_report(MAIN, working).await.expect("report agent");
+    h.app.refresh_sidebar().await;
+    check(&mut h, "agents rail shown").await;
     let busy = format!("{}BUSY-DONE", numbered_lines("busy", 30));
     emit(&mut h, MAIN, &busy, "BUSY-DONE").await;
-    check(&mut h, "output beside the sidebar").await;
+    check(&mut h, "output beside the rail").await;
     emit(&mut h, MAIN, VIM_LIKE, "VIM-DONE").await;
-    check(&mut h, "vim-style redraw beside the sidebar").await;
+    check(&mut h, "vim-style redraw beside the rail").await;
+
+    h.prefixed_char('e').await;
+    h.frame().await;
+    assert!(h.terminal.snapshot().starts_with(" Agents"), "rail expanded");
+    let under = format!("{}UNDER-DONE", numbered_lines("under", 8));
+    emit(&mut h, MAIN, &under, "UNDER-DONE").await;
+    h.frame().await;
     h.key(KeyCode::Esc).await;
+    check(&mut h, "output that arrived under the expanded rail").await;
+
     h.prefixed_char('?').await;
     h.frame().await;
     h.key(KeyCode::Char('q')).await;
-    check(&mut h, "overlay closed over the sidebar").await;
-    assert!(
-        h.terminal.snapshot().starts_with(" Agents"),
-        "sidebar repainted after the overlay:\n{}",
-        h.terminal.snapshot()
-    );
+    check(&mut h, "overlay closed over the rail").await;
+    let dot = h.terminal.grid().get_cell(0, 0).map(|c| c.c);
+    assert_eq!(dot, Some('●'), "rail repainted after the overlay");
     h.prefixed_char('z').await;
-    check(&mut h, "zoomed beside the sidebar").await;
+    check(&mut h, "zoomed beside the rail").await;
     h.prefixed_char('z').await;
-    h.prefixed_char('e').await;
-    check(&mut h, "sidebar hidden").await;
+    check(&mut h, "unzoomed beside the rail").await;
 
     h.prefixed_char('z').await;
     let zoomed = format!("{}ZOOM-DONE", numbered_lines("zoom", 12));

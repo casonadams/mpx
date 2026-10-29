@@ -241,6 +241,39 @@ impl LayoutNode {
     }
 }
 
+impl LayoutNode {
+    /// Spreads panes evenly, keeping the arrangement (tmux `select-layout -E`): each split gives
+    /// its sides room in proportion to the panes lined up along its direction on each side.
+    pub fn spread(&mut self) {
+        if let Self::Split {
+            direction,
+            ratio,
+            left,
+            right,
+        } = self
+        {
+            left.spread();
+            right.spread();
+            let (first, second) = (left.span(*direction), right.span(*direction));
+            *ratio = first as f32 / (first + second) as f32;
+        }
+    }
+
+    /// Panes lined up along `direction`: side by side for horizontal, stacked for vertical.
+    fn span(&self, direction: Direction) -> usize {
+        match self {
+            Self::Leaf { .. } => 1,
+            Self::Split {
+                direction: d,
+                left,
+                right,
+                ..
+            } if *d == direction => left.span(direction) + right.span(direction),
+            Self::Split { left, right, .. } => left.span(direction).max(right.span(direction)),
+        }
+    }
+}
+
 fn child_bounds(direction: Direction, ratio: f32, bounds: Rect) -> (Rect, Rect) {
     match direction {
         Direction::Horizontal => bounds.split_horizontal(ratio),

@@ -38,6 +38,9 @@ dim_content_bg = true               # dim explicit app backgrounds (diffs, selec
 [bind]                  # prefix key -> command line (see KEYBINDINGS.md)
 "M-h" = "select-pane -L"
 "g" = "launch-agent claude --split"
+
+[bind_root]             # keys without the prefix; "" unbinds
+"M-j" = "next-agent"
 "r" = "command-prompt -I 'rename-window '"
 
 [[harness]]             # extra or overriding agent harnesses (see AGENT-MANAGER.md)
@@ -94,6 +97,14 @@ Map custom prefix key shortcuts to `mpx` command lines. Format is `"<key>" = "<c
 "r"   = "command-prompt -I 'rename-window '"
 ```
 
+`[bind_root]` binds keys pressed without the prefix (tmux `bind -n`); they never reach the program in the pane. By default `M-j` and `M-k` step through agents (`next-agent`, `prev-agent`); on macOS `∆` and `˚`, what Option-j and Option-k type when the terminal's Option key is not set to act as Alt, do too. In either table an empty command line unbinds a key:
+
+```toml
+[bind_root]
+"M-j" = ""            # give Alt-j back to programs
+"M-n" = "next-agent"
+```
+
 Key names follow tmux notation:
 - Modifiers: `C-` (Ctrl), `M-` (Alt / Option), `S-` (Shift)
 - Special keys: `Enter`, `Escape`, `Tab`, `BTab` (Backtab / Shift-Tab), `Space`, `BSpace`, `Up`, `Down`, `Left`, `Right`, `Home`, `End`, `PageUp` (`PPage`), `PageDown` (`NPage`), `IC` (Insert), `DC` (Delete), `F1`–`F12`
@@ -119,12 +130,13 @@ All commands available in `[bind]` can also be run interactively from the comman
 | `next-window` | `tabnext`, `tabn` | none | Switch to next window tab. |
 | `previous-window` | `prev-window`, `tabp` | none | Switch to previous window tab. |
 | `last-window` | none | none | Toggle back to the previously active window tab. |
-| `select-layout` | `selectl`, `next-layout` | `[preset]` | Cycle split layout presets or pick layout preset. |
+| `select-layout` | `selectl`, `next-layout` | `[preset]`, `-E` | Cycle split layout presets or pick layout preset; `-E` spreads the panes evenly, keeping their arrangement. |
 | `launch-agent` | none | `[--split] [--teams] [--resume <id>] <harness>` | Launch an AI coding agent with hooks configured. |
 | `agents` | none | none | Open full-screen Agent Manager overlay with status and resume list. |
 | `next-attention` | none | none | Focus the background agent that has waited longest for user input. |
 | `choose-tree` | `tree` | none | Open interactive session / window / pane hierarchy tree. |
-| `sidebar` | none | none | Show and focus the agents sidebar, or hide it. |
+| `sidebar` | none | none | Focus the agents rail, expanding it, or collapse it. |
+| `next-agent`, `prev-agent` | none | none | Show the next / previous agent's pane without focusing the rail. |
 | `list-keys` | `help` | none | Open searchable keybindings cheat sheet overlay. |
 | `copy-mode` | none | none | Enter Vi visual scrollback navigation and copy mode. |
 | `command-prompt` | none | `[-I <initial>] [-p <prompt>]` | Open command line prompt at bottom row. |

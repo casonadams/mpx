@@ -53,8 +53,11 @@ impl Drop for TerminalGuard {
     }
 }
 
-/// Longest wait for the terminal to answer the margin query at startup.
-const QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(300);
+/// Longest wait for the terminal to answer the margin query at startup. Every terminal answers
+/// the DA1 that ends it, so the wait is one round trip; the limit only matters for one that never
+/// does. It is generous because a reply arriving after it would be read as typed keys (a slow
+/// SSH link).
+const QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// What the terminal said about left/right margins (DECLRMM, mode 69), once its reply is complete:
 /// the DECRQM report, if any, precedes the DA1 answer every terminal sends. `None` until then.

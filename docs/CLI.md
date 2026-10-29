@@ -104,7 +104,7 @@ Timeout exits with `124`, like `timeout(1)`.
 | `mpx focus <pane>` | Focus a pane (switches window if needed). |
 | `mpx swap-pane --source <pane> -t <pane>` | Swap two panes (also across windows). |
 | `mpx break-pane <pane>` | Move a pane into its own window. |
-| `mpx select-layout [preset]` | `even-horizontal`, `even-vertical`, `main-vertical`, `main-horizontal`, `tiled`; no argument cycles. |
+| `mpx select-layout [preset]` | `even-horizontal`, `even-vertical`, `main-vertical`, `main-horizontal`, `tiled`; no argument cycles; `-E` spreads the panes evenly, keeping their arrangement. |
 | `mpx resize-pane [-t pane] -L\|-R\|-U\|-D [cells]` | Move the pane border (tmux semantics). `-x`/`-y` set an absolute size. |
 | `mpx layout [--width W --height H]` | Print the computed pane geometry. |
 

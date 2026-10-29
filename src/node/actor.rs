@@ -490,6 +490,8 @@ impl PaneActor {
         info.last_output_ms = self.last_output_ms;
         info.agent = self.agent.info();
         info.modes = self.pty.then(|| self.screen.modes());
+        let grid = self.screen.grid();
+        info.size = self.pty.then_some((grid.cols as u16, grid.rows as u16));
         if full {
             info.title = self.screen.title().map(str::to_string);
             info.foreground = self.foreground_name();

@@ -28,3 +28,12 @@ async fn stepping_with_no_other_session_says_so() {
     assert_eq!(h.app.live_message(), Some("no other session"));
     assert_eq!(h.app.session, SESSION);
 }
+
+#[tokio::test]
+async fn the_tui_ends_when_its_daemon_goes_away() {
+    let mut h = Harness::start(Config::default(), ECHO).await;
+    h.frame().await;
+    let _ = h.probe.shutdown().await;
+    h.app.layout.dirty = true;
+    assert!(!h.app.prepare_frame().await, "nothing left to show");
+}

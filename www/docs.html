@@ -97,7 +97,7 @@ mpx -s dev</code></pre>
             <tr><td><code>Prefix + H J K L</code></td><td>Resize</td><td>Move the border 5 cells (repeatable for 500 ms)</td></tr>
             <tr><td><code>Prefix + z</code></td><td>Toggle Zoom</td><td>Maximize active pane to 100% full screen (press again to un-zoom)</td></tr>
             <tr><td><code>Prefix + x</code> / <code>!</code></td><td>Kill / Break Pane</td><td>Kill asks y/n; break moves the pane to its own window</td></tr>
-            <tr><td><code>Prefix + { }</code> / <code>Space</code></td><td>Swap / Layout</td><td>Swap with neighbour; cycle layout presets</td></tr>
+            <tr><td><code>Prefix + { }</code> / <code>Space</code> / <code>=</code></td><td>Swap / Layout</td><td>Swap with neighbour; cycle layout presets; spread panes evenly</td></tr>
             <tr><td><code>Prefix + d</code></td><td>Detach</td><td>Cleanly detach back to host terminal (leaves daemon running)</td></tr>
           </tbody>
         </table>
@@ -112,7 +112,8 @@ mpx -s dev</code></pre>
           <tbody>
             <tr><td><code>Prefix + s</code></td><td>Agent Manager</td><td>All AI agents across sessions grouped by state, plus resumable sessions</td></tr>
             <tr><td><code>Prefix + A</code></td><td>Next Attention</td><td>Jump to the agent that has waited longest for input</td></tr>
-            <tr><td><code>Prefix + e</code></td><td>Agents Sidebar</td><td>Every agent by session on the left; moving the highlight shows that agent live on the right</td></tr>
+            <tr><td><code>Prefix + e</code></td><td>Agents Rail</td><td>While agents run, a dot per agent on the left; focusing it expands the list over the panes, and moving the highlight shows that agent live</td></tr>
+            <tr><td><code>Alt-j</code> / <code>Alt-k</code></td><td>Next / Previous Agent</td><td>No prefix: show the next or previous agent's pane in any session; the reverse-video dot follows. On macOS Option-j/Option-k work whether or not Option is set to act as Alt</td></tr>
             <tr><td><code>Prefix + w</code></td><td>Sessions</td><td>Sessions, windows and panes with program, directory, agent counts and a pane preview</td></tr>
             <tr><td><code>Prefix + ( )</code></td><td>Switch Session</td><td>Previous / next session</td></tr>
             <tr><td><code>Prefix + :</code></td><td>Command Prompt</td><td>tmux commands with vim aliases (<code>:vsplit</code>, <code>:tabnew</code>, <code>:q</code>)</td></tr>
@@ -124,9 +125,10 @@ mpx -s dev</code></pre>
       <h3>Mouse Mode</h3>
       <ul>
         <li><strong>Left Click</strong>: Focus clicked pane immediately (no copy mode).</li>
+        <li><strong>Drag a Border</strong>: Resize the panes on either side of it.</li>
         <li><strong>Left Drag</strong>: Select text from the press point; release copies it.</li>
         <li><strong>Scroll Up</strong>: Automatically enters copy mode and scrolls history upward.</li>
-        <li><strong>Scroll Down</strong>: Scrolls downward toward live output.</li>
+        <li><strong>Scroll Down</strong>: Scrolls downward toward live output, leaving copy mode on reaching it when the wheel entered it.</li>
       </ul>
     </section>
 
@@ -134,7 +136,7 @@ mpx -s dev</code></pre>
 
     <section id="copy-mode">
       <h2>Vi Copy / Visual Mode</h2>
-      <p>Enter copy mode with <strong><code>Prefix + [</code></strong> or by scrolling up with the mouse wheel. Navigate with a live movable cursor across up to <strong>100,000 lines of scrollback history</strong>:</p>
+      <p>Enter copy mode with <strong><code>Prefix + [</code></strong> or by scrolling up with the mouse wheel; when the wheel entered it, scrolling back down to the prompt leaves it. Navigate with a live movable cursor across up to <strong>100,000 lines of scrollback history</strong>:</p>
 
       <div class="table-container">
         <table>
@@ -206,6 +208,9 @@ mcp = true              # give agents mpx launches the mpx MCP tools (mpx_peers,
 [bind]                  # custom prefix key bindings -&gt; command line
 "M-h" = "select-pane -L"
 "g" = "launch-agent claude --split"
+
+[bind_root]             # keys without the prefix; "" unbinds
+"M-j" = "next-agent"
 "r" = "command-prompt -I 'rename-window '"
 
 # Define custom aider harness
@@ -249,6 +254,7 @@ session_id_args = ["--session", "{id}"]</code></pre>
             <tr><td><code>agent.idle_ms</code></td><td>integer</td><td><code>1500</code></td><td>Daemon</td><td>Inactivity quiet period in milliseconds before classifying an agent as idle.</td></tr>
             <tr><td><code>agent.notify</code></td><td>bool</td><td><code>true</code></td><td>TUI</td><td>Send OSC 9 desktop notification when an off-screen agent needs user input.</td></tr>
             <tr><td><code>bind</code></td><td>table</td><td><code>{}</code></td><td>TUI</td><td>Custom key bindings mapping tmux key notation to mpx command lines.</td></tr>
+            <tr><td><code>bind_root</code></td><td>table</td><td><code>{"M-j" = "next-agent", "M-k" = "prev-agent"}</code></td><td>TUI</td><td>Bindings for keys pressed without the prefix; an empty command unbinds.</td></tr>
             <tr><td><code>harness</code></td><td>array of tables</td><td><code>[]</code></td><td>Daemon</td><td>Custom agent harness definitions (repeat <code>[[harness]]</code> for multiple agents).</td></tr>
           </tbody>
         </table>
@@ -276,12 +282,13 @@ session_id_args = ["--session", "{id}"]</code></pre>
             <tr><td><code>next-window</code></td><td><code>tabnext</code>, <code>tabn</code></td><td>none</td><td>Switch to next window tab.</td></tr>
             <tr><td><code>previous-window</code></td><td><code>prev-window</code>, <code>tabp</code></td><td>none</td><td>Switch to previous window tab.</td></tr>
             <tr><td><code>last-window</code></td><td>none</td><td>none</td><td>Toggle back to previous active window tab.</td></tr>
-            <tr><td><code>select-layout</code></td><td><code>selectl</code>, <code>next-layout</code></td><td><code>[preset]</code></td><td>Cycle or select split layout preset.</td></tr>
+            <tr><td><code>select-layout</code></td><td><code>selectl</code>, <code>next-layout</code></td><td><code>[preset]</code>, <code>-E</code></td><td>Cycle or select split layout preset; <code>-E</code> spreads the panes evenly, keeping their arrangement.</td></tr>
             <tr><td><code>launch-agent</code></td><td>none</td><td><code>[--split] [--teams] [--resume &lt;id&gt;] &lt;harness&gt;</code></td><td>Launch an AI agent harness with hooks.</td></tr>
             <tr><td><code>agents</code></td><td>none</td><td>none</td><td>Open full-screen Agent Manager overlay.</td></tr>
             <tr><td><code>next-attention</code></td><td>none</td><td>none</td><td>Jump to agent waiting longest for input.</td></tr>
             <tr><td><code>choose-tree</code></td><td><code>tree</code></td><td>none</td><td>Open session/window/pane tree navigation.</td></tr>
-            <tr><td><code>sidebar</code></td><td>none</td><td>none</td><td>Show and focus the agents sidebar, or hide it.</td></tr>
+            <tr><td><code>sidebar</code></td><td>none</td><td>none</td><td>Focus the agents rail, expanding it, or collapse it.</td></tr>
+            <tr><td><code>next-agent</code>, <code>prev-agent</code></td><td>none</td><td>none</td><td>Show the next / previous agent's pane without focusing the rail.</td></tr>
             <tr><td><code>list-keys</code></td><td><code>help</code></td><td>none</td><td>Open searchable keybindings cheat sheet.</td></tr>
             <tr><td><code>copy-mode</code></td><td>none</td><td>none</td><td>Enter Vi copy / visual scrollback mode.</td></tr>
             <tr><td><code>command-prompt</code></td><td>none</td><td><code>[-I &lt;initial&gt;] [-p &lt;prompt&gt;]</code></td><td>Open interactive command prompt.</td></tr>

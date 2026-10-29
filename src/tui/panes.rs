@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 use crate::client::Client;
 use crate::layout::{Divider, Rect, WindowTab};
-use crate::protocol::Side;
+use crate::protocol::{NodeInfo, Side};
 use crate::vt::VtScreen;
 
 /// A visible pane: name, cell rectangle, focused.
@@ -32,21 +32,26 @@ impl LayoutCache {
     /// Refetches the layout for a `width` x `layout_h` area starting `offset` columns in, when
     /// dirty or moved. Returns false when the window has no panes at all.
     pub async fn sync(&mut self, client: &mut Client, offset: u16, width: u16, layout_h: u16) -> bool {
-        if (self.dirty || self.raw.is_empty() || offset != self.offset)
-            && let Ok((panes, dividers, tabs)) = client.layout(width, layout_h).await
-        {
-            self.raw = panes
-                .into_iter()
-                .map(|(name, rect, focused)| (name, shift(rect, offset), focused))
-                .collect();
-            self.dividers = dividers
-                .into_iter()
-                .map(|d| Divider { x: d.x + offset, ..d })
-                .collect();
-            self.tabs = tabs;
-            self.offset = offset;
-            self.dirty = false;
+        if !(self.dirty || self.raw.is_empty() || offset != self.offset) {
+            return !self.raw.is_empty();
         }
+        // No answer means the daemon is gone (killed, or it ended with its last pane): nothing is
+        // left to show.
+        let Ok((panes, dividers, tabs)) = client.layout(width, layout_h).await else {
+            self.raw.clear();
+            return false;
+        };
+        self.raw = panes
+            .into_iter()
+            .map(|(name, rect, focused)| (name, shift(rect, offset), focused))
+            .collect();
+        self.dividers = dividers
+            .into_iter()
+            .map(|d| Divider { x: d.x + offset, ..d })
+            .collect();
+        self.tabs = tabs;
+        self.offset = offset;
+        self.dirty = false;
         !self.raw.is_empty()
     }
 }
@@ -181,5 +186,82 @@ pub async fn sync_dims(
             expected.insert(name.clone(), next);
             vt.insert(name, screen);
         }
+    }
+}
+
+/// Panes whose terminal is not the size last sent to it: another client or `mpx resize-pane`
+/// resized it since. Their size is to be sent again.
+pub fn resized_elsewhere(dims: &HashMap<String, (u16, u16)>, nodes: &[NodeInfo]) -> Vec<String> {
+    nodes
+        .iter()
+        .filter(|node| {
+            node.size
+                .is_some_and(|size| dims.get(&node.name).is_some_and(|sent| *sent != size))
+        })
+        .map(|node| node.name.clone())
+        .collect()
+}
+
+/// A split border grabbed with the mouse, and the panes on either side of it where it was grabbed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BorderGrab {
+    /// A `│` border between panes side by side; otherwise a `─` border between stacked panes.
+    pub vertical: bool,
+    pub before: String,
+    pub after: String,
+}
+
+/// The border under `(col, row)`, if any, with the panes it separates at that point.
+pub fn border_at(
+    dividers: &[Divider],
+    panes: &[PaneRect],
+    (col, row): (u16, u16),
+) -> Option<BorderGrab> {
+    let divider = dividers.iter().find(|d| {
+        let (along, at, start) = if d.is_vertical {
+            (row, col == d.x, d.y)
+        } else {
+            (col, row == d.y, d.x)
+        };
+        at && along >= start && along < start + d.length
+    })?;
+    let pane_at = |x: u16, y: u16| {
+        panes
+            .iter()
+            .find(|(_, rect, _)| rect.contains(x, y))
+            .map(|(name, ..)| name.clone())
+    };
+    let (before, after) = if divider.is_vertical {
+        (pane_at(col.checked_sub(1)?, row)?, pane_at(col + 1, row)?)
+    } else {
+        (pane_at(col, row.checked_sub(1)?)?, pane_at(col, row + 1)?)
+    };
+    Some(BorderGrab {
+        vertical: divider.is_vertical,
+        before,
+        after,
+    })
+}
+
+/// The resize that brings a grabbed border to `(col, row)`: the pane on the side the pointer
+/// moved to grows toward it. `None` when the border is already there.
+pub fn border_move(
+    grab: &BorderGrab,
+    panes: &[PaneRect],
+    (col, row): (u16, u16),
+) -> Option<(String, Side, u16)> {
+    let (_, rect, _) = panes.iter().find(|(name, ..)| *name == grab.before)?;
+    let (edge, to) = if grab.vertical {
+        (rect.x + rect.width, col)
+    } else {
+        (rect.y + rect.height, row)
+    };
+    let cells = to.abs_diff(edge);
+    match (to > edge, grab.vertical) {
+        _ if cells == 0 => None,
+        (true, true) => Some((grab.before.clone(), Side::Right, cells)),
+        (true, false) => Some((grab.before.clone(), Side::Down, cells)),
+        (false, true) => Some((grab.after.clone(), Side::Left, cells)),
+        (false, false) => Some((grab.after.clone(), Side::Up, cells)),
     }
 }

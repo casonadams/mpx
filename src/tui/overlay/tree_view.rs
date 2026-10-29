@@ -250,6 +250,18 @@ impl TreeView {
         self.refresh_screen().await;
     }
 
+    /// Fetches the preview when the selection now points at another pane than the one shown,
+    /// so moving through panes previews each at once rather than at the next refresh.
+    pub async fn follow_selection(&mut self) {
+        let want = self
+            .selected()
+            .and_then(|n| self.preview_pane(n))
+            .map(|(s, w, p)| self.pane_target(s, w, p));
+        if !self.preview_off && want != self.screen.as_ref().map(|(shown, _)| shown.clone()) {
+            self.refresh_screen().await;
+        }
+    }
+
     async fn refresh_screen(&mut self) {
         self.screen = None;
         if self.preview_off {

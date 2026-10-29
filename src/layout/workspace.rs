@@ -149,6 +149,11 @@ impl Window {
         }
     }
 
+    /// Spreads the panes evenly without rearranging them.
+    pub fn spread_layout(&mut self) {
+        self.root.iter_mut().for_each(LayoutNode::spread);
+    }
+
     pub fn resize_split(&mut self, name: &str, side: Side, cells: u16, bounds: Rect) -> bool {
         match self.root.as_mut() {
             Some(root) => root.resize_border(name, side, cells, bounds),
@@ -486,9 +491,19 @@ impl Workspace {
 
     /// Applies a preset to the active window; `None` cycles.
     pub fn select_layout(&mut self, preset: Option<LayoutPreset>) -> bool {
+        self.in_active_window(|win| win.select_layout(preset))
+    }
+
+    /// Spreads the active window's panes evenly, keeping their arrangement.
+    pub fn spread_layout(&mut self) -> bool {
+        self.in_active_window(Window::spread_layout)
+    }
+
+    /// Runs `change` on the active window; false when there is none.
+    fn in_active_window(&mut self, change: impl FnOnce(&mut Window)) -> bool {
         match self.active_window_mut() {
             Some(win) => {
-                win.select_layout(preset);
+                change(win);
                 true
             }
             None => false,

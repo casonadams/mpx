@@ -459,6 +459,7 @@ impl Session {
             Request::SelectLayout { preset } => {
                 check(self.workspace.select_layout(preset), "No window")
             }
+            Request::SpreadLayout => check(self.workspace.spread_layout(), "No window"),
             _ => self.window_request(req),
         }
     }

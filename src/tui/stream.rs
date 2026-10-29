@@ -208,6 +208,14 @@ impl App {
             self.refresh_nodes().await;
         }
         let newest = node_named(&self.nodes, name).map(|n| n.id);
+        if let Some(listed) = self
+            .sidebar
+            .agents
+            .iter_mut()
+            .find(|a| a.session == self.session && Some(a.node.id) == newest)
+        {
+            listed.node.agent = agent.clone();
+        }
         if let Some(node) = self.nodes.iter_mut().find(|n| Some(n.id) == newest) {
             node.agent = agent;
         }

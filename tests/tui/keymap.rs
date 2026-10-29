@@ -2,7 +2,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use mpx::config::Config;
 use mpx::protocol::Side;
 use mpx::tui::command::Command;
-use mpx::tui::keymap::{default_table, resolve};
+use mpx::tui::keymap::{Table, default_table, resolve};
 
 fn key(c: char) -> KeyEvent {
     KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)
@@ -17,7 +17,22 @@ fn default_keymap() -> mpx::tui::keymap::Keymap {
 }
 
 fn command_of(keymap: &mpx::tui::keymap::Keymap, ev: &KeyEvent) -> Option<Command> {
-    keymap.lookup(ev).map(|b| b.command.clone())
+    command_in(keymap, Table::Prefix, ev)
+}
+
+fn command_in(
+    keymap: &mpx::tui::keymap::Keymap,
+    table: Table,
+    ev: &KeyEvent,
+) -> Option<Command> {
+    let binding = keymap.lookup(table, ev)?;
+    Some(binding.command.clone())
+}
+
+fn alt(c: char) -> KeyEvent {
+    let mut ev = key(c);
+    ev.modifiers = KeyModifiers::ALT;
+    ev
 }
 
 #[test]
@@ -151,3 +166,37 @@ fn invalid_prefix_is_rejected() {
     assert!(resolve(&config).is_err());
 }
 
+
+#[test]
+fn alt_j_and_alt_k_step_through_agents_without_the_prefix() {
+    let keymap = default_keymap();
+    let root = |c| command_in(&keymap, Table::Root, &alt(c));
+    assert_eq!(root('j'), Some(Command::StepAgent { next: true }));
+    assert_eq!(root('k'), Some(Command::StepAgent { next: false }));
+    assert_eq!(command_in(&keymap, Table::Root, &key('j')), None, "plain j reaches the pane");
+    assert_eq!(command_of(&keymap, &alt('j')), None, "not a prefix binding");
+}
+
+#[test]
+fn config_bind_root_rebinds_and_an_empty_command_unbinds() {
+    let mut config = Config::default();
+    config.bind_root.insert("M-j".to_string(), String::new());
+    config.bind_root.insert("M-n".to_string(), "next-agent".to_string());
+    config.bind.insert("e".to_string(), " ".to_string());
+    let keymap = resolve(&config).unwrap();
+    assert_eq!(command_in(&keymap, Table::Root, &alt('j')), None);
+    assert_eq!(
+        command_in(&keymap, Table::Root, &alt('n')),
+        Some(Command::StepAgent { next: true })
+    );
+    assert_eq!(command_of(&keymap, &key('e')), None, "unbound prefix key");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn option_j_and_option_k_step_through_agents_when_the_terminal_sends_their_characters() {
+    let keymap = default_keymap();
+    let root = |c| command_in(&keymap, Table::Root, &key(c));
+    assert_eq!(root('∆'), Some(Command::StepAgent { next: true }));
+    assert_eq!(root('˚'), Some(Command::StepAgent { next: false }));
+}

@@ -125,6 +125,13 @@ fn select_layout_applies_a_preset_and_rejects_unknown_names() {
     assert_ne!(base.y, side.y);
     assert_eq!(run_command(&f, &["select-layout"]), 0);
     assert_eq!(run_command(&f, &["select-layout", "bogus"]), 1);
+
+    assert_eq!(run_command(&f, &["select-layout", "even-horizontal"]), 0);
+    assert_eq!(run_command(&f, &["resize-pane", "-t", "base", "-R", "10"]), 0);
+    assert!(place(&f, "base").w > place(&f, "side").w + 1);
+    assert_eq!(run_command(&f, &["select-layout", "-E"]), 0);
+    let (base, side) = (place(&f, "base"), place(&f, "side"));
+    assert!(base.w.abs_diff(side.w) <= 1, "widths {} and {}", base.w, side.w);
 }
 
 #[test]

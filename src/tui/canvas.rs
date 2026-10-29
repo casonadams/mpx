@@ -11,7 +11,7 @@ pub struct Canvas {
     width: u16,
     height: u16,
     front: Vec<Option<Cell>>,
-    occluded: Option<Rect>,
+    occluded: Vec<Rect>,
     cursor: Option<(u16, u16)>,
     style: Option<CellStyle>,
     status: Vec<u8>,
@@ -31,15 +31,24 @@ fn overlaps(a: Rect, b: Rect) -> bool {
 
 impl Canvas {
     /// Starts a frame over a `width` x `height` area; a size change forgets everything on screen.
-    /// Cells inside `occluded` are covered by chrome drawn later in the frame and are not painted.
-    pub fn begin(&mut self, width: u16, height: u16, occluded: Option<Rect>) {
+    /// Cells inside the `occluded` rectangles are covered by chrome drawn later in the frame:
+    /// they are not painted, and are forgotten, so whatever is drawn there once the chrome is
+    /// gone is sent again, even what nothing drew while it was up.
+    pub fn begin(&mut self, width: u16, height: u16, occluded: impl IntoIterator<Item = Rect>) {
         if (width, height) != (self.width, self.height) {
             self.width = width;
             self.height = height;
             self.front = vec![None; width as usize * height as usize];
             self.status.clear();
         }
-        self.occluded = occluded;
+        self.occluded = occluded.into_iter().collect();
+        for r in &self.occluded {
+            let cols = r.x.min(width) as usize..(r.x + r.width).min(width) as usize;
+            for y in r.y..(r.y + r.height).min(height) {
+                let row = y as usize * width as usize;
+                self.front[row + cols.start..row + cols.end].fill(None);
+            }
+        }
         self.cursor = None;
         self.style = None;
     }
@@ -67,7 +76,7 @@ impl Canvas {
             && region.y + region.height <= self.height
             && region.x + region.width <= self.width
             && n < region.height as usize;
-        let covered = self.occluded.is_some_and(|r| overlaps(r, region));
+        let covered = self.covers(region);
         if lines == 0 || !fits || covered {
             return Ok(false);
         }
@@ -140,7 +149,7 @@ impl Canvas {
             return Ok(());
         }
         let i = self.index(x, y);
-        if self.occluded.is_some_and(|r| r.contains(x, y)) {
+        if self.covers(Rect::new(x, y, 1, 1)) {
             self.front[i] = None;
             return Ok(());
         }
@@ -174,9 +183,7 @@ impl Canvas {
         let plain = |cell: &Option<Cell>| {
             cell.is_some_and(|c| c.c.is_ascii() && Some(c.style) == self.style)
         };
-        let hidden = self
-            .occluded
-            .is_some_and(|r| (from..x).any(|gx| r.contains(gx, y)));
+        let hidden = self.covers(Rect::new(from, y, x - from, 1));
         if hidden || !gap.iter().all(plain) {
             return Ok(false);
         }
@@ -213,9 +220,7 @@ impl Canvas {
             return Ok(());
         }
         let end = x + cells.len() as u16;
-        let covered = self
-            .occluded
-            .is_some_and(|r| y >= r.y && y < r.y + r.height && x < r.x + r.width && r.x < end);
+        let covered = self.covers(Rect::new(x, y, end - x, 1));
         if !covered
             && shown
                 .iter()
@@ -238,7 +243,7 @@ impl Canvas {
         let start = self.index(x, y);
         for (dx, cell) in cells.iter().enumerate() {
             self.write_cell(out, *cell)?;
-            let hidden = self.occluded.is_some_and(|r| r.contains(x + dx as u16, y));
+            let hidden = self.covers(Rect::new(x + dx as u16, y, 1, 1));
             self.front[start + dx] = (!hidden).then_some(*cell);
         }
         self.cursor = None;
@@ -254,6 +259,11 @@ impl Canvas {
         }
         let mut utf8 = [0u8; 4];
         out.write_all(cell.c.encode_utf8(&mut utf8).as_bytes())
+    }
+
+    /// Whether chrome covers any cell of `region`.
+    fn covers(&self, region: Rect) -> bool {
+        self.occluded.iter().any(|r| overlaps(*r, region))
     }
 
     fn index(&self, x: u16, y: u16) -> usize {

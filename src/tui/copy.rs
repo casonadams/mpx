@@ -59,6 +59,9 @@ pub struct CopyState {
     pub mode: SelectionKind,
     pub search_prompt: Option<SearchPrompt>,
     pub last_search: Option<(SearchDirection, String)>,
+    /// Entered by the wheel: scrolling it back down to the live screen leaves copy mode, as
+    /// tmux's `copy-mode -e` does. Entered from the keyboard, only `q` or Esc leave.
+    pub wheel_exit: bool,
 }
 
 /// What the key handler asks the app to do next.
@@ -92,6 +95,7 @@ impl CopyState {
             mode: SelectionKind::None,
             search_prompt: None,
             last_search: None,
+            wheel_exit: false,
         }
     }
 
@@ -107,6 +111,7 @@ impl CopyState {
             mode: SelectionKind::Character,
             search_prompt: None,
             last_search: None,
+            wheel_exit: false,
         }
     }
 
@@ -148,6 +153,7 @@ impl CopyState {
             mode: SelectionKind::None,
             search_prompt: None,
             last_search: None,
+            wheel_exit: true,
         }
     }
 
@@ -160,13 +166,11 @@ impl CopyState {
         }
     }
 
-    /// One wheel notch down: scroll back toward the live screen, then move the cursor down.
-    pub fn wheel_down(&mut self, pane_h: usize) {
-        if self.scroll_offset > 0 {
-            self.scroll_offset = self.scroll_offset.saturating_sub(WHEEL_STEP);
-        } else {
-            self.cursor_y = (self.cursor_y + WHEEL_STEP).min(pane_h.saturating_sub(1));
-        }
+    /// One wheel notch down, back toward the live screen. Returns true once it shows the live
+    /// screen: scrolling the wheel back down to it leaves copy mode, as in tmux.
+    pub fn wheel_down(&mut self) -> bool {
+        self.scroll_offset = self.scroll_offset.saturating_sub(WHEEL_STEP);
+        self.scroll_offset == 0
     }
 
     pub fn scroll_to_match(

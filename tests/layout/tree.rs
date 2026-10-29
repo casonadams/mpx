@@ -141,3 +141,19 @@ fn map_leaves_rewrites_names() {
     assert!(node.has_leaf("b!"));
     assert!(!node.has_leaf("b"));
 }
+
+#[test]
+fn spreading_evens_out_panes_and_keeps_their_arrangement() {
+    // a | (b | (c / d)): three columns, the last one stacked.
+    let mut tree = LayoutNode::leaf("a".into());
+    tree.split_leaf_with("a", "b".into(), Direction::Horizontal, 0.5);
+    tree.split_leaf_with("b", "c".into(), Direction::Horizontal, 0.5);
+    tree.split_leaf_with("c", "d".into(), Direction::Vertical, 0.8);
+    tree.spread();
+    let rects = rects_of(&tree, VIEW);
+    for name in ["a", "b", "c"] {
+        assert!((25..=27).contains(&width_of(&rects, name)), "{name} width");
+    }
+    assert_eq!(width_of(&rects, "c"), width_of(&rects, "d"), "c and d stay stacked");
+    assert!(height_of(&rects, "c").abs_diff(height_of(&rects, "d")) <= 1);
+}

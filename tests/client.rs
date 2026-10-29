@@ -100,3 +100,23 @@ async fn an_event_from_a_newer_daemon_is_skipped_and_the_stream_goes_on() {
         .expect("the stream stayed open");
     assert!(matches!(event, StreamEvent::Output { data, .. } if data == "after"));
 }
+
+#[tokio::test]
+async fn a_request_an_older_daemon_does_not_know_says_to_restart_the_session() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let endpoint = mpx::ipc::endpoint_in(dir.path(), "older");
+    let listener = IpcListener::bind(&endpoint).expect("bind");
+    tokio::spawn(async move {
+        let stream = listener.accept().await.expect("accept");
+        let mut lines = Framed::new(stream, LinesCodec::new());
+        lines.next().await.expect("request").expect("line");
+        let refused = Response::Error(
+            "Invalid request JSON: unknown variant `SpreadLayout`, expected one of `Ping`".into(),
+        );
+        let reply = serde_json::to_string(&DaemonMessage::Response(refused)).expect("json");
+        lines.send(reply).await.expect("reply");
+    });
+    let mut client = Client::connect(&endpoint).await.expect("connect");
+    let error = client.spread_layout().await.expect_err("refused");
+    assert!(error.contains("mpx kill-server, then mpx restore"), "{error}");
+}

@@ -64,6 +64,8 @@ pub enum Command {
     SelectLayout {
         preset: Option<LayoutPreset>,
     },
+    /// `select-layout -E`: spread the panes evenly, keeping their arrangement.
+    SpreadLayout,
     Zoom,
     CopyMode,
     Detach,
@@ -75,8 +77,12 @@ pub enum Command {
     NextAttention,
     OpenTree,
     OpenHelp,
-    /// Show and focus the agents sidebar, or hide it.
+    /// Focus the agents rail, expanding it, or collapse it again.
     ToggleSidebar,
+    /// Show the next (or previous) agent in the rail without focusing it.
+    StepAgent {
+        next: bool,
+    },
     CommandPrompt {
         initial: String,
     },
@@ -112,12 +118,14 @@ pub const COMMAND_NAMES: &[&str] = &[
     "list-keys",
     "new",
     "new-window",
+    "next-agent",
     "next-attention",
     "next-layout",
     "next-pane",
     "next-session",
     "next-window",
     "paste",
+    "prev-agent",
     "prev-session",
     "prev-window",
     "previous-window",
@@ -260,6 +268,8 @@ fn misc_cmd(name: &str, args: &[String]) -> Option<Result<Command, String>> {
         "choose-tree" => bare(name, args, Command::OpenTree),
         "list-keys" | "help" => bare(name, args, Command::OpenHelp),
         "sidebar" => bare(name, args, Command::ToggleSidebar),
+        "next-agent" => bare(name, args, Command::StepAgent { next: true }),
+        "prev-agent" => bare(name, args, Command::StepAgent { next: false }),
         "send-prefix" => bare(name, args, Command::SendPrefix),
         "next-session" => bare(name, args, Command::NextSession),
         "prev-session" => bare(name, args, Command::PrevSession),
@@ -549,6 +559,7 @@ fn swap_pane(name: &str, args: &[String]) -> Result<Command, String> {
 
 fn select_layout(name: &str, args: &[String]) -> Result<Command, String> {
     let preset = match args {
+        [flag] if flag == "-E" => return Ok(Command::SpreadLayout),
         [] => None,
         [one] => Some(LayoutPreset::parse(one).ok_or_else(|| format!("unknown layout '{one}'"))?),
         _ => return Err(format!("{name}: too many arguments")),

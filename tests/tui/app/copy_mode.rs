@@ -76,6 +76,21 @@ async fn mouse_wheel_scrolls_into_history() {
     assert!(h.frame().await.contains("COPY -6/"));
     h.mouse(MouseEventKind::ScrollDown, 5, 5).await;
     assert!(h.frame().await.contains("COPY -3/"));
+    h.mouse(MouseEventKind::ScrollDown, 5, 5).await;
+    assert!(h.mode_is_normal(), "back at the live screen, copy mode ends");
+    assert!(!h.frame().await.contains("COPY"));
+}
+
+#[tokio::test]
+async fn copy_mode_entered_from_the_keyboard_outlasts_the_wheel_and_keys_at_the_bottom() {
+    let mut h = started(&long_output()).await;
+    h.frame().await;
+    h.prefixed_char('[').await;
+    h.ctrl('u').await;
+    h.ctrl('d').await;
+    assert!(matches!(h.app.mode, Mode::Copy(_)), "keys back at the bottom");
+    h.mouse(MouseEventKind::ScrollDown, 5, 5).await;
+    assert!(matches!(h.app.mode, Mode::Copy(_)), "only q or Esc leave");
 }
 
 #[tokio::test]

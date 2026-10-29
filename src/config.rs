@@ -22,6 +22,8 @@ pub struct Config {
     pub agent: AgentConfig,
     /// Extra or overriding key bindings: key (tmux notation) -> command line.
     pub bind: BTreeMap<String, String>,
+    /// Extra or overriding bindings for keys pressed without the prefix (tmux `bind -n`).
+    pub bind_root: BTreeMap<String, String>,
     /// Extra or overriding agent harness definitions.
     pub harness: Vec<HarnessConfig>,
     pub style: StyleConfig,
@@ -110,6 +112,7 @@ impl Default for Config {
             which_key_delay_ms: 300,
             agent: AgentConfig::default(),
             bind: BTreeMap::new(),
+            bind_root: BTreeMap::new(),
             harness: Vec::new(),
             style: StyleConfig::default(),
         }

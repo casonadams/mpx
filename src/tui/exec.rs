@@ -23,6 +23,7 @@ enum Simple {
     FocusLast,
     BreakPane,
     SelectLayout(Option<LayoutPreset>),
+    SpreadLayout,
 }
 
 pub fn default_shell() -> String {
@@ -111,6 +112,7 @@ impl App {
             Command::LastWindow => self.simple(Simple::LastWindow).await,
             Command::BreakPane => self.simple(Simple::BreakPane).await,
             Command::SelectLayout { preset } => self.simple(Simple::SelectLayout(preset)).await,
+            Command::SpreadLayout => self.simple(Simple::SpreadLayout).await,
             Command::SwapPane { next } => self.swap(next).await,
             other => return Err(other),
         };
@@ -158,6 +160,7 @@ impl App {
             Command::OpenTree => self.open_overlay(Overlay::tree()).await,
             Command::OpenHelp => self.open_help().await,
             Command::ToggleSidebar => self.toggle_sidebar().await,
+            Command::StepAgent { next } => self.step_agent(next).await,
             Command::CommandPrompt { initial } => self.open_prompt(&initial),
             Command::Confirm { prompt, then } => self.ask(prompt, *then),
             other => self.say(format!("unhandled command: {other:?}")),
@@ -205,6 +208,7 @@ impl App {
                 self.client.break_pane(&pane).await
             }
             Simple::SelectLayout(preset) => self.client.select_layout(preset).await,
+            Simple::SpreadLayout => self.client.spread_layout().await,
         };
         self.settle(result)
     }
@@ -233,6 +237,12 @@ impl App {
     }
 
     async fn select_dir(&mut self, side: Side) -> Flow {
+        // Moving right out of the focused rail lands on the agent it shows: the rail collapses
+        // and that pane keeps the focus.
+        if self.sidebar.resume && side == Side::Right {
+            self.leave_sidebar().await;
+            return Flow::Continue;
+        }
         match find_directional(&self.panes, &self.active_pane, side) {
             Some(pane) => {
                 let result = self.client.focus(&pane).await;

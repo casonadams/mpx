@@ -3,7 +3,8 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use mpx::agents::LiveAgent;
 use mpx::protocol::{AgentInfo, AgentState, NodeInfo, NodeState};
 use mpx::tui::sidebar::{
-    SIDEBAR_COLS, Sidebar, View, body_lines, headline, ordered, render, scroll_top, width,
+    RAIL_COLS, Sidebar, View, body_lines, headline, ordered, rail_rows, rail_width,
+    render, scroll_top,
 };
 use mpx::vt::Color;
 
@@ -72,11 +73,37 @@ fn press(c: char) -> KeyEvent {
 }
 
 #[test]
-fn sidebar_only_takes_columns_when_shown_and_the_panes_keep_room() {
-    assert_eq!(width(false, 200), 0);
-    assert_eq!(width(true, 200), SIDEBAR_COLS);
-    assert_eq!(width(true, SIDEBAR_COLS + 39), 0);
-    assert_eq!(width(true, SIDEBAR_COLS + 40), SIDEBAR_COLS);
+fn the_rail_only_takes_columns_while_agents_run_and_the_panes_keep_room() {
+    assert_eq!(rail_width(false, 200), 0);
+    assert_eq!(rail_width(true, 200), RAIL_COLS);
+    assert_eq!(rail_width(true, RAIL_COLS + 39), 0);
+    assert_eq!(rail_width(true, RAIL_COLS + 40), RAIL_COLS);
+}
+
+#[test]
+fn the_rail_has_a_dot_per_agent_sessions_apart_and_the_shown_agent_reversed() {
+    let agents = fleet();
+    let shown = key("zsh-3");
+    let (rows, keys) = rail_rows(&agents, Some(&shown), 6, Color::BrightBlack);
+    let dots: String = rows.iter().map(|row| row[0].c).collect();
+    assert_eq!(dots, "◆● ✕  ", "main's two agents, a gap, then work's exited one");
+    assert!(rows[1][0].style.reverse && !rows[0][0].style.reverse);
+    assert!(rows.iter().all(|row| row.len() == RAIL_COLS as usize && row[1].c == '│'));
+    assert_eq!(keys[1], Some(shown));
+    assert_eq!(keys[2], None);
+}
+
+#[test]
+fn stepping_wraps_around_and_starts_at_either_end() {
+    let mut sidebar = Sidebar::default();
+    sidebar.agents = fleet();
+    let work = ("work".to_string(), "old".to_string());
+    assert_eq!(sidebar.step_from(Some(&key("zsh-0")), true), Some(key("zsh-3")));
+    assert_eq!(sidebar.step_from(Some(&work), true), Some(key("zsh-0")));
+    assert_eq!(sidebar.step_from(Some(&key("zsh-0")), false), Some(work.clone()));
+    assert_eq!(sidebar.step_from(None, true), Some(key("zsh-0")));
+    assert_eq!(sidebar.step_from(None, false), Some(work));
+    assert_eq!(Sidebar::default().step_from(None, true), None);
 }
 
 #[test]

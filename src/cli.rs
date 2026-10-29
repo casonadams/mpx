@@ -417,7 +417,12 @@ pub enum Commands {
 
     /// Apply a layout preset (even-horizontal, even-vertical, main-vertical, main-horizontal, tiled); none cycles
     #[command(name = "select-layout")]
-    SelectLayout { preset: Option<String> },
+    SelectLayout {
+        preset: Option<String>,
+        /// Spread the panes evenly, keeping their arrangement (tmux -E)
+        #[arg(short = 'E', conflicts_with = "preset")]
+        spread: bool,
+    },
 
     /// Resize a pane: -L/-R/-U/-D move its border by AMOUNT cells; -x/-y set the size
     #[command(name = "resize-pane")]

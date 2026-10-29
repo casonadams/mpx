@@ -335,13 +335,18 @@ async fn a_keypress_lets_only_a_few_frames_skip_the_budget() {
 }
 
 #[tokio::test]
-async fn beside_the_sidebar_a_scroll_sends_only_the_new_line_through_margins() {
+async fn beside_the_agents_rail_a_scroll_sends_only_the_new_line_through_margins() {
     let mut h = start().await;
     h.app.canvas.set_lr_margins(true);
-    h.prefixed_char('e').await;
-    h.key(KeyCode::Esc).await;
+    let working = mpx::client::AgentReportArgs {
+        harness: Some("claude".to_string()),
+        state: Some(mpx::protocol::AgentState::Working),
+        ..Default::default()
+    };
+    h.probe.agent_report(MAIN, working).await.expect("report agent");
+    h.app.refresh_sidebar().await;
     h.frame().await;
-    assert!(h.rect_of(MAIN).x > 0, "the pane sits right of the sidebar");
+    assert!(h.rect_of(MAIN).x > 0, "the pane sits right of the rail");
     for i in 0..40 {
         emit_line(&mut h, &format!("filler line {i:02} with some width to it")).await;
     }
@@ -350,6 +355,29 @@ async fn beside_the_sidebar_a_scroll_sends_only_the_new_line_through_margins() {
     let scrolled = frame_bytes(&mut h).await;
     assert!(
         scrolled * 5 < repaint,
-        "a one-line scroll beside the sidebar sent {scrolled} bytes; a full frame is {repaint}"
+        "a one-line scroll beside the rail sent {scrolled} bytes; a full frame is {repaint}"
     );
+}
+
+#[test]
+fn a_run_of_queued_drags_is_handled_at_its_last_position() {
+    use crossterm::event::{Event, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
+    use mpx::tui::app::latest_drag;
+    let mouse = |kind, column| {
+        Event::Mouse(MouseEvent {
+            kind,
+            column,
+            row: 1,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        })
+    };
+    let drag = |column| mouse(MouseEventKind::Drag(MouseButton::Left), column);
+    let up = mouse(MouseEventKind::Up(MouseButton::Left), 9);
+    let mut queue = vec![drag(5), drag(7), up.clone(), drag(8)].into_iter();
+    assert_eq!(latest_drag(drag(3), || queue.next()), (drag(7), Some(up)));
+    assert_eq!(queue.next(), Some(drag(8)), "events after the run stay queued");
+    let key = Event::Key(KeyEvent::from(KeyCode::Char('x')));
+    let mut untouched = vec![drag(1)].into_iter();
+    assert_eq!(latest_drag(key.clone(), || untouched.next()), (key, None));
+    assert_eq!(untouched.len(), 1, "a key takes nothing from the queue");
 }

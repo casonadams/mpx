@@ -38,6 +38,7 @@ Only the configured prefix is intercepted. `Ctrl-a` reaches your shell unless yo
 | `!` | `break-pane` | Move the pane to its own window |
 | `{` / `}` | `swap-pane -U/-D` | Swap with the previous/next pane |
 | `Space` | `next-layout` | Cycle even-horizontal, even-vertical, main-vertical, main-horizontal, tiled |
+| `=` | `select-layout -E` | Spread the panes evenly, keeping their arrangement |
 
 ### Sessions and agents
 
@@ -45,7 +46,7 @@ Only the configured prefix is intercepted. `Ctrl-a` reaches your shell unless yo
 | :--- | :--- | :--- |
 | `s` | `agents` | [Agent manager](AGENT-MANAGER.md) |
 | `w` | `choose-tree` | Sessions: session → window → pane tree with preview |
-| `e` | `sidebar` | Show and focus the [agents sidebar](#agents-sidebar), or hide it |
+| `e` | `sidebar` | Focus the [agents rail](#agents-rail), expanding it; again collapses it |
 | `(` / `)` | `prev-session` / `next-session` | Switch sessions |
 | `A` | `next-attention` | Jump to the agent that has waited longest for input, in any session |
 | `d` / `q` | `detach-client` | Detach (daemon and panes keep running) |
@@ -72,13 +73,13 @@ A vim-style command line on the status row. Editing keys: `Left`/`Right`, `Backs
 | `select-window -t N`, `last-window`, `rename-window NAME`, `kill-window [-t N]` | | |
 | `select-pane -t TARGET \| -L/-R/-U/-D`, `next-pane`, `last-pane`, `kill-pane [-t TARGET]` | | `TARGET` is `name`, `%id` or `session:pane` |
 | `resize-pane -L/-R/-U/-D [N]`, `resize-pane -Z` | | `N` defaults to 5 |
-| `swap-pane -U/-D`, `break-pane`, `select-layout [preset]`, `next-layout` | | |
+| `swap-pane -U/-D`, `break-pane`, `select-layout [preset]`, `select-layout -E`, `next-layout` | | |
 | `switch-client -t SESSION` | `session` | |
 | `next-session`, `prev-session` | | |
 | `send-keys [-t TARGET] KEYS...` | | tmux key names |
 | `paste [-t TARGET] [--submit] TEXT...` | | |
 | `launch-agent HARNESS [--resume ID] [--cwd DIR] [--split]` | | |
-| `agents`, `next-attention`, `choose-tree`, `sidebar`, `list-keys` | `help` | |
+| `agents`, `next-attention`, `choose-tree`, `sidebar`, `next-agent`, `prev-agent`, `list-keys` | `help` | |
 | `copy-mode`, `send-prefix`, `command-prompt` | | |
 | `detach-client` | `detach`, `q`, `quit` | |
 | `kill-server` | `qa` | Asks y/n |
@@ -97,19 +98,36 @@ All overlays use the same motions: `j`/`k` (or arrows), `gg`/`G`, `Ctrl-d`/`Ctrl
 
 ---
 
-## Agents sidebar
+## Agents rail
 
-`Prefix e` opens a column on the left listing every agent in every session, grouped by session with the attached one first. Each agent shows its state (`◆` waiting, `●` working, `○` idle, `✕` exited), its title and, below it, its latest message and the time since its state changed. The panes take the rest of the screen, so the right side is always the live terminal, not a preview.
+While any agent runs in any session, a thin rail on the left shows one dot per agent: `◆` waiting (yellow), `●` working (green), `○` idle, `✕` exited. Sessions are separated by a blank row, the attached one first, and the agent in the focused pane is drawn in reverse video. Without agents there is no rail, and screens narrower than 42 columns leave it out.
 
-While the sidebar has focus:
+Focused, the rail expands into a list over the panes, which keep their size: each agent's title and, below it, its latest message and the time since its state changed.
+
+| Key | Action |
+| :--- | :--- |
+| `Alt-j` / `Alt-k` (no prefix) | Show the next / previous agent's pane, in any window or session; the reverse-video dot follows. With no agents running the keys go to the program |
+| `Prefix e` | Focus the rail, expanding it; again collapses it |
+
+While the rail has focus:
 
 | Key | Action |
 | :--- | :--- |
 | `j`/`k`, `gg`/`G`, `Ctrl-d`/`Ctrl-u` | Move the highlight; the agent's pane shows at once (another session's after a 150 ms pause) |
-| `Enter` / `l` / `Right` / `Esc` | Hand the keys to the shown pane |
-| `q` | Hide the sidebar |
+| `Enter` / `l` / `Right` / `Esc` / `q` | Hand the keys to the shown pane and collapse the rail |
 
-`Prefix h` from the leftmost pane moves focus back to the sidebar, and clicking a row shows that agent. `Prefix e` again hides it. Screens narrower than 74 columns leave the sidebar hidden.
+`Prefix h` from the leftmost pane also focuses the rail, and clicking a dot shows that agent. `Alt-j`/`Alt-k` never reach the program in the pane; rebind or unbind them with [`[bind_root]`](CONFIG.md#key-bindings-bind).
+
+On macOS, terminals type `∆` and `˚` for Option-j and Option-k unless Option is set to act as Alt, so mpx binds those two characters too and the keys work either way (unbind them with `[bind_root] "∆" = ""` to type them). Setting Option to act as Alt also makes every other Alt shortcut work, in mpx and in the programs it runs:
+
+| Terminal | Setting |
+| :--- | :--- |
+| iTerm2 | Settings → Profiles → Keys → Left Option key: **Esc+** |
+| Terminal.app | Settings → Profiles → Keyboard → **Use Option as Meta key** |
+| Ghostty | `macos-option-as-alt = true` |
+| WezTerm | `send_composed_key_when_left_alt_is_pressed = false` |
+| Alacritty | `[window] option_as_alt = "Both"` |
+| kitty | `macos_option_as_alt yes` |
 
 ---
 
@@ -131,7 +149,8 @@ While the sidebar has focus:
 ## Mouse
 
 - **Click** focuses a pane and nothing else. **Drag** selects text (entering copy mode from where the press started), and releasing copies it (`pbcopy` on macOS, OSC 52 elsewhere).
-- **Wheel up** enters copy mode and scrolls history; **wheel down** scrolls back toward the prompt.
+- **Drag a border** between panes to resize them; the pane on the side you drag toward grows.
+- **Wheel up** enters copy mode and scrolls history; **wheel down** scrolls back toward the prompt and, when the wheel entered copy mode, leaves it on reaching the prompt (tmux's `copy-mode -e`). Copy mode entered with `Prefix [` stays until `q` or `Esc`.
 
 ---
 

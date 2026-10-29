@@ -4,6 +4,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use super::app::{App, Flow, Mode};
 use super::command::{self, COMMAND_NAMES, Command};
 use super::copy::{CopyOutcome, CopyState, apply_key};
+use super::keymap::Table;
 use super::overlay::{Overlay, OverlayAction};
 use super::prompt::PromptState;
 use crate::keys::encode_key;
@@ -32,8 +33,14 @@ impl App {
             self.enter_prefix();
             return Flow::Continue;
         }
+        if let Some(binding) = self.keymap.lookup(Table::Root, &key)
+            && self.takes_root_key(&binding.command)
+        {
+            let cmd = binding.command.clone();
+            return self.dispatch(cmd).await;
+        }
         if self.repeating()
-            && let Some(binding) = self.keymap.lookup(&key)
+            && let Some(binding) = self.keymap.lookup(Table::Prefix, &key)
             && matches!(binding.command, Command::ResizePane { .. })
         {
             let cmd = binding.command.clone();
@@ -45,15 +52,30 @@ impl App {
         Flow::Continue
     }
 
+    /// Whether a root binding takes its key: stepping through agents only while there are any,
+    /// so with none Alt-j and Alt-k still reach the program.
+    fn takes_root_key(&self, command: &Command) -> bool {
+        !matches!(command, Command::StepAgent { .. }) || !self.sidebar.agents.is_empty()
+    }
+
     pub async fn prefix_key(&mut self, key: KeyEvent) -> Flow {
-        let Some(binding) = self.keymap.lookup(&key) else {
+        // The rail had focus when the prefix was pressed: an unbound key goes back to it, and a
+        // command sees it (`prefix e` collapses it, `prefix l` leaves it), but nothing after.
+        let resume = std::mem::take(&mut self.sidebar.resume);
+        let Some(binding) = self.keymap.lookup(Table::Prefix, &key) else {
+            if resume {
+                self.mode = Mode::Sidebar;
+            }
             return Flow::Continue;
         };
         let cmd = binding.command.clone();
         if matches!(cmd, Command::ResizePane { .. }) {
             self.arm_repeat();
         }
-        self.dispatch(cmd).await
+        self.sidebar.resume = resume;
+        let flow = self.dispatch(cmd).await;
+        self.sidebar.resume = false;
+        flow
     }
 
     pub async fn copy_key(&mut self, mut cs: CopyState, key: KeyEvent) -> Flow {
@@ -83,6 +105,7 @@ impl App {
     pub async fn overlay_key(&mut self, mut overlay: Overlay, key: KeyEvent) -> Flow {
         match overlay_next(overlay.handle_key(key)) {
             OverlayNext::Stay => {
+                overlay.follow_selection().await;
                 self.mode = Mode::Overlay(overlay);
                 Flow::Continue
             }

@@ -195,16 +195,16 @@ impl Harness {
     }
 
     pub async fn key(&mut self, code: KeyCode) -> Flow {
-        self.event(Event::Key(KeyEvent::new(code, KeyModifiers::NONE)))
-            .await
+        self.chord(code, KeyModifiers::NONE).await
     }
 
     pub async fn ctrl(&mut self, c: char) -> Flow {
-        self.event(Event::Key(KeyEvent::new(
-            KeyCode::Char(c),
-            KeyModifiers::CONTROL,
-        )))
-        .await
+        self.chord(KeyCode::Char(c), KeyModifiers::CONTROL).await
+    }
+
+    /// Presses `code` with `mods` held.
+    pub async fn chord(&mut self, code: KeyCode, mods: KeyModifiers) -> Flow {
+        self.event(Event::Key(KeyEvent::new(code, mods))).await
     }
 
     /// Types each character as a key press.

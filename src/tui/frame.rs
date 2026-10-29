@@ -2,6 +2,7 @@
 use std::io::{self, Write};
 
 use super::app::{App, Mode};
+use super::canvas::write_sgr;
 use super::copy::{CopyState, SelectionKind};
 use super::panes::PaneRect;
 use super::render::{
@@ -45,9 +46,14 @@ pub fn draw_body<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
     let (screen_w, layout_h) = app.viewport;
     let screen_h = layout_h + 1;
     let hud = shortcut_popup(app, screen_w, screen_h);
-    let covered = match &app.mode {
-        Mode::Overlay(_) => Some(overlay_area(screen_w, screen_h)),
-        _ => hud,
+    let expanded = app.expanded_width();
+    let covered: Vec<Rect> = match &app.mode {
+        Mode::Overlay(_) => vec![overlay_area(screen_w, screen_h)],
+        _ => (expanded > 0)
+            .then(|| Rect::new(0, 0, expanded, layout_h))
+            .into_iter()
+            .chain(hud)
+            .collect(),
     };
     app.canvas.begin(screen_w, layout_h, covered);
     draw_sidebar(app, out)?;
@@ -69,6 +75,7 @@ pub fn draw_body<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
         )?;
     }
     app.canvas.finish(out)?;
+    draw_expanded(app, out)?;
     draw_status_row(app, out)?;
     if hud.is_some() {
         Compositor::draw_shortcut_hud(out, screen_w, screen_h)?;
@@ -138,10 +145,23 @@ fn pane_view_with(
     }
 }
 
-/// The sidebar goes first: a row it reprints forgets the cells to its right, which the panes
-/// drawn next then repaint.
+/// The collapsed rail goes first: a row it reprints forgets the cells to its right, which the
+/// panes drawn next then repaint.
 fn draw_sidebar<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
-    if app.sidebar_width() == 0 {
+    if app.sidebar_width() == 0 || app.expanded_width() > 0 {
+        return Ok(());
+    }
+    let border = parse_color(&app.config.style.border_inactive).unwrap_or(VtColor::BrightBlack);
+    for (y, row) in app.rail(border).iter().enumerate() {
+        app.canvas.put_row(out, 0, y as u16, row)?;
+    }
+    Ok(())
+}
+
+/// The expanded list, drawn over the panes once they are: the canvas leaves the cells under it
+/// alone and repaints them when it collapses, so the panes never resize for it.
+fn draw_expanded<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
+    if app.expanded_width() == 0 {
         return Ok(());
     }
     let style = &app.config.style;
@@ -151,9 +171,17 @@ fn draw_sidebar<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
         parse_color(&style.border_inactive).unwrap_or(VtColor::BrightBlack)
     };
     for (y, row) in app.sidebar_rows(border).iter().enumerate() {
-        app.canvas.put_row(out, 0, y as u16, row)?;
+        write!(out, "\x1b[{};1H", y + 1)?;
+        let mut sent = None;
+        for cell in row {
+            if sent != Some(cell.style) {
+                write_sgr(out, &cell.style)?;
+                sent = Some(cell.style);
+            }
+            write!(out, "{}", cell.c)?;
+        }
     }
-    Ok(())
+    out.write_all(b"\x1b[0m")
 }
 
 /// Panes are drawn left to right so a row that spills past its pane is repainted over by its neighbor.

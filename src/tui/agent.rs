@@ -17,7 +17,7 @@ pub struct AgentWatch {
     /// Agents waiting for input across all sessions, as of the last refresh.
     pub badge: usize,
     pub(super) seen: BTreeSet<AgentKey>,
-    /// Waiting agents in other sessions, refreshed every other tick.
+    /// Waiting agents in other sessions, as of the last refresh.
     pub(super) others: Vec<AgentKey>,
     pub(super) ticks: u64,
 }
@@ -73,15 +73,14 @@ pub fn newly_waiting(
 }
 
 impl App {
-    /// Polls every session's agents every other tick (every tick while the sidebar lists them)
-    /// and refreshes the badge.
+    /// Polls every session's agents for the rail and the waiting badge: every other tick, or
+    /// every tick while the rail is expanded. This session's agents change state at once anyway,
+    /// through their events.
     pub async fn refresh_agents(&mut self) {
         self.watch.ticks += 1;
-        if self.sidebar.visible || self.watch.ticks % 2 == 1 {
+        if self.watch.ticks % 2 == 1 || self.expanded_width() > 0 {
             let live = agents::list_live(&self.socket_dir).await;
-            if self.sidebar.visible {
-                self.sidebar.agents = sidebar::ordered(live.clone(), &self.session);
-            }
+            self.sidebar.agents = sidebar::ordered(live.clone(), &self.session);
             self.watch.others = waiting_elsewhere(live, &self.session);
         }
         self.update_waiting();

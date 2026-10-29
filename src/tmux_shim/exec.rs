@@ -459,6 +459,9 @@ impl Shim {
     }
 
     async fn select_layout(&mut self, inv: &Invocation) -> Result<String, String> {
+        if inv.has('E') {
+            return self.client.spread_layout().await.map(|_| String::new());
+        }
         let preset = match inv.operands.first() {
             Some(name) => {
                 Some(LayoutPreset::parse(name).ok_or_else(|| format!("unknown layout: {name}"))?)

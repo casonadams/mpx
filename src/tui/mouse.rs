@@ -1,8 +1,10 @@
-//! Mouse: click focuses a pane; dragging from the click starts a selection; release yanks; wheel scrolls.
+//! Mouse: click focuses a pane; dragging from the click starts a selection; release yanks; wheel scrolls;
+//! dragging a split border resizes the panes beside it.
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
 use super::app::{App, Flow, Mode};
 use super::copy::CopyState;
+use super::panes::{BorderGrab, border_at, border_move};
 use crate::layout::geometry::Rect;
 
 /// Cell position inside `rect`, clamped to its edges.
@@ -20,7 +22,8 @@ impl App {
         ) {
             return Flow::Continue;
         }
-        if ev.column < self.sidebar_width() && ev.row < self.viewport.1 {
+        let rail = self.expanded_width().max(self.sidebar_width());
+        if ev.column < rail && ev.row < self.viewport.1 {
             if ev.kind == MouseEventKind::Down(MouseButton::Left) {
                 self.sidebar_click(ev.row).await;
             }
@@ -68,6 +71,9 @@ impl App {
             return;
         }
 
+        if self.grab_border(col, row) {
+            return;
+        }
         let Some((name, rect)) = self
             .panes
             .iter()
@@ -99,6 +105,10 @@ impl App {
 
     /// Extends the selection, entering copy mode at the press point on the first drag.
     async fn mouse_drag(&mut self, col: u16, row: u16) {
+        if let Some(grab) = self.border_drag.clone() {
+            self.drag_border(&grab, col, row).await;
+            return;
+        }
         let Some(rect) = self.active_rect else { return };
         if !matches!(self.mode, Mode::Copy(_)) {
             let Some((name, x, y)) = self.press.clone() else {
@@ -117,6 +127,9 @@ impl App {
     /// Copies the selection when it covers something; the selection stays on screen.
     fn mouse_release(&mut self) {
         self.press = None;
+        if self.border_drag.take().is_some() {
+            self.layout.dirty = true;
+        }
         let (Mode::Copy(cs), Some(vt)) = (&self.mode, self.active_vt()) else {
             return;
         };
@@ -127,6 +140,25 @@ impl App {
         let text = cs.yank_text(grid);
         if !text.trim().is_empty() {
             self.clipboard.copy(&text);
+        }
+    }
+
+    /// Takes hold of the split border under the pointer, if there is one.
+    fn grab_border(&mut self, col: u16, row: u16) -> bool {
+        if self.zoomed.is_some() {
+            return false;
+        }
+        self.border_drag = border_at(&self.layout.dividers, &self.panes, (col, row));
+        self.border_drag.is_some()
+    }
+
+    /// Moves a held border to the pointer. The layout is refetched before the next mouse event
+    /// is handled, so each move starts from where the border really is.
+    async fn drag_border(&mut self, grab: &BorderGrab, col: u16, row: u16) {
+        if let Some((pane, side, cells)) = border_move(grab, &self.panes, (col, row)) {
+            let viewport = self.pane_viewport();
+            let _ = self.client.resize_split(&pane, side, cells, viewport).await;
+            self.layout.dirty = true;
         }
     }
 
@@ -143,10 +175,15 @@ impl App {
         self.mode = Mode::Copy(CopyState::from_wheel(grid, hist_len));
     }
 
+    /// Scrolls copy mode back toward the live screen, leaving it on arrival when the wheel
+    /// entered it.
     fn mouse_scroll_down(&mut self) {
-        let pane_h = self.active_rect.map_or(24, |r| r.height as usize);
-        if let Mode::Copy(cs) = &mut self.mode {
-            cs.wheel_down(pane_h);
+        if let Mode::Copy(cs) = &mut self.mode
+            && cs.wheel_down()
+            && cs.wheel_exit
+        {
+            self.mode = Mode::Normal;
+            self.release_scrollback(&self.active_pane.clone());
         }
     }
 }

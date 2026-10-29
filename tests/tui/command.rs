@@ -310,3 +310,8 @@ fn unterminated_quote_is_an_error() {
     assert_eq!(split_words("echo 'oops").unwrap_err(), "unterminated quote");
     assert_eq!(err("paste \"open"), "unterminated quote");
 }
+
+#[test]
+fn select_layout_e_spreads_the_panes() {
+    assert_eq!(ok("select-layout -E"), Command::SpreadLayout);
+}
