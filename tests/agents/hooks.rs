@@ -2,6 +2,7 @@ use std::path::Path;
 
 use mpx::agents::{
     HookReport, claude_hook_report, clip, hook_report, omp_extension_source, omp_hook_report,
+    omp_plugin_dir,
 };
 use mpx::protocol::AgentState;
 
@@ -104,10 +105,14 @@ fn omp_extension_forwards_events_to_the_given_binary() {
         "tool_approval_requested",
         "tool_approval_resolved",
         "session_shutdown",
+        "before_agent_start",
+        "tool_result",
     ] {
         assert!(source.contains(&format!(r#"pi.on("{event}""#)), "{event}");
     }
     assert!(source.contains(r#"["hook", "omp", event]"#));
+    assert!(source.contains("additionalContext"), "file notices reach the model");
+    assert!(source.contains(r#"customType: "mpx""#), "the roster reaches the model");
     assert!(source.contains("export default function"));
 }
 
@@ -168,4 +173,49 @@ fn claude_post_tool_use_records_edited_files_only() {
 fn clip_flattens_whitespace_and_marks_cuts() {
     assert_eq!(clip("  a\n\tb  c ", 10), "a b c");
     assert_eq!(clip("abcdef", 4), "abc…");
+}
+
+#[test]
+fn omp_shares_its_task_reply_and_edits_like_claude() {
+    let prompt = omp_hook_report("before_agent_start", r#"{"prompt":"fix\n the  login bug"}"#)
+        .expect("mapped");
+    assert_eq!(prompt.state, Some(AgentState::Working));
+    assert_eq!(prompt.task.as_deref(), Some("fix the login bug"));
+
+    let done = omp_hook_report("agent_end", r#"{"reply":"Fixed it."}"#).expect("mapped");
+    assert_eq!(done.state, Some(AgentState::Idle));
+    assert_eq!(done.reply.as_deref(), Some("Fixed it."));
+
+    let wrote = omp_hook_report("tool_result", r#"{"tool":"write","path":"/r/a.rs"}"#);
+    assert_eq!(wrote.and_then(|r| r.edited).as_deref(), Some("/r/a.rs"));
+    let edited = omp_hook_report("tool_result", r#"{"tool":"edit","path":"/r/b.rs"}"#);
+    assert_eq!(edited.and_then(|r| r.edited).as_deref(), Some("/r/b.rs"));
+    assert!(
+        omp_hook_report("tool_result", r#"{"tool":"read","path":"/r/a.rs"}"#).is_none(),
+        "reading changes nothing"
+    );
+    let mcp_call = r#"{"tool":"write","path":"xd://mcp__mpx_mpx_mpx_peers"}"#;
+    assert!(
+        omp_hook_report("tool_result", mcp_call).is_none(),
+        "omp runs MCP tools by writing to a virtual path, which is no edit"
+    );
+}
+
+#[test]
+fn omp_plugin_gives_the_agent_mpx_mcp_tools_through_a_script_in_the_plugin() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let plugin = omp_plugin_dir(dir.path(), Path::new("/opt/my apps/mpx")).expect("written");
+    let read = |name: &str| std::fs::read_to_string(plugin.join(name)).expect(name);
+    let mcp: serde_json::Value = serde_json::from_str(&read("mcp.json")).expect("json");
+    assert_eq!(mcp["mcpServers"]["mpx"]["command"], "./mpx", "inside the plugin, as omp requires");
+    assert_eq!(mcp["mcpServers"]["mpx"]["args"], serde_json::json!(["mcp"]));
+    let manifest: serde_json::Value = serde_json::from_str(&read("plugin.json")).expect("json");
+    assert_eq!(manifest["name"], "mpx");
+    assert!(read("mpx").contains("exec '/opt/my apps/mpx' \"$@\""));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(plugin.join("mpx")).expect("script").permissions().mode();
+        assert_eq!(mode & 0o111, 0o111, "executable");
+    }
 }

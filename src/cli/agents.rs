@@ -6,6 +6,7 @@ use super::sessions::{apply_key, ensure_client};
 use crate::agents::{
     self, Harness, LaunchOptions, claude_settings_json, find_harness, find_unique_by_prefix,
 };
+use crate::agents::aware::{HookEvent, HookSite, context_json, context_text};
 use crate::layout::Direction;
 use crate::node::now_ms;
 use crate::protocol::{NewWindowOpts, SpawnOpts, SplitOpts};
@@ -169,29 +170,44 @@ pub async fn hook(harness: &str, event: Option<&str>, key: Option<&str>) -> Resu
     }
     let mut input = String::new();
     let _ = std::io::stdin().read_to_string(&mut input);
-    if let Some(report) = agents::hook_report(harness, event, &input) {
+    if let Some(mut report) = agents::hook_report(harness, event, &input) {
+        report.edited = report.edited.as_deref().map(agents::aware::real_path);
         agents::send_hook_report(harness, report, key).await;
     }
-    if harness == "claude"
-        && let Some(context) = awareness(&input).await
-    {
+    if let Some(context) = awareness(harness, event, &input).await {
         println!("{context}");
     }
     Ok(0)
 }
 
-/// Context about other agents for this hook, bounded so a slow session never stalls the agent.
-async fn awareness(input: &str) -> Option<String> {
+/// Context about other agents for this hook, as the harness takes it: Claude Code reads hook JSON,
+/// the omp extension hands plain text to the model. Bounded so a slow session never stalls the
+/// agent.
+async fn awareness(harness: &str, event: Option<&str>, input: &str) -> Option<String> {
     let (Ok(pane), Ok(endpoint)) = (std::env::var("MPX_PANE"), std::env::var("MPX_ENDPOINT"))
     else {
         return None;
     };
+    let v: serde_json::Value = serde_json::from_str(input).ok()?;
+    let hooked = match harness {
+        "claude" => HookEvent::claude(&v)?,
+        "omp" => HookEvent::omp(event?, &v),
+        _ => return None,
+    };
     let socket_dir = crate::ipc::socket_dir();
-    let context = agents::aware::claude_context(input, &endpoint, &pane, &socket_dir, now_ms());
-    tokio::time::timeout(AWARENESS_TIMEOUT, context)
+    let site = HookSite {
+        endpoint: &endpoint,
+        pane: &pane,
+        socket_dir: &socket_dir,
+    };
+    let text = tokio::time::timeout(AWARENESS_TIMEOUT, context_text(&hooked, &site, now_ms()))
         .await
         .ok()
-        .flatten()
+        .flatten()?;
+    Some(match harness {
+        "claude" => context_json(&hooked.name, &text),
+        _ => text,
+    })
 }
 
 fn print_config(event: Option<&str>) -> Result<i32, String> {

@@ -14,7 +14,7 @@
 }
 ```
 
-Claude Code agents that mpx launches (`Prefix s`, `launch-agent`, `mpx_agent_launch`, restore) get this server automatically through `--mcp-config`; set `[agent] mcp = false` to turn that off. The server is named `mpx`, so it replaces rather than duplicates one you configured yourself.
+Claude Code and oh-my-pi agents that mpx launches (`Prefix s`, `launch-agent`, `mpx_agent_launch`, restore) get this server automatically: Claude Code through `--mcp-config`, oh-my-pi through a plugin passed with `--plugin-dir`. Set `[agent] mcp = false` to turn that off. The server is named `mpx`, so it replaces rather than duplicates one you configured yourself. It answers for the pane its agent runs in, in that pane's working directory, wherever the harness starts it.
 
 The server targets `$MPX_SESSION` / `$MPX_ENDPOINT` when set. Every mpx pane exports them, so an agent started inside mpx talks to its own session automatically. Pin a session explicitly with `"args": ["-s", "build-agent", "mcp"]`.
 
@@ -66,7 +66,7 @@ Pane arguments accept a node name or a pane id `%N`.
 | :--- | :--- | :--- |
 | `mpx_agents` | | Live agents across all sessions (harness, state, session id, detail) plus resumable stored sessions. |
 | `mpx_agent_launch` | `harness`, `resume`, `cwd`, `split`, `teams`, `name` | Start `claude`, `omp`, `codex`, `rho`, or a configured harness, optionally resuming a session. |
-| `mpx_peers` | `all` (default false) | Other agents whose working directory is in your repository (every agent with `all`): `agent` (`session:pane`), harness, state, terminal title, `task` (latest prompt), `last_reply`, `cwd` and `recent_edits` (last 30 minutes, newest first). |
+| `mpx_peers` | `all` (default false) | `you` (your own `session:pane`, to tell yourself apart), and the other agents whose working directory is in your repository (every agent with `all`): `agent` (`session:pane`), harness, state, terminal title, `task` (latest prompt), `last_reply`, `cwd` and `recent_edits` (last 30 minutes, newest first). |
 | `mpx_agent_prompt` | `name` (pane, or `session:pane` for another session), `text`, `wait` (default true), `timeout` (default 120 s) | Paste and submit a prompt to an agent pane, wait until the agent settles again (idle, needs input or exited, after the prompt; a slow start does not count as done), and return `{text, state, satisfied}`. `satisfied` is false on timeout. |
 
 ---

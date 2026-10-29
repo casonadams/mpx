@@ -63,8 +63,9 @@ async fn dispatch(command: Commands, r: Resolved) -> Result<i32, String> {
         Commands::Pipe { command } => pipe(&r, command).await,
         Commands::Restore => restore(&r).await,
         Commands::Mcp => {
-            ensure_client(&r).await?;
-            let caller = mcp_caller(&r.endpoint);
+            let mut client = ensure_client(&r).await?;
+            let pane = std::env::var("MPX_PANE").ok();
+            let caller = mcp_caller(&r.endpoint, &mut client, pane).await;
             McpServer::new(r.endpoint, r.session, r.socket_dir, r.config)
                 .with_caller(caller)
                 .run_stdio()
@@ -491,11 +492,22 @@ pub fn tui_options(r: &Resolved) -> AppOptions {
     }
 }
 
-/// The agent pane an MCP server was started from (mpx panes export `MPX_PANE`), in this directory.
-fn mcp_caller(endpoint: &str) -> Option<crate::agents::aware::Me> {
+/// The agent pane an MCP server serves (mpx panes export `MPX_PANE`), in that pane's working
+/// directory: the harness may start the server elsewhere (omp runs a plugin's servers in the
+/// plugin's folder). This process's directory only when the daemon cannot say.
+async fn mcp_caller(
+    endpoint: &str,
+    client: &mut Client,
+    pane: Option<String>,
+) -> Option<crate::agents::aware::Me> {
+    let pane = pane?;
+    let cwd = match client.get_cwd(&pane).await {
+        Ok(Some(dir)) => std::path::PathBuf::from(dir),
+        _ => std::env::current_dir().ok()?,
+    };
     Some(crate::agents::aware::Me {
         endpoint: endpoint.to_string(),
-        pane: std::env::var("MPX_PANE").ok()?,
-        cwd: std::env::current_dir().ok()?,
+        pane,
+        cwd,
     })
 }

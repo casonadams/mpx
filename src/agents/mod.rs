@@ -17,7 +17,7 @@ mod sessions;
 pub use harness::{LaunchEnv, detect, launch, launch_with, registry};
 pub use hooks::{
     HookReport, claude_hook_report, claude_settings_json, clip, omp_extension_source,
-    omp_hook_file, omp_hook_report, send_hook_report, tool_file,
+    omp_hook_file, omp_hook_report, omp_plugin_dir, send_hook_report, tool_file,
 };
 pub use sessions::{
     SessionMeta, Visit, lookup_rho_cwd, parse_claude_meta, parse_codex_meta, parse_omp_meta,

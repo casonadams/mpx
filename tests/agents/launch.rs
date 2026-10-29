@@ -12,6 +12,7 @@ fn env_none() -> LaunchEnv<'static> {
     LaunchEnv {
         exe: Path::new(EXE),
         omp_hook: None,
+        omp_plugin: None,
     }
 }
 
@@ -139,6 +140,7 @@ fn claude_settings_quote_paths_with_spaces_and_quotes() {
     let env = LaunchEnv {
         exe: Path::new("/opt/my apps/it's/mpx"),
         omp_hook: None,
+        omp_plugin: None,
     };
     let spec = launch_with(&harness("claude"), None, LaunchOptions::default(), &env);
     let raw = value_after(&spec.argv, "--settings").expect("--settings present");
@@ -186,6 +188,7 @@ fn omp_gets_the_extension_file_when_available() {
     let env = LaunchEnv {
         exe: Path::new(EXE),
         omp_hook: Some(hook),
+        omp_plugin: None,
     };
     let spec = launch_with(&harness("omp"), None, LaunchOptions::default(), &env);
     assert!(
@@ -341,4 +344,25 @@ fn claude_settings_watch_file_tools_after_use() {
         assert!(matcher.split('|').any(|t| t == tool), "{matcher}");
     }
     assert!(settings["hooks"]["Stop"][0].get("matcher").is_none());
+}
+
+#[test]
+fn omp_gets_mpx_mcp_tools_only_when_mcp_is_on() {
+    let env = LaunchEnv {
+        exe: Path::new(EXE),
+        omp_hook: None,
+        omp_plugin: Some(Path::new("/tmp/mpx/hooks/omp-plugin")),
+    };
+    let with = LaunchOptions {
+        mcp: true,
+        ..LaunchOptions::default()
+    };
+    let spec = launch_with(&harness("omp"), None, with, &env);
+    assert!(spec.argv.contains(&"--plugin-dir=/tmp/mpx/hooks/omp-plugin".to_string()));
+    let without = LaunchOptions {
+        mcp: false,
+        ..LaunchOptions::default()
+    };
+    let spec = launch_with(&harness("omp"), None, without, &env);
+    assert!(!spec.argv.iter().any(|a| a.starts_with("--plugin-dir")));
 }

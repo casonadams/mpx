@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use uuid::Uuid;
 
-use super::hooks::{claude_settings_json, omp_hook_file};
+use super::hooks::{claude_settings_json, omp_hook_file, omp_plugin_dir};
 use super::{Harness, LaunchOptions, LaunchSpec, SessionStore};
 use crate::config::{Config, HarnessConfig};
 
@@ -11,6 +11,8 @@ pub struct LaunchEnv<'a> {
     pub exe: &'a Path,
     /// Extension file loaded by omp (`--hook=<file>`), when available.
     pub omp_hook: Option<&'a Path>,
+    /// Plugin directory giving omp mpx's MCP tools (`--plugin-dir=<dir>`), when available.
+    pub omp_plugin: Option<&'a Path>,
 }
 
 fn strings(items: &[&str]) -> Vec<String> {
@@ -131,10 +133,13 @@ fn harness_args(h: &Harness, env: &LaunchEnv, opts: LaunchOptions) -> Vec<String
             }
             args
         }
-        "omp" => env
-            .omp_hook
-            .map(|f| vec![format!("--hook={}", f.display())])
-            .unwrap_or_default(),
+        "omp" => {
+            let hook = env.omp_hook.map(|f| format!("--hook={}", f.display()));
+            let plugin = (env.omp_plugin)
+                .filter(|_| opts.mcp)
+                .map(|d| format!("--plugin-dir={}", d.display()));
+            hook.into_iter().chain(plugin).collect()
+        }
         _ => Vec::new(),
     }
 }
@@ -148,8 +153,8 @@ pub fn claude_mcp_json(exe: &Path) -> String {
     .to_string()
 }
 
-/// Launch spec built from the running binary and, for omp, the extension file written to
-/// `<runtime_dir>/hooks`.
+/// Launch spec built from the running binary and, for omp, the extension file and MCP plugin
+/// written to `<runtime_dir>/hooks`.
 pub fn launch(
     h: &Harness,
     resume: Option<&str>,
@@ -157,11 +162,11 @@ pub fn launch(
     runtime_dir: &Path,
 ) -> LaunchSpec {
     let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("mpx"));
-    let hook = if h.name == "omp" {
-        omp_hook_file(runtime_dir)
-    } else {
-        None
-    };
+    let omp = h.name == "omp";
+    let hook = omp.then(|| omp_hook_file(runtime_dir)).flatten();
+    let plugin = (omp && opts.mcp)
+        .then(|| omp_plugin_dir(runtime_dir, &exe))
+        .flatten();
     launch_with(
         h,
         resume,
@@ -169,6 +174,7 @@ pub fn launch(
         &LaunchEnv {
             exe: &exe,
             omp_hook: hook.as_deref(),
+            omp_plugin: plugin.as_deref(),
         },
     )
 }

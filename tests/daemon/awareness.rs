@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 
 use super::support::{connect, logs_until, pty, serve_session};
-use mpx::agents::aware::{Me, claude_context};
+use mpx::agents::aware::{HookEvent, HookSite, Me, context_json, context_text};
 use mpx::client::{AgentReportArgs, Client};
 use mpx::config::Config;
 use mpx::mcp::McpServer;
@@ -43,8 +43,16 @@ impl Pair {
     }
 
     async fn context(&self, event: &str, extra: Value) -> Option<String> {
-        let input = self.payload(event, extra);
-        claude_context(&input, &self.beta, "b", &self.sockets(), now_ms()).await
+        let v: Value = serde_json::from_str(&self.payload(event, extra)).ok()?;
+        let hooked = HookEvent::claude(&v)?;
+        let sockets = self.sockets();
+        let site = HookSite {
+            endpoint: &self.beta,
+            pane: "b",
+            socket_dir: &sockets,
+        };
+        let text = context_text(&hooked, &site, now_ms()).await?;
+        Some(context_json(&hooked.name, &text))
     }
 }
 

@@ -205,6 +205,57 @@ pub fn claude_moment(v: &Value) -> Option<Moment> {
     }
 }
 
+/// The moment an omp extension event represents, if any: a new prompt, or a file tool's result
+/// (its absolute path, as the extension sends it).
+pub fn omp_moment(event: &str, v: &Value) -> Option<Moment> {
+    match event {
+        "before_agent_start" => Some(Moment::Roster),
+        "tool_result" => Some(Moment::File(v.get("path")?.as_str()?.to_string())),
+        _ => None,
+    }
+}
+
+/// `path` with symlinks resolved, so agents that name one file differently (`/var/...` and
+/// `/private/var/...` on macOS) still match; as given when it cannot be resolved.
+pub fn real_path(path: &str) -> String {
+    std::fs::canonicalize(path).map_or_else(|_| path.to_string(), |p| p.to_string_lossy().into_owned())
+}
+
+/// What a harness hook event means for awareness.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HookEvent {
+    pub name: String,
+    pub moment: Option<Moment>,
+    /// The agent's session ended: what it was told can be forgotten.
+    pub ends: bool,
+    pub session_id: Option<String>,
+    pub cwd: Option<PathBuf>,
+}
+
+impl HookEvent {
+    /// A Claude Code hook payload, which names its own event.
+    pub fn claude(v: &Value) -> Option<Self> {
+        let name = v.get("hook_event_name")?.as_str()?.to_string();
+        Some(Self::with(v, claude_moment(v), name == "SessionEnd", name))
+    }
+
+    /// An omp extension event, named on the command line.
+    pub fn omp(event: &str, v: &Value) -> Self {
+        Self::with(v, omp_moment(event, v), event == "session_shutdown", event.to_string())
+    }
+
+    fn with(v: &Value, moment: Option<Moment>, ends: bool, name: String) -> Self {
+        let field = |key: &str| v.get(key).and_then(Value::as_str);
+        Self {
+            name,
+            moment,
+            ends,
+            session_id: field("session_id").map(str::to_string),
+            cwd: field("cwd").map(PathBuf::from),
+        }
+    }
+}
+
 /// Hook stdout handing `text` to the model as context for `event`.
 pub fn context_json(event: &str, text: &str) -> String {
     json!({
@@ -213,46 +264,44 @@ pub fn context_json(event: &str, text: &str) -> String {
     .to_string()
 }
 
-/// Context to print for a Claude Code hook payload, given who runs it and where sessions and
-/// per-agent memory live. `None` when there is nothing new to say.
-pub async fn claude_context(
-    input: &str,
-    endpoint: &str,
-    pane: &str,
-    socket_dir: &Path,
-    now_ms: u64,
-) -> Option<String> {
-    let v: Value = serde_json::from_str(input).ok()?;
-    let event = v.get("hook_event_name")?.as_str()?.to_string();
-    let id = v
-        .get("session_id")
-        .and_then(Value::as_str)
-        .unwrap_or(pane)
-        .to_string();
-    let dir = socket_dir.join("aware");
-    if event == "SessionEnd" {
-        Seen::forget(&dir, &id);
+/// Where a hook runs: the agent's pane and session, and the directory holding every session and
+/// per-agent memory.
+pub struct HookSite<'a> {
+    pub endpoint: &'a str,
+    pub pane: &'a str,
+    pub socket_dir: &'a Path,
+}
+
+/// What to tell the agent behind `event` about other agents, remembering it was told. `None` when
+/// there is nothing new to say.
+pub async fn context_text(event: &HookEvent, site: &HookSite<'_>, now_ms: u64) -> Option<String> {
+    let id = event.session_id.as_deref().unwrap_or(site.pane);
+    let dir = site.socket_dir.join("aware");
+    if event.ends {
+        Seen::forget(&dir, id);
         return None;
     }
-    let moment = claude_moment(&v)?;
+    let moment = event.moment.as_ref()?;
     let me = Me {
-        endpoint: endpoint.to_string(),
-        pane: pane.to_string(),
-        cwd: PathBuf::from(v.get("cwd")?.as_str()?),
+        endpoint: site.endpoint.to_string(),
+        pane: site.pane.to_string(),
+        cwd: event.cwd.clone()?,
     };
-    let peers = peers(list_live(socket_dir).await, &me);
-    let mut seen = Seen::load(&dir, &id);
+    let peers = peers(list_live(site.socket_dir).await, &me);
+    let mut seen = Seen::load(&dir, id);
     let text = match moment {
         Moment::Roster => seen.roster_update(&peers),
-        Moment::File(path) => seen.file_update(&path, &peers, now_ms),
+        Moment::File(path) => seen.file_update(&real_path(path), &peers, now_ms),
     }?;
-    seen.save(&dir, &id);
-    Some(context_json(&event, &text))
+    seen.save(&dir, id);
+    Some(text)
 }
 
 /// `mpx_peers` result: agents in `me`'s repository (every agent with `all`), with what each is
 /// working on and the files it edited recently.
 pub fn peers_json(live: Vec<LiveAgent>, me: &Me, all: bool, now_ms: u64) -> Value {
+    // The caller's own name, so it can tell itself apart when another agent mentions it.
+    let you = live.iter().find(|a| is_me(a, me)).map(agent_ref);
     let agents: Vec<LiveAgent> = if all {
         live.into_iter().filter(|a| !is_me(a, me)).collect()
     } else {
@@ -281,5 +330,5 @@ pub fn peers_json(live: Vec<LiveAgent>, me: &Me, all: bool, now_ms: u64) -> Valu
             })
         })
         .collect();
-    json!({ "repository": repo_root(&me.cwd), "agents": rows })
+    json!({ "you": you, "repository": repo_root(&me.cwd), "agents": rows })
 }

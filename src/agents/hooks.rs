@@ -6,15 +6,49 @@ use serde_json::{Value, json};
 use crate::client::{AgentReportArgs, Client};
 use crate::protocol::AgentState;
 
-/// Claude Code hook events that mpx listens to; each runs `<exe> hook claude`.
-const CLAUDE_EVENTS: [&str; 7] = [
-    "SessionStart",
-    "UserPromptSubmit",
-    "PreToolUse",
-    "PostToolUse",
-    "Notification",
-    "Stop",
-    "SessionEnd",
+/// What a harness hook event means for its agent.
+#[derive(Clone, Copy)]
+enum Meaning {
+    State(AgentState),
+    /// A new prompt, its text under the key: working on it.
+    Prompted(&'static str),
+    /// The run ended, its last reply under the key: idle.
+    Finished(&'static str),
+    /// Waiting for the user, what for under the key.
+    Waiting(&'static str),
+    /// A tool ran: an edit of the file `path` finds, when the tool (named under `tool`) is one of
+    /// `edits`.
+    Tool {
+        tool: &'static str,
+        edits: &'static [&'static str],
+        path: fn(&Value) -> Option<String>,
+    },
+    Ended,
+}
+
+/// Claude Code hook events that mpx listens to, each running `<exe> hook claude`.
+const CLAUDE_HOOKS: [(&str, Meaning); 7] = [
+    ("SessionStart", Meaning::State(AgentState::Idle)),
+    ("UserPromptSubmit", Meaning::Prompted("prompt")),
+    ("PreToolUse", Meaning::State(AgentState::Working)),
+    ("PostToolUse", Meaning::Tool { tool: "tool_name", edits: &EDIT_TOOLS, path: tool_file }),
+    ("Notification", Meaning::Waiting("message")),
+    ("Stop", Meaning::Finished("last_assistant_message")),
+    ("SessionEnd", Meaning::Ended),
+];
+
+/// omp extension events (`mpx hook omp <event>`). A run (agent_start..agent_end) spans many
+/// turns; only the run boundary means idle.
+const OMP_HOOKS: [(&str, Meaning); 9] = [
+    ("session_start", Meaning::State(AgentState::Idle)),
+    ("before_agent_start", Meaning::Prompted("prompt")),
+    ("agent_start", Meaning::State(AgentState::Working)),
+    ("turn_start", Meaning::State(AgentState::Working)),
+    ("tool_approval_resolved", Meaning::State(AgentState::Working)),
+    ("tool_approval_requested", Meaning::Waiting("detail")),
+    ("tool_result", Meaning::Tool { tool: "tool", edits: &OMP_EDIT_TOOLS, path: omp_tool_path }),
+    ("agent_end", Meaning::Finished("reply")),
+    ("session_shutdown", Meaning::Ended),
 ];
 /// Tools whose use `PostToolUse` reports: file edits are recorded, and file access can surface
 /// another agent's recent edit of the same file.
@@ -25,32 +59,8 @@ const FOCUS_CHARS: usize = 240;
 
 const REPORT_TIMEOUT: Duration = Duration::from_secs(2);
 
-const OMP_EXTENSION: &str = r#"import { spawn } from "node:child_process";
-
-const MPX = __MPX_EXE__;
-
-function report(event, data) {
-  if (!process.env.MPX_PANE || !process.env.MPX_ENDPOINT) return;
-  try {
-    const child = spawn(MPX, ["hook", "omp", event], { stdio: ["pipe", "ignore", "ignore"], detached: true });
-    child.on("error", () => {});
-    child.stdin.on("error", () => {});
-    child.stdin.end(JSON.stringify(data));
-    child.unref();
-  } catch {}
-}
-
-export default function mpxAgentHooks(pi) {
-  pi.on("session_start", (_event, ctx) =>
-    report("session_start", { session_id: ctx?.sessionManager?.getSessionId?.() ?? null }));
-  pi.on("agent_start", () => report("agent_start", {}));
-  pi.on("turn_start", () => report("turn_start", {}));
-  pi.on("agent_end", () => report("agent_end", {}));
-  pi.on("tool_approval_requested", (event) => report("tool_approval_requested", { detail: event?.toolName ?? null }));
-  pi.on("tool_approval_resolved", () => report("tool_approval_resolved", {}));
-  pi.on("session_shutdown", () => report("session_shutdown", {}));
-}
-"#;
+/// The omp extension, with `__MPX_EXE__` standing for the mpx binary.
+const OMP_EXTENSION: &str = include_str!("omp_extension.js");
 
 /// Agent state and bookkeeping produced by one harness hook event.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -108,9 +118,9 @@ fn shell_quote(text: &str) -> String {
 pub fn claude_settings_json(exe: &Path) -> String {
     let command = format!("{} hook claude", shell_quote(&exe.to_string_lossy()));
     let hook = json!([{ "type": "command", "command": command }]);
-    let hooks: serde_json::Map<String, Value> = CLAUDE_EVENTS
+    let hooks: serde_json::Map<String, Value> = CLAUDE_HOOKS
         .iter()
-        .map(|event| {
+        .map(|(event, _)| {
             let entry = match *event {
                 "PostToolUse" => json!({ "matcher": CLAUDE_FILE_TOOLS, "hooks": hook }),
                 _ => json!({ "hooks": hook }),
@@ -124,63 +134,107 @@ pub fn claude_settings_json(exe: &Path) -> String {
 /// Maps a Claude Code hook payload (stdin JSON) to an agent report.
 pub fn claude_hook_report(input: &str) -> Option<HookReport> {
     let v: Value = serde_json::from_str(input).ok()?;
-    let session_id = str_field(&v, "session_id");
-    let event = str_field(&v, "hook_event_name")?;
-    let focus = |key: &str| str_field(&v, key).map(|t| clip(&t, FOCUS_CHARS));
-    let mut report = HookReport {
-        session_id,
-        ..HookReport::default()
-    };
-    match event.as_str() {
-        "SessionStart" => report.state = Some(AgentState::Idle),
-        "Stop" => {
-            report.state = Some(AgentState::Idle);
-            report.reply = focus("last_assistant_message");
-        }
-        "UserPromptSubmit" => {
-            report.state = Some(AgentState::Working);
-            report.task = focus("prompt");
-        }
-        "PreToolUse" => report.state = Some(AgentState::Working),
-        "PostToolUse" => {
-            let tool = str_field(&v, "tool_name").unwrap_or_default();
-            if !EDIT_TOOLS.contains(&tool.as_str()) {
-                return None;
-            }
-            report.edited = Some(tool_file(&v)?);
-        }
-        "Notification" => {
-            report.state = Some(AgentState::NeedsInput);
-            report.detail = str_field(&v, "message");
-        }
-        "SessionEnd" => report.clear = true,
-        _ => return None,
-    }
-    Some(report)
+    report_for(&v, &str_field(&v, "hook_event_name")?, &CLAUDE_HOOKS)
 }
+
+/// The report `event` makes with payload `v`, by what `hooks` say it means.
+fn report_for(v: &Value, event: &str, hooks: &[(&str, Meaning)]) -> Option<HookReport> {
+    let (_, meaning) = hooks.iter().find(|(name, _)| *name == event)?;
+    let p = Payload(v);
+    match *meaning {
+        Meaning::State(state) => p.in_state(state),
+        Meaning::Prompted(key) => p.prompted(key),
+        Meaning::Finished(key) => p.finished(key),
+        Meaning::Waiting(key) => p.waiting(key),
+        Meaning::Tool { tool, edits, path } => p.edited(str_field(v, tool), edits, path(v)),
+        Meaning::Ended => p.ended(),
+    }
+}
+
+/// Builds the reports of one hook payload; its session id goes with every one.
+struct Payload<'a>(&'a Value);
+
+impl Payload<'_> {
+    fn report(&self, state: Option<AgentState>) -> HookReport {
+        HookReport {
+            state,
+            session_id: str_field(self.0, "session_id"),
+            ..HookReport::default()
+        }
+    }
+
+    fn in_state(&self, state: AgentState) -> Option<HookReport> {
+        Some(self.report(Some(state)))
+    }
+
+    /// The agent took a prompt (its text under `key`): working on it.
+    fn prompted(&self, key: &str) -> Option<HookReport> {
+        let task = self.focus(key);
+        Some(HookReport {
+            task,
+            ..self.report(Some(AgentState::Working))
+        })
+    }
+
+    /// The agent finished its run (its last reply under `key`): idle.
+    fn finished(&self, key: &str) -> Option<HookReport> {
+        let reply = self.focus(key);
+        Some(HookReport {
+            reply,
+            ..self.report(Some(AgentState::Idle))
+        })
+    }
+
+    /// The agent waits for the user (what for under `key`).
+    fn waiting(&self, key: &str) -> Option<HookReport> {
+        let detail = str_field(self.0, key);
+        Some(HookReport {
+            detail,
+            ..self.report(Some(AgentState::NeedsInput))
+        })
+    }
+
+    /// `tool` ran on `path`: an edit worth recording when `tool` is one of `edit_tools`.
+    fn edited(
+        &self,
+        tool: Option<String>,
+        edit_tools: &[&str],
+        path: Option<String>,
+    ) -> Option<HookReport> {
+        if !edit_tools.contains(&tool?.as_str()) {
+            return None;
+        }
+        Some(HookReport {
+            edited: Some(path?),
+            ..self.report(None)
+        })
+    }
+
+    fn ended(&self) -> Option<HookReport> {
+        Some(HookReport {
+            clear: true,
+            ..self.report(None)
+        })
+    }
+
+    fn focus(&self, key: &str) -> Option<String> {
+        str_field(self.0, key).map(|t| clip(&t, FOCUS_CHARS))
+    }
+}
+
+/// omp tools whose results mean the agent changed a file.
+const OMP_EDIT_TOOLS: [&str; 2] = ["write", "edit"];
 
 /// Maps an omp extension event (`mpx hook omp <event>`, JSON on stdin) to an agent report.
 pub fn omp_hook_report(event: &str, input: &str) -> Option<HookReport> {
     let v: Value = serde_json::from_str(input).unwrap_or(Value::Null);
-    let session_id = str_field(&v, "session_id");
-    let detail = str_field(&v, "detail");
-    let (state, clear) = match event {
-        // A run (agent_start..agent_end) spans many turns; only the run boundary means idle.
-        "session_start" | "agent_end" => (Some(AgentState::Idle), false),
-        "agent_start" | "turn_start" | "tool_approval_resolved" => {
-            (Some(AgentState::Working), false)
-        }
-        "tool_approval_requested" => (Some(AgentState::NeedsInput), false),
-        "session_shutdown" => (None, true),
-        _ => return None,
-    };
-    Some(HookReport {
-        state,
-        session_id,
-        detail,
-        clear,
-        ..HookReport::default()
-    })
+    report_for(&v, event, &OMP_HOOKS)
+}
+
+/// The file an omp tool worked on: the extension sends it resolved. Never one of omp's virtual
+/// paths (`xd://...`, through which it runs MCP tools), which an older extension could send.
+fn omp_tool_path(v: &Value) -> Option<String> {
+    str_field(v, "path").filter(|path| !path.contains("://"))
 }
 
 /// Source of the omp extension that forwards lifecycle events to `exe hook omp <event>`.
@@ -196,11 +250,42 @@ pub fn omp_hook_file(runtime_dir: &Path) -> Option<PathBuf> {
     let dir = runtime_dir.join("hooks");
     std::fs::create_dir_all(&dir).ok()?;
     let path = dir.join("omp-agent.js");
-    let source = omp_extension_source(&exe);
-    if std::fs::read_to_string(&path).ok().as_deref() != Some(source.as_str()) {
-        std::fs::write(&path, source).ok()?;
-    }
+    write_if_changed(&path, &omp_extension_source(&exe))?;
     Some(path)
+}
+
+/// Writes an omp plugin (`--plugin-dir`) into `<runtime_dir>/hooks/omp-plugin` that gives the agent
+/// mpx's MCP tools, and returns its directory. omp runs a plugin's MCP server only from a bare
+/// command name or a file inside the plugin, so the plugin holds a small script that runs `exe`.
+pub fn omp_plugin_dir(runtime_dir: &Path, exe: &Path) -> Option<PathBuf> {
+    let dir = runtime_dir.join("hooks").join("omp-plugin");
+    std::fs::create_dir_all(&dir).ok()?;
+    let plugin = json!({
+        "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+        "name": "mpx",
+    });
+    let mcp = json!({
+        "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+        "mcpServers": { "mpx": { "type": "stdio", "command": "./mpx", "args": ["mcp"] } },
+    });
+    write_if_changed(&dir.join("plugin.json"), &plugin.to_string())?;
+    write_if_changed(&dir.join("mcp.json"), &mcp.to_string())?;
+    let script = dir.join("mpx");
+    let run = format!("#!/bin/sh\nexec {} \"$@\"\n", shell_quote(&exe.to_string_lossy()));
+    write_if_changed(&script, &run)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).ok()?;
+    }
+    Some(dir)
+}
+
+fn write_if_changed(path: &Path, content: &str) -> Option<()> {
+    if std::fs::read_to_string(path).ok().as_deref() != Some(content) {
+        std::fs::write(path, content).ok()?;
+    }
+    Some(())
 }
 
 /// Reports a hook event for `$MPX_PANE` on `$MPX_ENDPOINT`; silently does nothing outside mpx or on failure.

@@ -2,7 +2,8 @@ use std::path::{Path, PathBuf};
 
 use mpx::agents::LiveAgent;
 use mpx::agents::aware::{
-    Me, Moment, Seen, claude_moment, context_json, peers, peers_json, repo_root, roster_text,
+    HookEvent, Me, Moment, Seen, claude_moment, context_json, omp_moment, peers, peers_json,
+    real_path, repo_root, roster_text,
 };
 use mpx::protocol::{AgentFocus, AgentInfo, AgentState, EDIT_WINDOW_MS, FileEdit, NodeState};
 use serde_json::{Value, json};
@@ -188,8 +189,10 @@ fn peers_json_lists_focus_and_recent_edits_newest_first() {
             &[("/old.rs", 0), ("/a.rs", NOW - 60_000), ("/b.rs", NOW)],
         ),
         agent("main", "elsewhere", &other, None, &[]),
+        agent("main", "claude-a", &repo, Some("mine"), &[]),
     ];
     let v = peers_json(live.clone(), &me(&repo), false, NOW);
+    assert_eq!(v["you"], "main:claude-a", "the caller learns its own name");
     assert_eq!(v["repository"], json!(repo.canonicalize().expect("canonical")));
     let rows = v["agents"].as_array().expect("agents");
     assert_eq!(rows.len(), 1);
@@ -203,4 +206,29 @@ fn peers_json_lists_focus_and_recent_edits_newest_first() {
         .collect();
     assert_eq!(edits, vec!["/b.rs", "/a.rs"]);
     assert_eq!(peers_json(live, &me(&repo), true, NOW)["agents"].as_array().map(Vec::len), Some(2));
+}
+
+#[test]
+fn omp_moments_are_prompts_and_file_tool_results() {
+    let file = json!({ "path": "/r/a.rs", "cwd": "/r", "session_id": "o-1" });
+    assert_eq!(omp_moment("before_agent_start", &json!({})), Some(Moment::Roster));
+    assert_eq!(omp_moment("tool_result", &file), Some(Moment::File("/r/a.rs".into())));
+    assert_eq!(omp_moment("tool_result", &json!({})), None);
+    assert_eq!(omp_moment("agent_end", &file), None);
+    let ended = HookEvent::omp("session_shutdown", &file);
+    assert!(ended.ends && ended.session_id.as_deref() == Some("o-1"));
+    assert_eq!(HookEvent::omp("tool_result", &file).cwd, Some(PathBuf::from("/r")));
+}
+
+#[cfg(unix)]
+#[test]
+fn paths_are_compared_with_symlinks_resolved() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let real = dir.path().join("real.rs");
+    std::fs::write(&real, "").expect("file");
+    let link = dir.path().join("link.rs");
+    std::os::unix::fs::symlink(&real, &link).expect("symlink");
+    let resolved = std::fs::canonicalize(&real).expect("canonical");
+    assert_eq!(real_path(&link.to_string_lossy()), resolved.to_string_lossy());
+    assert_eq!(real_path("/no/such/file.rs"), "/no/such/file.rs", "as given when missing");
 }

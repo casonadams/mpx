@@ -84,7 +84,7 @@ session_id_args = []
 |---|---|---|---|---|
 | `idle_ms` | integer | `1500` | Daemon | Milliseconds of I/O inactivity before a hook-less agent is classified as `idle`. |
 | `notify` | bool | `true` | TUI | Emit an OSC 9 desktop notification when an off-screen background agent transitions to `needs_input`. |
-| `mcp` | bool | `true` | Launcher | Start Claude Code agents with the mpx MCP server (`--mcp-config`), so they can see and message the other agents. Read by whatever launches the agent: the TUI, the CLI, the MCP server or a daemon restore. |
+| `mcp` | bool | `true` | Launcher | Start Claude Code and oh-my-pi agents with the mpx MCP server (`--mcp-config`, or an omp plugin via `--plugin-dir`), so they can see and message the other agents. Read by whatever launches the agent: the TUI, the CLI, the MCP server or a daemon restore. |
 
 ### Key Bindings (`[bind]`)
 
