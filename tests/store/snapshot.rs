@@ -11,6 +11,7 @@ fn sample() -> SessionSnapshot {
         saved_ms: 42,
         clean_shutdown: false,
         active_window: 1,
+        last_window: None,
         windows: vec![WindowSnapshot {
             name: "editor".into(),
             renamed: true,

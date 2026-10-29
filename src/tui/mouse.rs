@@ -22,8 +22,8 @@ impl App {
         ) {
             return Flow::Continue;
         }
-        let rail = self.expanded_width().max(self.sidebar_width());
-        if ev.column < rail && ev.row < self.viewport.1 {
+        let rail = self.expanded_width();
+        if rail > 0 && ev.column < rail && ev.row < self.viewport.1 {
             if ev.kind == MouseEventKind::Down(MouseButton::Left) {
                 self.sidebar_click(ev.row).await;
             }

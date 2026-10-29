@@ -159,25 +159,23 @@ async fn frames_keep_the_terminal_identical_to_the_panes() {
     emit(&mut h, MAIN, VIM_LIKE, "VIM-DONE").await;
     check(&mut h, "vim-style redraw beside the rail").await;
 
-    h.prefixed_char('e').await;
+    h.prefixed_char('.').await;
     h.frame().await;
-    assert!(h.terminal.snapshot().starts_with(" Agents"), "rail expanded");
+    assert!(h.terminal.snapshot().starts_with(" Agents"), "drawer expanded");
     let under = format!("{}UNDER-DONE", numbered_lines("under", 8));
     emit(&mut h, MAIN, &under, "UNDER-DONE").await;
     h.frame().await;
     h.key(KeyCode::Esc).await;
-    check(&mut h, "output that arrived under the expanded rail").await;
+    check(&mut h, "output that arrived under the expanded drawer").await;
 
     h.prefixed_char('?').await;
     h.frame().await;
     h.key(KeyCode::Esc).await;
-    check(&mut h, "overlay closed over the rail").await;
-    let dot = h.terminal.grid().get_cell(0, 0).map(|c| c.c);
-    assert_eq!(dot, Some('●'), "rail repainted after the overlay");
+    check(&mut h, "overlay closed").await;
     h.prefixed_char('z').await;
-    check(&mut h, "zoomed beside the rail").await;
+    check(&mut h, "zoomed pane").await;
     h.prefixed_char('z').await;
-    check(&mut h, "unzoomed beside the rail").await;
+    check(&mut h, "unzoomed pane").await;
 
     h.prefixed_char('z').await;
     let zoomed = format!("{}ZOOM-DONE", numbered_lines("zoom", 12));

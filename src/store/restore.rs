@@ -34,8 +34,24 @@ where
         .collect();
     RestorePlan {
         active_window: remap_active(snapshot.active_window, &planned),
+        last_window: remap_last(snapshot.last_window, &planned),
         windows: planned.into_iter().flatten().collect(),
     }
+}
+
+/// Index among surviving windows of the last active window, or None when dropped.
+fn remap_last(last: Option<usize>, planned: &[Option<WindowPlan>]) -> Option<usize> {
+    let last = last?;
+    let mut mapped = 0;
+    for (i, p) in planned.iter().enumerate() {
+        if i == last {
+            return p.as_ref().map(|_| mapped);
+        }
+        if p.is_some() {
+            mapped += 1;
+        }
+    }
+    None
 }
 
 /// Index among surviving windows of the active window, or of the next survivor when it was dropped.

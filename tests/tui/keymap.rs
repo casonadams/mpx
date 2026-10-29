@@ -48,7 +48,8 @@ fn default_table_binds_digits_and_core_keys() {
     assert_eq!(find("%"), Some("split-window -h"));
     assert_eq!(find("\""), Some("split-window"));
     assert_eq!(find("x"), Some("kill-pane"));
-    assert_eq!(find("A"), Some("next-attention"));
+    assert_eq!(find("."), Some("sidebar"));
+    assert_eq!(find("A"), None);
     assert_eq!(find("7"), Some("select-window -t 7"));
 }
 
@@ -178,11 +179,11 @@ fn invalid_prefix_is_rejected() {
 
 
 #[test]
-fn alt_j_and_alt_k_step_through_agents_without_the_prefix() {
+fn alt_j_and_alt_k_reach_pane_unintercepted() {
     let keymap = default_keymap();
     let root = |c| command_in(&keymap, Table::Root, &alt(c));
-    assert_eq!(root('j'), Some(Command::StepAgent { next: true }));
-    assert_eq!(root('k'), Some(Command::StepAgent { next: false }));
+    assert_eq!(root('j'), None, "alt-j reaches the pane");
+    assert_eq!(root('k'), None, "alt-k reaches the pane");
     assert_eq!(command_in(&keymap, Table::Root, &key('j')), None, "plain j reaches the pane");
     assert_eq!(command_of(&keymap, &alt('j')), None, "not a prefix binding");
 }
@@ -190,23 +191,21 @@ fn alt_j_and_alt_k_step_through_agents_without_the_prefix() {
 #[test]
 fn config_bind_root_rebinds_and_an_empty_command_unbinds() {
     let mut config = Config::default();
-    config.bind_root.insert("M-j".to_string(), String::new());
     config.bind_root.insert("M-n".to_string(), "next-agent".to_string());
-    config.bind.insert("e".to_string(), " ".to_string());
+    config.bind.insert(".".to_string(), " ".to_string());
     let keymap = resolve(&config).unwrap();
-    assert_eq!(command_in(&keymap, Table::Root, &alt('j')), None);
     assert_eq!(
         command_in(&keymap, Table::Root, &alt('n')),
         Some(Command::StepAgent { next: true })
     );
-    assert_eq!(command_of(&keymap, &key('e')), None, "unbound prefix key");
+    assert_eq!(command_of(&keymap, &key('.')), None, "unbound prefix key");
 }
 
 #[cfg(target_os = "macos")]
 #[test]
-fn option_j_and_option_k_step_through_agents_when_the_terminal_sends_their_characters() {
+fn option_j_and_option_k_pass_through_unintercepted() {
     let keymap = default_keymap();
     let root = |c| command_in(&keymap, Table::Root, &key(c));
-    assert_eq!(root('∆'), Some(Command::StepAgent { next: true }));
-    assert_eq!(root('˚'), Some(Command::StepAgent { next: false }));
+    assert_eq!(root('∆'), None, "Option-j passes through to the pane");
+    assert_eq!(root('˚'), None, "Option-k passes through to the pane");
 }

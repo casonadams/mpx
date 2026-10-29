@@ -52,11 +52,14 @@ fn status_hit_detects_clicked_window_tab() {
             index: 0,
             name: "editor".into(),
             is_active: true,
+            ..Default::default()
         },
         WindowTab {
             index: 1,
             name: "server".into(),
             is_active: false,
+            is_last: true,
+            ..Default::default()
         },
     ];
     // "[dev] 0:editor* 1:server- "

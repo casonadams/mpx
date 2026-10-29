@@ -46,9 +46,8 @@ Only the configured prefix is intercepted. `Ctrl-a` reaches your shell unless yo
 | :--- | :--- | :--- |
 | `s` | `palette agents` | [Agent manager](AGENT-MANAGER.md) (Agents tab in palette; `:agents` for classic view) |
 | `w` | `palette sessions` | Sessions & panes (Sessions tab in palette; `:choose-tree` for classic tree) |
-| `e` | `sidebar` | Focus the [agents rail](#agents-rail), expanding it; again collapses it |
+| `.` | `sidebar` | Open or close the vertical [agents drawer](#agents-drawer) |
 | `(` / `)` | `prev-session` / `next-session` | Switch sessions |
-| `A` | `next-attention` | Jump to the agent that has waited longest for input, in any session |
 | `d` / `q` | `detach-client` | Detach (daemon and panes keep running) |
 
 ### Other
@@ -101,36 +100,15 @@ All overlays use the same motions: `j`/`k` (or arrows), `gg`/`G`, `Ctrl-d`/`Ctrl
 
 ---
 
-## Agents rail
+## Agents drawer
 
-While any agent runs in any session, a thin rail on the left shows one dot per agent: `◆` waiting (yellow), `●` working (green), `○` idle, `✕` exited. Sessions are separated by a blank row, the attached one first, and the agent in the focused pane is drawn in reverse video. Without agents there is no rail, and screens narrower than 42 columns leave it out.
-
-Focused, the rail expands into a list over the panes, which keep their size: each agent's title and, below it, its latest message and the time since its state changed.
+`Prefix .` opens an on-demand vertical drawer over the left 34 columns showing each agent's title, latest status, and state glyph (`◆` waiting, `●` working, `○` idle, `✕` exited). Panes always retain 100% full width with zero stolen columns when the drawer is closed.
 
 | Key | Action |
 | :--- | :--- |
-| `Alt-j` / `Alt-k` (no prefix) | Show the next / previous agent's pane, in any window or session; the reverse-video dot follows. With no agents running the keys go to the program |
-| `Prefix e` | Focus the rail, expanding it; again collapses it |
-
-While the rail has focus:
-
-| Key | Action |
-| :--- | :--- |
-| `j`/`k`, `gg`/`G`, `Ctrl-d`/`Ctrl-u` | Move the highlight; the agent's pane shows at once (another session's after a 150 ms pause) |
-| `Enter` / `l` / `Right` / `Esc` / `q` | Hand the keys to the shown pane and collapse the rail |
-
-`Prefix h` from the leftmost pane also focuses the rail, and clicking a dot shows that agent. `Alt-j`/`Alt-k` never reach the program in the pane; rebind or unbind them with [`[bind_root]`](CONFIG.md#key-bindings-bind).
-
-On macOS, terminals type `∆` and `˚` for Option-j and Option-k unless Option is set to act as Alt, so mpx binds those two characters too and the keys work either way (unbind them with `[bind_root] "∆" = ""` to type them). Setting Option to act as Alt also makes every other Alt shortcut work, in mpx and in the programs it runs:
-
-| Terminal | Setting |
-| :--- | :--- |
-| iTerm2 | Settings → Profiles → Keys → Left Option key: **Esc+** |
-| Terminal.app | Settings → Profiles → Keyboard → **Use Option as Meta key** |
-| Ghostty | `macos-option-as-alt = true` |
-| WezTerm | `send_composed_key_when_left_alt_is_pressed = false` |
-| Alacritty | `[window] option_as_alt = "Both"` |
-| kitty | `macos_option_as_alt yes` |
+| `Prefix .` | Open or close the vertical agents drawer |
+| `j`/`k`, `gg`/`G`, `Ctrl-d`/`Ctrl-u` | Move the highlight (another session's agent shows after a 150 ms pause) |
+| `Enter` / `l` / `Right` / `Esc` / `q` | Hand keys to the shown pane and close the drawer |
 
 ---
 

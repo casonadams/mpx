@@ -1,6 +1,42 @@
 //! Pure status-line helpers: exit badges, agent badge text and the OSC 9 notification sequence.
+use crate::agents::LiveAgent;
 use crate::layout::{Rect, WindowTab};
-use crate::protocol::NodeInfo;
+use crate::protocol::{AgentState, NodeInfo};
+
+fn count_tab_agents(agents: &[LiveAgent], session: &str, window: usize) -> (usize, usize) {
+    let mut needs_input = 0;
+    let mut working = 0;
+    for agent in agents {
+        if agent.session == session && agent.node.window == Some(window) {
+            match agent.node.agent.as_ref().map(|a| a.state) {
+                Some(AgentState::NeedsInput) => needs_input += 1,
+                Some(AgentState::Working) => working += 1,
+                _ => {}
+            }
+        }
+    }
+    (needs_input, working)
+}
+
+fn tab_badge(needs_input: usize, working: usize) -> Option<String> {
+    if needs_input > 1 {
+        Some(format!("\u{25c6}{needs_input}"))
+    } else if needs_input == 1 {
+        Some("\u{25c6}".to_string())
+    } else if working > 0 {
+        Some("\u{25cf}".to_string())
+    } else {
+        None
+    }
+}
+
+/// Updates `agent_badge` on each tab based on live agents running in that window.
+pub fn update_tab_agent_badges(tabs: &mut [WindowTab], agents: &[LiveAgent], session: &str) {
+    for tab in tabs.iter_mut() {
+        let (needs_input, working) = count_tab_agents(agents, session, tab.index);
+        tab.agent_badge = tab_badge(needs_input, working);
+    }
+}
 
 /// The node a pane name stands for: the newest with that name, since an exited process can leave
 /// an older node of the same name in the session's history.
@@ -112,12 +148,7 @@ pub fn status_hit<'a>(
         }
     } else {
         for tab in tabs {
-            let flag = match (tab.is_active, zoomed) {
-                (true, true) => "*Z",
-                (true, false) => "*",
-                (false, _) => "-",
-            };
-            let text = format!("{}:{}{} ", tab.index, tab.name, flag);
+            let text = crate::tui::render::format_tab(tab, zoomed);
             let len = text.chars().count();
             if col >= offset && col < offset + len {
                 return Some(StatusTarget::Window(tab.index));

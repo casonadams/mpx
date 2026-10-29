@@ -73,11 +73,10 @@ fn press(c: char) -> KeyEvent {
 }
 
 #[test]
-fn the_rail_only_takes_columns_while_agents_run_and_the_panes_keep_room() {
+fn the_rail_takes_zero_columns_leaving_panes_unobstructed() {
     assert_eq!(rail_width(false, 200), 0);
-    assert_eq!(rail_width(true, 200), RAIL_COLS);
-    assert_eq!(rail_width(true, RAIL_COLS + 39), 0);
-    assert_eq!(rail_width(true, RAIL_COLS + 40), RAIL_COLS);
+    assert_eq!(rail_width(true, 200), 0);
+    assert_eq!(rail_width(true, 40), 0);
 }
 
 #[test]

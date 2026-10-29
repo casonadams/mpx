@@ -396,6 +396,29 @@ impl Compositor {
     }
 }
 
+/// Formats a single window tab with agent badges and tmux flags.
+pub fn format_tab(tab: &WindowTab, zoomed: bool) -> String {
+    let mut flags = String::new();
+    if tab.is_active {
+        flags.push('*');
+        if zoomed {
+            flags.push('Z');
+        }
+    } else {
+        if tab.is_last {
+            flags.push('-');
+        }
+        if tab.has_bell {
+            flags.push('!');
+        }
+        if tab.has_activity {
+            flags.push('#');
+        }
+    }
+    let badge = tab.agent_badge.as_deref().unwrap_or("");
+    format!("{}:{}{}{} ", tab.index, tab.name, badge, flags)
+}
+
 /// Left side of the status row: `[session] ` followed by window tabs, or pane names when there are none.
 pub fn status_left(bar: &StatusBar<'_>) -> String {
     let mut left = format!("[{}] ", bar.session);
@@ -410,12 +433,7 @@ pub fn status_left(bar: &StatusBar<'_>) -> String {
         }
     } else {
         for tab in bar.tabs {
-            let flag = match (tab.is_active, bar.zoomed) {
-                (true, true) => "*Z",
-                (true, false) => "*",
-                (false, _) => "-",
-            };
-            left.push_str(&format!("{}:{}{} ", tab.index, tab.name, flag));
+            left.push_str(&format_tab(tab, bar.zoomed));
         }
     }
     left
@@ -465,6 +483,7 @@ const HUD_ITEMS: &[(&str, &str)] = &[
     ("x", "kill pane"),
     ("d", "detach"),
     ("s", "agents"),
+    (".", "sidebar"),
     ("w", "sessions"),
     ("?", "help"),
 ];

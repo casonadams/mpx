@@ -273,7 +273,7 @@ impl App {
         let layout_h = h.saturating_sub(1);
         self.viewport = (w, layout_h);
         let side = self.sidebar_width();
-        if side == 0 && matches!(self.mode, Mode::Sidebar) {
+        if w < crate::tui::sidebar::SIDEBAR_COLS && matches!(self.mode, Mode::Sidebar) {
             self.mode = Mode::Normal;
         }
         if !self.layout.sync(&mut self.client, side, w - side, layout_h).await {

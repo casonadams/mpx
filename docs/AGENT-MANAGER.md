@@ -38,7 +38,7 @@ On screens at least 12 rows tall, a preview panel below a five-row scrollable li
 | `s` | Scope stored sessions to this project's directory or all |
 | `q` / `Esc` | Close |
 
-**`Prefix A`** (outside the overlay) jumps to the agent that has waited longest for input, in any session. The status bar shows `◆N` while agents are waiting.
+**`Prefix .`** opens the on-demand vertical agents drawer for fast inspection and switching across agents. Window tabs show agent status dots (`◆` needs input, `●` working) and the status bar displays `◆N` while agents are waiting. Panes always keep 100% width with zero stolen columns.
 
 ---
 

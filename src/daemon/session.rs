@@ -317,7 +317,15 @@ impl Session {
 
     fn notice(&mut self, notice: PaneNotice) {
         match notice {
-            PaneNotice::Event(event) => self.fanout(&event),
+            PaneNotice::Event(event) => {
+                if let StreamEvent::Output { name, data, .. } = &event {
+                    if data.contains('\x07') {
+                        self.workspace.mark_bell(name);
+                    }
+                    self.workspace.mark_activity(name);
+                }
+                self.fanout(&event);
+            }
             PaneNotice::Exited { name, id, code } => {
                 self.finish(&name, id);
                 self.fanout(&StreamEvent::Exit { name, code });
@@ -953,6 +961,7 @@ impl Session {
         }
         if !self.workspace.windows.is_empty() {
             let _ = self.workspace.select_window(plan.active_window);
+            self.workspace.last_window = plan.last_window;
         }
         self.restored_ms = Some(now_ms());
         self.schedule_save();

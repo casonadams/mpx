@@ -72,6 +72,7 @@ fn session(active_window: usize, windows: Vec<WindowSnapshot>) -> SessionSnapsho
         saved_ms: 1,
         clean_shutdown: false,
         active_window,
+        last_window: None,
         windows,
     }
 }

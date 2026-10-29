@@ -36,6 +36,8 @@ pub struct SessionSnapshot {
     /// True once the daemon stopped through `kill-server`; false while running or after a crash.
     pub clean_shutdown: bool,
     pub active_window: usize,
+    #[serde(default)]
+    pub last_window: Option<usize>,
     pub windows: Vec<WindowSnapshot>,
 }
 
@@ -80,6 +82,7 @@ pub struct SnapshotStore {
 #[derive(Debug, Clone, PartialEq)]
 pub struct RestorePlan {
     pub active_window: usize,
+    pub last_window: Option<usize>,
     pub windows: Vec<WindowPlan>,
 }
 

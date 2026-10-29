@@ -8,7 +8,7 @@ use super::panes::PaneRect;
 use super::render::{
     Compositor, DividerStyle, RenderPaneContext, SelectionRange, StatusBar, hud_rect, parse_color,
 };
-use super::status::{exit_badge, node_named};
+use super::status::{exit_badge, node_named, update_tab_agent_badges};
 use crate::layout::geometry::Rect;
 use crate::protocol::NodeInfo;
 use crate::vt::Color as VtColor;
@@ -241,6 +241,7 @@ fn draw_panes<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
 /// Bottom row: the command line while typing or confirming, else a live message, else the status bar.
 /// Sent only when it differs from the row already on screen.
 fn draw_status_row<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
+    update_tab_agent_badges(&mut app.layout.tabs, &app.sidebar.agents, &app.session);
     let mut row = Vec::new();
     status_row(app, &mut row)?;
     if app.canvas.status_changed(&row) {

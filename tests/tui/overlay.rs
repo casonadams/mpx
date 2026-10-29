@@ -738,11 +738,13 @@ fn session_snapshot_places_panes_in_their_window_and_marks_focus() {
             index: 0,
             name: "w0".to_string(),
             is_active: true,
+            ..Default::default()
         },
         WindowTab {
             index: 1,
             name: "w1".to_string(),
             is_active: false,
+            ..Default::default()
         },
     ];
     let session = session_from_snapshot("main".to_string(), &nodes, &tabs, Some("a"));
@@ -767,6 +769,7 @@ fn session_snapshot_prefers_foreground_program_and_keeps_exit_status() {
         index: 0,
         name: "w0".to_string(),
         is_active: true,
+        ..Default::default()
     }];
     let session = session_from_snapshot("main".to_string(), &[shell, editor], &tabs, None);
     let panes = &session.windows[0].panes;

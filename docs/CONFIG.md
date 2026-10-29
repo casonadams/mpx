@@ -40,7 +40,7 @@ dim_content_bg = true               # dim explicit app backgrounds (diffs, selec
 "g" = "launch-agent claude --split"
 
 [bind_root]             # keys without the prefix; "" unbinds
-"M-j" = "next-agent"
+"F12" = "palette"
 "r" = "command-prompt -I 'rename-window '"
 
 [[harness]]             # extra or overriding agent harnesses (see AGENT-MANAGER.md)
@@ -97,11 +97,10 @@ Map custom prefix key shortcuts to `mpx` command lines. Format is `"<key>" = "<c
 "r"   = "command-prompt -I 'rename-window '"
 ```
 
-`[bind_root]` binds keys pressed without the prefix (tmux `bind -n`); they never reach the program in the pane. By default `C-Space` opens the unified Command Palette (`palette`), and `M-j` and `M-k` step through agents (`next-agent`, `prev-agent`); on macOS `∆` and `˚`, what Option-j and Option-k type when the terminal's Option key is not set to act as Alt, do too. In either table an empty command line unbinds a key:
+`[bind_root]` binds keys pressed without the prefix (tmux `bind -n`); they never reach the program in the pane. By default `C-Space` opens the unified Command Palette (`palette`). Terminal Alt/Option combinations pass through unmodified to programs in the pane. In either table an empty command line unbinds a key:
 
 ```toml
 [bind_root]
-"M-j" = ""            # give Alt-j back to programs
 "M-n" = "next-agent"
 ```
 
@@ -136,7 +135,7 @@ All commands available in `[bind]` can also be run interactively from the comman
 | `next-attention` | none | none | Focus the background agent that has waited longest for user input. |
 | `choose-tree` | `tree` | none | Open interactive session / window / pane hierarchy tree. |
 | `palette` | `command-palette` | `[commands\|agents\|sessions\|help]` | Open unified tabbed command palette with instant fuzzy search. |
-| `sidebar` | none | none | Focus the agents rail, expanding it, or collapse it. |
+| `sidebar` | none | none | Open or close the vertical agents drawer overlay. |
 | `next-agent`, `prev-agent` | none | none | Show the next / previous agent's pane without focusing the rail. |
 | `list-keys` | `help` | none | Open searchable keybindings cheat sheet overlay. |
 | `copy-mode` | none | none | Enter Vi visual scrollback navigation and copy mode. |

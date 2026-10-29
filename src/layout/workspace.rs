@@ -4,11 +4,19 @@ use super::geometry::Rect;
 use super::tree::{Direction, Divider, LayoutNode, preset_tree};
 use crate::protocol::{LayoutPreset, Side};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct WindowTab {
     pub index: usize,
     pub name: String,
     pub is_active: bool,
+    #[serde(default)]
+    pub is_last: bool,
+    #[serde(default)]
+    pub has_activity: bool,
+    #[serde(default)]
+    pub has_bell: bool,
+    #[serde(default)]
+    pub agent_badge: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -28,6 +36,10 @@ pub struct Window {
     /// Preset most recently applied by `select-layout`, used to cycle.
     #[serde(default)]
     pub preset: Option<LayoutPreset>,
+    #[serde(default)]
+    pub has_activity: bool,
+    #[serde(default)]
+    pub has_bell: bool,
 }
 
 impl Window {
@@ -41,6 +53,8 @@ impl Window {
             focused: Some(root_node),
             last_focused: None,
             preset: None,
+            has_activity: false,
+            has_bell: false,
         }
     }
 
@@ -249,14 +263,22 @@ impl Workspace {
             focused,
             last_focused: None,
             preset: None,
+            has_activity: false,
+            has_bell: false,
         });
         self.windows.len() - 1
     }
 
     fn set_active(&mut self, idx: usize) {
-        if idx < self.windows.len() && idx != self.active_idx {
-            self.last_window = Some(self.active_idx);
-            self.active_idx = idx;
+        if idx < self.windows.len() {
+            if idx != self.active_idx {
+                self.last_window = Some(self.active_idx);
+                self.active_idx = idx;
+            }
+            if let Some(w) = self.windows.get_mut(idx) {
+                w.has_activity = false;
+                w.has_bell = false;
+            }
         }
     }
 
@@ -305,8 +327,42 @@ impl Workspace {
                 index: i,
                 name: w.name.clone(),
                 is_active: i == self.active_idx,
+                is_last: Some(i) == self.last_window,
+                has_activity: w.has_activity,
+                has_bell: w.has_bell,
+                agent_badge: None,
             })
             .collect()
+    }
+
+    fn mark_window_flag(
+        &mut self,
+        pane_name: &str,
+        flag: impl FnOnce(&mut Window) -> &mut bool,
+    ) -> bool {
+        let Some(w_idx) = self.window_of(pane_name) else {
+            return false;
+        };
+        if w_idx == self.active_idx {
+            return false;
+        }
+        let Some(w) = self.windows.get_mut(w_idx) else {
+            return false;
+        };
+        let target = flag(w);
+        if !*target {
+            *target = true;
+            return true;
+        }
+        false
+    }
+
+    pub fn mark_activity(&mut self, pane_name: &str) -> bool {
+        self.mark_window_flag(pane_name, |w| &mut w.has_activity)
+    }
+
+    pub fn mark_bell(&mut self, pane_name: &str) -> bool {
+        self.mark_window_flag(pane_name, |w| &mut w.has_bell)
     }
 
     pub fn active_window(&self) -> Option<&Window> {

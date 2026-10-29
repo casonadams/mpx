@@ -231,11 +231,13 @@ fn pane_view_takes_its_window_name_from_the_layout_tabs() {
             index: 0,
             name: "editor".into(),
             is_active: true,
+            ..Default::default()
         },
         WindowTab {
             index: 1,
             name: "logs".into(),
             is_active: false,
+            ..Default::default()
         },
     ];
     let view = pane_view("dev", 0, &node, &[], &tabs);

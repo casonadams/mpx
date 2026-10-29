@@ -254,7 +254,7 @@ session_id_args = ["--session", "{id}"]</code></pre>
             <tr><td><code>agent.idle_ms</code></td><td>integer</td><td><code>1500</code></td><td>Daemon</td><td>Inactivity quiet period in milliseconds before classifying an agent as idle.</td></tr>
             <tr><td><code>agent.notify</code></td><td>bool</td><td><code>true</code></td><td>TUI</td><td>Send OSC 9 desktop notification when an off-screen agent needs user input.</td></tr>
             <tr><td><code>bind</code></td><td>table</td><td><code>{}</code></td><td>TUI</td><td>Custom key bindings mapping tmux key notation to mpx command lines.</td></tr>
-            <tr><td><code>bind_root</code></td><td>table</td><td><code>{"C-Space" = "palette", "M-j" = "next-agent", "M-k" = "prev-agent"}</code></td><td>TUI</td><td>Bindings for keys pressed without the prefix; an empty command unbinds.</td></tr>
+            <tr><td><code>bind_root</code></td><td>table</td><td><code>{"C-Space" = "palette"}</code></td><td>TUI</td><td>Bindings for keys pressed without the prefix; an empty command unbinds.</td></tr>
             <tr><td><code>harness</code></td><td>array of tables</td><td><code>[]</code></td><td>Daemon</td><td>Custom agent harness definitions (repeat <code>[[harness]]</code> for multiple agents).</td></tr>
           </tbody>
         </table>
@@ -288,7 +288,7 @@ session_id_args = ["--session", "{id}"]</code></pre>
             <tr><td><code>next-attention</code></td><td>none</td><td>none</td><td>Jump to agent waiting longest for input.</td></tr>
             <tr><td><code>choose-tree</code></td><td><code>tree</code></td><td>none</td><td>Open session/window/pane tree navigation.</td></tr>
             <tr><td><code>palette</code></td><td><code>command-palette</code></td><td><code>[commands|agents|sessions|help]</code></td><td>Open unified tabbed command palette with instant fuzzy search.</td></tr>
-            <tr><td><code>sidebar</code></td><td>none</td><td>none</td><td>Focus the agents rail, expanding it, or collapse it.</td></tr>
+            <tr><td><code>sidebar</code></td><td>none</td><td>none</td><td>Open or close the vertical agents drawer overlay.</td></tr>
             <tr><td><code>next-agent</code>, <code>prev-agent</code></td><td>none</td><td>none</td><td>Show the next / previous agent's pane without focusing the rail.</td></tr>
             <tr><td><code>list-keys</code></td><td><code>help</code></td><td>none</td><td>Open searchable keybindings cheat sheet.</td></tr>
             <tr><td><code>copy-mode</code></td><td>none</td><td>none</td><td>Enter Vi copy / visual scrollback mode.</td></tr>

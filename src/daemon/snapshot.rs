@@ -30,6 +30,7 @@ pub fn build_snapshot(
     let live = |name: &str| panes.iter().find(|p| p.name == name && p.running);
     let mut windows = Vec::new();
     let mut active_window = None;
+    let mut last_window = None;
     for (idx, win) in ws.windows.iter().enumerate() {
         let mut root = win.root.clone();
         for leaf in win.leaves() {
@@ -48,6 +49,9 @@ pub fn build_snapshot(
         if idx == ws.active_idx {
             active_window = Some(windows.len());
         }
+        if Some(idx) == ws.last_window {
+            last_window = Some(windows.len());
+        }
         windows.push(WindowSnapshot {
             name: win.name.clone(),
             renamed: win.renamed,
@@ -62,6 +66,7 @@ pub fn build_snapshot(
         saved_ms,
         clean_shutdown,
         active_window: active_window.unwrap_or(0),
+        last_window,
         windows,
     }
 }

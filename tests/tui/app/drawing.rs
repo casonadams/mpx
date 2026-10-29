@@ -335,7 +335,7 @@ async fn a_keypress_lets_only_a_few_frames_skip_the_budget() {
 }
 
 #[tokio::test]
-async fn beside_the_agents_rail_a_scroll_sends_only_the_new_line_through_margins() {
+async fn full_width_pane_scroll_sends_only_the_new_line() {
     let mut h = start().await;
     h.app.canvas.set_lr_margins(true);
     let working = mpx::client::AgentReportArgs {
@@ -346,7 +346,7 @@ async fn beside_the_agents_rail_a_scroll_sends_only_the_new_line_through_margins
     h.probe.agent_report(MAIN, working).await.expect("report agent");
     h.app.refresh_sidebar().await;
     h.frame().await;
-    assert!(h.rect_of(MAIN).x > 0, "the pane sits right of the rail");
+    assert_eq!(h.rect_of(MAIN).x, 0, "panes keep 100% width with zero stolen columns");
     for i in 0..40 {
         emit_line(&mut h, &format!("filler line {i:02} with some width to it")).await;
     }
@@ -355,7 +355,7 @@ async fn beside_the_agents_rail_a_scroll_sends_only_the_new_line_through_margins
     let scrolled = frame_bytes(&mut h).await;
     assert!(
         scrolled * 5 < repaint,
-        "a one-line scroll beside the rail sent {scrolled} bytes; a full frame is {repaint}"
+        "a one-line scroll sent {scrolled} bytes; a full frame is {repaint}"
     );
 }
 

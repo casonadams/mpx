@@ -2,8 +2,8 @@ use mpx::layout::{Divider, Rect, WindowTab};
 use mpx::tui::canvas::Canvas;
 use mpx::config::BorderStyle;
 use mpx::tui::render::{
-    Compositor, DividerStyle, RenderPaneContext, SelectionRange, StatusBar, dim_color, hud_rect,
-    parse_color, status_left, status_right, vt_to_crossterm,
+    Compositor, DividerStyle, RenderPaneContext, SelectionRange, StatusBar, dim_color, format_tab,
+    hud_rect, parse_color, status_left, status_right, vt_to_crossterm,
 };
 use mpx::vt::{CellStyle, Color as VtColor};
 use mpx::vt::grid::Grid;
@@ -144,11 +144,14 @@ fn status_text_prefers_window_tabs_and_agent_badge() {
             index: 0,
             name: "claude".into(),
             is_active: false,
+            is_last: true,
+            ..Default::default()
         },
         WindowTab {
             index: 1,
             name: "cargo".into(),
             is_active: true,
+            ..Default::default()
         },
     ];
     let bar = StatusBar {
@@ -166,6 +169,114 @@ fn status_text_prefers_window_tabs_and_agent_badge() {
     };
     assert_eq!(status_left(&bar), "[dev] 0:claude- 1:cargo* ");
     assert_eq!(status_right(&bar, "12:00"), " \u{25c6}2 12:00");
+}
+
+#[test]
+fn format_tab_renders_agent_badges_and_tmux_flags() {
+    let active = WindowTab {
+        index: 0,
+        name: "dev".into(),
+        is_active: true,
+        ..Default::default()
+    };
+    assert_eq!(format_tab(&active, false), "0:dev* ");
+    assert_eq!(format_tab(&active, true), "0:dev*Z ");
+
+    let waiting_agent = WindowTab {
+        index: 1,
+        name: "backend".into(),
+        is_active: false,
+        is_last: true,
+        agent_badge: Some("◆".into()),
+        ..Default::default()
+    };
+    assert_eq!(format_tab(&waiting_agent, false), "1:backend◆- ");
+
+    let multi_waiting = WindowTab {
+        index: 2,
+        name: "agents".into(),
+        is_active: false,
+        agent_badge: Some("◆2".into()),
+        ..Default::default()
+    };
+    assert_eq!(format_tab(&multi_waiting, false), "2:agents◆2 ");
+
+    let working_with_activity = WindowTab {
+        index: 3,
+        name: "build".into(),
+        is_active: false,
+        has_activity: true,
+        agent_badge: Some("●".into()),
+        ..Default::default()
+    };
+    assert_eq!(format_tab(&working_with_activity, false), "3:build●# ");
+
+    let bell_window = WindowTab {
+        index: 4,
+        name: "alerts".into(),
+        is_active: false,
+        has_bell: true,
+        ..Default::default()
+    };
+    assert_eq!(format_tab(&bell_window, false), "4:alerts! ");
+}
+
+#[test]
+fn update_tab_agent_badges_aggregates_agent_states_per_window() {
+    use mpx::agents::LiveAgent;
+    use mpx::protocol::{AgentInfo, AgentState, NodeInfo};
+    use mpx::tui::status::update_tab_agent_badges;
+
+    let mut tabs = vec![
+        WindowTab {
+            index: 0,
+            name: "win0".into(),
+            is_active: true,
+            ..Default::default()
+        },
+        WindowTab {
+            index: 1,
+            name: "win1".into(),
+            is_active: false,
+            ..Default::default()
+        },
+        WindowTab {
+            index: 2,
+            name: "win2".into(),
+            is_active: false,
+            ..Default::default()
+        },
+    ];
+
+    let make_agent = |session: &str, window: usize, state: AgentState| {
+        let mut node = NodeInfo::new("agent".into(), true, "claude".into());
+        node.window = Some(window);
+        node.agent = Some(AgentInfo {
+            harness: "claude".into(),
+            state,
+            session_id: None,
+            detail: None,
+            since_ms: 0,
+            focus: Default::default(),
+        });
+        LiveAgent {
+            session: session.into(),
+            endpoint: String::new(),
+            node,
+        }
+    };
+
+    let agents = vec![
+        make_agent("main", 0, AgentState::Working),
+        make_agent("main", 1, AgentState::NeedsInput),
+        make_agent("main", 1, AgentState::NeedsInput),
+        make_agent("other", 2, AgentState::NeedsInput),
+    ];
+
+    update_tab_agent_badges(&mut tabs, &agents, "main");
+    assert_eq!(tabs[0].agent_badge.as_deref(), Some("●"));
+    assert_eq!(tabs[1].agent_badge.as_deref(), Some("◆2"));
+    assert_eq!(tabs[2].agent_badge, None);
 }
 
 #[test]

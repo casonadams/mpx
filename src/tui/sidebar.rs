@@ -19,8 +19,6 @@ use crate::vt::{Cell, CellStyle, Color};
 pub const SIDEBAR_COLS: u16 = 34;
 /// Columns the collapsed rail takes beside the panes: a dot and a border.
 pub const RAIL_COLS: u16 = 2;
-/// Narrowest pane area the rail leaves; on smaller screens it stays hidden.
-const MIN_PANE_COLS: u16 = 40;
 /// How long the highlight rests on another session's agent before the view switches there.
 pub const SWITCH_DELAY: Duration = Duration::from_millis(150);
 const AGE_COLS: usize = 4;
@@ -30,14 +28,9 @@ const HINTS: &str = "j/k move  ⏎ open  esc close";
 const DIM: Option<Color> = Some(Color::BrightBlack);
 const ACCENT: Option<Color> = Some(Color::Cyan);
 
-/// Columns the rail takes beside the panes on a screen `screen_w` wide: none without agents or
-/// room.
-pub fn rail_width(has_agents: bool, screen_w: u16) -> u16 {
-    if has_agents && screen_w >= RAIL_COLS + MIN_PANE_COLS {
-        RAIL_COLS
-    } else {
-        0
-    }
+/// Columns the collapsed rail takes beside the panes: 0 (zero stolen columns).
+pub fn rail_width(_has_agents: bool, _screen_w: u16) -> u16 {
+    0
 }
 
 /// The collapsed rail: one state dot per agent, sessions apart by a blank row, the agent shown in
@@ -417,7 +410,7 @@ pub fn render(view: &View, top: usize, (width, height): (u16, u16), border: Colo
 }
 
 impl App {
-    /// Focuses the rail, expanding it; `prefix e` again collapses it.
+    /// Focuses the vertical drawer, expanding it; `prefix .` again collapses it.
     pub async fn toggle_sidebar(&mut self) -> Flow {
         if matches!(self.mode, Mode::Sidebar) || self.sidebar.resume {
             self.mode = Mode::Normal;
@@ -427,8 +420,8 @@ impl App {
         if self.sidebar.agents.is_empty() {
             return self.say("no agents running");
         }
-        if self.sidebar_width() == 0 {
-            return self.say("screen too narrow for the agents rail");
+        if self.viewport.0 < SIDEBAR_COLS {
+            return self.say("screen too narrow for the agents drawer");
         }
         self.focus_sidebar();
         Flow::Continue
@@ -554,13 +547,13 @@ impl App {
 
     /// Columns the rail takes beside the panes on the current screen.
     pub fn sidebar_width(&self) -> u16 {
-        rail_width(!self.sidebar.agents.is_empty(), self.viewport.0)
+        0
     }
 
     /// Columns the expanded list covers, or 0 while it is collapsed.
     pub fn expanded_width(&self) -> u16 {
         let focused = matches!(self.mode, Mode::Sidebar) || self.sidebar.resume;
-        if self.sidebar_width() == 0 || !focused {
+        if !focused || self.viewport.0 < SIDEBAR_COLS {
             return 0;
         }
         SIDEBAR_COLS.min(self.viewport.0)
