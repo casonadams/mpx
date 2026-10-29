@@ -100,6 +100,39 @@ async fn swap_pane_exchanges_neighbours_in_the_layout() {
 }
 
 #[tokio::test]
+async fn mark_pane_and_swap_with_prefix_bindings() {
+    let mut h = start().await;
+    h.frame().await;
+    h.prefixed_char('%').await;
+    h.frame().await;
+    assert_eq!(h.layout_panes().await, [MAIN, "pane-2"]);
+    // pane-2 is active. Mark it with prefix + m.
+    h.prefixed_char('m').await;
+    h.frame().await;
+    assert!(h.app.layout.tabs[0].has_marked);
+    assert_eq!(h.app.layout.tabs[0].marked_pane.as_deref(), Some("pane-2"));
+    assert!(h.app.marked_rect.is_some());
+
+    // Move focus to MAIN (left pane)
+    h.prefixed_char('h').await;
+    h.frame().await;
+    assert_eq!(h.app.active_pane, MAIN);
+
+    // Run swap-pane from prompt to swap active (MAIN) with marked (pane-2)
+    h.prefixed_char(':').await;
+    h.type_str("swap-pane").await;
+    h.key(KeyCode::Enter).await;
+    h.frame().await;
+    assert_eq!(h.layout_panes().await, ["pane-2", MAIN]);
+
+    // Clear mark with prefix + M
+    h.prefixed_char('M').await;
+    h.frame().await;
+    assert!(!h.app.layout.tabs[0].has_marked);
+    assert!(h.app.marked_rect.is_none());
+}
+
+#[tokio::test]
 async fn break_pane_moves_the_pane_into_its_own_window() {
     let mut h = start().await;
     h.frame().await;

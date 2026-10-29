@@ -7,7 +7,7 @@ use std::io::{self, Write};
 
 use super::canvas::Canvas;
 use super::status::agent_badge;
-use crate::config::BorderStyle;
+use crate::config::{BorderStyle, InactiveColorMode};
 use crate::layout::{Divider, WindowTab, geometry::Rect};
 use crate::vt::grid::Grid;
 use crate::vt::{Cell, CellStyle, Color as VtColor};
@@ -73,6 +73,39 @@ pub struct RenderPaneContext<'a> {
     pub dimmed: bool,
     pub dim_factor: f32,
     pub dim_content_bg: bool,
+    pub active_fg: Option<VtColor>,
+    pub active_bg: Option<VtColor>,
+    pub inactive_fg: Option<VtColor>,
+    pub inactive_bg: Option<VtColor>,
+    pub color_mode: InactiveColorMode,
+}
+
+impl<'a> RenderPaneContext<'a> {
+    pub fn from_config(
+        style: &crate::config::StyleConfig,
+        rect: Rect,
+        grid: &'a Grid,
+        selection: Option<&'a SelectionRange>,
+        scroll_offset: usize,
+        badge: Option<&'a str>,
+        dimmed: bool,
+    ) -> Self {
+        Self {
+            rect,
+            grid,
+            selection,
+            scroll_offset,
+            badge,
+            dimmed,
+            dim_factor: style.inactive.factor.unwrap_or(style.dim_factor),
+            dim_content_bg: style.inactive.dim_content_bg.unwrap_or(style.dim_content_bg),
+            active_fg: parse_color(&style.active.fg),
+            active_bg: parse_color(&style.active.bg),
+            inactive_fg: parse_color(&style.inactive.fg),
+            inactive_bg: parse_color(&style.inactive.bg),
+            color_mode: style.inactive.color_mode,
+        }
+    }
 }
 
 /// Inputs for the bottom status row.
@@ -88,12 +121,14 @@ pub struct StatusBar<'a> {
     pub fg: Option<VtColor>,
     pub zoomed: bool,
     pub copy_pane: Option<&'a str>,
+    pub marked_pane: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DividerStyle {
     pub active_color: VtColor,
     pub inactive_color: VtColor,
+    pub marked_color: VtColor,
     pub border_style: BorderStyle,
 }
 
@@ -102,18 +137,33 @@ impl Default for DividerStyle {
         Self {
             active_color: VtColor::BrightGreen,
             inactive_color: VtColor::BrightBlack,
+            marked_color: VtColor::BrightMagenta,
             border_style: BorderStyle::Single,
         }
     }
 }
 
-fn divider_color(x: u16, y: u16, rect: Option<Rect>, style: DividerStyle) -> VtColor {
-    if let Some(r) = rect {
+fn divider_color(
+    x: u16,
+    y: u16,
+    active: Option<Rect>,
+    marked: Option<Rect>,
+    style: DividerStyle,
+) -> VtColor {
+    let touches = |r: Rect| {
         let is_left = x + 1 == r.x && y + 1 >= r.y && y <= r.y + r.height;
         let is_right = x == r.x + r.width && y + 1 >= r.y && y <= r.y + r.height;
         let is_top = y + 1 == r.y && x + 1 >= r.x && x <= r.x + r.width;
         let is_bottom = y == r.y + r.height && x + 1 >= r.x && x <= r.x + r.width;
-        if is_left || is_right || is_top || is_bottom {
+        is_left || is_right || is_top || is_bottom
+    };
+    if let Some(m) = marked {
+        if touches(m) {
+            return style.marked_color;
+        }
+    }
+    if let Some(a) = active {
+        if touches(a) {
             return style.active_color;
         }
     }
@@ -125,12 +175,13 @@ fn divider_cell(
     (x, y): (u16, u16),
     all: &[Divider],
     active: Option<Rect>,
+    marked: Option<Rect>,
     style: DividerStyle,
 ) -> Cell {
     Cell {
         c: get_divider_char(div, x, y, all, style.border_style),
         style: CellStyle {
-            fg: Some(divider_color(x, y, active, style)),
+            fg: Some(divider_color(x, y, active, marked, style)),
             ..CellStyle::default()
         },
     }
@@ -276,11 +327,12 @@ impl Compositor {
         w: &mut W,
         dividers: &[Divider],
         active_rect: Option<Rect>,
+        marked_rect: Option<Rect>,
         style: DividerStyle,
     ) -> io::Result<()> {
         for div in dividers {
             for pos in divider_cells(div) {
-                let cell = divider_cell(div, pos, dividers, active_rect, style);
+                let cell = divider_cell(div, pos, dividers, active_rect, marked_rect, style);
                 canvas.put(w, pos.0, pos.1, cell)?;
             }
         }
@@ -415,6 +467,9 @@ pub fn format_tab(tab: &WindowTab, zoomed: bool) -> String {
             flags.push('#');
         }
     }
+    if tab.has_marked {
+        flags.push('M');
+    }
     let badge = tab.agent_badge.as_deref().unwrap_or("");
     format!("{}:{}{}{} ", tab.index, tab.name, badge, flags)
 }
@@ -424,11 +479,14 @@ pub fn status_left(bar: &StatusBar<'_>) -> String {
     let mut left = format!("[{}] ", bar.session);
     if bar.tabs.is_empty() {
         for (i, (name, _, is_focused)) in bar.panes.iter().enumerate() {
-            let flag = match (*is_focused, bar.zoomed) {
-                (true, true) => "*Z",
-                (true, false) => "*",
-                (false, _) => "-",
+            let mut flag = match (*is_focused, bar.zoomed) {
+                (true, true) => "*Z".to_string(),
+                (true, false) => "*".to_string(),
+                (false, _) => "-".to_string(),
             };
+            if bar.marked_pane.as_deref() == Some(name) {
+                flag.push('M');
+            }
             left.push_str(&format!("{}:{}{} ", i, name, flag));
         }
     } else {
@@ -478,6 +536,7 @@ const HUD_ITEMS: &[(&str, &str)] = &[
     ("k", "focus up"),
     ("l", "focus right"),
     ("o", "next pane"),
+    ("m", "mark pane"),
     ("z", "toggle zoom"),
     ("[", "copy mode"),
     ("x", "kill pane"),
@@ -572,25 +631,106 @@ fn cell_content(
     if ctx.selection.is_some_and(|s| s.contains_abs(col, abs_row)) {
         highlighted(cell.c)
     } else if ctx.dimmed {
-        let style = &cell.style;
-        let dimmed_fg = Some(dim_color(style.fg, ctx.dim_factor));
-        let dimmed_bg = if ctx.dim_content_bg {
-            style.bg.map(|bg| dim_color(Some(bg), ctx.dim_factor))
-        } else {
-            style.bg
-        };
+        let (fg, faint) = apply_inactive_fg(
+            cell.style.fg,
+            ctx.color_mode,
+            ctx.inactive_fg,
+            ctx.inactive_bg,
+            ctx.dim_factor,
+            cell.style.faint,
+        );
+        let bg = apply_inactive_bg(
+            cell.style.bg,
+            ctx.color_mode,
+            ctx.inactive_bg,
+            ctx.dim_factor,
+            ctx.dim_content_bg,
+        );
         Cell {
             c: cell.c,
             style: CellStyle {
-                fg: dimmed_fg,
-                bg: dimmed_bg,
+                fg,
+                bg,
                 bold: false,
-                faint: style.faint || palette_normal(style.fg),
+                faint,
                 ..cell.style
             },
         }
     } else {
+        apply_active_style(cell, ctx.active_fg, ctx.active_bg)
+    }
+}
+
+pub fn apply_active_style(
+    cell: Cell,
+    active_fg: Option<VtColor>,
+    active_bg: Option<VtColor>,
+) -> Cell {
+    let fg = cell.style.fg.or(active_fg);
+    let bg = cell.style.bg.or(active_bg);
+    if fg == cell.style.fg && bg == cell.style.bg {
         cell
+    } else {
+        Cell {
+            c: cell.c,
+            style: CellStyle {
+                fg,
+                bg,
+                ..cell.style
+            },
+        }
+    }
+}
+
+pub fn apply_inactive_fg(
+    orig: Option<VtColor>,
+    mode: InactiveColorMode,
+    inactive_fg: Option<VtColor>,
+    inactive_bg: Option<VtColor>,
+    factor: f32,
+    orig_faint: bool,
+) -> (Option<VtColor>, bool) {
+    match orig {
+        None => {
+            let fg = inactive_fg.unwrap_or_else(|| dim_color(None, factor));
+            (Some(fg), orig_faint)
+        }
+        Some(c) => match mode {
+            InactiveColorMode::None => (Some(c), orig_faint),
+            InactiveColorMode::Dim => (
+                Some(dim_color(Some(c), factor)),
+                orig_faint || palette_normal(Some(c)),
+            ),
+            InactiveColorMode::Desaturate => (Some(desaturate_color(c, factor)), orig_faint),
+            InactiveColorMode::Tint => (
+                Some(tint_color(c, inactive_fg.or(inactive_bg), factor)),
+                orig_faint,
+            ),
+        },
+    }
+}
+
+pub fn apply_inactive_bg(
+    orig: Option<VtColor>,
+    mode: InactiveColorMode,
+    inactive_bg: Option<VtColor>,
+    factor: f32,
+    dim_content_bg: bool,
+) -> Option<VtColor> {
+    match orig {
+        None => inactive_bg,
+        Some(c) => {
+            if dim_content_bg {
+                match mode {
+                    InactiveColorMode::None => Some(c),
+                    InactiveColorMode::Dim => Some(dim_color(Some(c), factor)),
+                    InactiveColorMode::Desaturate => Some(desaturate_color(c, factor)),
+                    InactiveColorMode::Tint => Some(tint_color(c, inactive_bg, factor)),
+                }
+            } else {
+                Some(c)
+            }
+        }
     }
 }
 
@@ -624,11 +764,18 @@ fn palette_normal(fg: Option<VtColor>) -> bool {
     )
 }
 
-/// Foreground of an unfocused pane: default and white turn grey, bright colors their normal shade.
+/// Foreground of an unfocused pane: default and white scale by factor, bright colors their normal shade.
 pub fn dim_color(fg: Option<VtColor>, factor: f32) -> VtColor {
     let scale = (1.0 - factor).clamp(0.0, 1.0);
     match fg {
-        None | Some(VtColor::White | VtColor::BrightWhite) => VtColor::BrightBlack,
+        None | Some(VtColor::BrightWhite) => {
+            let val = (255.0 * scale).round() as u8;
+            VtColor::Rgb(val, val, val)
+        }
+        Some(VtColor::White) => {
+            let val = (230.0 * scale).round() as u8;
+            VtColor::Rgb(val, val, val)
+        }
         Some(VtColor::Rgb(r, g, b)) => VtColor::Rgb(
             (r as f32 * scale).round() as u8,
             (g as f32 * scale).round() as u8,
@@ -661,6 +808,82 @@ pub fn dim_color(fg: Option<VtColor>, factor: f32) -> VtColor {
         }
         Some(other) => other,
     }
+}
+
+pub fn color_to_rgb(color: VtColor) -> (u8, u8, u8) {
+    match color {
+        VtColor::Black => (0, 0, 0),
+        VtColor::Red => (205, 49, 49),
+        VtColor::Green => (13, 188, 121),
+        VtColor::Yellow => (229, 229, 16),
+        VtColor::Blue => (36, 114, 200),
+        VtColor::Magenta => (188, 63, 188),
+        VtColor::Cyan => (17, 168, 205),
+        VtColor::White => (229, 229, 229),
+        VtColor::BrightBlack => (102, 102, 102),
+        VtColor::BrightRed => (241, 76, 76),
+        VtColor::BrightGreen => (35, 209, 139),
+        VtColor::BrightYellow => (245, 245, 67),
+        VtColor::BrightBlue => (59, 142, 234),
+        VtColor::BrightMagenta => (214, 112, 214),
+        VtColor::BrightCyan => (41, 184, 219),
+        VtColor::BrightWhite => (255, 255, 255),
+        VtColor::Indexed(i) => indexed_to_rgb(i),
+        VtColor::Rgb(r, g, b) => (r, g, b),
+    }
+}
+
+fn indexed_to_rgb(i: u8) -> (u8, u8, u8) {
+    if (16..=231).contains(&i) {
+        let idx = i - 16;
+        let b = ((idx % 6) * 51) as u8;
+        let g = (((idx / 6) % 6) * 51) as u8;
+        let r = ((idx / 36) * 51) as u8;
+        (r, g, b)
+    } else if (232..=255).contains(&i) {
+        let gray = (8 + (i - 232) as u16 * 10).min(255) as u8;
+        (gray, gray, gray)
+    } else {
+        match i {
+            0 => (0, 0, 0),
+            1 => (205, 49, 49),
+            2 => (13, 188, 121),
+            3 => (229, 229, 16),
+            4 => (36, 114, 200),
+            5 => (188, 63, 188),
+            6 => (17, 168, 205),
+            7 => (229, 229, 229),
+            8 => (102, 102, 102),
+            9 => (241, 76, 76),
+            10 => (35, 209, 139),
+            11 => (245, 245, 67),
+            12 => (59, 142, 234),
+            13 => (214, 112, 214),
+            14 => (41, 184, 219),
+            _ => (255, 255, 255),
+        }
+    }
+}
+
+fn lerp_rgb(from: (u8, u8, u8), to: (f32, f32, f32), factor: f32) -> VtColor {
+    let factor = factor.clamp(0.0, 1.0);
+    let (r, g, b) = from;
+    let nr = (r as f32 + factor * (to.0 - r as f32)).round().clamp(0.0, 255.0) as u8;
+    let ng = (g as f32 + factor * (to.1 - g as f32)).round().clamp(0.0, 255.0) as u8;
+    let nb = (b as f32 + factor * (to.2 - b as f32)).round().clamp(0.0, 255.0) as u8;
+    VtColor::Rgb(nr, ng, nb)
+}
+
+pub fn desaturate_color(color: VtColor, factor: f32) -> VtColor {
+    let rgb = color_to_rgb(color);
+    let lum = 0.299 * (rgb.0 as f32) + 0.587 * (rgb.1 as f32) + 0.114 * (rgb.2 as f32);
+    lerp_rgb(rgb, (lum, lum, lum), factor)
+}
+
+pub fn tint_color(color: VtColor, target: Option<VtColor>, factor: f32) -> VtColor {
+    let rgb = color_to_rgb(color);
+    let (tr, tg, tb) = target.map(color_to_rgb).unwrap_or((0, 0, 0));
+    lerp_rgb(rgb, (tr as f32, tg as f32, tb as f32), factor)
 }
 
 pub fn parse_color(s: &str) -> Option<VtColor> {

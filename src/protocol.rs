@@ -81,6 +81,9 @@ pub struct NodeInfo {
     /// Size (cols, rows) of a terminal pane's PTY (absent from daemons that predate it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size: Option<(u16, u16)>,
+    /// Whether this pane is the marked pane in the session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub marked: Option<bool>,
 }
 
 impl NodeInfo {
@@ -103,6 +106,7 @@ impl NodeInfo {
             agent: None,
             modes: None,
             size: None,
+            marked: None,
         }
     }
 
@@ -370,8 +374,18 @@ pub enum Request {
         height: u16,
     },
     SwapPane {
-        a: String,
-        b: String,
+        #[serde(default)]
+        a: Option<String>,
+        #[serde(default)]
+        b: Option<String>,
+    },
+    /// Mark or unmark a pane. If `name` is None, targets the currently active pane.
+    /// If `clear` is true (-M), clears the marked pane unconditionally.
+    MarkPane {
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        clear: bool,
     },
     BreakPane {
         name: String,

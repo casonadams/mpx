@@ -16,6 +16,7 @@ prefix = "C-b"          # tmux notation: C-a, C-Space, M-b ...
 remain_on_exit = false  # keep panes on screen after their process exits
 history_limit = 64      # exited, removed panes whose logs stay readable
 tmux_compat = false     # export TMUX/TMUX_PANE + the tmux shim in every pane
+allow_passthrough = true # allow terminal passthrough sequences (DCS tmux, OSC 4/10/11/12/52) from active pane
 restore = true          # after a crash or reboot, recreate the last layout and resume agents
 persist_pipes = true    # keep pipe messages and consumer cursors across daemon restarts
 which_key_delay_ms = 300  # wait after the prefix key before showing the shortcut popup (0 = at once)
@@ -28,12 +29,26 @@ mcp = true              # give agents mpx launches the mpx MCP tools (mpx_peers,
 [style]
 border_active = "bright-green"      # active border color or hex ("#3fb950")
 border_inactive = "bright-black"    # inactive border color or hex ("#263345")
+border_marked = "bright-magenta"    # marked border color or hex ("#bc8cff")
 border_style = "single"             # "single", "rounded", "double", "ascii"
 status_bg = "dark-green"            # status line background or hex ("#121820")
 status_fg = "black"                 # status line foreground or hex ("#c5d1de")
 dim_inactive = true                 # dim inactive panes when multiple are visible
 dim_factor = 0.20                   # dim factor (0.20 = 20% reduction)
 dim_content_bg = true               # dim explicit app backgrounds (diffs, selections)
+
+# Optional template for active (focused) pane
+[style.active]
+fg = ""                             # default text color (empty for terminal default)
+bg = ""                             # default background color
+
+# Optional template for inactive (unfocused) panes
+[style.inactive]
+fg = "#4c566a"                      # default text color in inactive panes (e.g. muted slate/grey)
+bg = "#242933"                      # optional surface background tint for inactive panes
+color_mode = "desaturate"           # syntax color mode: "dim", "desaturate", "tint", or "none"
+factor = 0.25                       # color transformation intensity (0.0 to 1.0)
+dim_content_bg = true               # transform explicit app background colors in inactive panes
 
 [bind]                  # prefix key -> command line (see KEYBINDINGS.md)
 "M-h" = "select-pane -L"
@@ -61,6 +76,7 @@ session_id_args = []
 | `remain_on_exit` | bool | `false` | Daemon | If `true`, pane stays open on screen after its child process exits until explicitly closed. |
 | `history_limit` | integer | `64` | Daemon | Number of exited and removed panes whose output buffers remain readable via CLI/MCP. |
 | `tmux_compat` | bool | `false` | Daemon | Exports `TMUX` and `TMUX_PANE` environment variables and injects the `mpx` tmux compatibility shim. |
+| `allow_passthrough` | bool | `true` | TUI | Allow terminal passthrough sequences (DCS tmux passthrough, OSC 4/10/11/12/52) from the active pane to forward to the host terminal. |
 | `restore` | bool | `true` | Daemon | On startup, automatically restore the last saved session layout and resume registered agent harnesses. |
 | `persist_pipes` | bool | `true` | Daemon | Store virtual pipe message queues and consumer cursors on disk across daemon restarts. |
 | `which_key_delay_ms` | integer | `300` | TUI | Milliseconds to wait after pressing the prefix before displaying the which-key HUD popup (`0` displays immediately). |
@@ -71,12 +87,20 @@ session_id_args = []
 |---|---|---|---|---|
 | `border_active` | string | `"bright-green"` | TUI | Active pane border color. Supports standard ANSI names (`"bright-green"`, `"cyan"`) or hex (`"#3fb950"`). |
 | `border_inactive` | string | `"bright-black"` | TUI | Inactive pane border color. Supports ANSI names or hex (`"#263345"`). |
+| `border_marked` | string | `"bright-magenta"` | TUI | Marked pane border color. Supports ANSI names or hex (`"#bc8cff"`). |
 | `border_style` | string | `"single"` | TUI | Border style: `"single"` (─│┌┐), `"rounded"` (─│╭╮), `"double"` (═║╔╗), or `"ascii"` (-\|+). |
 | `status_bg` | string | `"dark-green"` | TUI | Status line background color name or hex (`"#121820"`). |
 | `status_fg` | string | `"black"` | TUI | Status line text foreground color name or hex (`"#c5d1de"`). |
-| `dim_inactive` | bool | `true` | TUI | When multiple panes are visible, subtly dim inactive panes to emphasize focus: default text turns grey, bright colors take their normal shade, normal colors are drawn faint (SGR 2, so your theme's shade is kept), and RGB and 256-color text is scaled by `dim_factor`. |
+| `dim_inactive` | bool | `true` | TUI | When multiple panes are visible, subtly dim inactive panes to emphasize focus: default text, white, bright colors, RGB, and 256-color text are scaled by `dim_factor`, while normal palette colors are drawn faint (SGR 2) to preserve your theme's palette. |
 | `dim_factor` | float | `0.20` | TUI | Dimming reduction factor between `0.0` and `1.0` (`0.20` = dim by 20%, keeping text legible). |
 | `dim_content_bg` | bool | `true` | TUI | When dimming inactive panes, also dim explicit application background colors (diffs, selections, statuslines) while preserving transparent terminal canvas. |
+| `active.fg` | string | `""` | TUI | Default foreground text color for the active pane (ANSI name or hex `#rrggbb`). Empty inherits outer terminal default. |
+| `active.bg` | string | `""` | TUI | Default background color for the active pane. Empty leaves background transparent. |
+| `inactive.fg` | string | `""` | TUI | Default foreground text color for inactive panes (e.g. `"#4c566a"`, `"bright-black"`). Empty uses dimmed default text. |
+| `inactive.bg` | string | `""` | TUI | Default background color for inactive panes (e.g. `"#242933"` surface tint). Empty leaves background transparent. |
+| `inactive.color_mode` | string | `"dim"` | TUI | Transformation for syntax-highlighted / colored text in inactive panes: `"dim"` (scale RGB & faint ANSI), `"desaturate"` (pull saturation toward grayscale), `"tint"` (blend toward inactive fg/bg), or `"none"` (leave colors untouched). |
+| `inactive.factor` | float | `None` | TUI | Inactive color transformation intensity (0.0 to 1.0). If omitted, falls back to `style.dim_factor`. |
+| `inactive.dim_content_bg` | bool | `None` | TUI | Whether to transform explicit application backgrounds in inactive panes. If omitted, falls back to `style.dim_content_bg`. |
 
 ### Agent Settings (`[agent]`)
 
@@ -116,9 +140,9 @@ All commands available in `[bind]` can also be run interactively from the comman
 | Command | Aliases | Arguments & Flags | Description |
 |---|---|---|---|
 | `split-window` | `splitw`, `split`, `vsplit` | `[-h|-v] [-d] [-c <dir>] [-- <cmd...>]` | Split active pane vertically (`-h` / columns) or horizontally (`-v` / rows). `-d` leaves focus on current pane. |
-| `select-pane` | `selectp` | `[-L|-R|-U|-D] [-t <pane>]` | Directional focus movement (Left, Right, Up, Down) or jump to target pane ID/name. |
+| `select-pane` | `selectp` | `[-L|-R|-U|-D] [-m|-M] [-t <pane>]` | Directional focus movement (Left, Right, Up, Down), mark pane (`-m`), clear mark (`-M`), or jump to target pane ID/name. |
 | `resize-pane` | `resizep` | `[-L|-R|-U|-D] [-x <w>] [-y <h>] [-Z]` | Resize active pane boundary in direction or set absolute size. `-Z` toggles zoom. |
-| `swap-pane` | `swapp` | `[-U|-D] [-s <pane>] [-t <pane>]` | Swap active pane with previous (`-U`) or next (`-D`) neighbor. |
+| `swap-pane` | `swapp` | `[-U|-D] [-s <pane>] [-t <pane>]` | Swap active pane with marked pane (default), or previous (`-U`) / next (`-D`) neighbor, or explicit panes. |
 | `break-pane` | `breakp` | `[-d]` | Break active pane out into its own window tab. |
 | `kill-pane` | `killp`, `close`, `q` | `[-t <pane>]` | Kill pane process and remove split (confirms if active). |
 | `zoom` | `resize-pane -Z` | none | Toggle 100% full-screen zoom on the active pane. |

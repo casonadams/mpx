@@ -54,6 +54,19 @@ impl LayoutCache {
         self.dirty = false;
         !self.raw.is_empty()
     }
+
+    /// The name of the marked pane if it is in the active window.
+    pub fn marked_pane(&self) -> Option<&str> {
+        self.tabs
+            .iter()
+            .find(|t| t.is_active)
+            .and_then(|t| t.marked_pane.as_deref())
+    }
+
+    /// The name of the marked pane across all windows, if any is marked.
+    pub fn marked_pane_global(&self) -> Option<&str> {
+        self.tabs.iter().find_map(|t| t.marked_pane.as_deref())
+    }
 }
 
 impl Default for LayoutCache {
@@ -155,6 +168,7 @@ pub async fn load_pane(
         VtScreen::live(width as usize, height as usize)
     };
     screen.feed(logs.as_bytes());
+    let _ = screen.take_passthroughs();
     // The log holds only recent output: a mode the program set before it (focus events, cursor
     // keys) comes from the daemon's screen, which has seen everything. Asked after the log, so a
     // change in between also arrives on the stream past `next`.

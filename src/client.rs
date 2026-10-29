@@ -387,11 +387,27 @@ impl Client {
     }
 
     pub async fn swap_pane(&mut self, a: &str, b: &str) -> Result<(), String> {
+        self.swap_pane_targets(Some(a), Some(b)).await
+    }
+
+    pub async fn swap_pane_targets(
+        &mut self,
+        a: Option<&str>,
+        b: Option<&str>,
+    ) -> Result<(), String> {
         let req = Request::SwapPane {
-            a: a.to_string(),
-            b: b.to_string(),
+            a: a.map(str::to_string),
+            b: b.map(str::to_string),
         };
         self.call_ok("SwapPane", req).await
+    }
+
+    pub async fn mark_pane(&mut self, name: Option<&str>, clear: bool) -> Result<(), String> {
+        let req = Request::MarkPane {
+            name: name.map(str::to_string),
+            clear,
+        };
+        self.call_ok("MarkPane", req).await
     }
 
     pub async fn break_pane(&mut self, name: &str) -> Result<(), String> {

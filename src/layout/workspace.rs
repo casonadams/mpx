@@ -16,6 +16,10 @@ pub struct WindowTab {
     #[serde(default)]
     pub has_bell: bool,
     #[serde(default)]
+    pub has_marked: bool,
+    #[serde(default)]
+    pub marked_pane: Option<String>,
+    #[serde(default)]
     pub agent_badge: Option<String>,
 }
 
@@ -208,6 +212,8 @@ pub struct Workspace {
     pub next_window_id: usize,
     #[serde(default)]
     pub last_window: Option<usize>,
+    #[serde(default)]
+    pub marked_pane: Option<String>,
 }
 
 impl Workspace {
@@ -218,6 +224,7 @@ impl Workspace {
             active_idx: 0,
             next_window_id: 0,
             last_window: None,
+            marked_pane: None,
         }
     }
 
@@ -323,14 +330,20 @@ impl Workspace {
         self.windows
             .iter()
             .enumerate()
-            .map(|(i, w)| WindowTab {
-                index: i,
-                name: w.name.clone(),
-                is_active: i == self.active_idx,
-                is_last: Some(i) == self.last_window,
-                has_activity: w.has_activity,
-                has_bell: w.has_bell,
-                agent_badge: None,
+            .map(|(i, w)| {
+                let marked_pane = self.marked_pane.as_ref().filter(|m| w.contains(m)).cloned();
+                let has_marked = marked_pane.is_some();
+                WindowTab {
+                    index: i,
+                    name: w.name.clone(),
+                    is_active: i == self.active_idx,
+                    is_last: Some(i) == self.last_window,
+                    has_activity: w.has_activity,
+                    has_bell: w.has_bell,
+                    has_marked,
+                    marked_pane,
+                    agent_badge: None,
+                }
             })
             .collect()
     }
@@ -427,6 +440,9 @@ impl Workspace {
     }
 
     pub fn remove(&mut self, node_name: &str) {
+        if self.marked_pane.as_deref() == Some(node_name) {
+            self.marked_pane = None;
+        }
         for win in &mut self.windows {
             win.remove(node_name);
         }
@@ -496,11 +512,40 @@ impl Workspace {
             return None;
         }
         let panes = self.windows[idx].leaves();
+        if let Some(marked) = &self.marked_pane {
+            if panes.iter().any(|p| p == marked) {
+                self.marked_pane = None;
+            }
+        }
         self.windows.remove(idx);
         let shift = |i: usize| if i > idx { i - 1 } else { i };
         self.active_idx = shift(self.active_idx).min(self.windows.len().saturating_sub(1));
         self.last_window = self.last_window.filter(|&l| l != idx).map(shift);
         Some(panes)
+    }
+
+    /// Toggles the marked flag on `pane`: if already marked, clears the mark;
+    /// otherwise marks it. Returns `true` if the pane is now marked.
+    pub fn mark_pane(&mut self, pane: &str) -> bool {
+        if self.marked_pane.as_deref() == Some(pane) {
+            self.marked_pane = None;
+            false
+        } else if self.window_of(pane).is_some() {
+            self.marked_pane = Some(pane.to_string());
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Clears the marked pane unconditionally.
+    pub fn clear_mark_pane(&mut self) {
+        self.marked_pane = None;
+    }
+
+    /// The currently marked pane, if any.
+    pub fn marked_pane(&self) -> Option<&str> {
+        self.marked_pane.as_deref()
     }
 
     /// Exchanges two panes by name, wherever they live.

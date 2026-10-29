@@ -433,6 +433,20 @@ impl Shim {
     }
 
     async fn select_pane(&mut self, inv: &Invocation) -> Result<String, String> {
+        if inv.has('M') {
+            return self.client.mark_pane(None, true).await.map(|_| String::new());
+        }
+        if inv.has('m') {
+            let target = match inv.value('t') {
+                Some(t) => Some(self.resolve(Some(t)).await?.name),
+                None => None,
+            };
+            return self
+                .client
+                .mark_pane(target.as_deref(), false)
+                .await
+                .map(|_| String::new());
+        }
         if let Some(side) = side_of(inv) {
             let node = self.resolve(inv.value('t')).await?;
             let rects = self.layout().await?;
@@ -505,10 +519,48 @@ impl Shim {
     }
 
     async fn swap_pane(&mut self, inv: &Invocation) -> Result<String, String> {
-        let src = self.resolve(inv.value('s')).await?;
-        let dst = self.resolve(inv.value('t')).await?;
+        let (w, h) = terminal_view();
+        let (rects, _, tabs) = self.client.layout(w, h).await?;
+        if inv.has('U') || inv.has('D') {
+            let next = inv.has('D');
+            let target = self.resolve(inv.value('t')).await?;
+            let names: Vec<String> = rects.iter().map(|(n, ..)| n.clone()).collect();
+            let Some(idx) = names.iter().position(|n| n == &target.name) else {
+                return Err("pane not in current layout".to_string());
+            };
+            let other_idx = if next {
+                (idx + 1) % names.len()
+            } else if idx == 0 {
+                names.len().saturating_sub(1)
+            } else {
+                idx - 1
+            };
+            if idx == other_idx {
+                return Ok(String::new());
+            }
+            return self
+                .client
+                .swap_pane(&target.name, &names[other_idx])
+                .await
+                .map(|_| String::new());
+        }
+        let marked = tabs.iter().find_map(|t| t.marked_pane.as_deref());
+        let src = match inv.value('s') {
+            Some(s) => self.resolve(Some(s)).await?.name,
+            None => match marked {
+                Some(m) => m.to_string(),
+                None => self.resolve(None).await?.name,
+            },
+        };
+        let dst = match inv.value('t') {
+            Some(t) => self.resolve(Some(t)).await?.name,
+            None => self.resolve(None).await?.name,
+        };
+        if src == dst {
+            return Ok(String::new());
+        }
         self.client
-            .swap_pane(&src.name, &dst.name)
+            .swap_pane(&src, &dst)
             .await
             .map(|_| String::new())
     }
@@ -539,32 +591,36 @@ pub fn pane_view(
     rects: &[(String, Rect, bool)],
     tabs: &[WindowTab],
 ) -> PaneView {
-    let window = node.window.unwrap_or(0);
-    let (width, height, active) = rects
-        .iter()
-        .find(|(n, _, _)| n == &node.name)
-        .map(|(_, r, f)| (r.width, r.height, *f))
-        .unwrap_or((0, 0, false));
-    PaneView {
-        session: session.to_string(),
-        id: node.id,
-        index,
-        pid: node.pid,
-        title: node.title.clone().unwrap_or_default(),
-        command: node
-            .foreground
-            .clone()
-            .unwrap_or_else(|| node.command.clone()),
-        path: node.cwd.clone().unwrap_or_default(),
-        width,
-        height,
-        active,
-        dead: !node.is_running(),
-        window,
-        window_name: tabs
+        let window = node.window.unwrap_or(0);
+        let (width, height, active) = rects
             .iter()
-            .find(|t| t.index == window)
-            .map(|t| t.name.clone())
-            .unwrap_or_default(),
-    }
+            .find(|(n, _, _)| n == &node.name)
+            .map(|(_, r, f)| (r.width, r.height, *f))
+            .unwrap_or((0, 0, false));
+        let marked = node.marked.unwrap_or(false);
+        let marked_set = tabs.iter().any(|t| t.has_marked) || marked;
+        PaneView {
+            session: session.to_string(),
+            id: node.id,
+            index,
+            pid: node.pid,
+            title: node.title.clone().unwrap_or_default(),
+            command: node
+                .foreground
+                .clone()
+                .unwrap_or_else(|| node.command.clone()),
+            path: node.cwd.clone().unwrap_or_default(),
+            width,
+            height,
+            active,
+            dead: !node.is_running(),
+            marked,
+            marked_set,
+            window,
+            window_name: tabs
+                .iter()
+                .find(|t| t.index == window)
+                .map(|t| t.name.clone())
+                .unwrap_or_default(),
+        }
 }

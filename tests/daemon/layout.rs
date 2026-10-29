@@ -197,6 +197,45 @@ async fn swap_pane_exchanges_positions() {
 }
 
 #[tokio::test]
+async fn mark_pane_and_swap_with_marked_pane() {
+    let daemon = start().await;
+    let mut client = connect(&daemon.endpoint).await;
+    client.spawn(task("mk-a", "cat", &[])).await.unwrap();
+    client
+        .split(split_of("mk-a", "mk-b", true, None))
+        .await
+        .unwrap();
+
+    // Mark mk-a (which is not focused since mk-b was focused on split)
+    client.mark_pane(Some("mk-a"), false).await.unwrap();
+
+    let (_, _, tabs) = client.layout(80, 24).await.unwrap();
+    assert!(tabs[0].has_marked);
+    assert_eq!(tabs[0].marked_pane.as_deref(), Some("mk-a"));
+
+    // Check node info has marked: true for mk-a
+    let nodes = client.list().await.unwrap();
+    let node_a = nodes.iter().find(|n| n.name == "mk-a").unwrap();
+    assert_eq!(node_a.marked, Some(true));
+    let node_b = nodes.iter().find(|n| n.name == "mk-b").unwrap();
+    assert_eq!(node_b.marked, Some(false));
+
+    // Swapping without source swaps active (mk-b) with marked (mk-a)
+    client.swap_pane_targets(None, None).await.unwrap();
+    let (layout, _, _) = client.layout(80, 24).await.unwrap();
+    let left = layout.iter().min_by_key(|p| p.1.x).unwrap();
+    assert_eq!(left.0, "mk-b");
+
+    // Clear mark
+    client.mark_pane(None, true).await.unwrap();
+    let (_, _, tabs) = client.layout(80, 24).await.unwrap();
+    assert!(!tabs[0].has_marked);
+
+    client.kill("mk-a").await.unwrap();
+    client.kill("mk-b").await.unwrap();
+}
+
+#[tokio::test]
 async fn break_pane_moves_it_into_a_new_window() {
     let daemon = start().await;
     let mut client = connect(&daemon.endpoint).await;

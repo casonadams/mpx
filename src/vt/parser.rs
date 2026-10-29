@@ -7,10 +7,13 @@ use crate::keys::TermModes;
 pub struct VtHandler {
     pub grid: Grid,
     pub responses: Vec<Vec<u8>>,
+    pub passthroughs: Vec<Vec<u8>>,
+    pub bg_color: Option<String>,
     modes: TermModes,
     title: Option<String>,
     alerts: Vec<Alert>,
     last_char: Option<char>,
+    dcs_buf: Option<Vec<u8>>,
 }
 
 impl VtHandler {
@@ -18,10 +21,13 @@ impl VtHandler {
         Self {
             grid: Grid::new(cols, rows),
             responses: Vec::new(),
+            passthroughs: Vec::new(),
+            bg_color: None,
             modes: TermModes::default(),
             title: None,
             alerts: Vec::new(),
             last_char: None,
+            dcs_buf: None,
         }
     }
 
@@ -193,6 +199,8 @@ impl VtHandler {
         self.grid.history_limit = limit;
         self.modes = TermModes::default();
         self.title = None;
+        self.bg_color = None;
+        self.dcs_buf = None;
         self.last_char = None;
     }
 
@@ -256,6 +264,40 @@ fn skip_extended_color<'a>(sub: &[u16], iter: &mut impl Iterator<Item = &'a [u16
         }
         _ => {}
     }
+}
+
+const MAX_DCS_LEN: usize = 1024 * 1024;
+
+fn unescape_tmux_dcs(payload: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(payload.len());
+    let mut i = 0;
+    while i < payload.len() {
+        if payload[i] == 0x1b && i + 1 < payload.len() && payload[i + 1] == 0x1b {
+            out.push(0x1b);
+            i += 2;
+        } else {
+            out.push(payload[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+fn format_osc(params: &[&[u8]], bell_terminated: bool) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(64);
+    buf.extend_from_slice(b"\x1b]");
+    for (i, p) in params.iter().enumerate() {
+        if i > 0 {
+            buf.push(b';');
+        }
+        buf.extend_from_slice(p);
+    }
+    if bell_terminated {
+        buf.push(0x07);
+    } else {
+        buf.extend_from_slice(b"\x1b\\");
+    }
+    buf
 }
 
 fn join_osc(parts: &[&[u8]]) -> String {
@@ -435,7 +477,35 @@ impl Perform for VtHandler {
         }
     }
 
-    fn osc_dispatch(&mut self, params: &[&[u8]], _bell_terminated: bool) {
+    fn hook(&mut self, _params: &Params, _intermediates: &[u8], _ignore: bool, action: char) {
+        let mut buf = Vec::new();
+        buf.push(action as u8);
+        self.dcs_buf = Some(buf);
+    }
+
+    fn put(&mut self, byte: u8) {
+        if let Some(buf) = &mut self.dcs_buf {
+            if buf.len() < MAX_DCS_LEN {
+                buf.push(byte);
+            }
+        }
+    }
+
+    fn unhook(&mut self) {
+        if let Some(buf) = self.dcs_buf.take() {
+            let payload = buf
+                .strip_prefix(b"tmux;")
+                .or_else(|| buf.strip_prefix(b"mpx;"));
+            if let Some(payload) = payload {
+                let unescaped = unescape_tmux_dcs(payload);
+                if !unescaped.is_empty() {
+                    self.passthroughs.push(unescaped);
+                }
+            }
+        }
+    }
+
+    fn osc_dispatch(&mut self, params: &[&[u8]], bell_terminated: bool) {
         match params {
             [b"0" | b"2", rest @ ..] => self.title = Some(join_osc(rest)),
             // OSC 9;4 is ConEmu/Windows Terminal progress reporting, not a notification.
@@ -451,10 +521,31 @@ impl Perform for VtHandler {
                 };
                 self.push_notify(text);
             }
-            // Respond to background color query with default dark background
-            [b"11", b"?", ..] => self
-                .responses
-                .push(b"\x1b]11;rgb:0000/0000/0000\x1b\\".to_vec()),
+            // Respond to background color query
+            [b"11", b"?", ..] => {
+                let bg = self.bg_color.as_deref().unwrap_or("rgb:0000/0000/0000");
+                self.responses
+                    .push(format!("\x1b]11;{bg}\x1b\\").into_bytes());
+            }
+            // Background color set: save for queries and pass through
+            [b"11", color, ..] => {
+                self.bg_color = Some(String::from_utf8_lossy(color).into_owned());
+                self.passthroughs
+                    .push(format_osc(params, bell_terminated));
+            }
+            // Palette (4), Foreground (10), Cursor (12), Clipboard (52), Resets (104, 110, 111, 112)
+            [b"4" | b"10" | b"12" | b"52" | b"104" | b"110" | b"111" | b"112", ..] => {
+                if params[0] == b"111" {
+                    self.bg_color = None;
+                }
+                self.passthroughs
+                    .push(format_osc(params, bell_terminated));
+            }
+            // iTerm2 custom sequences (e.g. OSC Pg... for colors)
+            [first, ..] if first.starts_with(b"P") => {
+                self.passthroughs
+                    .push(format_osc(params, bell_terminated));
+            }
             _ => {}
         }
     }
@@ -556,6 +647,16 @@ impl VtScreen {
     /// Drains BEL and OSC 9 / OSC 777 notifications received since the last call.
     pub fn take_alerts(&mut self) -> Vec<Alert> {
         std::mem::take(&mut self.handler.alerts)
+    }
+
+    /// Drains passthrough sequences (DCS tmux, OSC 4/10/11/12/52) received since the last call.
+    pub fn take_passthroughs(&mut self) -> Vec<Vec<u8>> {
+        std::mem::take(&mut self.handler.passthroughs)
+    }
+
+    /// Latest background color set via OSC 11.
+    pub fn bg_color(&self) -> Option<&str> {
+        self.handler.bg_color.as_deref()
     }
 
     /// Scrollback history plus the visible screen as plain text, trailing blank lines trimmed;

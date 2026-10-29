@@ -114,6 +114,9 @@ impl App {
             Command::SelectLayout { preset } => self.simple(Simple::SelectLayout(preset)).await,
             Command::SpreadLayout => self.simple(Simple::SpreadLayout).await,
             Command::SwapPane { next } => self.swap(next).await,
+            Command::SwapPaneMarked { source, target } => self.swap_marked(source, target).await,
+            Command::MarkPane { target } => self.mark_pane(target.as_deref()).await,
+            Command::ClearMark => self.clear_mark().await,
             other => return Err(other),
         };
         Ok(flow)
@@ -356,6 +359,27 @@ impl App {
         };
         let active = self.active_pane.clone();
         let result = self.client.swap_pane(&active, &other).await;
+        self.settle(result)
+    }
+
+    async fn swap_marked(&mut self, source: Option<String>, target: Option<String>) -> Flow {
+        if source.is_none() && target.is_none() && self.layout.marked_pane_global().is_none() {
+            return self.say("no marked pane");
+        }
+        let result = self
+            .client
+            .swap_pane_targets(source.as_deref(), target.as_deref())
+            .await;
+        self.settle(result)
+    }
+
+    async fn mark_pane(&mut self, target: Option<&str>) -> Flow {
+        let result = self.client.mark_pane(target, false).await;
+        self.settle(result)
+    }
+
+    async fn clear_mark(&mut self) -> Flow {
+        let result = self.client.mark_pane(None, true).await;
         self.settle(result)
     }
 

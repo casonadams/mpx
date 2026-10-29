@@ -64,6 +64,8 @@ pub fn draw_body<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
                 .unwrap_or(VtColor::BrightGreen),
             inactive_color: parse_color(&app.config.style.border_inactive)
                 .unwrap_or(VtColor::BrightBlack),
+            marked_color: parse_color(&app.config.style.border_marked)
+                .unwrap_or(VtColor::BrightMagenta),
             border_style: app.config.style.border_style,
         };
         Compositor::draw_dividers(
@@ -71,6 +73,7 @@ pub fn draw_body<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
             out,
             &app.layout.dividers,
             app.active_rect,
+            app.marked_rect,
             style,
         )?;
     }
@@ -195,8 +198,6 @@ fn draw_panes<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
         app.zoomed.is_some(),
         app.config.style.dim_inactive,
     );
-    let dim_factor = app.config.style.dim_factor;
-    let dim_content_bg = app.config.style.dim_content_bg;
     for pane in &panes {
         let (_, rect, _) = pane;
         let vt = app
@@ -223,16 +224,15 @@ fn draw_panes<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
         Compositor::draw_pane_content(
             &mut app.canvas,
             out,
-            RenderPaneContext {
-                rect: *rect,
-                grid: vt.grid(),
-                selection: view.selection.as_ref(),
-                scroll_offset: view.scroll_offset,
-                badge: view.badge.as_deref(),
-                dimmed: view.dimmed,
-                dim_factor,
-                dim_content_bg,
-            },
+            RenderPaneContext::from_config(
+                &app.config.style,
+                *rect,
+                vt.grid(),
+                view.selection.as_ref(),
+                view.scroll_offset,
+                view.badge.as_deref(),
+                view.dimmed,
+            ),
         )?;
     }
     Ok(())
@@ -291,6 +291,7 @@ fn status_row(app: &App, out: &mut Vec<u8>) -> io::Result<()> {
                         }
                         _ => None,
                     },
+                    marked_pane: app.layout.marked_pane_global().map(str::to_string),
                 },
             ),
         },

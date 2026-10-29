@@ -13,6 +13,8 @@ pub struct Config {
     pub history_limit: usize,
     /// Export TMUX/TMUX_PANE and the mpx `tmux` shim in every pane.
     pub tmux_compat: bool,
+    /// Allow terminal passthrough sequences (DCS tmux, OSC 4/10/11/12/52) from the active pane.
+    pub allow_passthrough: bool,
     /// After a crash or reboot, recreate the last session layout and resume its agents on start.
     pub restore: bool,
     /// Keep pipe messages and consumer cursors on disk across daemon restarts.
@@ -36,6 +38,8 @@ pub struct StyleConfig {
     pub border_active: String,
     /// Inactive pane border color name or hex (e.g. "bright-black", "#263345").
     pub border_inactive: String,
+    /// Marked pane border color name or hex (e.g. "bright-magenta", "#bc8cff").
+    pub border_marked: String,
     /// Border style: "single", "rounded", "double", or "ascii".
     pub border_style: BorderStyle,
     /// Status bar background color name or hex.
@@ -48,6 +52,44 @@ pub struct StyleConfig {
     pub dim_factor: f32,
     /// Whether to also dim explicit application background colors in inactive panes.
     pub dim_content_bg: bool,
+    /// Template styling for the active (focused) pane.
+    pub active: ActiveStyle,
+    /// Template styling for inactive (unfocused) panes.
+    pub inactive: InactiveStyle,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct ActiveStyle {
+    /// Optional default foreground text color for the active pane (e.g. "#d8dee9", "white").
+    pub fg: String,
+    /// Optional default background color for the active pane (e.g. "#2e3440", "black").
+    pub bg: String,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum InactiveColorMode {
+    #[default]
+    Dim,
+    Desaturate,
+    Tint,
+    None,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct InactiveStyle {
+    /// Default foreground text color for inactive panes (e.g. "#4c566a", "bright-black").
+    pub fg: String,
+    /// Default background color for inactive panes (e.g. "#242933", "black").
+    pub bg: String,
+    /// Transformation applied to colored text in inactive panes: "dim", "desaturate", "tint", or "none".
+    pub color_mode: InactiveColorMode,
+    /// Transformation intensity (0.0 to 1.0). If omitted, falls back to `style.dim_factor`.
+    pub factor: Option<f32>,
+    /// Whether to also transform explicit application background colors in inactive panes.
+    pub dim_content_bg: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Default)]
@@ -65,12 +107,15 @@ impl Default for StyleConfig {
         Self {
             border_active: "bright-green".to_string(),
             border_inactive: "bright-black".to_string(),
+            border_marked: "bright-magenta".to_string(),
             border_style: BorderStyle::Single,
             status_bg: "dark-green".to_string(),
             status_fg: "black".to_string(),
             dim_inactive: true,
             dim_factor: 0.20,
             dim_content_bg: true,
+            active: ActiveStyle::default(),
+            inactive: InactiveStyle::default(),
         }
     }
 }
@@ -107,6 +152,7 @@ impl Default for Config {
             remain_on_exit: false,
             history_limit: 64,
             tmux_compat: false,
+            allow_passthrough: true,
             restore: true,
             persist_pipes: true,
             which_key_delay_ms: 300,

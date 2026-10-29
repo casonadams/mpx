@@ -38,6 +38,8 @@ const DEFAULT_BINDINGS: &[(&str, &str)] = &[
     ("z", "resize-pane -Z"),
     ("x", "kill-pane"),
     ("!", "break-pane"),
+    ("m", "select-pane -m"),
+    ("M", "select-pane -M"),
     ("{", "swap-pane -U"),
     ("}", "swap-pane -D"),
     ("Space", "next-layout"),

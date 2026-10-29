@@ -6,6 +6,7 @@ mod fidelity;
 mod keys;
 mod overlay_io;
 mod overlay_keys;
+mod passthrough;
 mod prompt_cmds;
 mod sessions;
 mod sidebar;

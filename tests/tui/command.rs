@@ -163,6 +163,18 @@ fn select_pane_by_target_or_direction() {
         ok("select-pane -D"),
         Command::SelectPaneDir { side: Side::Down }
     );
+    assert_eq!(
+        ok("select-pane -m"),
+        Command::MarkPane { target: None }
+    );
+    assert_eq!(
+        ok("select-pane -t build -m"),
+        Command::MarkPane {
+            target: Some("build".into())
+        }
+    );
+    assert_eq!(ok("select-pane -M"), Command::ClearMark);
+    assert_eq!(ok("mark-pane"), Command::MarkPane { target: None });
     assert!(err("select-pane").contains("need -t"));
 }
 
@@ -188,10 +200,23 @@ fn resize_pane_defaults_to_five_cells_and_supports_zoom() {
 }
 
 #[test]
-fn swap_pane_directions() {
+fn swap_pane_directions_and_marked() {
     assert_eq!(ok("swap-pane -U"), Command::SwapPane { next: false });
     assert_eq!(ok("swap-pane -D"), Command::SwapPane { next: true });
-    assert!(err("swap-pane").contains("need -U or -D"));
+    assert_eq!(
+        ok("swap-pane"),
+        Command::SwapPaneMarked {
+            source: None,
+            target: None
+        }
+    );
+    assert_eq!(
+        ok("swap-pane -s a -t b"),
+        Command::SwapPaneMarked {
+            source: Some("a".into()),
+            target: Some("b".into()),
+        }
+    );
 }
 
 #[test]

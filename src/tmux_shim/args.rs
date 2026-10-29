@@ -66,7 +66,7 @@ pub fn spec(command: &str) -> Option<(&'static str, &'static str)> {
         "list-sessions" => ("", "F"),
         "display-message" => ("pIv", "tF"),
         "has-session" | "select-window" | "rename-window" | "last-window" => ("", "t"),
-        "select-pane" => ("LRUDMZe", "tT"),
+        "select-pane" => ("LRUDmMZe", "tT"),
         "select-layout" => ("nopE", "t"),
         "resize-pane" => ("LRUDMZ", "txyt"),
         "swap-pane" => ("dDUZ", "st"),

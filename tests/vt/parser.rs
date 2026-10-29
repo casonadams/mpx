@@ -187,6 +187,51 @@ fn osc_777_notify_without_body_uses_title_only() {
 }
 
 #[test]
+fn osc_palette_theme_and_clipboard_passthroughs() {
+    let mut vt = VtScreen::new(20, 5);
+    feed(&mut vt, "\x1b]4;0;rgb:24/2A/36\x1b\\");
+    feed(&mut vt, "\x1b]10;rgb:d8/de/e9\x1b\\\x1b]11;rgb:2e/34/40\x1b\\\x1b]12;;7\x1b\\");
+    feed(&mut vt, "\x1b]52;c;aGVsbG8=\x07");
+    assert_eq!(
+        vt.take_passthroughs(),
+        vec![
+            b"\x1b]4;0;rgb:24/2A/36\x1b\\".to_vec(),
+            b"\x1b]10;rgb:d8/de/e9\x1b\\".to_vec(),
+            b"\x1b]11;rgb:2e/34/40\x1b\\".to_vec(),
+            b"\x1b]12;;7\x1b\\".to_vec(),
+            b"\x1b]52;c;aGVsbG8=\x07".to_vec(),
+        ]
+    );
+}
+
+#[test]
+fn osc_eleven_records_background_and_answers_query() {
+    let mut vt = VtScreen::new(20, 5);
+    feed(&mut vt, "\x1b]11;rgb:2e/34/40\x1b\\");
+    assert_eq!(vt.bg_color(), Some("rgb:2e/34/40"));
+
+    feed(&mut vt, "\x1b]11;?\x1b\\");
+    assert_eq!(
+        vt.take_responses(),
+        vec![b"\x1b]11;rgb:2e/34/40\x1b\\".to_vec()]
+    );
+}
+
+#[test]
+fn dcs_tmux_and_mpx_passthroughs() {
+    let mut vt = VtScreen::new(20, 5);
+    feed(&mut vt, "\x1bPtmux;\x1b\x1b]4;0;rgb:24/2A/36\x1b\x1b\\\x1b\\");
+    feed(&mut vt, "\x1bPmpx;hello_world\x1b\\");
+    assert_eq!(
+        vt.take_passthroughs(),
+        vec![
+            b"\x1b]4;0;rgb:24/2A/36\x1b\\".to_vec(),
+            b"hello_world".to_vec(),
+        ]
+    );
+}
+
+#[test]
 fn alerts_drain_in_arrival_order() {
     let mut vt = VtScreen::new(20, 5);
     feed(&mut vt, "\x07\x1b]9;done\x07\x07");
@@ -350,9 +395,10 @@ fn decsc_decrc_save_and_restore_cursor() {
 #[test]
 fn ris_resets_screen_modes_title_and_style() {
     let mut vt = VtScreen::new(20, 5);
-    feed(&mut vt, "\x1b[?1h\x1b[?2004h\x1b]0;t\x07\x1b[31mabc\x1bc");
+    feed(&mut vt, "\x1b[?1h\x1b[?2004h\x1b]0;t\x07\x1b]11;rgb:2e/34/40\x1b\\\x1b[31mabc\x1bc");
     assert_eq!(vt.modes(), TermModes::default());
     assert_eq!(vt.title(), None);
+    assert_eq!(vt.bg_color(), None);
     assert_eq!(row(&vt, 0), "");
     assert_eq!(cursor(&vt), (0, 0));
     assert_eq!(vt.grid().current_style, CellStyle::default());

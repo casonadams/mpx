@@ -17,6 +17,8 @@ pub struct PaneView {
     pub height: u16,
     pub active: bool,
     pub dead: bool,
+    pub marked: bool,
+    pub marked_set: bool,
     pub window: usize,
     pub window_name: String,
 }
@@ -55,6 +57,8 @@ pub fn pane_vars(p: &PaneView) -> Vars {
     vars.insert("pane_height", p.height.to_string());
     vars.insert("pane_active", flag(p.active));
     vars.insert("pane_dead", flag(p.dead));
+    vars.insert("pane_marked", flag(p.marked));
+    vars.insert("pane_marked_set", flag(p.marked_set));
     vars.insert("session_name", p.session.clone());
     vars.insert("window_index", p.window.to_string());
     vars.insert("window_id", format!("@{}", p.window));

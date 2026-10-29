@@ -166,10 +166,15 @@ impl App {
     }
 
     fn feed(&mut self, name: &str, data: &str, next: u64) {
-        self.vt
+        let vt = self
+            .vt
             .entry(name.to_string())
-            .or_insert_with(|| VtScreen::live(DEFAULT_SIZE.0 as usize, DEFAULT_SIZE.1 as usize))
-            .feed(data.as_bytes());
+            .or_insert_with(|| VtScreen::live(DEFAULT_SIZE.0 as usize, DEFAULT_SIZE.1 as usize));
+        vt.feed(data.as_bytes());
+        let pass = vt.take_passthroughs();
+        if self.config.allow_passthrough && name == self.active_pane {
+            self.passthroughs.extend(pass);
+        }
         self.expected.insert(name.to_string(), next);
     }
 
@@ -181,6 +186,7 @@ impl App {
         if let Ok((data, next)) = self.client.logs(name, None, false, Some(since)).await {
             if let Some(vt) = self.vt.get_mut(name) {
                 vt.feed(data.as_bytes());
+                let _ = vt.take_passthroughs();
             }
             self.expected.insert(name.to_string(), next);
         }
@@ -195,7 +201,8 @@ impl App {
 
     async fn reload_pane(&mut self, name: &str, scrollback: bool) {
         let size = self.pane_dims.get(name).copied().unwrap_or(DEFAULT_SIZE);
-        if let Some((screen, next)) = load_pane(&mut self.client, name, size, scrollback).await {
+        if let Some((mut screen, next)) = load_pane(&mut self.client, name, size, scrollback).await {
+            let _ = screen.take_passthroughs();
             self.vt.insert(name.to_string(), screen);
             self.expected.insert(name.to_string(), next);
         }

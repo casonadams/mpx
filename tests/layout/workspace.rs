@@ -154,6 +154,67 @@ fn swap_exchanges_panes_across_windows() {
 }
 
 #[test]
+fn mark_pane_toggles_and_clears_and_updates_tabs() {
+    let mut ws = main_tab_ws();
+    ws.new_window("other".into(), "c".into());
+
+    // Initially no mark
+    assert_eq!(ws.marked_pane(), None);
+    assert!(!ws.window_tabs()[0].has_marked);
+    assert!(!ws.window_tabs()[1].has_marked);
+
+    // Mark pane1 in window 0
+    assert!(ws.mark_pane("pane1"));
+    assert_eq!(ws.marked_pane(), Some("pane1"));
+    assert!(ws.window_tabs()[0].has_marked);
+    assert_eq!(ws.window_tabs()[0].marked_pane.as_deref(), Some("pane1"));
+    assert!(!ws.window_tabs()[1].has_marked);
+
+    // Marking same pane unmarks it
+    assert!(!ws.mark_pane("pane1"));
+    assert_eq!(ws.marked_pane(), None);
+    assert!(!ws.window_tabs()[0].has_marked);
+
+    // Mark pane in window 1
+    assert!(ws.mark_pane("c"));
+    assert_eq!(ws.marked_pane(), Some("c"));
+    assert!(!ws.window_tabs()[0].has_marked);
+    assert!(ws.window_tabs()[1].has_marked);
+
+    // Marking nonexistent pane fails
+    assert!(!ws.mark_pane("nonexistent"));
+    // Old mark is preserved
+    assert_eq!(ws.marked_pane(), Some("c"));
+
+    // Clear mark
+    ws.clear_mark_pane();
+    assert_eq!(ws.marked_pane(), None);
+}
+
+#[test]
+fn marked_pane_lifecycle_swap_and_removal() {
+    let mut ws = main_tab_ws();
+    ws.add_or_split("pane2".to_string(), Direction::Horizontal);
+    ws.mark_pane("pane2");
+    assert_eq!(ws.marked_pane(), Some("pane2"));
+
+    // Swap panes: pane2 is still the marked pane
+    assert!(ws.swap("pane1", "pane2"));
+    assert_eq!(ws.marked_pane(), Some("pane2"));
+
+    // Removing pane2 clears the mark
+    ws.remove("pane2");
+    assert_eq!(ws.marked_pane(), None);
+
+    // Creating another window, marking its pane, and killing the window clears mark
+    let win2 = ws.new_window("win2".into(), "leaf".into());
+    ws.mark_pane("leaf");
+    assert_eq!(ws.marked_pane(), Some("leaf"));
+    ws.kill_window(win2);
+    assert_eq!(ws.marked_pane(), None);
+}
+
+#[test]
 fn break_pane_moves_it_into_its_own_window() {
     let mut ws = main_tab_ws();
     ws.add_or_split("pane2".to_string(), Direction::Horizontal);

@@ -40,6 +40,10 @@ pub enum Command {
     SelectPaneDir {
         side: Side,
     },
+    MarkPane {
+        target: Option<String>,
+    },
+    ClearMark,
     SelectWindow {
         index: usize,
     },
@@ -68,6 +72,10 @@ pub enum Command {
     },
     SwapPane {
         next: bool,
+    },
+    SwapPaneMarked {
+        source: Option<String>,
+        target: Option<String>,
     },
     BreakPane,
     SelectLayout {
@@ -130,6 +138,7 @@ pub const COMMAND_NAMES: &[&str] = &[
     "last-window",
     "launch-agent",
     "list-keys",
+    "mark-pane",
     "new",
     "new-window",
     "next-agent",
@@ -251,6 +260,7 @@ fn window_cmd(name: &str, args: &[String]) -> Option<Result<Command, String>> {
 fn pane_cmd(name: &str, args: &[String]) -> Option<Result<Command, String>> {
     let cmd = match name {
         "kill-pane" => kill_pane(name, args),
+        "mark-pane" => mark_pane(name, args),
         "select-pane" => select_pane(name, args),
         "send-keys" => send_keys(name, args),
         "paste" => paste(name, args),
@@ -330,7 +340,7 @@ const KILL_TARGET: Spec = Spec {
     stop_at_arg: false,
 };
 const SELECT_PANE: Spec = Spec {
-    bools: &["-L", "-R", "-U", "-D"],
+    bools: &["-L", "-R", "-U", "-D", "-m", "-M"],
     values: &["-t"],
     stop_at_arg: false,
 };
@@ -341,7 +351,7 @@ const RESIZE_PANE: Spec = Spec {
 };
 const SWAP_PANE: Spec = Spec {
     bools: &["-U", "-D"],
-    values: &[],
+    values: &["-s", "-t"],
     stop_at_arg: false,
 };
 const SEND_KEYS: Spec = Spec {
@@ -535,15 +545,35 @@ fn kill_pane(name: &str, args: &[String]) -> Result<Command, String> {
 fn select_pane(name: &str, args: &[String]) -> Result<Command, String> {
     let o = parse_opts(name, args, SELECT_PANE)?;
     o.no_rest(name)?;
+    if o.has("-M") {
+        return Ok(Command::ClearMark);
+    }
+    if o.has("-m") {
+        return Ok(Command::MarkPane {
+            target: o.value("-t").map(str::to_string),
+        });
+    }
     if let Some(side) = direction_flag(&o) {
         return Ok(Command::SelectPaneDir { side });
     }
     let target = o
         .value("-t")
-        .ok_or_else(|| format!("{name}: need -t <target> or -L/-R/-U/-D"))?;
+        .ok_or_else(|| format!("{name}: need -t <target>, -m/-M, or -L/-R/-U/-D"))?;
     Ok(Command::SelectPane {
         target: target.to_string(),
     })
+}
+
+fn mark_pane(name: &str, args: &[String]) -> Result<Command, String> {
+    let o = parse_opts(name, args, SELECT_PANE)?;
+    o.no_rest(name)?;
+    if o.has("-M") {
+        Ok(Command::ClearMark)
+    } else {
+        Ok(Command::MarkPane {
+            target: o.value("-t").map(str::to_string),
+        })
+    }
 }
 
 fn resize_pane(name: &str, args: &[String]) -> Result<Command, String> {
@@ -569,7 +599,10 @@ fn swap_pane(name: &str, args: &[String]) -> Result<Command, String> {
     } else if o.has("-U") {
         Ok(Command::SwapPane { next: false })
     } else {
-        Err(format!("{name}: need -U or -D"))
+        Ok(Command::SwapPaneMarked {
+            source: o.value("-s").map(str::to_string),
+            target: o.value("-t").map(str::to_string),
+        })
     }
 }
 

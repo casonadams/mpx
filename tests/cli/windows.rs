@@ -116,6 +116,27 @@ fn swap_pane_exchanges_the_two_positions() {
 }
 
 #[test]
+fn select_pane_mark_and_swap_with_marked() {
+    let f = Fixture::start();
+    base_and_side(&f);
+    let (base, side) = (place(&f, "base"), place(&f, "side"));
+
+    // Mark base pane
+    assert_eq!(run_command(&f, &["select-pane", "-t", "base", "-m"]), 0);
+
+    // Focus side pane
+    assert_eq!(run_command(&f, &["focus", "side"]), 0);
+
+    // Swap without args swaps active (side) with marked (base)
+    assert_eq!(run_command(&f, &["swap-pane"]), 0);
+    assert_eq!(place(&f, "base"), side);
+    assert_eq!(place(&f, "side"), base);
+
+    // Clear mark
+    assert_eq!(run_command(&f, &["select-pane", "-M"]), 0);
+}
+
+#[test]
 fn select_layout_applies_a_preset_and_rejects_unknown_names() {
     let f = Fixture::start();
     base_and_side(&f);

@@ -190,6 +190,7 @@ impl PaneActor {
         for reply in self.screen.take_responses() {
             self.write_raw(&reply);
         }
+        let _ = self.screen.take_passthroughs();
         self.ring.write(bytes);
         self.last_output_ms = now_ms();
         self.emit_text(bytes);

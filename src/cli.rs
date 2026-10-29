@@ -397,15 +397,31 @@ pub enum Commands {
         name: String,
     },
 
-    /// Swap the positions of two panes
+    /// Select, mark, or unmark a pane
+    #[command(name = "select-pane", alias = "selectp")]
+    SelectPane {
+        /// Target pane (defaults to active pane)
+        #[arg(short = 't', long = "target")]
+        target: Option<String>,
+
+        /// Mark target pane (toggle if already marked)
+        #[arg(short = 'm')]
+        mark: bool,
+
+        /// Clear the marked pane
+        #[arg(short = 'M')]
+        clear_mark: bool,
+    },
+
+    /// Swap the positions of two panes (defaults to swapping active pane with marked pane)
     #[command(name = "swap-pane")]
     SwapPane {
-        /// Source pane (tmux -s; `-s` is the global session flag here)
+        /// Source pane (tmux -s; defaults to marked pane or active pane)
         #[arg(long = "source")]
-        source: String,
+        source: Option<String>,
 
         #[arg(short = 't', long = "target")]
-        target: String,
+        target: Option<String>,
     },
 
     /// Move a pane into its own window

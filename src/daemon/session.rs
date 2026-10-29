@@ -456,10 +456,8 @@ impl Session {
                 ),
                 Err(e) => Response::Error(e),
             },
-            Request::SwapPane { a, b } => match (self.target_name(&a), self.target_name(&b)) {
-                (Ok(a), Ok(b)) => check(self.workspace.swap(&a, &b), "Cannot swap panes"),
-                (Err(e), _) | (_, Err(e)) => Response::Error(e),
-            },
+            Request::SwapPane { a, b } => self.swap_pane_req(a, b),
+            Request::MarkPane { name, clear } => self.mark_pane_req(name, clear),
             Request::BreakPane { name } => match self.target_name(&name) {
                 Ok(n) => check(self.workspace.break_pane(&n), "Pane is alone in its window"),
                 Err(e) => Response::Error(e),
@@ -470,6 +468,58 @@ impl Session {
             Request::SpreadLayout => check(self.workspace.spread_layout(), "No window"),
             _ => self.window_request(req),
         }
+    }
+
+    fn swap_pane_req(&mut self, a: Option<String>, b: Option<String>) -> Response {
+        let marked = self.workspace.marked_pane.clone();
+        let active = self.workspace.active_window().and_then(|w| w.focused.clone());
+        let src = match a {
+            Some(s) => match self.target_name(&s) {
+                Ok(t) => t,
+                Err(e) => return Response::Error(e),
+            },
+            None => match marked.clone().or_else(|| active.clone()) {
+                Some(p) => p,
+                None => return Response::Error("No pane to swap".to_string()),
+            },
+        };
+        let dst = match b {
+            Some(t) => match self.target_name(&t) {
+                Ok(t) => t,
+                Err(e) => return Response::Error(e),
+            },
+            None => match active {
+                Some(act) if act != src => act,
+                _ => match marked {
+                    Some(m) if m != src => m,
+                    _ => src.clone(),
+                },
+            },
+        };
+        if src == dst {
+            Response::Ok
+        } else {
+            check(self.workspace.swap(&src, &dst), "Cannot swap panes")
+        }
+    }
+
+    fn mark_pane_req(&mut self, name: Option<String>, clear: bool) -> Response {
+        if clear {
+            self.workspace.clear_mark_pane();
+            return Response::Ok;
+        }
+        let target = match name {
+            Some(n) => match self.target_name(&n) {
+                Ok(t) => t,
+                Err(e) => return Response::Error(e),
+            },
+            None => match self.workspace.active_window().and_then(|w| w.focused.clone()) {
+                Some(f) => f,
+                None => return Response::Error("No active pane to mark".to_string()),
+            },
+        };
+        self.workspace.mark_pane(&target);
+        Response::Ok
     }
 
     /// Window navigation and naming.
@@ -547,6 +597,7 @@ impl Session {
         let handle = self.handle_of(name)?;
         let mut info = handle.info(full).await?;
         info.window = self.workspace.window_of(name);
+        info.marked = Some(self.workspace.marked_pane.as_deref() == Some(name));
         Ok(info)
     }
 
@@ -560,12 +611,16 @@ impl Session {
         for entry in self.nodes.values() {
             if let Ok(mut info) = entry.handle.info(true).await {
                 info.window = self.workspace.window_of(entry.handle.name());
+                info.marked =
+                    Some(self.workspace.marked_pane.as_deref() == Some(entry.handle.name()));
                 infos.push(info);
             }
         }
         // History holds exited panes that left the layout; a live pane may reuse their name.
         for entry in &self.history {
-            if let Ok(info) = entry.handle.info(true).await {
+            if let Ok(mut info) = entry.handle.info(true).await {
+                info.marked =
+                    Some(self.workspace.marked_pane.as_deref() == Some(entry.handle.name()));
                 infos.push(info);
             }
         }

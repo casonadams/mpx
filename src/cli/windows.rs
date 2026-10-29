@@ -99,7 +99,14 @@ pub async fn run(cmd: Commands, r: &Resolved) -> Result<i32, String> {
                 .map_err(|e| format!("last-pane error: {e}"))?;
             Ok(0)
         }
-        Commands::SwapPane { source, target } => swap(r, &source, &target).await,
+        Commands::SelectPane {
+            target,
+            mark,
+            clear_mark,
+        } => select_pane(r, target.as_deref(), mark, clear_mark).await,
+        Commands::SwapPane { source, target } => {
+            swap(r, source.as_deref(), target.as_deref()).await
+        }
         Commands::BreakPane { name } => {
             let mut client = ensure_client(r).await?;
             client
@@ -176,12 +183,49 @@ async fn new_window(r: &Resolved, req: NewWindowRequest) -> Result<i32, String> 
     Ok(0)
 }
 
-async fn swap(r: &Resolved, source: &str, target: &str) -> Result<i32, String> {
+async fn select_pane(
+    r: &Resolved,
+    target: Option<&str>,
+    mark: bool,
+    clear_mark: bool,
+) -> Result<i32, String> {
     let mut client = ensure_client(r).await?;
-    let a = resolve_name(&mut client, Some(source)).await?;
-    let b = resolve_name(&mut client, Some(target)).await?;
+    if clear_mark {
+        client
+            .mark_pane(None, true)
+            .await
+            .map_err(|e| format!("select-pane error: {e}"))?;
+    } else if mark {
+        let name = match target {
+            Some(t) => Some(resolve_name(&mut client, Some(t)).await?),
+            None => None,
+        };
+        client
+            .mark_pane(name.as_deref(), false)
+            .await
+            .map_err(|e| format!("select-pane error: {e}"))?;
+    } else if let Some(target) = target {
+        let name = resolve_name(&mut client, Some(target)).await?;
+        client
+            .focus(&name)
+            .await
+            .map_err(|e| format!("select-pane error: {e}"))?;
+    }
+    Ok(0)
+}
+
+async fn swap(r: &Resolved, source: Option<&str>, target: Option<&str>) -> Result<i32, String> {
+    let mut client = ensure_client(r).await?;
+    let a = match source {
+        Some(s) => Some(resolve_name(&mut client, Some(s)).await?),
+        None => None,
+    };
+    let b = match target {
+        Some(t) => Some(resolve_name(&mut client, Some(t)).await?),
+        None => None,
+    };
     client
-        .swap_pane(&a, &b)
+        .swap_pane_targets(a.as_deref(), b.as_deref())
         .await
         .map_err(|e| format!("swap-pane error: {e}"))?;
     Ok(0)

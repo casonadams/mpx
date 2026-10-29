@@ -71,9 +71,9 @@ A vim-style command line on the status row. Editing keys: `Left`/`Right`, `Backs
 | `new-window [-n name] [-c dir] [cmd...]` | `new`, `tabnew` | |
 | `next-window` / `previous-window` | `tabnext`, `tabn` / `prev-window`, `tabprevious`, `tabp` | |
 | `select-window -t N`, `last-window`, `rename-window NAME`, `kill-window [-t N]` | | |
-| `select-pane -t TARGET \| -L/-R/-U/-D`, `next-pane`, `last-pane`, `kill-pane [-t TARGET]` | | `TARGET` is `name`, `%id` or `session:pane` |
+| `select-pane [-t TARGET] [-m|-M] \| -L/-R/-U/-D`, `next-pane`, `last-pane`, `kill-pane [-t TARGET]` | | `TARGET` is `name`, `%id` or `session:pane` |
 | `resize-pane -L/-R/-U/-D [N]`, `resize-pane -Z` | | `N` defaults to 5 |
-| `swap-pane -U/-D`, `break-pane`, `select-layout [preset]`, `select-layout -E`, `next-layout` | | |
+| `swap-pane [-U|-D] [-s SRC] [-t DST]`, `break-pane`, `select-layout [preset]`, `select-layout -E`, `next-layout` | | |
 | `switch-client -t SESSION` | `session` | |
 | `next-session`, `prev-session` | | |
 | `send-keys [-t TARGET] KEYS...` | | tmux key names |

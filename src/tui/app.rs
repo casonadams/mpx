@@ -1,6 +1,6 @@
 use crossterm::event::{Event, KeyEvent, KeyEventKind, MouseEventKind};
 use std::collections::{HashMap, VecDeque};
-use std::io::{BufWriter, stdout};
+use std::io::{BufWriter, Write, stdout};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{self, UnboundedReceiver, unbounded_channel};
@@ -109,6 +109,7 @@ pub struct App {
     /// cursor and selection while the prefix is pending or focus moves elsewhere.
     pub parked_copy: HashMap<String, CopyState>,
     pub vt: HashMap<String, VtScreen>,
+    pub passthroughs: Vec<Vec<u8>>,
     pub pane_dims: HashMap<String, (u16, u16)>,
     /// Byte offset each pane's screen has absorbed; the next output chunk must start there.
     pub expected: HashMap<String, u64>,
@@ -119,6 +120,7 @@ pub struct App {
     pub panes: Vec<PaneRect>,
     pub active_pane: String,
     pub active_rect: Option<Rect>,
+    pub marked_rect: Option<Rect>,
     pub focus_pane: Option<String>,
     pub zoomed: Option<String>,
     pub split_counter: usize,
@@ -208,6 +210,7 @@ impl App {
             border_drag: None,
             parked_copy: HashMap::new(),
             vt: HashMap::new(),
+            passthroughs: Vec::new(),
             pane_dims: HashMap::new(),
             expected: HashMap::new(),
             layout: LayoutCache::new(),
@@ -215,6 +218,7 @@ impl App {
             panes: Vec::new(),
             active_pane: String::new(),
             active_rect: None,
+            marked_rect: None,
             focus_pane: None,
             zoomed: None,
             split_counter: 1,
@@ -293,6 +297,10 @@ impl App {
             None => self.layout.raw.clone(),
         };
         self.active_rect = self.panes.iter().find(|(.., f)| *f).map(|(_, r, _)| *r);
+        let marked_name = self.layout.marked_pane();
+        self.marked_rect = marked_name.and_then(|m| {
+            self.panes.iter().find(|(name, ..)| name == m).map(|(_, r, _)| *r)
+        });
         self.refresh_newly_shown(&shown_before).await;
         if self.focus_pane.as_deref() != Some(self.active_pane.as_str()) {
             self.recheck_size(&self.active_pane.clone()).await;
@@ -738,7 +746,11 @@ pub async fn run_tui(
         let output = matches!(wake, Wake::Stream(_));
         let flow = match wake {
             Wake::Input(event) => app.on_event(event).await,
-            Wake::Stream(item) => app.on_stream(item, &mut stream).await,
+            Wake::Stream(item) => {
+                let flow = app.on_stream(item, &mut stream).await;
+                flush_passthroughs(&mut out, &mut app.passthroughs);
+                flow
+            }
             Wake::Tick => app.on_tick().await,
             Wake::Due => app.on_due().await,
         };
@@ -748,4 +760,14 @@ pub async fn run_tui(
             return Ok(());
         }
     }
+}
+
+fn flush_passthroughs<W: Write>(out: &mut W, passthroughs: &mut Vec<Vec<u8>>) {
+    if passthroughs.is_empty() {
+        return;
+    }
+    for p in passthroughs.drain(..) {
+        let _ = out.write_all(&p);
+    }
+    let _ = out.flush();
 }

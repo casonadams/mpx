@@ -26,6 +26,8 @@ fn pane(id: u32, index: usize) -> PaneView {
         height: 24,
         active: true,
         dead: false,
+        marked: false,
+        marked_set: false,
         window: 1,
         window_name: "dev".into(),
     }
@@ -185,6 +187,10 @@ fn side_flags_map_to_directions() {
     assert_eq!(side_of(&parse(&["select-pane", "-L"])), Some(Side::Left));
     assert_eq!(side_of(&parse(&["select-pane", "-D"])), Some(Side::Down));
     assert_eq!(side_of(&parse(&["select-pane", "-t", "%1"])), None);
+    let inv_m = parse(&["select-pane", "-m"]);
+    assert!(inv_m.has('m'));
+    let inv_cap_m = parse(&["select-pane", "-M"]);
+    assert!(inv_cap_m.has('M'));
 }
 
 fn rect(x: u16, y: u16, width: u16, height: u16) -> Rect {
@@ -246,4 +252,17 @@ fn pane_view_takes_its_window_name_from_the_layout_tabs() {
         "1:logs"
     );
     assert_eq!(pane_view("dev", 0, &node, &[], &[]).window_name, "");
+}
+
+#[test]
+fn pane_view_and_vars_reflect_marked() {
+    let mut p = pane(1, 0);
+    p.marked = true;
+    p.marked_set = true;
+    assert_eq!(expand("#{pane_marked}", &pane_vars(&p)), "1");
+    assert_eq!(expand("#{pane_marked_set}", &pane_vars(&p)), "1");
+
+    p.marked = false;
+    assert_eq!(expand("#{pane_marked}", &pane_vars(&p)), "0");
+    assert_eq!(expand("#{pane_marked_set}", &pane_vars(&p)), "1");
 }

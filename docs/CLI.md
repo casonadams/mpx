@@ -102,7 +102,8 @@ Timeout exits with `124`, like `timeout(1)`.
 | `mpx kill-window [-t index]` / `mpx rename-window [-t index] <name>` | Close / rename a window. A renamed window stops auto-naming. |
 | `mpx select-window -t <index>` / `mpx last-window` / `mpx last-pane` | Navigation. |
 | `mpx focus <pane>` | Focus a pane (switches window if needed). |
-| `mpx swap-pane --source <pane> -t <pane>` | Swap two panes (also across windows). |
+| `mpx select-pane [-t <pane>] [-m] [-M]` | Focus a pane, mark it (`-m`), or clear the marked pane (`-M`). |
+| `mpx swap-pane [--source <pane>] [-t <pane>]` | Swap two panes (defaults to swapping active pane with marked pane; also works across windows). |
 | `mpx break-pane <pane>` | Move a pane into its own window. |
 | `mpx select-layout [preset]` | `even-horizontal`, `even-vertical`, `main-vertical`, `main-horizontal`, `tiled`; no argument cycles; `-E` spreads the panes evenly, keeping their arrangement. |
 | `mpx resize-pane [-t pane] -L\|-R\|-U\|-D [cells]` | Move the pane border (tmux semantics). `-x`/`-y` set an absolute size. |

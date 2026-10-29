@@ -1,9 +1,10 @@
 use mpx::layout::{Divider, Rect, WindowTab};
 use mpx::tui::canvas::Canvas;
-use mpx::config::BorderStyle;
+use mpx::config::{BorderStyle, InactiveColorMode};
 use mpx::tui::render::{
-    Compositor, DividerStyle, RenderPaneContext, SelectionRange, StatusBar, dim_color, format_tab,
-    hud_rect, parse_color, status_left, status_right, vt_to_crossterm,
+    Compositor, DividerStyle, RenderPaneContext, SelectionRange, StatusBar, apply_active_style,
+    apply_inactive_bg, apply_inactive_fg, color_to_rgb, desaturate_color, dim_color, format_tab,
+    hud_rect, parse_color, status_left, status_right, tint_color, vt_to_crossterm,
 };
 use mpx::vt::{CellStyle, Color as VtColor};
 use mpx::vt::grid::Grid;
@@ -18,6 +19,11 @@ fn pane_ctx<'a>(grid: &'a Grid, rect: Rect, dimmed: bool) -> RenderPaneContext<'
         dimmed,
         dim_factor: 0.20,
         dim_content_bg: true,
+        active_fg: None,
+        active_bg: None,
+        inactive_fg: None,
+        inactive_bg: None,
+        color_mode: InactiveColorMode::Dim,
     }
 }
 
@@ -47,7 +53,7 @@ fn dimmed_pane_draws_default_text_grey() {
     let mut grid = Grid::new(10, 5);
     grid.put_char('Z');
     let out = draw_pane(&grid, true);
-    assert!(out.contains("\x1b[0;90mZ"), "{out:?}");
+    assert!(out.contains("\x1b[0;38;2;204;204;204mZ"), "{out:?}");
 }
 
 /// What drawing one cell of `fg` text sends, in an inactive pane or not.
@@ -81,6 +87,7 @@ fn status_bar_lists_session_and_pane_names() {
         fg: None,
         zoomed: false,
         copy_pane: None,
+        marked_pane: None,
     };
     Compositor::draw_status_bar(&mut buf, &bar).unwrap();
     let out = String::from_utf8_lossy(&buf);
@@ -104,6 +111,7 @@ fn status_bar_paints_every_column_of_its_row() {
         fg: None,
         zoomed: false,
         copy_pane: None,
+        marked_pane: None,
     };
     let mut terminal = mpx::vt::VtScreen::new(40, 10);
     terminal.feed(format!("\x1b[?7l\x1b[10;1H{}", "X".repeat(40)).as_bytes());
@@ -131,6 +139,7 @@ fn status_bar_shows_waiting_agent_badge() {
         fg: None,
         zoomed: false,
         copy_pane: None,
+        marked_pane: None,
     };
     Compositor::draw_status_bar(&mut buf, &bar).unwrap();
     assert!(String::from_utf8_lossy(&buf).contains("◆3"));
@@ -166,6 +175,7 @@ fn status_text_prefers_window_tabs_and_agent_badge() {
         fg: None,
         zoomed: false,
         copy_pane: None,
+        marked_pane: None,
     };
     assert_eq!(status_left(&bar), "[dev] 0:claude- 1:cargo* ");
     assert_eq!(status_right(&bar, "12:00"), " \u{25c6}2 12:00");
@@ -219,6 +229,28 @@ fn format_tab_renders_agent_badges_and_tmux_flags() {
         ..Default::default()
     };
     assert_eq!(format_tab(&bell_window, false), "4:alerts! ");
+}
+
+#[test]
+fn format_tab_renders_marked_flag() {
+    let marked_tab = WindowTab {
+        index: 0,
+        name: "dev".into(),
+        is_active: true,
+        has_marked: true,
+        ..Default::default()
+    };
+    assert_eq!(format_tab(&marked_tab, false), "0:dev*M ");
+
+    let marked_inactive = WindowTab {
+        index: 1,
+        name: "other".into(),
+        is_active: false,
+        is_last: true,
+        has_marked: true,
+        ..Default::default()
+    };
+    assert_eq!(format_tab(&marked_inactive, false), "1:other-M ");
 }
 
 #[test]
@@ -294,6 +326,7 @@ fn status_bar_shows_zoom_flag_and_copy_pane_badge() {
         fg: None,
         zoomed: true,
         copy_pane: Some("pane-1"),
+        marked_pane: None,
     };
     assert_eq!(status_left(&bar), "[main] 0:pane-1*Z ");
     assert_eq!(status_right(&bar, "12:00"), "[pane-1] Z 12:00");
@@ -367,7 +400,15 @@ fn dividers_render_junction_connector() {
     let active_rect = Some(Rect::new(41, 11, 39, 13));
     let mut canvas = Canvas::default();
     canvas.begin(80, 24, None);
-    Compositor::draw_dividers(&mut canvas, &mut buf, &dividers, active_rect, DividerStyle::default()).unwrap();
+    Compositor::draw_dividers(
+        &mut canvas,
+        &mut buf,
+        &dividers,
+        active_rect,
+        None,
+        DividerStyle::default(),
+    )
+    .unwrap();
     assert!(String::from_utf8_lossy(&buf).contains('┬'));
 }
 
@@ -399,7 +440,9 @@ fn dim_color_scales_rgb_and_dims_bright() {
     // 20% dimming factor -> 80% brightness
     assert_eq!(dim_color(Some(rgb), 0.20), VtColor::Rgb(80, 160, 40));
     assert_eq!(dim_color(Some(VtColor::BrightRed), 0.20), VtColor::Red);
-    assert_eq!(dim_color(None, 0.20), VtColor::BrightBlack);
+    // Default text and white text scale with dim_factor
+    assert_eq!(dim_color(None, 0.20), VtColor::Rgb(204, 204, 204));
+    assert_eq!(dim_color(None, 0.05), VtColor::Rgb(242, 242, 242));
 }
 
 #[test]
@@ -418,16 +461,7 @@ fn dimmed_pane_dims_content_background_and_suppresses_bold() {
     Compositor::draw_pane_content(
         &mut canvas,
         &mut buf,
-        RenderPaneContext {
-            rect: Rect::new(0, 0, 10, 5),
-            grid: &grid,
-            selection: None,
-            scroll_offset: 0,
-            badge: None,
-            dimmed: true,
-            dim_factor: 0.20,
-            dim_content_bg: true,
-        },
+        pane_ctx(&grid, Rect::new(0, 0, 10, 5), true),
     )
     .unwrap();
     let out = String::from_utf8_lossy(&buf);
@@ -462,9 +496,11 @@ fn divider_styles_render_distinct_characters() {
         &mut buf,
         &dividers,
         None,
+        None,
         DividerStyle {
             active_color: VtColor::BrightGreen,
             inactive_color: VtColor::BrightBlack,
+            marked_color: VtColor::BrightMagenta,
             border_style: BorderStyle::Double,
         },
     )
@@ -480,9 +516,11 @@ fn divider_styles_render_distinct_characters() {
         &mut buf,
         &dividers,
         None,
+        None,
         DividerStyle {
             active_color: VtColor::BrightGreen,
             inactive_color: VtColor::BrightBlack,
+            marked_color: VtColor::BrightMagenta,
             border_style: BorderStyle::Ascii,
         },
     )
@@ -506,6 +544,7 @@ fn status_bar_applies_custom_colors() {
         fg: Some(VtColor::Rgb(240, 246, 252)),
         zoomed: false,
         copy_pane: None,
+        marked_pane: None,
     };
     let mut buf = Vec::new();
     Compositor::draw_status_bar(&mut buf, &bar).unwrap();
@@ -513,3 +552,81 @@ fn status_bar_applies_custom_colors() {
     assert!(text.contains(";48;2;18;24;32"), "bg color missing: {text}");
     assert!(text.contains(";38;2;240;246;252"), "fg color missing: {text}");
 }
+
+#[test]
+fn active_pane_template_applies_default_fg_and_bg() {
+    let mut grid = Grid::new(10, 5);
+    grid.put_char('A');
+    let mut canvas = Canvas::default();
+    canvas.begin(10, 5, None);
+    let mut buf = Vec::new();
+    let mut ctx = pane_ctx(&grid, Rect::new(0, 0, 10, 5), false);
+    ctx.active_fg = Some(VtColor::Rgb(216, 222, 233));
+    ctx.active_bg = Some(VtColor::Rgb(46, 52, 64));
+    Compositor::draw_pane_content(&mut canvas, &mut buf, ctx).unwrap();
+    let out = String::from_utf8_lossy(&buf);
+    assert!(out.contains(";38;2;216;222;233"), "active fg missing: {out}");
+    assert!(out.contains(";48;2;46;52;64"), "active bg missing: {out}");
+}
+
+#[test]
+fn inactive_pane_template_uses_explicit_fg_and_bg() {
+    let mut grid = Grid::new(10, 5);
+    grid.put_char('Z');
+    let mut canvas = Canvas::default();
+    canvas.begin(10, 5, None);
+    let mut buf = Vec::new();
+    let mut ctx = pane_ctx(&grid, Rect::new(0, 0, 10, 5), true);
+    ctx.inactive_fg = Some(VtColor::Rgb(76, 86, 106));
+    ctx.inactive_bg = Some(VtColor::Rgb(36, 41, 51));
+    Compositor::draw_pane_content(&mut canvas, &mut buf, ctx).unwrap();
+    let out = String::from_utf8_lossy(&buf);
+    assert!(out.contains(";38;2;76;86;106"), "inactive fg missing: {out}");
+    assert!(out.contains(";48;2;36;41;51"), "inactive bg missing: {out}");
+}
+
+#[test]
+fn color_to_rgb_and_desaturation_and_tint() {
+    let (r, g, b) = color_to_rgb(VtColor::Red);
+    assert_eq!((r, g, b), (205, 49, 49));
+
+    // Desaturate pure red by 100% -> luminance grayscale
+    let desat_full = desaturate_color(VtColor::Rgb(255, 0, 0), 1.0);
+    if let VtColor::Rgb(dr, dg, db) = desat_full {
+        assert_eq!(dr, dg);
+        assert_eq!(dg, db);
+        assert_eq!(dr, 76); // 0.299 * 255 = 76.245
+    } else {
+        panic!("expected rgb");
+    }
+
+    // Tint pure red 50% toward black
+    let tinted = tint_color(VtColor::Rgb(200, 100, 50), Some(VtColor::Rgb(0, 0, 0)), 0.5);
+    if let VtColor::Rgb(tr, tg, tb) = tinted {
+        assert_eq!(tr, 100);
+        assert_eq!(tg, 50);
+        assert_eq!(tb, 25);
+    } else {
+        panic!("expected rgb");
+    }
+}
+
+#[test]
+fn inactive_color_modes_transform_appropriately() {
+    let orig = Some(VtColor::Rgb(200, 100, 50));
+    // None mode keeps original
+    let (none_fg, _) = apply_inactive_fg(orig, InactiveColorMode::None, None, None, 0.2, false);
+    assert_eq!(none_fg, orig);
+
+    // Desaturate mode pulls toward luminance
+    let (desat_fg, _) =
+        apply_inactive_fg(orig, InactiveColorMode::Desaturate, None, None, 0.5, false);
+    assert_ne!(desat_fg, orig);
+
+    // Tint mode pulls toward target
+    let target = Some(VtColor::Rgb(10, 20, 30));
+    let (tinted_fg, _) =
+        apply_inactive_fg(orig, InactiveColorMode::Tint, target, None, 0.5, false);
+    assert_ne!(tinted_fg, orig);
+}
+
