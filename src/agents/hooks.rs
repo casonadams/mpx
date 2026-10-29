@@ -16,6 +16,8 @@ enum Meaning {
     Finished(&'static str),
     /// Waiting for the user, what for under the key.
     Waiting(&'static str),
+    /// Ready for user input with a static detail description.
+    Ready(&'static str),
     /// A tool ran: an edit of the file `path` finds, when the tool (named under `tool`) is one of
     /// `edits`.
     Tool {
@@ -49,6 +51,15 @@ const OMP_HOOKS: [(&str, Meaning); 9] = [
     ("tool_result", Meaning::Tool { tool: "tool", edits: &OMP_EDIT_TOOLS, path: omp_tool_path }),
     ("agent_end", Meaning::Finished("reply")),
     ("session_shutdown", Meaning::Ended),
+];
+
+/// rho lifecycle events (`mpx hook rho <event>`).
+const RHO_HOOKS: [(&str, Meaning); 5] = [
+    ("turn_start", Meaning::Prompted("prompt")),
+    ("turn_end", Meaning::Ready("I'm ready for you")),
+    ("on_tool_call", Meaning::State(AgentState::Working)),
+    ("approval_requested", Meaning::Waiting("detail")),
+    ("session_end", Meaning::Ended),
 ];
 /// Tools whose use `PostToolUse` reports: file edits are recorded, and file access can surface
 /// another agent's recent edit of the same file.
@@ -152,6 +163,7 @@ fn report_for(v: &Value, event: &str, hooks: &[(&str, Meaning)]) -> Option<HookR
         Meaning::Prompted(key) => p.prompted(key),
         Meaning::Finished(key) => p.finished(key),
         Meaning::Waiting(key) => p.waiting(key),
+        Meaning::Ready(detail) => p.ready(detail),
         Meaning::Tool { tool, edits, path } => p.edited(str_field(v, tool), edits, path(v)),
         Meaning::Ended => p.ended(),
     }
@@ -200,6 +212,14 @@ impl Payload<'_> {
         })
     }
 
+    /// The agent completed its turn and is ready for user input.
+    fn ready(&self, detail: &str) -> Option<HookReport> {
+        Some(HookReport {
+            detail: Some(detail.to_string()),
+            ..self.report(Some(AgentState::NeedsInput))
+        })
+    }
+
     /// `tool` ran on `path`: an edit worth recording when `tool` is one of `edit_tools`.
     fn edited(
         &self,
@@ -235,6 +255,32 @@ const OMP_EDIT_TOOLS: [&str; 2] = ["write", "edit"];
 pub fn omp_hook_report(event: &str, input: &str) -> Option<HookReport> {
     let v: Value = serde_json::from_str(input).unwrap_or(Value::Null);
     report_for(&v, event, &OMP_HOOKS)
+}
+
+/// Maps a rho lifecycle event (`mpx hook rho <event>`, JSON on stdin) to an agent report.
+pub fn rho_hook_report(event: &str, input: &str) -> Option<HookReport> {
+    let v: Value = serde_json::from_str(input).unwrap_or(Value::Null);
+    report_for(&v, event, &RHO_HOOKS)
+}
+
+/// Writes rho hook scripts into `<runtime_dir>/hooks/rho` and returns the directory.
+pub fn rho_hook_dir(runtime_dir: &Path, exe: &Path) -> Option<PathBuf> {
+    let dir = runtime_dir.join("hooks").join("rho");
+    std::fs::create_dir_all(&dir).ok()?;
+    for name in &["turn_start", "turn_end"] {
+        let path = dir.join(name);
+        let content = format!(
+            "#!/bin/sh\nexec {} hook rho {name}\n",
+            shell_quote(&exe.to_string_lossy())
+        );
+        write_if_changed(&path, &content)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755));
+        }
+    }
+    Some(dir)
 }
 
 /// The file an omp tool worked on: the extension sends it resolved. Never one of omp's virtual

@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use mpx::agents::{
     LaunchEnv, LaunchOptions, claude_settings_json, find_harness, launch, launch_with,
@@ -13,6 +13,7 @@ fn env_none() -> LaunchEnv<'static> {
         exe: Path::new(EXE),
         omp_hook: None,
         omp_plugin: None,
+        rho_hook_dir: None,
     }
 }
 
@@ -91,6 +92,17 @@ fn rho_has_no_preassigned_session_id() {
     let spec = launch_with(&harness("rho"), None, LaunchOptions::default(), &env_none());
     assert_eq!(spec.argv, ["rho"]);
     assert_eq!(spec.session_id, None);
+}
+
+#[test]
+fn rho_passes_hook_dir_when_provided() {
+    let dir = PathBuf::from("/var/run/rho_hooks");
+    let env = LaunchEnv {
+        rho_hook_dir: Some(&dir),
+        ..env_none()
+    };
+    let argv = launch_with(&harness("rho"), None, LaunchOptions::default(), &env).argv;
+    assert_eq!(argv[1], format!("--hook-dir={}", dir.display()));
 }
 
 #[test]
@@ -178,6 +190,7 @@ fn claude_settings_quote_paths_with_spaces_and_quotes() {
         exe: Path::new("/opt/my apps/it's/mpx"),
         omp_hook: None,
         omp_plugin: None,
+        rho_hook_dir: None,
     };
     let spec = launch_with(&harness("claude"), None, LaunchOptions::default(), &env);
     let raw = value_after(&spec.argv, "--settings").expect("--settings present");
@@ -226,6 +239,7 @@ fn omp_gets_the_extension_file_when_available() {
         exe: Path::new(EXE),
         omp_hook: Some(hook),
         omp_plugin: None,
+        rho_hook_dir: None,
     };
     let spec = launch_with(&harness("omp"), None, LaunchOptions::default(), &env);
     assert!(
@@ -389,6 +403,7 @@ fn omp_gets_mpx_mcp_tools_only_when_mcp_is_on() {
         exe: Path::new(EXE),
         omp_hook: None,
         omp_plugin: Some(Path::new("/tmp/mpx/hooks/omp-plugin")),
+        rho_hook_dir: None,
     };
     let with = LaunchOptions {
         mcp: true,

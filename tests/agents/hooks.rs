@@ -121,6 +121,7 @@ fn hook_report_dispatches_by_harness() {
     assert!(hook_report("claude", None, &claude("Stop", "")).is_some());
     assert!(hook_report("omp", None, "{}").is_none());
     assert!(hook_report("omp", Some("agent_start"), "{}").is_some());
+    assert!(hook_report("rho", Some("turn_end"), "{}").is_some());
     assert!(hook_report("other", Some("agent_start"), "{}").is_none());
 }
 
@@ -216,6 +217,53 @@ fn omp_plugin_gives_the_agent_mpx_mcp_tools_through_a_script_in_the_plugin() {
     {
         use std::os::unix::fs::PermissionsExt;
         let mode = std::fs::metadata(plugin.join("mpx")).expect("script").permissions().mode();
+        assert_eq!(mode & 0o111, 0o111, "executable");
+    }
+}
+
+#[test]
+fn rho_events_map_to_states() {
+    let start = mpx::agents::rho_hook_report(
+        "turn_start",
+        r#"{"prompt":"run cargo test","turn":1,"session_id":"s123"}"#,
+    );
+    assert_eq!(
+        start,
+        Some(HookReport {
+            state: Some(AgentState::Working),
+            session_id: Some("s123".to_string()),
+            task: Some("run cargo test".to_string()),
+            ..Default::default()
+        })
+    );
+
+    let end = mpx::agents::rho_hook_report(
+        "turn_end",
+        r#"{"status":"Completed","tool_calls_count":2,"turn":1,"session_id":"s123"}"#,
+    );
+    assert_eq!(
+        end,
+        Some(HookReport {
+            state: Some(AgentState::NeedsInput),
+            session_id: Some("s123".to_string()),
+            detail: Some("I'm ready for you".to_string()),
+            ..Default::default()
+        })
+    );
+}
+
+#[test]
+fn rho_hook_dir_writes_turn_scripts() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let hook_dir = mpx::agents::rho_hook_dir(dir.path(), Path::new("/opt/bin/mpx")).expect("rho hook dir");
+    let start_script = std::fs::read_to_string(hook_dir.join("turn_start")).expect("turn_start");
+    assert!(start_script.contains("exec '/opt/bin/mpx' hook rho turn_start"));
+    let end_script = std::fs::read_to_string(hook_dir.join("turn_end")).expect("turn_end");
+    assert!(end_script.contains("exec '/opt/bin/mpx' hook rho turn_end"));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(hook_dir.join("turn_end")).expect("meta").permissions().mode();
         assert_eq!(mode & 0o111, 0o111, "executable");
     }
 }

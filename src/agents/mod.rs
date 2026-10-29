@@ -17,7 +17,8 @@ mod sessions;
 pub use harness::{LaunchEnv, detect, launch, launch_with, registry};
 pub use hooks::{
     HookReport, claude_hook_report, claude_settings_json, clip, omp_extension_source,
-    omp_hook_file, omp_hook_report, omp_plugin_dir, send_hook_report, tool_file,
+    omp_hook_file, omp_hook_report, omp_plugin_dir, rho_hook_dir, rho_hook_report,
+    send_hook_report, tool_file,
 };
 pub use sessions::{
     SessionMeta, Visit, lookup_rho_cwd, parse_claude_meta, parse_codex_meta, parse_omp_meta,
@@ -148,9 +149,13 @@ pub fn default_node_name(spec: &LaunchSpec) -> String {
 
 /// Agent report for a hook payload: `claude` reads the event from the payload, `omp` gets it as an argument.
 pub fn hook_report(harness: &str, event: Option<&str>, input: &str) -> Option<HookReport> {
+    if harness == "claude" {
+        return claude_hook_report(input);
+    }
+    let ev = event?;
     match harness {
-        "claude" => claude_hook_report(input),
-        "omp" => omp_hook_report(event?, input),
+        "omp" => omp_hook_report(ev, input),
+        "rho" => rho_hook_report(ev, input),
         _ => None,
     }
 }

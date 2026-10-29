@@ -1,4 +1,6 @@
 /target
+/.rho/
+.ripwire*
 **/*.rs.bk
 Cargo.lock
 .DS_Store

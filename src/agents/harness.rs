@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use uuid::Uuid;
 
-use super::hooks::{claude_settings_json, omp_hook_file, omp_plugin_dir};
+use super::hooks::{claude_settings_json, omp_hook_file, omp_plugin_dir, rho_hook_dir};
 use super::{Harness, LaunchOptions, LaunchSpec, SessionStore};
 use crate::config::{Config, HarnessConfig};
 
@@ -13,6 +13,8 @@ pub struct LaunchEnv<'a> {
     pub omp_hook: Option<&'a Path>,
     /// Plugin directory giving omp mpx's MCP tools (`--plugin-dir=<dir>`), when available.
     pub omp_plugin: Option<&'a Path>,
+    /// Hook directory passed to rho (`--hook-dir=<dir>`), when available.
+    pub rho_hook_dir: Option<&'a Path>,
 }
 
 fn strings(items: &[&str]) -> Vec<String> {
@@ -156,6 +158,10 @@ fn harness_args(h: &Harness, env: &LaunchEnv, opts: LaunchOptions) -> Vec<String
                 .map(|d| format!("--plugin-dir={}", d.display()));
             hook.into_iter().chain(plugin).collect()
         }
+        "rho" => {
+            let hook = env.rho_hook_dir.map(|d| format!("--hook-dir={}", d.display()));
+            hook.into_iter().collect()
+        }
         _ => Vec::new(),
     }
 }
@@ -183,6 +189,8 @@ pub fn launch(
     let plugin = (omp && opts.mcp)
         .then(|| omp_plugin_dir(runtime_dir, &exe))
         .flatten();
+    let rho = h.name == "rho";
+    let rho_hook = rho.then(|| rho_hook_dir(runtime_dir, &exe)).flatten();
     launch_with(
         h,
         resume,
@@ -191,6 +199,7 @@ pub fn launch(
             exe: &exe,
             omp_hook: hook.as_deref(),
             omp_plugin: plugin.as_deref(),
+            rho_hook_dir: rho_hook.as_deref(),
         },
     )
 }
