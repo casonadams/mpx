@@ -81,3 +81,15 @@ async fn prefix_twice_sends_the_prefix_byte() {
     h.ctrl('b').await;
     wait_for(&mut h.probe, MAIN, "\x02").await;
 }
+
+#[tokio::test]
+async fn focus_reports_survive_output_beyond_what_the_log_keeps() {
+    // The request for focus events scrolls out of the pane's log before the TUI attaches, so
+    // the screen rebuilt from the log alone would not know about it.
+    let flood = r"head -c 2500000 /dev/zero | tr '\0' x";
+    let script = format!(r"printf '\033[?1004h'; {flood}; {ECHO}");
+    let mut h = Harness::start(Config::default(), &script).await;
+    h.frame().await;
+    assert!(h.app.modes_of(MAIN).focus_events);
+    wait_for(&mut h.probe, MAIN, "\x1b[I").await;
+}

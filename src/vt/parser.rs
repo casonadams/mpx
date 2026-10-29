@@ -539,6 +539,11 @@ impl VtScreen {
         self.handler.modes
     }
 
+    /// Takes on input modes set before the output this screen was fed, which it could not see.
+    pub fn set_modes(&mut self, modes: TermModes) {
+        self.handler.modes = modes;
+    }
+
     /// Latest OSC 0/2 window title.
     pub fn title(&self) -> Option<&str> {
         self.handler.title.as_deref()

@@ -1,3 +1,4 @@
+use crate::keys::TermModes;
 use crate::layout::{Direction, Divider, Rect, WindowTab};
 use serde::{Deserialize, Serialize};
 
@@ -74,6 +75,9 @@ pub struct NodeInfo {
     /// Index of the window containing this pane, if it is laid out.
     pub window: Option<usize>,
     pub agent: Option<AgentInfo>,
+    /// Input modes the program in a terminal pane has set (absent from daemons that predate it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modes: Option<TermModes>,
 }
 
 impl NodeInfo {
@@ -94,6 +98,7 @@ impl NodeInfo {
             last_output_ms: 0,
             window: None,
             agent: None,
+            modes: None,
         }
     }
 
@@ -329,6 +334,9 @@ pub enum Request {
         /// come for every pane.
         #[serde(default)]
         active_window: bool,
+        /// With `active_window`: also send `Layout` whenever windows or panes are rearranged.
+        #[serde(default)]
+        layout: bool,
     },
     Screen {
         name: String,
@@ -495,6 +503,9 @@ pub enum StreamEvent {
     },
     /// This subscriber fell behind and events were dropped; re-read state before trusting the stream.
     Lagged,
+    /// Windows or panes were rearranged (focus, a window switch, a split, a swap...): refetch the
+    /// layout. Sent only to subscribers that asked for it, so older clients never see it.
+    Layout,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -11,7 +11,7 @@ pub struct WindowTab {
     pub is_active: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Window {
     pub id: usize,
     pub name: String,
@@ -181,7 +181,7 @@ fn next_preset(current: Option<LayoutPreset>) -> LayoutPreset {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Workspace {
     pub name: String,
     pub windows: Vec<Window>,

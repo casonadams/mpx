@@ -150,6 +150,12 @@ pub async fn load_pane(
         VtScreen::live(width as usize, height as usize)
     };
     screen.feed(logs.as_bytes());
+    // The log holds only recent output: a mode the program set before it (focus events, cursor
+    // keys) comes from the daemon's screen, which has seen everything. Asked after the log, so a
+    // change in between also arrives on the stream past `next`.
+    if let Ok(Some(modes)) = client.status(name).await.map(|info| info.modes) {
+        screen.set_modes(modes);
+    }
     Some((screen, next))
 }
 

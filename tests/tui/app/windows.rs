@@ -5,7 +5,9 @@ use crossterm::event::KeyCode;
 use mpx::config::Config;
 use mpx::tui::app::{Flow, Mode};
 
-use super::support::{ECHO, Harness, MAIN, SESSION, connect, wait_for, window};
+use mpx::layout::Direction;
+
+use super::support::{ECHO, Harness, MAIN, SESSION, connect, split, wait_for, window};
 
 /// Default bindings that would spawn the user's shell, rebound to run `ECHO`.
 fn echo_config() -> Config {
@@ -255,4 +257,19 @@ async fn a_window_that_flooded_while_hidden_is_rebuilt_when_selected() {
     h.prefixed_char('1').await;
     let shown = h.frame().await;
     assert!(shown.contains("150000") && shown.contains("BIG-END"), "{shown}");
+}
+
+#[tokio::test]
+async fn panes_split_or_focused_from_outside_are_laid_out_without_waiting_for_a_tick() {
+    let mut h = start().await;
+    h.frame().await;
+    h.app.layout.dirty = false;
+    split(&mut h.probe, MAIN, "agent", Direction::Horizontal).await;
+    h.until("the split is laid out", |app| app.layout.dirty).await;
+
+    h.frame().await;
+    h.app.layout.dirty = false;
+    h.probe.focus("agent").await.expect("focus");
+    h.until("the focus change is laid out", |app| app.layout.dirty)
+        .await;
 }

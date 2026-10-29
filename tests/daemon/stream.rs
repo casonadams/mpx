@@ -259,3 +259,48 @@ async fn an_active_window_subscriber_gets_only_that_windows_output_but_every_exi
         .any(|e| matches!(e, StreamEvent::Output { name, .. } if name == "back"));
     assert!(!hidden, "the hidden window's output was sent");
 }
+
+#[tokio::test]
+async fn a_terminal_hears_of_rearranged_windows_and_other_subscribers_do_not() {
+    let daemon = start().await;
+    let mut client = connect(&daemon.endpoint).await;
+    let window = |name: &str| mpx::protocol::NewWindowOpts {
+        name: Some(name.to_string()),
+        spawn: pty(name, "sh", &["-c", "cat"]),
+        focus: true,
+    };
+    client.new_window(window("one")).await.expect("one");
+    client.new_window(window("two")).await.expect("two");
+
+    let (term_tx, mut term_rx) = tokio::sync::mpsc::channel(64);
+    let terminal = connect(&daemon.endpoint).await;
+    tokio::spawn(async move {
+        let _ = terminal.stream_logs_into((None, None), true, term_tx, |e| e).await;
+    });
+    let (all_tx, mut all_rx) = tokio::sync::mpsc::channel(64);
+    let everything = connect(&daemon.endpoint).await;
+    tokio::spawn(async move {
+        let _ = everything.stream_logs_into((None, None), false, all_tx, |e| e).await;
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    client.select_window(0).await.expect("select window");
+    let heard = tokio::time::timeout(Duration::from_secs(2), async {
+        while let Some(event) = term_rx.recv().await {
+            if matches!(event, StreamEvent::Layout) {
+                return true;
+            }
+        }
+        false
+    })
+    .await;
+    assert_eq!(heard, Ok(true), "the terminal was not told");
+
+    client.kill("two").await.expect("kill two");
+    let mut seen = Vec::new();
+    while !seen.iter().any(|e| matches!(e, StreamEvent::Exit { .. })) {
+        let event = tokio::time::timeout(Duration::from_secs(2), all_rx.recv()).await;
+        seen.push(event.expect("events in time").expect("event"));
+    }
+    assert!(!seen.iter().any(|e| matches!(e, StreamEvent::Layout)), "{seen:?}");
+}

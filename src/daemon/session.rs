@@ -88,8 +88,9 @@ pub(super) enum SessionMsg {
 /// Which session-wide events a subscriber receives.
 pub(super) enum Filter {
     Everything,
-    /// What a TUI shows: output of the active window's panes, and every other pane event.
-    ActiveWindow,
+    /// What a TUI shows: output of the active window's panes, every other pane event, and
+    /// `Layout` events when `layout` is set.
+    ActiveWindow { layout: bool },
     Pipe(String),
 }
 
@@ -97,18 +98,29 @@ impl Filter {
     /// Whether `event` goes to this subscriber; `shown` says if a pane is in the active window.
     fn accepts(&self, event: &StreamEvent, shown: impl Fn(&str) -> bool) -> bool {
         match (self, event) {
+            (_, StreamEvent::Layout) => matches!(self, Filter::ActiveWindow { layout: true }),
             (Filter::Everything, _) => true,
-            (Filter::ActiveWindow, StreamEvent::Output { name, .. }) => shown(name),
-            (Filter::ActiveWindow, StreamEvent::Pipe { .. }) => false,
-            (Filter::ActiveWindow, _) => true,
+            (Filter::ActiveWindow { .. }, StreamEvent::Output { name, .. }) => shown(name),
+            (Filter::ActiveWindow { .. }, StreamEvent::Pipe { .. }) => false,
+            (Filter::ActiveWindow { .. }, _) => true,
             (Filter::Pipe(want), StreamEvent::Pipe { name, .. }) => want == name,
             (Filter::Pipe(_), _) => false,
         }
     }
 
+    /// What a subscription asked for: a terminal's view (`active_window`), with or without layout
+    /// events, or everything.
+    pub(super) fn subscriber(active_window: bool, layout: bool) -> Self {
+        if active_window {
+            Filter::ActiveWindow { layout }
+        } else {
+            Filter::Everything
+        }
+    }
+
     /// Session-wide: wants events from every pane, so panes must relay them.
     fn session_wide(&self) -> bool {
-        matches!(self, Filter::Everything | Filter::ActiveWindow)
+        matches!(self, Filter::Everything | Filter::ActiveWindow { .. })
     }
 }
 
@@ -247,9 +259,13 @@ impl Session {
         match msg {
             SessionMsg::Req { req, reply } => {
                 let mutates = !is_read_only(&req);
+                let before = mutates.then(|| self.workspace.clone());
                 let resp = self.request(*req).await;
                 if mutates {
                     self.schedule_save();
+                }
+                if before.is_some_and(|before| before != self.workspace) {
+                    self.fanout(&StreamEvent::Layout);
                 }
                 let _ = reply.send(resp);
             }

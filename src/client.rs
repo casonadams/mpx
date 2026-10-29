@@ -1,6 +1,6 @@
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
-use tokio_util::codec::{Framed, FramedRead, LengthDelimitedCodec, LinesCodec};
+use tokio_util::codec::{Framed, FramedParts, LengthDelimitedCodec, LinesCodec};
 
 use crate::ipc::{IpcStream, connect_stream};
 use crate::layout::{Divider, Rect, WindowTab};
@@ -484,6 +484,7 @@ impl Client {
             since,
             binary: false,
             active_window: false,
+            layout: false,
         };
         self.stream(req, handler)
             .await
@@ -493,8 +494,8 @@ impl Client {
     /// full: a reader that falls behind stops reading, which slows the daemon's delivery instead of
     /// piling events up in memory. Events come as binary frames (`wire`) when the daemon offers
     /// them, as JSON lines otherwise. With `active_window`, pane output comes only for the active
-    /// window's panes (a daemon that predates it sends all). Ends when the daemon or `tx`'s
-    /// receiver goes away.
+    /// window's panes (a daemon that predates it sends all), and `Layout` events come when windows
+    /// or panes are rearranged. Ends when the daemon or `tx`'s receiver goes away.
     pub async fn stream_logs_into<T>(
         mut self,
         (name, since): (Option<String>, Option<u64>),
@@ -507,6 +508,7 @@ impl Client {
             since,
             binary: true,
             active_window,
+            layout: active_window,
         };
         match self.call(req).await? {
             Response::BinaryStream => return self.forward_frames(tx, wrap).await,
@@ -535,11 +537,18 @@ impl Client {
         let codec = LengthDelimitedCodec::builder()
             .max_frame_length(wire::MAX_FRAME)
             .new_codec();
-        let mut frames = FramedRead::new(parts.io, codec);
-        frames.read_buffer_mut().extend_from_slice(&parts.read_buf);
+        // Built from parts so bytes read along with the daemon's answer are decoded at once,
+        // without waiting for more to arrive.
+        let mut binary = FramedParts::new::<bytes::Bytes>(parts.io, codec);
+        binary.read_buf = parts.read_buf;
+        let mut frames = Framed::from_parts(binary);
         while let Some(frame) = frames.next().await {
             let frame = frame.map_err(|e| e.to_string())?;
-            let event = wire::decode_event(&frame)?;
+            // An event this client does not know (from a newer daemon) is skipped, as the JSON
+            // stream does; a skipped output chunk shows up as a gap in the offsets.
+            let Ok(event) = wire::decode_event(&frame) else {
+                continue;
+            };
             if tx.send(wrap(event)).await.is_err() {
                 break;
             }

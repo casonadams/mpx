@@ -251,18 +251,23 @@ fn push_frame(buf: &mut Vec<u8>, event: &StreamEvent) {
     }
 }
 
+/// Serves a `Subscribe` request for the rest of the connection.
 async fn subscribe_node<S: AsyncStream>(
     state: &DaemonState,
     framed: &mut Framed<S, LinesCodec>,
-    (name, since): (Option<String>, Option<u64>),
-    active_window: bool,
-    binary: bool,
+    request: Request,
 ) {
-    let session_wide = if active_window {
-        Filter::ActiveWindow
-    } else {
-        Filter::Everything
+    let Request::Subscribe {
+        name,
+        since,
+        binary,
+        active_window,
+        layout,
+    } = request
+    else {
+        return;
     };
+    let session_wide = Filter::subscriber(active_window, layout);
     // A session-wide subscriber is an attached terminal: its backlog paces pane output.
     let backlog = (name.is_none() && since.is_none()).then(|| state.pacing.track(now_ms()));
     let (sink, rx) = Sink::channel(backlog.clone());
@@ -305,13 +310,8 @@ pub async fn handle_client<S: AsyncStream>(state: Arc<DaemonState>, stream: S) {
         };
 
         match req {
-            Request::Subscribe {
-                name,
-                since,
-                binary,
-                active_window,
-            } => {
-                subscribe_node(&state, &mut framed, (name, since), active_window, binary).await;
+            subscribe @ Request::Subscribe { .. } => {
+                subscribe_node(&state, &mut framed, subscribe).await;
                 break;
             }
             Request::SubscribePipe { name } => {
