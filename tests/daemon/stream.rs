@@ -7,7 +7,7 @@ use mpx::protocol::{StreamEvent, WaitCondition};
 type Chunk = (u64, u64, String);
 
 /// Streams `name` from `since` until `done` says stop, failing the test if it takes too long.
-async fn collect(
+async fn collect_chunks(
     endpoint: &str,
     name: Option<&str>,
     since: Option<u64>,
@@ -51,7 +51,7 @@ async fn since_replays_the_tail_then_continues_live_without_gap_or_duplicates() 
         writer.send_input("replay", "three\n").await.unwrap();
     });
 
-    let events = collect(&daemon.endpoint, Some("replay"), Some(mid), |events, _| {
+    let events = collect_chunks(&daemon.endpoint, Some("replay"), Some(mid), |events, _| {
         events.iter().any(|(_, _, d)| d.contains("three"))
     })
     .await;
@@ -88,7 +88,7 @@ async fn live_output_split_across_reads_keeps_offsets_contiguous() {
         .await
         .unwrap();
 
-    let events = collect(&daemon.endpoint, Some("wide"), Some(0), |_, event| {
+    let events = collect_chunks(&daemon.endpoint, Some("wide"), Some(0), |_, event| {
         matches!(event, StreamEvent::Exit { .. })
     })
     .await;
@@ -191,14 +191,14 @@ async fn binary_and_json_subscribers_receive_the_same_output() {
 
     let script = r#"for i in 1 2 3; do printf '\033[31mred\033[0m é€😀 漢字 %s\r\n' "$i"; done; echo WIRE-END"#;
     client
-        .spawn(pty("mix", "sh", &["-c", script]))
+        .spawn(task("mix", "sh", &["-c", script]))
         .await
         .expect("spawn");
 
-    let collect = |rx: &mut Vec<StreamEvent>| output_until(rx, "mix", "WIRE-END");
+    let output_of = |rx: &mut Vec<StreamEvent>| output_until(rx, "mix", "WIRE-END");
     let (mut from_json, mut from_bin) = (Vec::new(), Vec::new());
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
-    while collect(&mut from_json).is_none() || collect(&mut from_bin).is_none() {
+    while output_of(&mut from_json).is_none() || output_of(&mut from_bin).is_none() {
         assert!(tokio::time::Instant::now() < deadline, "both streams end with the marker");
         tokio::select! {
             Some(event) = json_rx.recv() => from_json.push(event),
@@ -206,8 +206,8 @@ async fn binary_and_json_subscribers_receive_the_same_output() {
             _ = tokio::time::sleep(Duration::from_millis(20)) => {}
         }
     }
-    let (json_text, json_ranges) = collect(&mut from_json).expect("json output");
-    let (bin_text, bin_ranges) = collect(&mut from_bin).expect("binary output");
+    let (json_text, json_ranges) = output_of(&mut from_json).expect("json output");
+    let (bin_text, bin_ranges) = output_of(&mut from_bin).expect("binary output");
     assert_eq!(bin_text, json_text);
     assert!(bin_text.contains("\x1b[31mred\x1b[0m é€😀 漢字 3"), "{bin_text:?}");
     let contiguous = |ranges: &[(u64, u64)]| ranges.windows(2).all(|w| w[0].1 == w[1].0);

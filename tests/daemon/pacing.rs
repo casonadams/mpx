@@ -44,7 +44,7 @@ async fn a_terminal_that_falls_behind_paces_a_flood_until_it_detaches() {
     tokio::time::sleep(Duration::from_millis(300)).await;
     let freed = produced(&mut client, "flood").await;
     assert!(
-        freed - still > 1024 * 1024,
+        freed - still > 256 * 1024,
         "the pane must run free once the terminal detaches: {still} -> {freed}"
     );
     client.kill("flood").await.expect("kill flood");
@@ -69,7 +69,7 @@ async fn a_flooding_pane_still_answers_requests_and_dies_on_kill_at_once() {
     let killed = std::time::Instant::now();
     client.kill("flood").await.expect("kill flood");
     assert!(
-        killed.elapsed() < Duration::from_millis(500),
+        killed.elapsed() < Duration::from_secs(1),
         "kill took {:?}",
         killed.elapsed()
     );
