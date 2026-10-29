@@ -12,7 +12,7 @@ async fn until(
     seen: &mut Vec<AgentState>,
     want: AgentState,
 ) {
-    let found = tokio::time::timeout(Duration::from_millis(1500), async {
+    let found = tokio::time::timeout(Duration::from_secs(5), async {
         while let Some(state) = rx.recv().await {
             if let Some(state) = state {
                 seen.push(state);
@@ -30,17 +30,21 @@ async fn until(
     );
 }
 
+/// An agent without hooks, named so the harness detection matches the script's own name. It rings
+/// the bell only when told to, once the test has seen it idle: an alert before the agent is
+/// recognized (the daemon probes processes every 250 ms) would not count.
+fn fake_agent(dir: &std::path::Path) -> std::path::PathBuf {
+    let script = dir.join("fakeagent");
+    let body = "#!/bin/sh\nsleep 0.1\necho working\nread ring\nprintf '\\a'\nread line\necho \"got $line\"\nexec sleep 5\n";
+    std::fs::write(&script, body).unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    script
+}
+
 #[tokio::test]
 async fn unhooked_agent_transitions_stream_to_session_subscribers() {
     let dir = tempfile::tempdir().unwrap();
-    // Named so the harness detection matches the script's own name.
-    let script = dir.path().join("fakeagent");
-    std::fs::write(
-        &script,
-        "#!/bin/sh\nsleep 0.1\necho working\nsleep 0.2\nprintf '\\a'\nread line\necho \"got $line\"\nexec sleep 5\n",
-    )
-    .unwrap();
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let script = fake_agent(dir.path());
 
     let config = Config {
         harness: vec![HarnessConfig {
@@ -82,6 +86,7 @@ async fn unhooked_agent_transitions_stream_to_session_subscribers() {
     let mut seen = Vec::new();
     until(&mut rx, &mut seen, AgentState::Working).await;
     until(&mut rx, &mut seen, AgentState::Idle).await;
+    client.send_input("fakeagent", "ring\n").await.unwrap();
     until(&mut rx, &mut seen, AgentState::NeedsInput).await;
 
     client.send_input("fakeagent", "go\n").await.unwrap();

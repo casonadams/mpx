@@ -25,7 +25,9 @@ pub const MAIN: &str = "main";
 pub const SIZE: (u16, u16) = (100, 30);
 /// Pane program: raw mode without echo, prints READY, then echoes its input back.
 pub const ECHO: &str = "stty raw -echo; printf READY; exec cat";
-const WAIT: Duration = Duration::from_secs(2);
+/// Guard against a hang, not a speed check: a passing test is done long before it. Generous
+/// because a busy machine (a parallel `cargo test`, live agents) slows floods through PTYs.
+const WAIT: Duration = Duration::from_secs(10);
 
 /// A pty pane running `sh -c script`.
 pub fn pane(name: &str, script: &str) -> SpawnOpts {

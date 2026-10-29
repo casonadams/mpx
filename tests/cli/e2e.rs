@@ -173,6 +173,13 @@ fn kill_server_is_safe_without_a_daemon() {
     assert_eq!(s.code(&["kill-server"]), 1);
 }
 
+/// Asserts that `out` ended with `code` and said `needle` on stderr.
+fn assert_fails(out: &Output, code: i32, needle: &str) {
+    assert_eq!(out.status.code(), Some(code));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains(needle), "{stderr}");
+}
+
 #[test]
 fn attach_refuses_nested_use_inside_a_pane() {
     let s = Session::new("nest");
@@ -182,8 +189,15 @@ fn attach_refuses_nested_use_inside_a_pane() {
         .arg("attach")
         .output()
         .expect("spawn");
-    assert_eq!(out.status.code(), Some(1));
-    assert!(String::from_utf8_lossy(&out.stderr).contains("nested"));
+    assert_fails(&out, 1, "nested");
+}
+
+/// Run as a child process: clap prints usage errors straight to stderr, which the test harness
+/// does not capture from an in-process call.
+#[test]
+fn unknown_flag_is_a_usage_error() {
+    let out = Command::new(BIN).arg("--no-such-flag").output().expect("spawn");
+    assert_fails(&out, 2, "unexpected argument '--no-such-flag'");
 }
 
 #[test]
@@ -512,10 +526,7 @@ fn help_lists_restore_and_the_idempotency_flag() {
 #[test]
 fn restore_without_a_snapshot_exits_one_with_a_message() {
     let s = Session::new("rs");
-    let out = s.run(&["restore"]);
-    assert_eq!(out.status.code(), Some(1));
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("snapshot"), "{stderr}");
+    assert_fails(&s.run(&["restore"]), 1, "snapshot");
 }
 
 #[test]

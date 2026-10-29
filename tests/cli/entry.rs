@@ -14,11 +14,6 @@ fn version_flag_exits_zero() {
 }
 
 #[test]
-fn unknown_flag_is_a_usage_error() {
-    assert_eq!(main_entry(argv(&["mpx", "--no-such-flag"])), 2);
-}
-
-#[test]
 fn has_session_without_a_daemon_reports_absent() {
     let dir = tempfile::tempdir().expect("temp dir");
     let endpoint = dir.path().join("none.sock");

@@ -8,6 +8,10 @@ use super::pacing::{Inflight, Pacing};
 use super::pane::PaneMsg;
 use super::{NodeError, Process, SpawnSpec};
 
+/// openpty(3) is not safe to call from several threads at once on macOS: overlapping calls fail
+/// now and then with errno -6. Panes open their PTYs one at a time.
+static OPEN_PTY: Mutex<()> = Mutex::new(());
+
 const COLS: u16 = 80;
 const ROWS: u16 = 24;
 
@@ -65,14 +69,16 @@ impl PtyNode {
         pacing: Arc<Pacing>,
         inflight: Arc<Inflight>,
     ) -> Result<Self, NodeError> {
-        let pair = native_pty_system()
-            .openpty(PtySize {
+        let pair = {
+            let _one_at_a_time = OPEN_PTY.lock().unwrap_or_else(|e| e.into_inner());
+            native_pty_system().openpty(PtySize {
                 rows: ROWS,
                 cols: COLS,
                 pixel_width: 0,
                 pixel_height: 0,
             })
-            .map_err(|e| NodeError::Internal(format!("Failed to open PTY: {}", e)))?;
+        }
+        .map_err(|e| NodeError::Internal(format!("Failed to open PTY: {}", e)))?;
 
         let mut cmd = CommandBuilder::new(&spec.command);
         cmd.args(&spec.args);
