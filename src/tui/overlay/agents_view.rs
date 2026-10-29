@@ -107,7 +107,7 @@ fn activity(agent: &LiveAgent) -> u64 {
     agent.node.last_output_ms.max(since(agent))
 }
 
-fn agent_key(agent: &LiveAgent) -> String {
+pub(crate) fn agent_key(agent: &LiveAgent) -> String {
     format!("{}:%{}", agent.session, agent.node.id)
 }
 

@@ -2,6 +2,7 @@
 pub mod agents_view;
 pub mod help_view;
 pub mod nav;
+pub mod palette_view;
 pub mod tree_view;
 pub mod widgets;
 
@@ -17,7 +18,9 @@ use crate::tui::command::Command;
 
 pub use agents_view::AgentsView;
 pub use help_view::HelpView;
+pub use palette_view::{PaletteItem, PaletteView};
 pub use tree_view::{TreePane, TreeSession, TreeView, TreeWindow};
+pub use crate::tui::command::PaletteTab;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum OverlayAction {
@@ -48,6 +51,7 @@ pub enum Overlay {
     Agents(AgentsView),
     Tree(TreeView),
     Help(HelpView),
+    Palette(PaletteView),
 }
 
 impl Overlay {
@@ -63,19 +67,26 @@ impl Overlay {
         Overlay::Help(HelpView::new(entries))
     }
 
+    pub fn palette(view: PaletteView) -> Self {
+        Overlay::Palette(view)
+    }
+
     /// Reload data; called on open, once per second while open, and after actions.
     pub async fn refresh(&mut self, ctx: &mut OverlayCtx<'_>) {
         match self {
             Overlay::Agents(view) => view.refresh(ctx).await,
             Overlay::Tree(view) => view.refresh(ctx).await,
             Overlay::Help(_) => {}
+            Overlay::Palette(view) => view.refresh(ctx).await,
         }
     }
 
     /// Brings anything that depends on the selection up to date after a key moved it.
     pub async fn follow_selection(&mut self) {
-        if let Overlay::Tree(view) = self {
-            view.follow_selection().await;
+        match self {
+            Overlay::Tree(view) => view.follow_selection().await,
+            Overlay::Palette(view) => view.follow_selection().await,
+            _ => {}
         }
     }
 
@@ -84,6 +95,7 @@ impl Overlay {
             Overlay::Agents(view) => view.handle_key(key),
             Overlay::Tree(view) => view.handle_key(key),
             Overlay::Help(view) => view.handle_key(key),
+            Overlay::Palette(view) => view.handle_key(key),
         }
     }
 
@@ -93,6 +105,7 @@ impl Overlay {
             Overlay::Agents(view) => view.render(out, area),
             Overlay::Tree(view) => view.render(out, area),
             Overlay::Help(view) => view.render(out, area),
+            Overlay::Palette(view) => view.render(out, area),
         }
     }
 }

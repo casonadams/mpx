@@ -159,6 +159,7 @@ impl App {
             Command::OpenAgents => self.open_overlay(Overlay::agents()).await,
             Command::OpenTree => self.open_overlay(Overlay::tree()).await,
             Command::OpenHelp => self.open_help().await,
+            Command::OpenPalette { tab } => self.open_palette(tab).await,
             Command::ToggleSidebar => self.toggle_sidebar().await,
             Command::StepAgent { next } => self.step_agent(next).await,
             Command::CommandPrompt { initial } => self.open_prompt(&initial),
@@ -170,6 +171,16 @@ impl App {
     async fn open_help(&mut self) -> Flow {
         let entries = self.keymap.help_entries();
         self.open_overlay(Overlay::help(entries)).await
+    }
+
+    async fn open_palette(&mut self, tab: Option<crate::tui::command::PaletteTab>) -> Flow {
+        let entries = self.keymap.help_entries();
+        let view = super::overlay::PaletteView::new(
+            tab.unwrap_or_default(),
+            entries,
+            &self.session,
+        );
+        self.open_overlay(Overlay::palette(view)).await
     }
 
     fn open_prompt(&mut self, initial: &str) -> Flow {

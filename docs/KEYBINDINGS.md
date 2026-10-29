@@ -55,6 +55,7 @@ Only the configured prefix is intercepted. `Ctrl-a` reaches your shell unless yo
 
 | Key | Command | Description |
 | :--- | :--- | :--- |
+| `Ctrl-Space` (no prefix) | `palette` | Open the unified command palette |
 | `:` | `command-prompt` | Command line on the status row |
 | `?` | `list-keys` | Searchable key list |
 | `[` | `copy-mode` | Vi copy mode |
@@ -80,6 +81,7 @@ A vim-style command line on the status row. Editing keys: `Left`/`Right`, `Backs
 | `paste [-t TARGET] [--submit] TEXT...` | | |
 | `launch-agent HARNESS [--resume ID] [--cwd DIR] [--split]` | | |
 | `agents`, `next-attention`, `choose-tree`, `sidebar`, `next-agent`, `prev-agent`, `list-keys` | `help` | |
+| `palette [commands\|agents\|sessions\|help]` | `command-palette` | |
 | `copy-mode`, `send-prefix`, `command-prompt` | | |
 | `detach-client` | `detach`, `q`, `quit` | |
 | `kill-server` | `qa` | Asks y/n |
@@ -92,6 +94,7 @@ Custom bindings map a key to any of these command lines; see [CONFIG.md](CONFIG.
 
 All overlays use the same motions: `j`/`k` (or arrows), `gg`/`G`, `Ctrl-d`/`Ctrl-u`, `/` filter (fuzzy; `Enter` keeps the filter, `Esc` clears it), and `q`/`Esc` to close.
 
+- **Command Palette** (`Ctrl-Space` or `:palette`): unified tabbed modal with instant fuzzy search across **Commands**, **Agents**, **Sessions & Panes**, and **Help**. Navigate rows with `Ctrl-n`/`Ctrl-p` or `Up`/`Down`, switch tabs with `Tab`/`Shift-Tab` or `Left`/`Right`, type to filter, `Ctrl-w`/`Ctrl-u` to delete word/clear, `Enter` to execute or switch, and `Esc` to close.
 - **Agent manager** (`Prefix s`): see [AGENT-MANAGER.md](AGENT-MANAGER.md).
 - **Sessions** (`Prefix w`): every session, window and pane, with the current session first. Pane rows show the running program, working directory and time since last output; session and window rows count waiting (`◆`), working (`●`) and exited (`✕`) panes, even when collapsed. `l`/`Right`/`Enter` expands or selects, `h`/`Left` collapses, `/` filters by name, program or directory, `x` kills the selected pane, window or session (asks y/n), `p` toggles a preview of the selected pane. Selecting switches session and window as needed.
 - **Help** (`Prefix ?`): every active binding and its command.

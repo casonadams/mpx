@@ -195,7 +195,7 @@ pub fn session_from_snapshot(
     }
 }
 
-async fn load_session(endpoint: &str) -> Option<TreeSession> {
+pub(crate) async fn load_session(endpoint: &str) -> Option<TreeSession> {
     let mut client = Client::connect(endpoint).await.ok()?;
     let info = client.info().await.ok()?;
     let nodes = client.list().await.ok()?;

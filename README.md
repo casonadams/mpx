@@ -102,7 +102,9 @@ mpx agents new claude --split
 
 ---
 
-## Agent Manager
+## Command Palette & Agent Manager
+
+`Ctrl-Space` (no prefix needed) opens the unified **Command Palette**: instant fuzzy search across commands, agents, windows/panes, and key bindings with `Ctrl-n`/`Ctrl-p` and `Tab`/`Shift-Tab` navigation.
 
 `Prefix s` (or `mpx agents`) lists every AI agent running in any session (Claude Code, oh-my-pi, Codex, rho, Antigravity, OpenCode, or your own harness). Agents are grouped by state (**needs you**, working, idle, exited), next to stored sessions you can resume. You can jump to an agent, resume or launch one, message several at once, or kill them, all with vim keys. `Prefix e` opens an agents sidebar: every agent by session down the left, with the highlighted agent's pane live on the right. `Prefix A` jumps to the agent that has waited longest, and the status bar shows `◆N` while agents wait. State comes from harness hooks that mpx installs when it launches an agent, with terminal bells and output activity as fallbacks. See **[Agent Manager](docs/AGENT-MANAGER.md)**.
 

@@ -9,8 +9,8 @@ use mpx::tui::overlay::nav::fuzzy_match;
 use mpx::tui::overlay::tree_view::session_from_snapshot;
 use mpx::tui::overlay::widgets::{age_label, short_path};
 use mpx::tui::overlay::{
-    AgentsView, HelpEntry, HelpView, Overlay, OverlayAction, TreePane, TreeSession, TreeView,
-    TreeWindow,
+    AgentsView, HelpEntry, HelpView, Overlay, OverlayAction, PaletteTab, PaletteView, TreePane,
+    TreeSession, TreeView, TreeWindow,
 };
 
 fn key(c: char) -> KeyEvent {
@@ -880,16 +880,23 @@ fn draw_agents(view: &AgentsView, area: Rect) -> String {
     String::from_utf8_lossy(&buf).into_owned()
 }
 
-/// Screen text after drawing the tree, so assertions ignore styling escapes.
-fn draw_tree(view: &TreeView, area: Rect) -> String {
+fn snapshot_overlay(
+    area: Rect,
+    render: impl FnOnce(&mut Vec<u8>) -> Result<(), std::io::Error>,
+) -> String {
     let mut buf: Vec<u8> = Vec::new();
-    view.render(&mut buf, area).expect("render");
+    render(&mut buf).expect("render");
     let mut screen = mpx::vt::VtScreen::new(
         usize::from(area.x + area.width),
         usize::from(area.y + area.height),
     );
     screen.feed(&buf);
     screen.snapshot()
+}
+
+/// Screen text after drawing the tree, so assertions ignore styling escapes.
+fn draw_tree(view: &TreeView, area: Rect) -> String {
+    snapshot_overlay(area, |buf| view.render(buf, area))
 }
 
 #[test]
@@ -1122,4 +1129,207 @@ fn short_path_replaces_only_a_whole_home_prefix() {
     assert_eq!(short_path("/home/meow", home), "/home/meow");
     assert_eq!(short_path("/tmp", home), "/tmp");
     assert_eq!(short_path("/home/me/src", None), "/home/me/src");
+}
+
+fn sample_palette() -> PaletteView {
+    let entries = vec![
+        HelpEntry {
+            key: "c".to_string(),
+            command: "new-window".to_string(),
+        },
+        HelpEntry {
+            key: "%".to_string(),
+            command: "split-window -h".to_string(),
+        },
+    ];
+    PaletteView::new(PaletteTab::Commands, entries, "main")
+}
+
+fn draw_palette(view: &PaletteView, area: Rect) -> String {
+    snapshot_overlay(area, |buf| view.render(buf, area))
+}
+
+#[test]
+fn palette_starts_on_commands_tab_and_cycles_tabs() {
+    let mut view = sample_palette();
+    assert_eq!(view.tab, PaletteTab::Commands);
+
+    view.handle_key(code(KeyCode::Tab));
+    assert_eq!(view.tab, PaletteTab::Agents);
+
+    view.handle_key(code(KeyCode::Right));
+    assert_eq!(view.tab, PaletteTab::Sessions);
+
+    view.handle_key(code(KeyCode::Tab));
+    assert_eq!(view.tab, PaletteTab::Help);
+
+    view.handle_key(code(KeyCode::Tab));
+    assert_eq!(view.tab, PaletteTab::Commands);
+
+    view.handle_key(code(KeyCode::BackTab));
+    assert_eq!(view.tab, PaletteTab::Help);
+
+    view.handle_key(code(KeyCode::Left));
+    assert_eq!(view.tab, PaletteTab::Sessions);
+}
+
+#[test]
+fn palette_fuzzy_filters_commands_and_edits_search_text() {
+    let mut view = sample_palette();
+    let initial_count = view.current_items().len();
+
+    // Type "split"
+    for c in "split".chars() {
+        view.handle_key(key(c));
+    }
+    let filtered = view.current_items();
+    assert!(filtered.len() < initial_count);
+    assert!(filtered.iter().any(|item| item.title.contains("Split Horizontal")));
+    assert!(filtered.iter().any(|item| item.title.contains("Split Vertical")));
+
+    // Move down with Ctrl-n
+    view.handle_key(ctrl('n'));
+    assert_eq!(view.list.cursor, 1);
+
+    // Move up with Ctrl-p
+    view.handle_key(ctrl('p'));
+    assert_eq!(view.list.cursor, 0);
+
+    // Ctrl-w deletes the word "split"
+    view.handle_key(ctrl('w'));
+    assert_eq!(view.prompt.text(), "");
+    assert_eq!(view.current_items().len(), initial_count);
+
+    // Type and clear with Ctrl-u
+    view.handle_key(key('z'));
+    assert_eq!(view.prompt.text(), "z");
+    view.handle_key(ctrl('u'));
+    assert_eq!(view.prompt.text(), "");
+}
+
+#[test]
+fn palette_executes_commands_and_arbitrary_lines() {
+    let mut view = sample_palette();
+    for c in "vertical".chars() {
+        view.handle_key(key(c));
+    }
+    assert_eq!(view.current_items()[0].title, "Split Vertical");
+    assert_eq!(
+        view.handle_key(code(KeyCode::Enter)),
+        OverlayAction::Run(vec![Command::SplitWindow {
+            side_by_side: true,
+            argv: Vec::new(),
+            cwd: None,
+            detach: false,
+        }])
+    );
+
+    view.prompt.clear();
+    for c in ":rename-window dev".chars() {
+        view.handle_key(key(c));
+    }
+    assert_eq!(view.current_items()[0].title, "Run: rename-window dev");
+    assert_eq!(
+        view.handle_key(code(KeyCode::Enter)),
+        OverlayAction::Run(vec![Command::RenameWindow {
+            name: "dev".to_string(),
+        }])
+    );
+}
+
+#[test]
+fn palette_escape_and_ctrl_c_closes() {
+    let mut view = sample_palette();
+    assert_eq!(view.handle_key(code(KeyCode::Esc)), OverlayAction::Close);
+    assert_eq!(view.handle_key(ctrl('c')), OverlayAction::Close);
+}
+
+#[test]
+fn palette_agents_tab_selection() {
+    let mut view = sample_palette();
+    view.live_agents = vec![agent("main", "worker", 1, Some(AgentState::Working), 0, 1000)];
+    view.resumable = vec![resume("claude", "sess-abc", "fix-auth", Some("/repo"))];
+
+    view.tab = PaletteTab::Agents;
+    view.rebuild_items();
+    let items = view.current_items();
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0].title, "worker");
+    assert_eq!(items[1].title, "fix-auth");
+
+    // Enter on live agent selects its pane
+    let action = view.handle_key(code(KeyCode::Enter));
+    assert_eq!(
+        action,
+        OverlayAction::Run(vec![Command::SelectPane {
+            target: "main:%1".to_string(),
+        }])
+    );
+
+    // Down to resumable session and enter launches it
+    view.handle_key(code(KeyCode::Down));
+    let action = view.handle_key(code(KeyCode::Enter));
+    assert_eq!(
+        action,
+        OverlayAction::Run(vec![Command::LaunchAgent {
+            harness: "claude".to_string(),
+            resume: Some("sess-abc".to_string()),
+            cwd: Some("/repo".to_string()),
+            split: false,
+        }])
+    );
+}
+
+#[test]
+fn palette_sessions_tab_selection() {
+    let mut view = sample_palette();
+    view.sessions = vec![TreeSession {
+        name: "dev".to_string(),
+        endpoint: String::new(),
+        windows: vec![
+            TreeWindow {
+                index: 0,
+                name: "editor".to_string(),
+                active: true,
+                panes: Vec::new(),
+            },
+            TreeWindow {
+                index: 1,
+                name: "tests".to_string(),
+                active: false,
+                panes: Vec::new(),
+            },
+        ],
+    }];
+
+    view.tab = PaletteTab::Sessions;
+    view.rebuild_items();
+    let items = view.current_items();
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0].title, "dev: 0:editor");
+
+    // Enter on window in another session switches session and selects window
+    let action = view.handle_key(code(KeyCode::Enter));
+    assert_eq!(
+        action,
+        OverlayAction::Run(vec![
+            Command::SwitchSession {
+                name: "dev".to_string(),
+            },
+            Command::SelectWindow { index: 0 },
+        ])
+    );
+}
+
+#[test]
+fn palette_renders_tabs_and_search_prompt() {
+    let view = sample_palette();
+    let text = draw_palette(&view, Rect::new(0, 0, 100, 20));
+    assert!(text.contains("[ Commands ]"), "{text}");
+    assert!(text.contains("Agents"), "{text}");
+    assert!(text.contains("Sessions & Panes"), "{text}");
+    assert!(text.contains("Help"), "{text}");
+    assert!(text.contains(">"), "{text}");
+    assert!(text.contains("Split Horizontal"), "{text}");
+    assert!(text.contains("Enter: run"), "{text}");
 }

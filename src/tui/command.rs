@@ -2,6 +2,15 @@
 //! Targets use `[session:]pane` where pane is a node name or `%id`.
 use crate::protocol::{LayoutPreset, Side};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PaletteTab {
+    #[default]
+    Commands,
+    Agents,
+    Sessions,
+    Help,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     /// `side_by_side`: vertical divider (`:vsplit`, tmux `split-window -h`).
@@ -77,6 +86,10 @@ pub enum Command {
     NextAttention,
     OpenTree,
     OpenHelp,
+    /// Open the unified command palette with an optional initial tab.
+    OpenPalette {
+        tab: Option<PaletteTab>,
+    },
     /// Focus the agents rail, expanding it, or collapse it again.
     ToggleSidebar,
     /// Show the next (or previous) agent in the rail without focusing it.
@@ -104,6 +117,7 @@ pub const COMMAND_NAMES: &[&str] = &[
     "agents",
     "break-pane",
     "choose-tree",
+    "command-palette",
     "command-prompt",
     "copy-mode",
     "detach",
@@ -124,6 +138,7 @@ pub const COMMAND_NAMES: &[&str] = &[
     "next-pane",
     "next-session",
     "next-window",
+    "palette",
     "paste",
     "prev-agent",
     "prev-session",
@@ -275,6 +290,7 @@ fn misc_cmd(name: &str, args: &[String]) -> Option<Result<Command, String>> {
         "prev-session" => bare(name, args, Command::PrevSession),
         "switch-client" | "session" => switch_client(name, args),
         "launch-agent" => launch_agent(name, args),
+        "palette" | "command-palette" => palette_cmd(name, args),
         "command-prompt" => command_prompt(name, args),
         _ => return None,
     };
@@ -625,4 +641,16 @@ fn command_prompt(name: &str, args: &[String]) -> Result<Command, String> {
         None => o.rest.join(" "),
     };
     Ok(Command::CommandPrompt { initial })
+}
+
+fn palette_cmd(name: &str, args: &[String]) -> Result<Command, String> {
+    let tab = match args.first().map(|s| s.as_str()) {
+        None => None,
+        Some("commands" | "cmd") => Some(PaletteTab::Commands),
+        Some("agents" | "agent") => Some(PaletteTab::Agents),
+        Some("sessions" | "session" | "tree") => Some(PaletteTab::Sessions),
+        Some("help" | "keys") => Some(PaletteTab::Help),
+        Some(other) => return Err(format!("{name}: unknown tab '{other}'")),
+    };
+    Ok(Command::OpenPalette { tab })
 }

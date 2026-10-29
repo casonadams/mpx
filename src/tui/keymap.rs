@@ -53,10 +53,15 @@ const DEFAULT_BINDINGS: &[(&str, &str)] = &[
     ("(", "prev-session"),
     (")", "next-session"),
     ("A", "next-attention"),
+    ("C-Space", "palette"),
 ];
 
 /// Bindings for keys pressed without the prefix: they never reach the pane.
-const ROOT_BINDINGS: &[(&str, &str)] = &[("M-j", "next-agent"), ("M-k", "prev-agent")];
+const ROOT_BINDINGS: &[(&str, &str)] = &[
+    ("C-Space", "palette"),
+    ("M-j", "next-agent"),
+    ("M-k", "prev-agent"),
+];
 
 /// What macOS terminals send for Option-j and Option-k (US and ABC layouts) unless Option is set
 /// to act as Alt (Meta / Esc+), so the same keys step through agents out of the box.
