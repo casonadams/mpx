@@ -286,6 +286,9 @@ pub fn write_sgr<W: Write>(out: &mut W, style: &CellStyle) -> io::Result<()> {
     if style.bold {
         out.write_all(b";1")?;
     }
+    if style.faint {
+        out.write_all(b";2")?;
+    }
     if style.italic {
         out.write_all(b";3")?;
     }

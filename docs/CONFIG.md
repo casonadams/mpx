@@ -71,7 +71,7 @@ session_id_args = []
 | `border_style` | string | `"single"` | TUI | Border style: `"single"` (─│┌┐), `"rounded"` (─│╭╮), `"double"` (═║╔╗), or `"ascii"` (-\|+). |
 | `status_bg` | string | `"dark-green"` | TUI | Status line background color name or hex (`"#121820"`). |
 | `status_fg` | string | `"black"` | TUI | Status line text foreground color name or hex (`"#c5d1de"`). |
-| `dim_inactive` | bool | `true` | TUI | When multiple panes are visible, subtly dim inactive panes to emphasize focus. |
+| `dim_inactive` | bool | `true` | TUI | When multiple panes are visible, subtly dim inactive panes to emphasize focus: default text turns grey, bright colors take their normal shade, normal colors are drawn faint (SGR 2, so your theme's shade is kept), and RGB and 256-color text is scaled by `dim_factor`. |
 | `dim_factor` | float | `0.20` | TUI | Dimming reduction factor between `0.0` and `1.0` (`0.20` = dim by 20%, keeping text legible). |
 | `dim_content_bg` | bool | `true` | TUI | When dimming inactive panes, also dim explicit application background colors (diffs, selections, statuslines) while preserving transparent terminal canvas. |
 

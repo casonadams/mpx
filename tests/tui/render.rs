@@ -50,6 +50,21 @@ fn dimmed_pane_draws_default_text_grey() {
     assert!(out.contains("\x1b[0;90mZ"), "{out:?}");
 }
 
+/// What drawing one cell of `fg` text sends, in an inactive pane or not.
+fn draw_colored(fg: VtColor, dimmed: bool) -> String {
+    let mut grid = Grid::new(10, 5);
+    grid.current_style.fg = Some(fg);
+    grid.put_char('C');
+    draw_pane(&grid, dimmed)
+}
+
+#[test]
+fn dimmed_pane_draws_normal_colors_faint_and_bright_ones_normal() {
+    assert!(draw_colored(VtColor::Blue, true).contains("\x1b[0;2;34mC"));
+    assert!(draw_colored(VtColor::BrightBlue, true).contains("\x1b[0;34mC"));
+    assert!(draw_colored(VtColor::Blue, false).contains("\x1b[0;34mC"));
+}
+
 #[test]
 fn status_bar_lists_session_and_pane_names() {
     let mut buf = Vec::new();

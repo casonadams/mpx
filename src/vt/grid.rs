@@ -30,6 +30,8 @@ pub struct CellStyle {
     pub fg: Option<Color>,
     pub bg: Option<Color>,
     pub bold: bool,
+    /// Faint (SGR 2): the terminal draws the text dimmer than its color.
+    pub faint: bool,
     pub italic: bool,
     pub underline: bool,
 }
@@ -48,6 +50,7 @@ const BLANK: Cell = Cell {
         fg: None,
         bg: None,
         bold: false,
+        faint: false,
         italic: false,
         underline: false,
     },

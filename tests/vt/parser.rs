@@ -48,6 +48,21 @@ fn sgr_sets_style_and_reset_clears_it() {
     assert_eq!(vt.grid().current_style, CellStyle::default());
 }
 
+/// The style of each cell in the top row after `input`.
+fn styles_after(input: &str) -> Vec<CellStyle> {
+    let mut vt = VtScreen::new(20, 5);
+    feed(&mut vt, input);
+    (0..20).map(|x| vt.grid().get_cell(x, 0).unwrap().style).collect()
+}
+
+#[test]
+fn faint_is_kept_and_sgr_22_ends_it_with_bold() {
+    let style = styles_after("\x1b[2mdim\x1b[1;2mboth\x1b[22mnone");
+    assert!(style[0].faint && !style[0].bold);
+    assert!(style[3].faint && style[3].bold);
+    assert!(!style[7].faint && !style[7].bold);
+}
+
 #[test]
 fn dsr_and_device_attributes_produce_responses() {
     let mut vt = VtScreen::new(20, 5);
@@ -473,12 +488,8 @@ fn private_csi_forms_do_not_act_as_sgr_or_cursor_restore() {
 
 #[test]
 fn underline_sgr_honours_subparameters_and_ignores_underline_colour_arguments() {
-    let mut vt = VtScreen::new(20, 5);
-    feed(
-        &mut vt,
-        "\x1b[4:3mA\x1b[4:0mB\x1b[58;2;4;4;4mC\x1b[58;5;4mD\x1b[24m",
-    );
-    let underlined = |x| vt.grid().get_cell(x, 0).unwrap().style.underline;
+    let style = styles_after("\x1b[4:3mA\x1b[4:0mB\x1b[58;2;4;4;4mC\x1b[58;5;4mD\x1b[24m");
+    let underlined = |x: usize| style[x].underline;
     assert!(underlined(0));
     assert!(!underlined(1));
     assert!(!underlined(2));

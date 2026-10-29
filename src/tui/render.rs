@@ -565,6 +565,7 @@ fn cell_content(
                 fg: dimmed_fg,
                 bg: dimmed_bg,
                 bold: false,
+                faint: style.faint || palette_normal(style.fg),
                 ..cell.style
             },
         }
@@ -583,6 +584,24 @@ fn highlighted(c: char) -> Cell {
             ..CellStyle::default()
         },
     }
+}
+
+/// Whether `fg` is one of the eight normal palette colors other than white. Its shade is the
+/// terminal theme's, so an unfocused pane dims it with the faint attribute, which the terminal
+/// applies to whatever that shade is.
+fn palette_normal(fg: Option<VtColor>) -> bool {
+    matches!(
+        fg,
+        Some(
+            VtColor::Black
+                | VtColor::Red
+                | VtColor::Green
+                | VtColor::Yellow
+                | VtColor::Blue
+                | VtColor::Magenta
+                | VtColor::Cyan
+        )
+    )
 }
 
 /// Foreground of an unfocused pane: default and white turn grey, bright colors their normal shade.

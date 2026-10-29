@@ -37,11 +37,15 @@ impl VtHandler {
             match code {
                 0 => self.grid.current_style = CellStyle::default(),
                 1 => self.grid.current_style.bold = true,
+                2 => self.grid.current_style.faint = true,
                 3 => self.grid.current_style.italic = true,
                 4 => self.grid.current_style.underline = sub.get(1) != Some(&0),
                 21 => self.grid.current_style.underline = true,
                 7 => self.grid.current_style.reverse = true,
-                22 => self.grid.current_style.bold = false,
+                22 => {
+                    self.grid.current_style.bold = false;
+                    self.grid.current_style.faint = false;
+                }
                 23 => self.grid.current_style.italic = false,
                 24 => self.grid.current_style.underline = false,
                 27 => self.grid.current_style.reverse = false,
