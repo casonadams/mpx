@@ -84,8 +84,12 @@ impl Fixture {
     {
         let endpoint = self.endpoint();
         runtime().block_on(async move {
-            let client = Client::connect(&endpoint).await.expect("connect to daemon");
-            f(client).await
+            tokio::time::timeout(TIMEOUT, async {
+                let client = Client::connect(&endpoint).await.expect("connect to daemon");
+                f(client).await
+            })
+            .await
+            .expect("query timed out")
         })
     }
 
@@ -131,7 +135,7 @@ impl Drop for Fixture {
         if self.daemon.is_none() {
             return;
         }
-        run_command(self, &["kill-server"]);
+        let _ = run_command(self, &["kill-server"]);
         if let Some(rx) = self.daemon.take() {
             let _ = rx.recv_timeout(TIMEOUT);
         }
@@ -146,8 +150,14 @@ pub fn run_command(f: &Fixture, args: &[&str]) -> i32 {
         Ok(cli) => cli,
         Err(e) => return e.exit_code(),
     };
-    runtime().block_on(run_cli(cli)).unwrap_or_else(|message| {
-        eprintln!("{message}");
-        1
-    })
+    runtime()
+        .block_on(async {
+            tokio::time::timeout(TIMEOUT, run_cli(cli))
+                .await
+                .unwrap_or_else(|_| Err("command timed out".to_string()))
+        })
+        .unwrap_or_else(|message| {
+            eprintln!("{message}");
+            1
+        })
 }

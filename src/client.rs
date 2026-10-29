@@ -11,6 +11,9 @@ use crate::protocol::{
 };
 use crate::wire;
 
+const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+const SHUTDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
 pub type LayoutTuple = (Vec<(String, Rect, bool)>, Vec<Divider>, Vec<WindowTab>);
 
 pub struct Client {
@@ -140,10 +143,10 @@ impl Client {
         if self.framed.send(req).await.is_err() {
             return Handshake::Gone;
         }
-        let line = match self.framed.next().await {
-            None => return Handshake::Gone,
-            Some(Err(_)) => return Handshake::Incompatible { pid: peer },
-            Some(Ok(line)) => line,
+        let line = match tokio::time::timeout(HANDSHAKE_TIMEOUT, self.framed.next()).await {
+            Ok(Some(Ok(line))) => line,
+            Ok(Some(Err(_))) => return Handshake::Incompatible { pid: peer },
+            _ => return Handshake::Gone,
         };
         match serde_json::from_str(&line) {
             Ok(DaemonMessage::Response(Response::Session(info))) if info.protocol == PROTOCOL => {
@@ -168,9 +171,9 @@ impl Client {
     }
 
     pub async fn shutdown(&mut self) -> Result<(), String> {
-        self.call_ok("Shutdown", Request::Shutdown).await
+        let _ = tokio::time::timeout(SHUTDOWN_TIMEOUT, self.call_ok("Shutdown", Request::Shutdown)).await;
+        Ok(())
     }
-
     pub async fn spawn(&mut self, opts: SpawnOpts) -> Result<NodeInfo, String> {
         self.call_node("Spawn", Request::Spawn(opts)).await
     }

@@ -3,8 +3,10 @@ use std::path::{Path, PathBuf};
 use mpx::agents::LiveAgent;
 use mpx::agents::aware::{
     HookEvent, Me, Moment, Seen, claude_moment, context_json, omp_moment, peers, peers_json,
-    real_path, repo_root, roster_text,
+    repo_root, roster_text,
 };
+#[cfg(unix)]
+use mpx::agents::aware::real_path;
 use mpx::protocol::{AgentFocus, AgentInfo, AgentState, EDIT_WINDOW_MS, FileEdit, NodeState};
 use serde_json::{Value, json};
 

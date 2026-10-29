@@ -119,15 +119,22 @@ enum Probe {
     Down,
 }
 
+const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+
 async fn probe(endpoint: &str) -> Probe {
-    let Ok(mut client) = Client::connect(endpoint).await else {
-        return Probe::Down;
+    let probe_fut = async {
+        let Ok(mut client) = Client::connect(endpoint).await else {
+            return Probe::Down;
+        };
+        match client.handshake().await {
+            Handshake::Compatible => Probe::Ready(client),
+            Handshake::Incompatible { pid } => Probe::Incompatible(pid),
+            Handshake::Gone => Probe::Down,
+        }
     };
-    match client.handshake().await {
-        Handshake::Compatible => Probe::Ready(client),
-        Handshake::Incompatible { pid } => Probe::Incompatible(pid),
-        Handshake::Gone => Probe::Down,
-    }
+    tokio::time::timeout(PROBE_TIMEOUT, probe_fut)
+        .await
+        .unwrap_or(Probe::Down)
 }
 
 fn incompatible(endpoint: &str, pid: Option<u32>) -> String {

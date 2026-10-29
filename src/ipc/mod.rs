@@ -244,6 +244,12 @@ impl IpcListener {
         &self.pipe_name
     }
 }
+#[cfg(windows)]
+impl Drop for IpcListener {
+    fn drop(&mut self) {
+        let _ = self.server.disconnect();
+    }
+}
 
 #[cfg(windows)]
 pub type IpcStream = tokio::net::windows::named_pipe::NamedPipeClient;
