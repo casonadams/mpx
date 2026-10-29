@@ -244,7 +244,7 @@ async fn the_sessions_last_pane_exiting_ends_the_tui() {
 async fn a_window_that_flooded_while_hidden_is_rebuilt_when_selected() {
     let mut h = Harness::start(Config::default(), ECHO).await;
     let mut seed = connect(&h.sandbox.endpoint(SESSION)).await;
-    let script = "printf READY; read go; seq 1 150000; echo BIG-END; exec cat";
+    let script = "printf READY; read go; seq -f 'line %04.0f ------------------------------------------------------------' 1 8000; echo BIG-END; exec cat";
     window(&mut seed, "bulk", script).await;
     h.frame().await;
     seed.select_window(0).await.expect("back to main");
@@ -256,7 +256,7 @@ async fn a_window_that_flooded_while_hidden_is_rebuilt_when_selected() {
 
     h.prefixed_char('1').await;
     let shown = h.frame().await;
-    assert!(shown.contains("150000") && shown.contains("BIG-END"), "{shown}");
+    assert!(shown.contains("8000") && shown.contains("BIG-END"), "{shown}");
 }
 
 #[tokio::test]
