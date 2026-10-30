@@ -8,8 +8,8 @@ const BUFFER_LIMIT: usize = 50;
 
 #[derive(Default)]
 pub(super) struct Stores {
-    /// Indexed by `VarKind`: options, then environment.
-    vars: [BTreeMap<String, String>; 2],
+    /// Indexed by `VarKind`: options, environment, bindings, hooks.
+    vars: [BTreeMap<String, String>; 4],
     /// Newest first.
     buffers: VecDeque<Buffer>,
     next_buffer: u64,
@@ -26,6 +26,11 @@ impl Stores {
                 vars.remove(&name);
             }
         }
+    }
+
+    /// The command line set for `hook`, if any.
+    pub(super) fn hook(&self, hook: &str) -> Option<&String> {
+        self.vars[VarKind::Hook as usize].get(hook)
     }
 
     pub(super) fn vars(&self, kind: VarKind) -> Vec<(String, String)> {

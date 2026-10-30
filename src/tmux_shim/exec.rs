@@ -16,6 +16,7 @@ const VERSION: &str = "tmux 3.4\n";
 const DEFAULT_VIEW: (u16, u16) = (80, 24);
 
 /// Connection target derived from the environment of the process (inside an mpx pane or outside).
+#[derive(Clone, Debug)]
 pub struct EnvTarget {
     pub endpoint: String,
     pub session: String,
@@ -49,7 +50,7 @@ impl EnvTarget {
 
 /// Multicall entry point. Returns the process exit code and prints tmux-style output.
 pub async fn run(argv: Vec<String>) -> i32 {
-    match execute(&argv).await {
+    match execute(&argv, None).await {
         Ok(out) => {
             print!("{out}");
             0
@@ -65,9 +66,18 @@ pub async fn run(argv: Vec<String>) -> i32 {
 
 type Run<'a> = Pin<Box<dyn Future<Output = Result<String, String>> + 'a>>;
 
+/// The server a command line runs against when it is not the environment's: the attached TUI and
+/// the daemon's hooks run tmux commands against their own session.
+pub type Target<'a> = Option<&'a EnvTarget>;
+
+/// Runs a tmux command string (commands separated by `;`) against `target`.
+pub async fn run_in(target: &EnvTarget, line: &str) -> Result<String, String> {
+    run_command_string(line, Some(target)).await
+}
+
 /// Runs one tmux command line. Boxed because `if-shell`, `run-shell -C` and `source-file` run more
 /// commands through it.
-fn execute(argv: &[String]) -> Run<'_> {
+fn execute<'a>(argv: &'a [String], target: Target<'a>) -> Run<'a> {
     Box::pin(async move {
         let inv = parse(argv)?;
         let cmd = inv.command.as_str();
@@ -78,17 +88,24 @@ fn execute(argv: &[String]) -> Run<'_> {
             return Ok(String::new());
         }
         match cmd {
-            "run-shell" => return run_shell_command(&inv).await,
-            "source-file" => return source_file(&inv).await,
+            "run-shell" => return run_shell_command(&inv, target).await,
+            "source-file" => return source_file(&inv, target).await,
             _ => {}
         }
-        let env = EnvTarget::for_invocation(&inv);
+        let env = match target {
+            Some(env) => {
+                let mut env = env.clone();
+                env.retarget(inv.value('t'));
+                env
+            }
+            None => EnvTarget::for_invocation(&inv),
+        };
         match cmd {
             "list-sessions" => list_sessions(&inv, &env.socket_dir()),
             "has-session" => has_session(&inv, &env).await,
             "attach-session" => attach_session(&inv, &env, None).await,
             "new-session" => new_session(&inv, &env).await,
-            "if-shell" => if_shell(&inv, &env).await,
+            "if-shell" => if_shell(&inv, &env, target).await,
             "kill-server" => kill_server(&env).await,
             _ => {
                 let client = Client::connect(&env.endpoint)
@@ -222,10 +239,10 @@ async fn has_session(inv: &Invocation, env: &EnvTarget) -> Result<String, String
 }
 
 /// `run-shell`: the command's output is the output of this one; `-C` runs it as a tmux command.
-async fn run_shell_command(inv: &Invocation) -> Result<String, String> {
+async fn run_shell_command(inv: &Invocation, target: Target<'_>) -> Result<String, String> {
     let cmd = inv.operand_text();
     if inv.has('C') {
-        return run_command_string(&cmd).await;
+        return run_command_string(&cmd, target).await;
     }
     if let Some(delay) = inv.value('d').and_then(|d| d.parse::<f64>().ok()) {
         tokio::time::sleep(std::time::Duration::from_secs_f64(delay.max(0.0))).await;
@@ -244,7 +261,11 @@ async fn run_shell_command(inv: &Invocation) -> Result<String, String> {
 
 /// `if-shell`: runs the second operand when the first holds, else the optional third. The first is a
 /// shell command that must exit 0, or with `-F` a format that must expand to something but `0`.
-async fn if_shell(inv: &Invocation, env: &EnvTarget) -> Result<String, String> {
+async fn if_shell(
+    inv: &Invocation,
+    env: &EnvTarget,
+    target: Target<'_>,
+) -> Result<String, String> {
     let cond = inv
         .operands
         .first()
@@ -266,41 +287,121 @@ async fn if_shell(inv: &Invocation, env: &EnvTarget) -> Result<String, String> {
         shell::run_shell(cond).await?.code == 0
     };
     match inv.operands.get(if holds { 1 } else { 2 }) {
-        Some(line) => run_command_string(line).await,
+        Some(line) => run_command_string(line, target).await,
         None => Ok(String::new()),
     }
 }
 
 /// Runs each command of a tmux command string in turn, stopping at the first error.
-async fn run_command_string(line: &str) -> Result<String, String> {
+async fn run_command_string(line: &str, target: Target<'_>) -> Result<String, String> {
     let mut out = String::new();
     for words in shell::split_commands(line)? {
-        out.push_str(&execute(&words).await?);
+        out.push_str(&execute(&words, target).await?);
     }
     Ok(out)
 }
 
-/// `source-file`: runs each line of the files as a tmux command. Errors carry `path:line`.
-async fn source_file(inv: &Invocation) -> Result<String, String> {
+/// Expands `fmt` for the current pane of `env`; without a server, with no variables.
+async fn expand_format(env: &EnvTarget, fmt: &str) -> String {
+    match Client::connect(&env.endpoint).await {
+        Ok(client) => {
+            let mut shim = Shim {
+                client,
+                session: env.session.clone(),
+            };
+            shim.expand_for(None, fmt).await.unwrap_or_default()
+        }
+        Err(_) => expand(fmt, &super::format::Vars::new()),
+    }
+}
+
+/// One level of `%if` nesting in a config file.
+struct Branch {
+    /// Lines of this branch run (and the enclosing branches run too).
+    live: bool,
+    /// An earlier branch of this `%if` already ran, so `%elif` / `%else` must not.
+    taken: bool,
+    parent_live: bool,
+}
+
+/// What a config line is, with `%if` / `%elif` / `%else` / `%endif` resolved against `stack`.
+/// Returns whether the line is a command to run.
+async fn directive(line: &str, stack: &mut Vec<Branch>, env: &EnvTarget) -> Result<bool, String> {
+    let (word, rest) = line.split_once(char::is_whitespace).unwrap_or((line, ""));
+    let rest = rest.trim();
+    let parent_live = stack.last().is_none_or(|b| b.live);
+    match word {
+        "%if" => {
+            let holds = parent_live && shell::format_is_true(&expand_format(env, rest).await);
+            stack.push(Branch { live: holds, taken: holds, parent_live });
+            Ok(false)
+        }
+        "%elif" => {
+            let top = stack.last_mut().ok_or("%elif without %if")?;
+            let holds = top.parent_live && !top.taken && shell::format_is_true(&expand_format(env, rest).await);
+            top.live = holds;
+            top.taken |= holds;
+            Ok(false)
+        }
+        "%else" => {
+            let top = stack.last_mut().ok_or("%else without %if")?;
+            top.live = top.parent_live && !top.taken;
+            top.taken = true;
+            Ok(false)
+        }
+        "%endif" => {
+            stack.pop().ok_or("%endif without %if")?;
+            Ok(false)
+        }
+        _ => Ok(parent_live),
+    }
+}
+
+/// `source-file`: runs each line of the files as a tmux command, honoring `%if` blocks. Errors
+/// carry `path:line`. `~` starts a path in the home directory.
+async fn source_file(inv: &Invocation, target: Target<'_>) -> Result<String, String> {
+    let env = target.cloned().unwrap_or_else(|| EnvTarget::for_invocation(inv));
     let mut out = String::new();
     let mut errors = Vec::new();
     for path in &inv.operands {
-        let text = match std::fs::read_to_string(path) {
+        let path = expand_home(path);
+        let text = match std::fs::read_to_string(&path) {
             Ok(text) => text,
             Err(_) if inv.has('q') => continue,
             Err(e) => return Err(format!("{path}: {e}")),
         };
+        let mut stack = Vec::new();
         for (number, line) in shell::config_lines(&text) {
-            match run_command_string(&line).await {
+            let run = match directive(&line, &mut stack, &env).await {
+                Ok(run) => run,
+                Err(e) => {
+                    errors.push(format!("{path}:{number}: {e}"));
+                    continue;
+                }
+            };
+            if !run || inv.has('n') {
+                continue;
+            }
+            match run_command_string(&line, target).await {
                 Ok(text) => out.push_str(&text),
                 Err(e) => errors.push(format!("{path}:{number}: {e}")),
             }
+        }
+        if !stack.is_empty() {
+            errors.push(format!("{path}: %if without %endif"));
         }
     }
     if errors.is_empty() {
         Ok(out)
     } else {
         Err(errors.join("\n"))
+    }
+}
+
+fn expand_home(path: &str) -> String {
+    match (path.strip_prefix("~/"), crate::config::home_dir()) {
+        (Some(rest), Some(home)) => home.join(rest).to_string_lossy().into_owned(),
+        _ => path.to_string(),
     }
 }
 
@@ -529,6 +630,11 @@ impl Shim {
             "swap-window" => self.swap_window(inv).await,
             "move-window" => self.move_window(inv).await,
             "pipe-pane" => self.pipe_pane(inv).await,
+            "bind-key" => self.bind_key(inv).await,
+            "unbind-key" => self.unbind_key(inv).await,
+            "list-keys" => self.list_keys(inv).await,
+            "set-hook" => self.set_hook(inv).await,
+            "show-hooks" => self.show_hooks(inv).await,
             other => Err(format!("unknown command: {other}")),
         }
     }

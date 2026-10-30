@@ -114,12 +114,6 @@ impl Conv {
         if let Err(e) = KeySpec::parse(key) {
             return self.note(line, format!("bind {key}: invalid key ({e})"));
         }
-        if command.iter().any(|w| w == ";") {
-            return self.note(
-                line,
-                format!("bind {key}: chained commands are not supported"),
-            );
-        }
         match mpx_command(command) {
             Ok((cmd, dropped)) => {
                 if opts.has('r') {
@@ -380,28 +374,9 @@ fn mpx_command(words: &[String]) -> Result<(String, Option<String>), String> {
             kept.push(word.clone());
         }
     }
-    let line = kept
-        .iter()
-        .map(|w| quote_word(w))
-        .collect::<Vec<_>>()
-        .join(" ");
+    let line = super::shell::join_words(&kept);
     parse_command(&line).map_err(|e| format!("command '{name}' not supported ({e})"))?;
     Ok((line, dropped))
-}
-
-/// Quotes one word so that `split_words` reads it back unchanged.
-fn quote_word(word: &str) -> String {
-    let bare = !word.is_empty()
-        && word
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || "-_./=:+,@%#{}~^".contains(c));
-    if bare {
-        word.to_string()
-    } else if !word.contains('\'') {
-        format!("'{word}'")
-    } else {
-        format!("\"{}\"", word.replace('\\', "\\\\").replace('"', "\\\""))
-    }
 }
 
 /// tmux-style options: bundled switches (`-nr`), options taking a value (`-T root`), then operands.

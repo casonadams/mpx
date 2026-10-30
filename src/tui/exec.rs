@@ -11,7 +11,7 @@ use super::session::{pick, split_target};
 use crate::config::Config;
 use crate::ipc;
 use crate::layout::Direction;
-use crate::protocol::{LayoutPreset, NewWindowOpts, Side, SpawnOpts, SplitOpts};
+use crate::protocol::{LayoutPreset, NewWindowOpts, Side, SpawnOpts, SplitOpts, VarKind};
 
 /// Client calls that need only the active window.
 enum Simple {
@@ -160,6 +160,13 @@ impl App {
             Command::PrevSession => self.step_session(false).await,
             Command::KillServer => self.kill_server().await,
             Command::ReloadConfig => self.reload_config().await,
+            Command::Bind { root, key, line } => self.bind_key(root, &key, &line).await,
+            Command::RefreshRuntime => {
+                self.apply_runtime().await;
+                Flow::Continue
+            }
+            Command::Tmux { words } => self.run_tmux(&words).await,
+            Command::Sequence(commands) => Box::pin(self.run_sequence(commands)).await,
             Command::Zoom => self.toggle_zoom(),
             Command::CopyMode => self.enter_copy().await,
             Command::Detach => Flow::Quit,
@@ -188,18 +195,91 @@ impl App {
             Ok(config) => config,
             Err(e) => return self.say(format!("reload-config: {e}")),
         };
-        let keymap = match keymap::resolve(&config) {
-            Ok(keymap) => keymap,
-            Err(e) => return self.say(format!("reload-config: {e}")),
-        };
+        if let Err(e) = keymap::resolve(&config) {
+            return self.say(format!("reload-config: {e}"));
+        }
         let daemon = self.client.reload_config(path.as_deref()).await;
-        self.config = config;
-        self.keymap = keymap;
+        self.base_config = config;
+        self.apply_runtime().await;
         self.layout.dirty = true;
         match daemon {
             Ok(()) => self.say("config reloaded"),
             Err(e) => self.say(format!("config reloaded in the UI only: {e}")),
         }
+    }
+
+    /// Rebuilds the effective config and keymap: the file's config, then the session's
+    /// `set-option` values, then its `bind-key` / `unbind-key` changes. A value that does not
+    /// apply is reported and skipped.
+    pub async fn apply_runtime(&mut self) {
+        let mut config = self.base_config.clone();
+        let mut problems = Vec::new();
+        for (name, value) in self.client.get_vars(VarKind::Option).await.unwrap_or_default() {
+            if let Err(e) = config.apply_option(&name, &value) {
+                problems.push(format!("{name}: {e}"));
+            }
+        }
+        let mut keymap = match keymap::resolve(&config) {
+            Ok(keymap) => keymap,
+            Err(e) => {
+                problems.push(e);
+                config = self.base_config.clone();
+                keymap::resolve(&config).unwrap_or_else(|_| self.keymap.clone())
+            }
+        };
+        for (name, line) in self.client.get_vars(VarKind::Binding).await.unwrap_or_default() {
+            let (table, key) = name.split_once(':').unwrap_or(("prefix", &name));
+            if let Err(e) = keymap.bind(table == "root", key, &line) {
+                problems.push(e);
+            }
+        }
+        self.config = config;
+        self.keymap = keymap;
+        self.layout.dirty = true;
+        if let Some(first) = problems.first() {
+            self.say(first.clone());
+        }
+    }
+
+    /// `bind-key` / `unbind-key`: changes this keymap and records the binding in the session, so
+    /// terminals attaching later have it too.
+    async fn bind_key(&mut self, root: bool, key: &str, line: &str) -> Flow {
+        if let Err(e) = self.keymap.bind(root, key, line) {
+            return self.say(e);
+        }
+        let name = format!("{}:{key}", if root { "root" } else { "prefix" });
+        let result = self.client.set_var(VarKind::Binding, &name, Some(line)).await;
+        self.settle(result)
+    }
+
+    /// Any other tmux command, through the shim against this session. Its output is shown on the
+    /// status row.
+    async fn run_tmux(&mut self, words: &[String]) -> Flow {
+        let target = crate::tmux_shim::EnvTarget {
+            endpoint: self.endpoint.clone(),
+            session: self.session.clone(),
+        };
+        let line = crate::tmux_shim::join_words(words);
+        match crate::tmux_shim::run_in(&target, &line).await {
+            Ok(out) => {
+                self.apply_runtime().await;
+                match out.lines().next() {
+                    Some(first) => self.say(first.to_string()),
+                    None => Flow::Continue,
+                }
+            }
+            Err(e) => self.say(e),
+        }
+    }
+
+    /// Commands one after the other, until one quits.
+    async fn run_sequence(&mut self, commands: Vec<Command>) -> Flow {
+        for cmd in commands {
+            if self.run(cmd).await == Flow::Quit {
+                return Flow::Quit;
+            }
+        }
+        Flow::Continue
     }
 
     async fn open_help(&mut self) -> Flow {

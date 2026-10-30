@@ -98,10 +98,10 @@ fn global_options_and_version() {
 
 #[test]
 fn commands_without_an_mpx_equivalent_are_accepted_noops() {
-    for cmd in ["bind-key", "unbind-key", "set-hook", "refresh-client"] {
+    for cmd in ["respawn-pane", "refresh-client"] {
         assert!(is_noop(cmd), "{cmd}");
     }
-    for cmd in ["set-option", "show-options", "source-file", "split-window"] {
+    for cmd in ["set-option", "show-options", "source-file", "bind-key", "set-hook", "split-window"] {
         assert!(!is_noop(cmd), "{cmd} is implemented");
     }
     assert!(

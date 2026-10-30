@@ -143,3 +143,26 @@ pub fn config_lines(text: &str) -> Vec<(usize, String)> {
     }
     out
 }
+
+/// Joins words into a command line that `parse` reads back as the same words: a word that would
+/// split or end a command is quoted, and a lone `;` stays a separator.
+pub fn join_words(words: &[String]) -> String {
+    let quote = |w: &String| {
+        let plain = !w.is_empty() && !w.chars().any(|c| c.is_whitespace() || "'\"\\;".contains(c));
+        if plain || w == ";" {
+            w.clone()
+        } else {
+            format!("'{}'", w.replace('\'', "'\\''"))
+        }
+    };
+    words.iter().map(quote).collect::<Vec<_>>().join(" ")
+}
+
+/// The command line for the words after a key or hook name: one word is already a command string
+/// (`bind x "split-window -h"`), several are the command's own words.
+pub fn command_line(words: &[String]) -> String {
+    match words {
+        [one] => one.clone(),
+        many => join_words(many),
+    }
+}

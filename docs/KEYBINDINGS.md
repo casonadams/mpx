@@ -60,6 +60,10 @@ If you pause after the prefix, a shortcut popup lists common action keys after `
 
 ---
 
+## Changing bindings while running
+
+`:bind-key [-n] key command...` and `:unbind-key [-n] key` (or `tmux bind-key ...` from a script) change the keymap of the running session at once, in every attached terminal; a terminal attaching later picks them up too. `-n` binds without the prefix. Chain commands with `\;` (`:bind r source-file ~/.tmux.conf \; display-message reloaded`). Bindings last until the daemon stops; put lasting ones in `[bind]` / `[bind_root]` of `config.toml` or in a tmux config you `source-file`. Any tmux command works at the prompt: `:set-option -g ...`, `:source-file ~/.tmux.conf`, `:display-message ...`.
+
 ## Command Prompt (`Prefix :`)
 
 Vim-style command line on the status row. Supports tab-completion, history (`Up`/`Down`), quotes, and escapes.

@@ -211,3 +211,31 @@ fn option_j_and_option_k_pass_through_unintercepted() {
     assert_eq!(root('∆'), None, "Option-j passes through to the pane");
     assert_eq!(root('˚'), None, "Option-k passes through to the pane");
 }
+
+#[test]
+fn runtime_bind_adds_replaces_and_removes_keys_in_either_table() {
+    let mut keymap = default_keymap();
+    assert!(matches!(command_of(&keymap, &key('x')), Some(Command::KillPane { .. })));
+
+    keymap.bind(false, "x", "kill-window").unwrap();
+    assert!(matches!(command_of(&keymap, &key('x')), Some(Command::KillWindow { .. })));
+    keymap.bind(false, "x", "").unwrap();
+    assert!(command_of(&keymap, &key('x')).is_none(), "an empty line unbinds");
+
+    keymap.bind(true, "M-h", "select-pane -L").unwrap();
+    assert!(command_in(&keymap, Table::Root, &alt('h')).is_some());
+    assert!(command_of(&keymap, &alt('h')).is_none(), "the prefix table is separate");
+
+    keymap.bind(false, "F5", "split-window ; select-layout tiled").unwrap();
+    let rows = keymap.entries();
+    assert!(rows.iter().any(|(root, k, line)| !root && k == "F5" && line.contains("select-layout")));
+}
+
+#[test]
+fn runtime_bind_refuses_bad_keys_commands_and_the_prefix_key() {
+    let mut keymap = default_keymap();
+    assert!(keymap.bind(false, "NoSuchKey", "kill-pane").is_err());
+    assert!(keymap.bind(false, "y", "nosuchcommand").is_err());
+    assert!(keymap.bind(false, "C-b", "kill-pane").unwrap_err().contains("prefix"));
+    assert_eq!(keymap, default_keymap(), "failed binds change nothing");
+}

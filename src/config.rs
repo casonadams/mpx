@@ -218,6 +218,16 @@ impl Config {
         home_dir().map(|h| h.join(".config").join("mpx").join("config.toml"))
     }
 
+    /// Applies one tmux option (`set-option name value`) that mpx has an equivalent for.
+    /// `Ok(false)` for an option with none, which is then only stored.
+    pub fn apply_option(&mut self, name: &str, value: &str) -> Result<bool, String> {
+        match name {
+            "prefix" => self.prefix = value.to_string(),
+            _ => return Ok(false),
+        }
+        Ok(true)
+    }
+
     pub fn parse(text: &str) -> Result<Config, String> {
         toml::from_str(text).map_err(|e| e.to_string())
     }

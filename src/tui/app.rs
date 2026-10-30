@@ -86,7 +86,10 @@ pub struct App {
     pub endpoint: String,
     pub session: String,
     pub client: Client,
+    /// The effective config: `base_config` with the session's `set-option` values on top.
     pub config: Config,
+    /// The config as loaded from the file (and `-f`), before runtime options.
+    pub base_config: Config,
     /// Config file given with `-f`; `reload-config` re-reads it instead of the default location.
     pub config_path: Option<PathBuf>,
     pub keymap: Keymap,
@@ -198,6 +201,7 @@ impl App {
             endpoint: endpoint.to_string(),
             session: session.to_string(),
             client,
+            base_config: config.clone(),
             config,
             config_path,
             keymap,
@@ -242,6 +246,7 @@ impl App {
             host_colors: super::render::HostColors::default(),
         };
         app.subscribe(sub_client);
+        app.apply_runtime().await;
         app.refresh_nodes().await;
         if let Ok(info) = app.client.info().await
             && let Some(restored_ms) = info.restored_ms

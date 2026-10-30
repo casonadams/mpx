@@ -105,10 +105,26 @@ pub enum Command {
         prompt: String,
         then: Box<Command>,
     },
+    /// Commands run one after the other (`a ; b`), stopping at the first that fails or quits.
+    Sequence(Vec<Command>),
+    /// `bind-key`: bind `key` in the prefix table, or the root table with `root`; an empty `line`
+    /// is `unbind-key`.
+    Bind {
+        root: bool,
+        key: String,
+        line: String,
+    },
+    /// Re-read the session's options and key bindings (sent when another client changes them).
+    RefreshRuntime,
+    /// Any other tmux command, run as the `tmux` shim would against this session.
+    Tmux {
+        words: Vec<String>,
+    },
 }
 
 /// Command names and aliases accepted by `parse`; used for `:` completion.
 pub const COMMAND_NAMES: &[&str] = &[
+    "bind-key",
     "break-pane",
     "choose-tree",
     "command-palette",
@@ -157,8 +173,10 @@ pub const COMMAND_NAMES: &[&str] = &[
     "tabn",
     "tabnext",
     "tabnew",
+    "source-file",
     "tabp",
     "tabprevious",
+    "unbind-key",
     "vs",
     "vsplit",
 ];
@@ -168,7 +186,21 @@ type Group = fn(&str, &[String]) -> Option<Result<Command, String>>;
 
 /// Parses a command line (tmux command names plus vim aliases such as `vsplit`, `q`).
 pub fn parse(line: &str) -> Result<Command, String> {
-    let words = split_words(line)?;
+    if line.contains(';') {
+        let mut commands = Vec::new();
+        for words in crate::tmux_shim::split_commands(line)? {
+            commands.push(parse_words(&words)?);
+        }
+        return match commands.len() {
+            0 => Err("empty command".to_string()),
+            1 => Ok(commands.remove(0)),
+            _ => Ok(Command::Sequence(commands)),
+        };
+    }
+    parse_words(&split_words(line)?)
+}
+
+fn parse_words(words: &[String]) -> Result<Command, String> {
     let (name, args) = words
         .split_first()
         .ok_or_else(|| "empty command".to_string())?;
@@ -176,7 +208,69 @@ pub fn parse(line: &str) -> Result<Command, String> {
     groups
         .into_iter()
         .find_map(|group| group(name, args))
-        .unwrap_or_else(|| Err(format!("unknown command: {name}")))
+        .unwrap_or_else(|| tmux_fallback(name, args))
+}
+
+/// A tmux command with no TUI form runs through the shim, so every command the `tmux` shim knows
+/// also works at the `:` prompt, in key bindings and in sourced files.
+fn tmux_fallback(name: &str, args: &[String]) -> Result<Command, String> {
+    if crate::tmux_shim::spec(crate::tmux_shim::canonical(name)).is_none() {
+        return Err(format!("unknown command: {name}"));
+    }
+    let mut words = vec![name.to_string()];
+    words.extend_from_slice(args);
+    Ok(Command::Tmux { words })
+}
+
+const BIND: Spec = Spec {
+    bools: &["-n", "-r"],
+    values: &["-T", "-N"],
+    stop_at_arg: true,
+};
+const UNBIND: Spec = Spec {
+    bools: &["-n", "-a"],
+    values: &["-T"],
+    stop_at_arg: false,
+};
+
+/// Whether `-n` or `-T` names the root table; tables other than prefix and root are refused.
+fn root_table(name: &str, o: &Opts) -> Result<bool, String> {
+    match (o.value("-T"), o.has("-n")) {
+        (Some("root"), _) | (None, true) => Ok(true),
+        (Some("prefix"), _) | (None, false) => Ok(false),
+        (Some(table), _) => Err(format!("{name}: key table '{table}' is not supported")),
+    }
+}
+
+fn bind_key(name: &str, args: &[String]) -> Result<Command, String> {
+    let o = parse_opts(name, args, BIND)?;
+    let root = root_table(name, &o)?;
+    let (key, command) = o
+        .rest
+        .split_first()
+        .ok_or_else(|| format!("{name}: need a key and a command"))?;
+    if command.is_empty() {
+        return Err(format!("{name}: need a command for key {key}"));
+    }
+    Ok(Command::Bind {
+        root,
+        key: key.clone(),
+        line: crate::tmux_shim::command_line(command),
+    })
+}
+
+fn unbind_key(name: &str, args: &[String]) -> Result<Command, String> {
+    let o = parse_opts(name, args, UNBIND)?;
+    let root = root_table(name, &o)?;
+    let key = o
+        .rest
+        .first()
+        .ok_or_else(|| format!("{name}: need a key"))?;
+    Ok(Command::Bind {
+        root,
+        key: key.clone(),
+        line: String::new(),
+    })
 }
 
 /// Splits a command line into words: whitespace separates, `'..'` is literal, `".."` honours
@@ -275,7 +369,11 @@ fn misc_cmd(name: &str, args: &[String]) -> Option<Result<Command, String>> {
         "choose-tree" => bare(name, args, Command::OpenTree),
         "list-keys" | "help" => bare(name, args, Command::OpenHelp),
         "send-prefix" => bare(name, args, Command::SendPrefix),
-        "reload-config" | "source-file" => bare(name, args, Command::ReloadConfig),
+        "reload-config" => bare(name, args, Command::ReloadConfig),
+        "source-file" if args.is_empty() => Ok(Command::ReloadConfig),
+        "refresh-runtime" => bare(name, args, Command::RefreshRuntime),
+        "bind-key" | "bind" => bind_key(name, args),
+        "unbind-key" | "unbind" => unbind_key(name, args),
         "next-session" => bare(name, args, Command::NextSession),
         "prev-session" => bare(name, args, Command::PrevSession),
         "switch-client" | "session" => switch_client(name, args),

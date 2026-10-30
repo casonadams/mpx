@@ -337,3 +337,68 @@ fn unterminated_quote_is_an_error() {
 fn select_layout_e_spreads_the_panes() {
     assert_eq!(ok("select-layout -E"), Command::SpreadLayout);
 }
+
+#[test]
+fn semicolons_chain_commands_and_escaped_ones_are_literal() {
+    match ok("split-window -h ; select-layout tiled") {
+        Command::Sequence(parts) => {
+            assert_eq!(parts.len(), 2);
+            assert!(matches!(parts[0], Command::SplitWindow { side_by_side: true, .. }));
+            assert!(matches!(parts[1], Command::SelectLayout { .. }));
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(matches!(ok("kill-pane;"), Command::KillPane { .. }), "a trailing ; adds nothing");
+    assert!(err("split-window ; nosuchcommand").contains("unknown command"));
+    assert!(matches!(
+        ok("rename-window 'a;b'"),
+        Command::RenameWindow { name } if name == "a;b"
+    ));
+}
+
+#[test]
+fn bind_and_unbind_name_the_table_and_the_command_line() {
+    assert_eq!(
+        ok("bind-key x kill-pane"),
+        Command::Bind { root: false, key: "x".into(), line: "kill-pane".into() }
+    );
+    assert_eq!(
+        ok("bind -n M-h select-pane -L"),
+        Command::Bind { root: true, key: "M-h".into(), line: "select-pane -L".into() }
+    );
+    assert_eq!(
+        ok("bind -T root F5 split-window -h \\; select-pane -R"),
+        Command::Bind { root: true, key: "F5".into(), line: "split-window -h ; select-pane -R".into() }
+    );
+    assert_eq!(
+        ok("unbind-key -n M-h"),
+        Command::Bind { root: true, key: "M-h".into(), line: String::new() }
+    );
+    assert!(err("bind-key -T copy-mode-vi v send -X begin-selection").contains("not supported"));
+    assert!(err("bind-key x").contains("need a command"));
+}
+
+#[test]
+fn commands_only_the_shim_knows_run_through_it() {
+    match ok("set-option -g @theme dark") {
+        Command::Tmux { words } => assert_eq!(words, ["set-option", "-g", "@theme", "dark"]),
+        other => panic!("{other:?}"),
+    }
+    assert!(matches!(ok("source-file ~/.tmux.conf"), Command::Tmux { .. }));
+    assert_eq!(ok("source-file"), Command::ReloadConfig, "without a file it reloads the config");
+    assert!(matches!(ok("display-message hi"), Command::Tmux { .. }));
+}
+
+#[test]
+fn joined_words_parse_back_to_the_same_words() {
+    let words: Vec<String> = ["send-keys", "a b", "it's", "x;y", ";", "", "plain"]
+        .iter()
+        .map(|w| w.to_string())
+        .collect();
+    let line = mpx::tmux_shim::join_words(&words);
+    let back = mpx::tmux_shim::split_commands(&line).unwrap();
+    assert_eq!(back, [
+        vec!["send-keys", "a b", "it's", "x;y"],
+        vec!["", "plain"],
+    ]);
+}

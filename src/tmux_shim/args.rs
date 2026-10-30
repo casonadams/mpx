@@ -57,6 +57,7 @@ pub fn canonical(name: &str) -> &str {
         "has" => "has-session",
         "lastw" => "last-window",
         "lastp" => "last-pane",
+        "lsk" => "list-keys",
         "next" => "next-window",
         "prev" => "previous-window",
         "detach" => "detach-client",
@@ -76,6 +77,8 @@ pub fn canonical(name: &str) -> &str {
         "if" => "if-shell",
         "wait" => "wait-for",
         "source" => "source-file",
+        "bind" => "bind-key",
+        "unbind" => "unbind-key",
         other => other,
     }
 }
@@ -114,6 +117,11 @@ pub fn spec(command: &str) -> Option<(&'static str, &'static str)> {
         "if-shell" => ("bF", "t"),
         "wait-for" => ("LSU", ""),
         "source-file" => ("nqFv", "t"),
+        "bind-key" => ("nr", "TN"),
+        "list-keys" => ("1aN", "FT"),
+        "unbind-key" => ("anq", "T"),
+        "set-hook" => ("agRuw", "t"),
+        "show-hooks" => ("gpw", "t"),
         "join-pane" => ("bdhvf", "lst"),
         "swap-window" => ("d", "st"),
         "move-window" => ("abdkr", "st"),
@@ -132,13 +140,7 @@ pub fn spec(command: &str) -> Option<(&'static str, &'static str)> {
 pub fn is_noop(command: &str) -> bool {
     matches!(
         command,
-        "bind-key"
-            | "bind"
-            | "unbind-key"
-            | "unbind"
-            | "set-hook"
-            | "respawn-pane"
-            | "refresh-client"
+        "respawn-pane" | "refresh-client"
     )
 }
 

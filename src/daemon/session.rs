@@ -27,7 +27,7 @@ use crate::node::sink::Sink;
 use crate::node::{SpawnSpec, now_ms};
 use crate::protocol::{
     NewWindowOpts, NodeInfo, PaneId, Request, Response, SessionInfo, SpawnOpts, SplitOpts,
-    StreamEvent,
+    StreamEvent, VarKind,
 };
 use crate::store::{SessionSnapshot, SnapshotStore, WindowPlan, plan_restore};
 use crate::tmux_shim;
@@ -168,6 +168,8 @@ enum Next {
 struct Session {
     session: String,
     endpoint: String,
+    /// The config as loaded; `config` is this with the session's options on top.
+    base_config: Config,
     config: Config,
     created_ms: u64,
     restored_ms: Option<u64>,
@@ -209,6 +211,7 @@ pub(super) async fn run(boot: Boot, mut rx: mpsc::UnboundedReceiver<SessionMsg>)
     let mut session = Session {
         session: session.clone(),
         endpoint,
+        base_config: config.clone(),
         config,
         created_ms: now_ms(),
         restored_ms: None,
@@ -253,7 +256,11 @@ impl Session {
             SessionMsg::Req { req, reply } => {
                 let mutates = !is_read_only(&req);
                 let before = mutates.then(|| self.workspace.clone());
+                let hook = super::hooks::after_request(&req);
                 let resp = self.request(*req).await;
+                if let Some(hook) = hook.filter(|_| !matches!(resp, Response::Error(_))) {
+                    self.fire_hook(hook);
+                }
                 if mutates {
                     self.schedule_save();
                 }
@@ -272,6 +279,9 @@ impl Session {
             }
             SessionMsg::KillWindow { index, reply } => {
                 let result = self.kill_window(index);
+                if result.is_ok() {
+                    self.fire_hook("after-kill-window");
+                }
                 self.schedule_save();
                 let _ = reply.send(result);
             }
@@ -287,8 +297,12 @@ impl Session {
                 if filter.session_wide() {
                     self.relay.store(true, Ordering::Relaxed);
                 }
+                let terminal = matches!(filter, Filter::ActiveWindow { layout: true });
                 self.filters.push((filter, sink));
                 let _ = reply.send(());
+                if terminal {
+                    self.fire_hook("client-attached");
+                }
             }
             SessionMsg::SubscribeNode {
                 name,
@@ -326,9 +340,37 @@ impl Session {
         }
     }
 
+    /// Runs the command line set for `hook`, if one is set. The receiver resolves when it is done.
+    fn fire_hook(&self, hook: &str) -> Option<std::sync::mpsc::Receiver<()>> {
+        let line = self.stores.hook(hook)?.clone();
+        let target = tmux_shim::EnvTarget {
+            endpoint: self.endpoint.clone(),
+            session: self.session.clone(),
+        };
+        Some(super::hooks::fire(target, line))
+    }
+
+    /// `config` again: the loaded config with the session's `set-option` values applied.
+    fn rebuild_config(&mut self) {
+        let mut config = self.base_config.clone();
+        for (name, value) in self.stores.vars(VarKind::Option) {
+            if let Err(e) = config.apply_option(&name, &value) {
+                warn!("option {name}: {e}");
+            }
+        }
+        self.config = config;
+    }
+
+    /// Terminal subscribers still on the list: those that follow the active window and its layout.
+    fn terminal_count(&self) -> usize {
+        let terminal = |f: &Filter| matches!(f, Filter::ActiveWindow { layout: true });
+        self.filters.iter().filter(|(f, _)| terminal(f)).count()
+    }
+
     fn fanout(&mut self, event: &StreamEvent) {
         let workspace = &self.workspace;
         let shown = |name: &str| workspace.active_window().is_some_and(|w| w.contains(name));
+        let before = self.terminal_count();
         self.filters.retain_mut(|(filter, sink)| {
             if filter.accepts(event, shown) {
                 sink.push(event.clone())
@@ -336,6 +378,9 @@ impl Session {
                 !sink.is_closed()
             }
         });
+        for _ in self.terminal_count()..before {
+            self.fire_hook("client-detached");
+        }
         self.relay.store(
             self.filters.iter().any(|(filter, _)| filter.session_wide()),
             Ordering::Relaxed,
@@ -362,7 +407,8 @@ impl Session {
             Request::ReloadConfig { path } => {
                 match Config::load_at(path.as_deref().map(std::path::Path::new)) {
                     Ok(config) => {
-                        self.config = config;
+                        self.base_config = config;
+                        self.rebuild_config();
                         Response::Ok
                     }
                     Err(e) => Response::Error(e),
@@ -388,7 +434,18 @@ impl Session {
     fn tmux_request(&mut self, req: Request) -> Response {
         match req {
             Request::SetVar { kind, name, value } => {
+                if kind == VarKind::Hook && !super::hooks::HOOK_NAMES.contains(&name.as_str()) {
+                    return Response::Error(format!("unknown hook: {name}"));
+                }
                 self.stores.set_var(kind, name, value);
+                if kind == VarKind::Option {
+                    self.rebuild_config();
+                }
+                if matches!(kind, VarKind::Option | VarKind::Binding) {
+                    self.fanout(&StreamEvent::ClientCommand {
+                        line: "refresh-runtime".to_string(),
+                    });
+                }
                 Response::Ok
             }
             Request::GetVars { kind } => Response::Vars(self.stores.vars(kind)),
@@ -976,6 +1033,10 @@ impl Session {
             return;
         }
         entry.exited = true;
+        self.fire_hook("pane-exited");
+        let Some(entry) = self.nodes.get_mut(name) else {
+            return;
+        };
         if !entry.remain {
             if let Some(entry) = self.nodes.remove(name) {
                 self.history.push_back(entry);
@@ -1021,6 +1082,10 @@ impl Session {
     /// Saves a clean snapshot, then starts killing every running pane. Later saves are disabled.
     async fn shutdown(&mut self) -> Vec<oneshot::Receiver<()>> {
         self.save(true).await;
+        if let Some(done) = self.fire_hook("session-closed") {
+            // A hook that talks back to this session would wait on it, so the wait is short.
+            let _ = done.recv_timeout(Duration::from_millis(500));
+        }
         self.shutting_down = true;
         self.save_due = None;
         self.nodes

@@ -266,3 +266,56 @@ async fn pipe_pane_feeds_output_to_a_command_and_toggles_off() {
 
     assert!(client.pipe_pane("missing", Some("cat"), false).await.is_err());
 }
+
+#[tokio::test]
+async fn hooks_run_their_command_after_the_event_and_unknown_hooks_are_refused() {
+    let daemon = start().await;
+    let mut client = connect(&daemon.endpoint).await;
+    let dir = tempfile::tempdir().unwrap();
+    let mark = dir.path().join("hook.txt");
+    let line = format!("run-shell \"echo fired >> {}\"", mark.display());
+
+    client.set_var(VarKind::Hook, "after-new-window", Some(&line)).await.unwrap();
+    assert!(client.set_var(VarKind::Hook, "after-nonsense", Some("x")).await.is_err());
+    assert!(!mark.exists(), "setting a hook runs nothing");
+
+    client.new_window(window("w", "hp")).await.unwrap();
+    eventually(Duration::from_secs(5), || {
+        std::fs::read_to_string(&mark).ok().filter(|t| t.contains("fired"))
+    })
+    .await;
+
+    client.set_var(VarKind::Hook, "after-new-window", None).await.unwrap();
+    let before = std::fs::read_to_string(&mark).unwrap();
+    client.new_window(window("w2", "hp2")).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert_eq!(std::fs::read_to_string(&mark).unwrap(), before, "an unset hook stays quiet");
+}
+
+#[tokio::test]
+async fn pane_exit_and_a_failed_request_fire_the_right_hooks() {
+    let daemon = start().await;
+    let mut client = connect(&daemon.endpoint).await;
+    let dir = tempfile::tempdir().unwrap();
+    let exited = dir.path().join("exited.txt");
+    let split = dir.path().join("split.txt");
+    for (hook, file) in [("pane-exited", &exited), ("after-split-window", &split)] {
+        let line = format!("run-shell \"touch {}\"", file.display());
+        client.set_var(VarKind::Hook, hook, Some(&line)).await.unwrap();
+    }
+    assert!(client
+        .split(mpx::protocol::SplitOpts {
+            target: Some("nope".into()),
+            spawn: task("x", "cat", &[]),
+            direction: mpx::layout::Direction::Horizontal,
+            percent: None,
+            focus: true,
+        })
+        .await
+        .is_err());
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!split.exists(), "a failed split fires no after-split-window");
+
+    client.spawn(task("short", "true", &[])).await.unwrap();
+    eventually(Duration::from_secs(5), || exited.exists().then_some(())).await;
+}

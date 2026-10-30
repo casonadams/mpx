@@ -5,6 +5,7 @@ use std::io::{Read, Write};
 use super::args::Invocation;
 use super::exec::{Shim, window_key};
 use super::format::{Vars, expand};
+use super::shell::command_line;
 use crate::config::Config;
 use crate::protocol::{Buffer, ChannelAction, VarKind};
 
@@ -349,4 +350,127 @@ impl Shim {
             .await?;
         Ok(String::new())
     }
+}
+
+/// Key table named by `-n` / `-T`: `true` for root. Tables mpx has no equivalent for are refused.
+fn root_table(inv: &Invocation) -> Result<bool, String> {
+    match (inv.value('T'), inv.has('n')) {
+        (Some("root"), _) | (None, true) => Ok(true),
+        (Some("prefix"), _) | (None, false) => Ok(false),
+        (Some(table), _) => Err(format!("key table '{table}' is not supported")),
+    }
+}
+
+impl Shim {
+    /// `bind-key [-n] [-T table] key command [arguments]`: recorded in the session, so every
+    /// attached terminal, and any that attaches later, has the binding.
+    pub(super) async fn bind_key(&mut self, inv: &Invocation) -> Result<String, String> {
+        let root = root_table(inv)?;
+        let (key, command) = inv
+            .operands
+            .split_first()
+            .filter(|(_, command)| !command.is_empty())
+            .ok_or_else(|| "too few arguments: key and command required".to_string())?;
+        let line = command_line(command);
+        crate::tui::command::parse(&line).map_err(|e| format!("bind {key}: {e}"))?;
+        crate::tui::keymap::resolve(&Config::default())?.bind(root, key, &line)?;
+        self.client
+            .set_var(VarKind::Binding, &binding_name(root, key), Some(&line))
+            .await?;
+        Ok(String::new())
+    }
+
+    /// `unbind-key [-a] [-n] [-T table] key`. `-a` removes every binding of the table.
+    pub(super) async fn unbind_key(&mut self, inv: &Invocation) -> Result<String, String> {
+        let root = root_table(inv)?;
+        if inv.has('a') {
+            let keymap = self.effective_keymap().await?;
+            for (table_root, key, _) in keymap.entries() {
+                if table_root == root {
+                    self.client
+                        .set_var(VarKind::Binding, &binding_name(root, &key), Some(""))
+                        .await?;
+                }
+            }
+            return Ok(String::new());
+        }
+        let key = inv
+            .operands
+            .first()
+            .ok_or_else(|| "too few arguments: key required".to_string())?;
+        crate::tui::keymap::resolve(&Config::default())?.bind(root, key, "")?;
+        self.client
+            .set_var(VarKind::Binding, &binding_name(root, key), Some(""))
+            .await?;
+        Ok(String::new())
+    }
+
+    /// The keymap a terminal of this session has: the config file, the session's options, then its
+    /// bindings.
+    async fn effective_keymap(&mut self) -> Result<crate::tui::keymap::Keymap, String> {
+        let mut config = Config::load_or_default();
+        for (name, value) in self.client.get_vars(VarKind::Option).await? {
+            let _ = config.apply_option(&name, &value);
+        }
+        let mut keymap = crate::tui::keymap::resolve(&config)?;
+        for (name, line) in self.client.get_vars(VarKind::Binding).await? {
+            let (table, key) = name.split_once(':').unwrap_or(("prefix", &name));
+            keymap.bind(table == "root", key, &line)?;
+        }
+        Ok(keymap)
+    }
+
+    /// `list-keys [-T table]`, one `bind-key` line per binding.
+    pub(super) async fn list_keys(&mut self, inv: &Invocation) -> Result<String, String> {
+        let only = inv.value('T');
+        let keymap = self.effective_keymap().await?;
+        Ok(keymap.entries()
+            .into_iter()
+            .map(|(root, key, line)| {
+                let table = if root { "root" } else { "prefix" };
+                (table, key, line)
+            })
+            .filter(|(table, ..)| only.is_none_or(|t| t == *table))
+            .map(|(table, key, line)| format!("bind-key -T {table} {} {line}\n", quote_option_value(&key)))
+            .collect())
+    }
+
+    /// `set-hook [-gu] [-a] hook command`: see `daemon::hooks::HOOK_NAMES`.
+    pub(super) async fn set_hook(&mut self, inv: &Invocation) -> Result<String, String> {
+        let name = operand(inv, 0, "hook")?;
+        if !crate::daemon::hooks::HOOK_NAMES.contains(&name.as_str()) {
+            return Err(format!("unknown hook: {name}"));
+        }
+        if inv.has('u') || inv.has('R') {
+            self.client.set_var(VarKind::Hook, &name, None).await?;
+            return Ok(String::new());
+        }
+        let mut line = command_line(&inv.operands[1..]);
+        if line.is_empty() {
+            return Err("too few arguments: command required".to_string());
+        }
+        if inv.has('a') {
+            let old = self.client.get_vars(VarKind::Hook).await?;
+            if let Some((_, old)) = old.into_iter().find(|(k, _)| *k == name) {
+                line = format!("{old} ; {line}");
+            }
+        }
+        crate::tui::command::parse(&line).map_err(|e| format!("hook {name}: {e}"))?;
+        self.client.set_var(VarKind::Hook, &name, Some(&line)).await?;
+        Ok(String::new())
+    }
+
+    pub(super) async fn show_hooks(&mut self, inv: &Invocation) -> Result<String, String> {
+        let hooks = self.client.get_vars(VarKind::Hook).await?;
+        let wanted = inv.operands.first();
+        Ok(hooks
+            .iter()
+            .filter(|(name, _)| wanted.is_none_or(|w| w == name))
+            .map(|(name, line)| format!("{name} {}\n", quote_option_value(line)))
+            .collect())
+    }
+}
+
+fn binding_name(root: bool, key: &str) -> String {
+    format!("{}:{key}", if root { "root" } else { "prefix" })
 }

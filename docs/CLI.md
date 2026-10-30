@@ -48,7 +48,7 @@ mpx import-tmux ~/.tmux.conf > /tmp/mpx-fragment.toml
 ```
 
 - Converted: `prefix` (`set -g prefix`), `history-limit`, `remain-on-exit`, `allow-passthrough`, `status-style` and `pane-border-style`/`pane-active-border-style` colours (`fg`/`bg` as mpx colour names or hex), `pane-border-lines` (single, double, rounded, simple as ascii), and `bind`/`bind -n`/`bind -T root`/`unbind` for commands mpx accepts.
-- Skipped or approximated lines are listed on stderr as `# line N: ...` and again in the output as `# unsupported (line N): ...` comments. Examples: `run`/`run-shell` and TPM plugins (never executed), `source-file` (only the given file is converted), `%if` blocks (not evaluated), `mouse` and `escape-time` (no mpx setting), `bind` of commands mpx does not have, and `split-window -c '#{pane_current_path}'` (dropped, since mpx already starts new panes in the active pane's directory).
+- Skipped or approximated lines are listed on stderr as `# line N: ...` and again in the output as `# unsupported (line N): ...` comments. Examples: `run`/`run-shell` and TPM plugins (never executed), `source-file` (only the given file is converted), `%if` blocks (skipped; use `source-file` for a live, evaluated config), `mouse` and `escape-time` (no mpx setting), `bind` of commands mpx does not have, and `split-window -c '#{pane_current_path}'` (dropped, since mpx already starts new panes in the active pane's directory).
 - `unbind KEY` is written as an empty binding, which removes mpx's default for that key.
 - `~` and `$HOME` are copied as written.
 
@@ -194,7 +194,9 @@ A tmux server holds many sessions; `mpx` runs one daemon per session. A *server*
 | `wait-for [-S\|-L\|-U] channel` | Blocks until signaled (a signal sent first is remembered), or takes / releases the channel lock. |
 | `run-shell [-b] [-C] [-d secs] command` | Prints the output; a non-zero exit fails with `'command' returned N`. `-C` runs a tmux command instead. |
 | `if-shell [-F] condition then [else]` | The condition is a shell command (exit 0), or with `-F` a format. The branches are tmux command strings (`;` separates commands). |
-| `source-file [-q] file...` | Runs each line as a tmux command and reports failures as `file:line: error`. `%if` blocks are not supported. |
+| `source-file [-nq] file...` | Runs each line as a tmux command, honoring `%if` / `%elif` / `%else` / `%endif` (conditions are formats) and `~` in paths; failures are reported as `file:line: error`. `-n` only checks. Also works at the `:` prompt, so `:source-file ~/.tmux.conf` applies a tmux config to the running session. |
+| `bind-key [-n] [-T prefix\|root] key command...`, `unbind-key [-a] [-n] [-T table] key`, `list-keys [-T table]` | Bindings are changed in the running session and reach every attached terminal at once, and any that attaches later. A command is one string or separate words; `;` chains commands (`\;` at the `:` prompt). Tables other than `prefix` and `root` (such as `copy-mode-vi`) are refused. `-r` is accepted and ignored. |
+| `set-hook [-gua] hook command`, `show-hooks` | Runs the command (a tmux command string) when the event happens: `after-new-window`, `after-split-window`, `after-select-window`, `after-select-pane`, `after-kill-window`, `after-resize-pane`, `after-select-layout`, `after-rename-window`, `after-rename-session`, `after-break-pane`, `after-join-pane`, `after-swap-pane`, `after-send-keys`, `pane-exited`, `client-attached`, `client-detached`, `session-closed`. An unknown hook name is an error. A failed request fires no `after-*` hook. |
 
 Options and environment:
 
@@ -203,6 +205,6 @@ Options and environment:
 - `set-environment` does apply: later panes of the session start with the variable.
 - Reading an option that was never set fails with `invalid option` unless `-q` is given.
 
-Accepted and ignored, so tools that configure tmux keep working: `bind-key`, `unbind-key`, `set-hook`, `respawn-pane`, `refresh-client`. Any other command fails with `unknown command`. Not supported: `display-popup`, `choose-*`, `copy-mode`, `command-prompt`, control mode (`-C`), `%if` in config files.
+Accepted and ignored, so tools that configure tmux keep working: `respawn-pane`, `refresh-client`. Any other command fails with `unknown command`. Not supported: `display-popup`, `choose-*`, `copy-mode`, `command-prompt`, control mode (`-C`).
 
 Buffers, options, the environment and `wait-for` channels belong to one session, so a tool that sets a buffer in one session and pastes it in another will not find it. Inside an mpx pane every command reaches the pane's own session, which is what such tools expect.

@@ -624,3 +624,68 @@ fn tmux_multicall_attach_needs_a_terminal_and_names_the_session_it_attaches_to()
         String::from_utf8_lossy(&attach.stderr)
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn tmux_multicall_binds_keys_sets_hooks_and_sources_conditional_files() {
+    let s = Session::new("tk");
+    let _ = s.run(&["run", "-n", "base", "--pty", "cat"]);
+    let t = |args: &[&str]| tmux(&s, args);
+    let out = |args: &[&str]| stdout(&t(args));
+    let ok = |args: &[&str]| {
+        let run = t(args);
+        assert!(run.status.success(), "{args:?}: {}", String::from_utf8_lossy(&run.stderr));
+    };
+
+    let defaults = out(&["list-keys"]);
+    assert!(defaults.contains("bind-key -T prefix x kill-pane"), "{defaults}");
+    ok(&["bind-key", "y", "split-window", "-h", ";", "select-layout", "tiled"]);
+    ok(&["bind", "-n", "M-h", "select-pane", "-L"]);
+    ok(&["unbind-key", "x"]);
+    let keys = out(&["list-keys"]);
+    assert!(keys.contains("bind-key -T prefix y split-window -h ; select-layout tiled"), "{keys}");
+    assert!(keys.contains("bind-key -T root M-h select-pane -L"), "{keys}");
+    assert!(!keys.contains("-T prefix x "), "{keys}");
+    assert_eq!(out(&["list-keys", "-T", "root"]).lines().count(), 2, "C-Space and M-h");
+
+    let bad = t(&["bind-key", "q", "nosuchcommand"]);
+    assert!(String::from_utf8_lossy(&bad.stderr).contains("unknown command"));
+    let table = t(&["bind-key", "-T", "copy-mode-vi", "v", "send-keys", "x"]);
+    assert!(String::from_utf8_lossy(&table.stderr).contains("not supported"));
+    ok(&["unbind-key", "-a", "-n"]);
+    assert_eq!(out(&["list-keys", "-T", "root"]), "");
+
+    let mark = s.runtime.join("hook.txt");
+    let command = format!("run-shell 'touch {}'", mark.display());
+    ok(&["set-hook", "-g", "after-new-window", &command]);
+    assert!(out(&["show-hooks"]).starts_with("after-new-window "));
+    assert!(!t(&["set-hook", "after-nonsense", "x"]).status.success());
+    ok(&["new-window", "-d", "cat"]);
+    assert!(
+        (0..60).any(|_| {
+            std::thread::sleep(Duration::from_millis(50));
+            mark.exists()
+        }),
+        "after-new-window never ran"
+    );
+    ok(&["set-hook", "-gu", "after-new-window"]);
+    assert_eq!(out(&["show-hooks"]), "");
+
+    let conf = s.runtime.join("cond.conf");
+    std::fs::write(
+        &conf,
+        "set -g @a base\n%if \"#{==:1,1}\"\nset -g @b yes\n%if 0\nset -g @c never\n%endif\n%else\nset -g @d never\n%endif\n%if 0\nset -g @e never\n%elif 1\nset -g @f elif\n%else\nset -g @g never\n%endif\n",
+    )
+    .unwrap();
+    ok(&["source-file", conf.to_str().unwrap()]);
+    let set = out(&["show-options", "-g"]);
+    for want in ["@a base", "@b yes", "@f elif"] {
+        assert!(set.contains(want), "{want} missing in {set}");
+    }
+    for never in ["@c", "@d", "@e", "@g"] {
+        assert!(!set.contains(never), "{never} ran in {set}");
+    }
+    std::fs::write(&conf, "%if 1\nset -g @x 1\n").unwrap();
+    let open = t(&["source-file", conf.to_str().unwrap()]);
+    assert!(String::from_utf8_lossy(&open.stderr).contains("%if without %endif"));
+}

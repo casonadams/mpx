@@ -123,6 +123,38 @@ impl Keymap {
         bindings.iter().find(|b| b.key.matches(ev))
     }
 
+    /// Binds `key` (tmux notation) to `line` in the root table when `root`, else after the prefix,
+    /// replacing an earlier binding of the key; an empty `line` removes it. The prefix key itself
+    /// stays bound to `send-prefix`.
+    pub fn bind(&mut self, root: bool, key: &str, line: &str) -> Result<(), String> {
+        let spec = parse_key(key)?;
+        if !root && spec == self.prefix {
+            return Err(format!("{key} is the prefix key"));
+        }
+        let new = if line.trim().is_empty() {
+            None
+        } else {
+            Some(binding(spec, line.to_string())?)
+        };
+        let table = if root { &mut self.root } else { &mut self.bindings };
+        table.retain(|b| b.key != spec);
+        table.extend(new);
+        Ok(())
+    }
+
+    /// Every binding as (root table, key in tmux notation, command line).
+    pub fn entries(&self) -> Vec<(bool, String, String)> {
+        let rows = |root: bool, table: &Vec<Binding>| {
+            table
+                .iter()
+                .map(|b| (root, b.key.display(), b.source.clone()))
+                .collect::<Vec<_>>()
+        };
+        let mut all = rows(false, &self.bindings);
+        all.extend(rows(true, &self.root));
+        all
+    }
+
     pub fn bindings(&self) -> &[Binding] {
         &self.bindings
     }

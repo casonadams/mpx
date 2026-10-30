@@ -13,6 +13,11 @@ pub enum VarKind {
     Option,
     /// Environment handed to panes created later (`set-environment`).
     Environment,
+    /// Key bindings made while running (`bind-key`): name `prefix:KEY` or `root:KEY`, value the
+    /// command line, empty for a removed binding.
+    Binding,
+    /// Commands run on events (`set-hook`): name the hook, value the command line.
+    Hook,
 }
 
 /// What a `WaitFor` request does with a channel (tmux `wait-for`).

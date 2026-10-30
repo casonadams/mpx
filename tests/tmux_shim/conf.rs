@@ -224,8 +224,11 @@ fn semicolon_separates_top_level_commands_and_escaped_semicolon_chains_binds() {
     let config = parsed(&c);
     assert_eq!(config.prefix, "C-a");
     assert_eq!(config.history_limit, 5);
-    assert!(!config.bind.contains_key("x"));
-    assert!(has_note(&c, 2), "{:?}", c.notes);
+    assert_eq!(
+        config.bind.get("x").map(String::as_str),
+        Some("split-window ; select-layout tiled")
+    );
+    assert!(c.notes.is_empty(), "{:?}", c.notes);
 }
 
 #[test]
