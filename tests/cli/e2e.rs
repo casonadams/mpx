@@ -689,3 +689,81 @@ fn tmux_multicall_binds_keys_sets_hooks_and_sources_conditional_files() {
     let open = t(&["source-file", conf.to_str().unwrap()]);
     assert!(String::from_utf8_lossy(&open.stderr).contains("%if without %endif"));
 }
+
+#[test]
+fn tmux_multicall_rotates_respawns_and_finds_windows() {
+    let s = Session::new("tw");
+    let _ = s.run(&["run", "-n", "base", "--pty", "cat"]);
+    let split = tmux(
+        &s,
+        &["split-window", "-h", "-l", "25", "-d", "-t", "base", "cat"],
+    );
+    assert!(
+        split.status.success(),
+        "{}",
+        String::from_utf8_lossy(&split.stderr)
+    );
+    let width = |s: &Session| -> u16 {
+        let out = tmux(s, &["display-message", "-p", "-t", "base", "#{pane_width}"]);
+        stdout(&out).parse().expect("pane width")
+    };
+
+    // The wide pane starts in the left slot. Rotating up hands base the narrow slot, and
+    // rotating down gives the wide one back.
+    let wide = width(&s);
+    assert!(wide > 40, "base should start as the wide pane: {wide}");
+    assert!(tmux(&s, &["rotate-window"]).status.success());
+    let narrow = width(&s);
+    assert!(narrow < wide, "rotated base is {narrow}, was {wide}");
+    assert!(tmux(&s, &["rotate-window", "-D"]).status.success());
+    assert_eq!(width(&s), wide);
+
+    let restart = tmux(
+        &s,
+        &["respawn-pane", "-k", "-t", "base", "echo respawned; cat"],
+    );
+    assert!(
+        restart.status.success(),
+        "{}",
+        String::from_utf8_lossy(&restart.stderr)
+    );
+    let printed = (0..40).any(|_| {
+        std::thread::sleep(Duration::from_millis(50));
+        stdout(&tmux(&s, &["capture-pane", "-p", "-t", "base"])).contains("respawned")
+    });
+    assert!(printed, "the respawned command never printed");
+    assert_eq!(width(&s), wide, "respawn keeps the pane's slot");
+
+    let busy = tmux(&s, &["respawn-pane", "-t", "base", "cat"]);
+    assert!(!busy.status.success());
+    assert!(String::from_utf8_lossy(&busy.stderr).contains("still active"));
+
+    let found = tmux(&s, &["find-window", "-C", "respawned"]);
+    assert!(
+        found.status.success(),
+        "{}",
+        String::from_utf8_lossy(&found.stderr)
+    );
+    assert!(stdout(&found).starts_with("0:"), "{}", stdout(&found));
+    let by_name = tmux(&s, &["find-window", "-N", "respawned"]);
+    assert!(!by_name.status.success());
+    assert!(String::from_utf8_lossy(&by_name.stderr).contains("no windows matching: respawned"));
+}
+
+#[cfg(unix)]
+#[test]
+fn tmux_multicall_numbers_panes_per_window_and_has_no_alert_window_by_default() {
+    let s = Session::new("tw");
+    let _ = s.run(&["run", "-n", "base", "--pty", "cat"]);
+    let t = |args: &[&str]| tmux(&s, args);
+    let out = |args: &[&str]| stdout(&t(args));
+
+    assert!(!t(&["next-window", "-a"]).status.success(), "no other window to alert");
+    assert!(t(&["new-window", "-d", "-n", "quiet", "cat"]).status.success());
+    assert!(t(&["new-window", "-d", "-n", "noisy", "cat"]).status.success());
+    assert!(t(&["split-window", "-d", "cat"]).status.success());
+    let indexes = out(&["list-panes", "-a", "-F", "#{window_name}:#{pane_index}"]);
+    let lines: Vec<&str> = indexes.lines().collect();
+    assert!(lines.contains(&"quiet:0") && lines.contains(&"noisy:0"), "{indexes}");
+    assert!(lines.iter().any(|l| l.ends_with(":1")), "second pane of a window is 1: {indexes}");
+}

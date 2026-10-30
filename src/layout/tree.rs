@@ -290,12 +290,34 @@ pub fn preset_tree(preset: LayoutPreset, leaves: &[String]) -> Option<LayoutNode
             stack(leaves.iter().map(leaf).collect(), Direction::Horizontal)
         }
         LayoutPreset::EvenVertical => stack(leaves.iter().map(leaf).collect(), Direction::Vertical),
-        LayoutPreset::MainVertical => {
-            main_split(first, rest, Direction::Horizontal, Direction::Vertical)
-        }
-        LayoutPreset::MainHorizontal => {
-            main_split(first, rest, Direction::Vertical, Direction::Horizontal)
-        }
+        LayoutPreset::MainVertical => main_split(
+            first,
+            rest,
+            Direction::Horizontal,
+            Direction::Vertical,
+            false,
+        ),
+        LayoutPreset::MainVerticalMirrored => main_split(
+            first,
+            rest,
+            Direction::Horizontal,
+            Direction::Vertical,
+            true,
+        ),
+        LayoutPreset::MainHorizontal => main_split(
+            first,
+            rest,
+            Direction::Vertical,
+            Direction::Horizontal,
+            false,
+        ),
+        LayoutPreset::MainHorizontalMirrored => main_split(
+            first,
+            rest,
+            Direction::Vertical,
+            Direction::Horizontal,
+            true,
+        ),
         LayoutPreset::Tiled => {
             let cols = (leaves.len() as f64).sqrt().ceil() as usize;
             let rows = leaves
@@ -307,12 +329,14 @@ pub fn preset_tree(preset: LayoutPreset, leaves: &[String]) -> Option<LayoutNode
     }
 }
 
-/// `first` takes 60% along `main`; the rest are stacked along `others`.
+/// `first` takes 60% along `main`; the rest are stacked along `others`. Mirrored, `first` goes to
+/// the far side (right or bottom) and the rest keep the near side.
 fn main_split(
     first: &str,
     rest: &[String],
     main: Direction,
     others: Direction,
+    mirrored: bool,
 ) -> Option<LayoutNode> {
     let head = LayoutNode::leaf(first.to_string());
     if rest.is_empty() {
@@ -322,11 +346,16 @@ fn main_split(
         rest.iter().map(|n| LayoutNode::leaf(n.clone())).collect(),
         others,
     )?;
+    let (left, right, ratio) = if mirrored {
+        (tail, head, 0.4)
+    } else {
+        (head, tail, 0.6)
+    };
     Some(LayoutNode::Split {
         direction: main,
-        ratio: 0.6,
-        left: Box::new(head),
-        right: Box::new(tail),
+        ratio,
+        left: Box::new(left),
+        right: Box::new(right),
     })
 }
 

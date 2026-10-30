@@ -16,6 +16,7 @@ mod daemon {
     mod stream;
     mod support;
     mod task_node;
+    mod tmux_ops;
     mod tmux_state;
     mod wait;
 }

@@ -183,16 +183,20 @@ pub enum LayoutPreset {
     EvenHorizontal,
     EvenVertical,
     MainVertical,
+    MainVerticalMirrored,
     MainHorizontal,
+    MainHorizontalMirrored,
     Tiled,
 }
 
 impl LayoutPreset {
-    pub const ALL: [LayoutPreset; 5] = [
+    pub const ALL: [LayoutPreset; 7] = [
         LayoutPreset::EvenHorizontal,
         LayoutPreset::EvenVertical,
         LayoutPreset::MainVertical,
+        LayoutPreset::MainVerticalMirrored,
         LayoutPreset::MainHorizontal,
+        LayoutPreset::MainHorizontalMirrored,
         LayoutPreset::Tiled,
     ];
 
@@ -201,7 +205,9 @@ impl LayoutPreset {
             LayoutPreset::EvenHorizontal => "even-horizontal",
             LayoutPreset::EvenVertical => "even-vertical",
             LayoutPreset::MainVertical => "main-vertical",
+            LayoutPreset::MainVerticalMirrored => "main-vertical-mirrored",
             LayoutPreset::MainHorizontal => "main-horizontal",
+            LayoutPreset::MainHorizontalMirrored => "main-horizontal-mirrored",
             LayoutPreset::Tiled => "tiled",
         }
     }
@@ -233,7 +239,7 @@ pub struct WaitOutcome {
 
 /// Version of the client-daemon protocol. Bump it on any change an older peer cannot parse, so
 /// clients refuse an incompatible daemon instead of misreading it.
-pub const PROTOCOL: u32 = 2;
+pub const PROTOCOL: u32 = 3;
 
 fn first_protocol() -> u32 {
     1
@@ -455,6 +461,24 @@ pub enum Request {
         name: String,
         command: Option<String>,
         toggle: bool,
+    },
+    /// Rotates the panes of the active window through its layout slots (tmux `rotate-window`).
+    /// The default moves every pane to the slot before it (the first pane goes last); `down`
+    /// moves every pane to the slot after it. Pane names move, slots and focus stay.
+    RotateWindow {
+        down: bool,
+    },
+    /// Restarts a pane's process in place (tmux `respawn-pane`): the pane keeps its name and
+    /// layout slot. `kill` stops a running process first. `cwd` and `command` (program, then its
+    /// arguments) replace the pane's own for this and later respawns.
+    Respawn {
+        name: String,
+        #[serde(default)]
+        kill: bool,
+        #[serde(default)]
+        cwd: Option<String>,
+        #[serde(default)]
+        command: Option<Vec<String>>,
     },
 }
 

@@ -16,7 +16,7 @@ use super::overlay::Overlay;
 use super::panes::{BorderGrab, LayoutCache, PaneRect, resized_elsewhere, sync_dims};
 use super::prompt::PromptState;
 use super::render::copy_to_clipboard;
-use super::status::{local_utc_offset, restored_notice};
+use super::status::{local_utc_offset, restored_notice, time_of_day};
 use super::terminal::TerminalGuard;
 use crate::client::Client;
 use crate::config::Config;
@@ -47,6 +47,14 @@ pub enum Mode {
     Overlay(Overlay),
     Prompt(PromptState),
     Confirm(String, Command),
+    /// display-panes: pane numbers on screen until `until` (`None`: until a key is pressed).
+    Panes {
+        until: Option<Instant>,
+    },
+    /// clock-mode: a large clock fills `pane` until a key is pressed.
+    Clock {
+        pane: String,
+    },
 }
 
 /// Event-stream subscription for the attached session. Events tagged with an older
@@ -81,6 +89,8 @@ const BURST_YIELDS: usize = 4;
 const REPEAT_WINDOW: Duration = Duration::from_millis(500);
 const MESSAGE_TTL: Duration = Duration::from_secs(3);
 const HISTORY_CAP: usize = 100;
+/// Status-row messages kept for `show-messages`.
+const MESSAGE_LOG_CAP: usize = 100;
 
 pub struct App {
     pub endpoint: String,
@@ -148,6 +158,34 @@ pub struct App {
     pub yanks: Vec<String>,
     /// Default foreground and background of the host terminal, read at attach.
     pub host_colors: super::render::HostColors,
+    /// The last `MESSAGE_LOG_CAP` status-row messages, oldest first (`show-messages`).
+    pub message_log: Vec<String>,
+    /// Set by `suspend-client`; the event loop stops the process once the command has run.
+    pub suspend_requested: bool,
+    /// Where clock mode reads the time.
+    pub clock: ClockSource,
+}
+
+/// Where clock mode reads the time: the system clock, or a fixed time (for tests).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ClockSource {
+    #[default]
+    System,
+    Fixed(u8, u8),
+}
+
+impl ClockSource {
+    /// Local hour and minute now, 24-hour.
+    pub fn hour_minute(self) -> (u8, u8) {
+        match self {
+            Self::Fixed(hour, minute) => (hour, minute),
+            Self::System => {
+                let now = crate::node::now_ms();
+                let (hour, minute, _) = time_of_day(now, local_utc_offset(now));
+                (hour as u8, minute as u8)
+            }
+        }
+    }
 }
 
 /// Everything the app reads from its surroundings, so it can run against explicit inputs.
@@ -244,6 +282,9 @@ impl App {
             last_copy: None,
             yanks: Vec::new(),
             host_colors: super::render::HostColors::default(),
+            message_log: Vec::new(),
+            suspend_requested: false,
+            clock: ClockSource::default(),
         };
         app.subscribe(sub_client);
         app.apply_runtime().await;
@@ -527,7 +568,12 @@ impl App {
 
     /// Records a message for the status row; it expires after a few seconds.
     pub fn say(&mut self, text: impl Into<String>) -> Flow {
-        self.message = Some((text.into(), Instant::now()));
+        let text = text.into();
+        self.message_log.push(text.clone());
+        if self.message_log.len() > MESSAGE_LOG_CAP {
+            self.message_log.remove(0);
+        }
+        self.message = Some((text, Instant::now()));
         Flow::Continue
     }
 
@@ -577,6 +623,24 @@ impl App {
         self.hud_deadline().is_some_and(|due| Instant::now() >= due)
     }
 
+    /// When the display-panes numbers go away on their own; `None` while they wait for a key.
+    pub fn display_deadline(&self) -> Option<Instant> {
+        match self.mode {
+            Mode::Panes { until } => until,
+            _ => None,
+        }
+    }
+
+    /// Clears the display-panes numbers once their time has passed at `now`.
+    pub fn expire_panes(&mut self, now: Instant) {
+        if let Mode::Panes { until: Some(until) } = self.mode
+            && now >= until
+        {
+            self.mode = Mode::Normal;
+            self.layout.dirty = true;
+        }
+    }
+
     pub async fn on_key(&mut self, key: KeyEvent) -> Flow {
         match std::mem::replace(&mut self.mode, Mode::Normal) {
             Mode::Normal => self.normal_key(key).await,
@@ -585,6 +649,9 @@ impl App {
             Mode::Overlay(ov) => self.overlay_key(ov, key).await,
             Mode::Prompt(p) => self.prompt_key(p, key).await,
             Mode::Confirm(prompt, cmd) => self.confirm_key(prompt, cmd, key).await,
+            Mode::Panes { .. } => self.panes_key(key).await,
+            // The mode is already back to normal: any key ends clock mode and is not forwarded.
+            Mode::Clock { .. } => Flow::Continue,
         }
     }
 }
@@ -723,7 +790,7 @@ pub async fn run_tui(
     start: StartView,
     opts: AppOptions,
 ) -> Result<(), String> {
-    let _guard = TerminalGuard::enter().map_err(|e| format!("Failed to enter raw mode: {e}"))?;
+    let guard = TerminalGuard::enter().map_err(|e| format!("Failed to enter raw mode: {e}"))?;
     let report = super::terminal::query_terminal();
     let (mut app, mut stream) = App::open(endpoint, session, start, opts).await?;
     app.canvas.set_lr_margins(report.margins);
@@ -755,7 +822,7 @@ pub async fn run_tui(
             app.drew(Instant::now());
         }
         let popup = app.hud_deadline().filter(|_| !app.hud_visible());
-        let due = earliest([popup, app.frame_due]);
+        let due = earliest([popup, app.frame_due, app.display_deadline()]);
         let wake = tokio::select! {
             Some(event) = keys.recv() => Wake::Input(event),
             item = stream.recv() => Wake::Stream(item),
@@ -771,10 +838,23 @@ pub async fn run_tui(
                 flow
             }
             Wake::Tick => app.on_tick().await,
-            Wake::Due => Flow::Continue,
+            Wake::Due => {
+                app.expire_panes(Instant::now());
+                Flow::Continue
+            }
         };
+        let suspended = std::mem::take(&mut app.suspend_requested);
+        if suspended {
+            let _ = out.flush();
+            if let Err(e) = guard.suspend() {
+                app.say(format!("suspend-client: {e}"));
+            }
+            app.canvas.invalidate();
+            app.layout.dirty = true;
+            last_cursor.clear();
+        }
         let forwarded = std::mem::take(&mut app.forwarded);
-        redraw = needs_redraw(output, forwarded, app.frame_due, Instant::now());
+        redraw = needs_redraw(output, forwarded, app.frame_due, Instant::now()) || suspended;
         if flow == Flow::Quit {
             return Ok(());
         }

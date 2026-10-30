@@ -4,7 +4,7 @@ use mpx::protocol::{NodeInfo, NodeState};
 use mpx::tui::command::Command;
 use mpx::tui::overlay::nav::fuzzy_match;
 use mpx::tui::overlay::tree_view::session_from_snapshot;
-use mpx::tui::overlay::widgets::{age_label, short_path};
+use mpx::tui::overlay::widgets::{age_label, printable, short_path};
 use mpx::tui::overlay::{
     HelpEntry, HelpView, Overlay, OverlayAction, PaletteTab, PaletteView, TreePane,
     TreeSession, TreeView, TreeWindow,
@@ -745,4 +745,47 @@ fn palette_renders_tabs_and_search_prompt() {
     assert!(text.contains("Sessions & Panes"), "{text}");
     assert!(text.contains("Help"), "{text}");
     assert!(text.contains(" > _"), "{text}");
+}
+
+/// The text an overlay draws in `area`.
+fn render_text(overlay: &Overlay, area: Rect) -> String {
+    let mut out = Vec::new();
+    overlay.render(&mut out, area).unwrap();
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+#[test]
+fn text_overlay_scrolls_with_vim_motions_and_closes_on_q_or_escape() {
+    let lines: Vec<String> = (1..=30).map(|i| format!("line {i:02}")).collect();
+    let mut view = Overlay::text("messages", lines);
+    let area = Rect::new(0, 0, 40, 10);
+
+    let top = render_text(&view, area);
+    assert!(top.contains("line 01") && top.contains("messages"), "{top}");
+    assert!(!top.contains("line 30"), "{top}");
+
+    assert_eq!(view.handle_key(key('G')), OverlayAction::None);
+    let bottom = render_text(&view, area);
+    assert!(bottom.contains("line 30") && !bottom.contains("line 01"), "{bottom}");
+
+    view.handle_key(key('g'));
+    view.handle_key(key('g'));
+    assert!(render_text(&view, area).contains("line 01"));
+
+    view.handle_key(ctrl('d'));
+    assert!(render_text(&view, area).contains("line 05"), "half a page down");
+
+    assert_eq!(view.handle_key(key('q')), OverlayAction::Close);
+    assert_eq!(view.handle_key(code(KeyCode::Esc)), OverlayAction::Close);
+}
+
+#[test]
+fn text_overlay_says_when_there_is_nothing_to_show() {
+    let view = Overlay::text("messages", Vec::new());
+    assert!(render_text(&view, Rect::new(0, 0, 40, 10)).contains("nothing to show"));
+}
+
+#[test]
+fn program_output_is_shown_without_control_characters() {
+    assert_eq!(printable("a\tb\x1b[0m"), "a b?[0m");
 }

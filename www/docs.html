@@ -110,6 +110,7 @@ tmux_compat = true      # Export TMUX/TMUX_PANE and tmux shim (default: true)
 allow_passthrough = true # Forward DCS tmux and OSC 52 clipboard sequences
 restore = true          # Recreate layout and resume processes across restarts
 which_key_delay_ms = 300  # HUD popup delay (0 = instant)
+display_panes_time_ms = 1000  # display-panes numbers stay up this long (0 = until a key)
 
 [style]
 border_active = "bright-green"
@@ -157,6 +158,7 @@ fallback = ["nvim", "-S", "Session.vim"]</code></pre>
             <tr><td><code>allow_passthrough</code></td><td>bool</td><td><code>true</code></td><td>TUI</td><td>Allow terminal passthrough sequences (DCS tmux passthrough, OSC 4/10/11/12/52) from active pane to host terminal.</td></tr>
             <tr><td><code>restore</code></td><td>bool</td><td><code>true</code></td><td>Daemon</td><td>Automatically restore saved session layout and resume registered processes on startup.</td></tr>
             <tr><td><code>which_key_delay_ms</code></td><td>integer</td><td><code>300</code></td><td>TUI</td><td>Milliseconds to wait after prefix before showing shortcut HUD popup (0 = instant).</td></tr>
+            <tr><td><code>display_panes_time_ms</code></td><td>integer</td><td><code>1000</code></td><td>TUI</td><td>Milliseconds the display-panes numbers stay up (0 = until a key is pressed).</td></tr>
             <tr><td><code>resume</code></td><td>array of tables</td><td>defaults</td><td>Daemon</td><td>Rules for resuming processes across restarts (repeat <code>[[resume]]</code>).</td></tr>
           </tbody>
         </table>

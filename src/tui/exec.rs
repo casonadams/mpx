@@ -3,7 +3,7 @@ use super::app::{App, Flow, Mode};
 use super::command::Command;
 use super::copy::CopyState;
 use super::keymap;
-use super::overlay::{Overlay, OverlayCtx};
+use super::overlay::{Overlay, OverlayCtx, buffer_summary};
 use super::panes::{find_directional, neighbor_pane};
 use super::prompt::PromptState;
 use super::session::neighbor_session;
@@ -12,6 +12,7 @@ use crate::config::Config;
 use crate::ipc;
 use crate::layout::Direction;
 use crate::protocol::{LayoutPreset, NewWindowOpts, Side, SpawnOpts, SplitOpts, VarKind};
+use std::time::{Duration, Instant};
 
 /// Client calls that need only the active window.
 enum Simple {
@@ -53,6 +54,12 @@ fn clears_zoom(cmd: &Command) -> bool {
             | Command::KillServer
             | Command::SendPrefix
             | Command::ReloadConfig
+            | Command::DisplayPanes { .. }
+            | Command::ClockMode { .. }
+            | Command::ShowMessages
+            | Command::ListBuffers
+            | Command::ChooseBuffer
+            | Command::SuspendClient
     )
 }
 
@@ -169,6 +176,7 @@ impl App {
             Command::Sequence(commands) => Box::pin(self.run_sequence(commands)).await,
             Command::Zoom => self.toggle_zoom(),
             Command::CopyMode => self.enter_copy().await,
+            Command::CopyModePageUp => self.enter_copy_page_up().await,
             Command::Detach => Flow::Quit,
             Command::RenameSession { name } => {
                 let result = self.client.rename_session(&name).await;
@@ -182,6 +190,15 @@ impl App {
             Command::OpenPalette { tab } => self.open_palette(tab).await,
             Command::CommandPrompt { initial } => self.open_prompt(&initial),
             Command::Confirm { prompt, then } => self.ask(prompt, *then),
+            Command::DisplayPanes { duration_ms } => self.open_panes(duration_ms),
+            Command::ClockMode { target } => self.open_clock(target),
+            Command::ShowMessages => {
+                let lines = self.message_log.clone();
+                self.open_overlay(Overlay::text("messages", lines)).await
+            }
+            Command::ListBuffers => self.list_buffers().await,
+            Command::ChooseBuffer => self.open_overlay(Overlay::buffers()).await,
+            Command::SuspendClient => self.suspend_client(),
             other => self.say(format!("unhandled command: {other:?}")),
         }
     }
@@ -263,8 +280,13 @@ impl App {
         match crate::tmux_shim::run_in(&target, &line).await {
             Ok(out) => {
                 self.apply_runtime().await;
-                match out.lines().next() {
-                    Some(first) => self.say(first.to_string()),
+                let mut lines: Vec<String> = out.lines().map(str::to_string).collect();
+                if lines.len() > 1 {
+                    let title = words.first().cloned().unwrap_or_default();
+                    return self.open_overlay(Overlay::text(title, lines)).await;
+                }
+                match lines.pop() {
+                    Some(only) => self.say(only),
                     None => Flow::Continue,
                 }
             }
@@ -285,6 +307,54 @@ impl App {
     async fn open_help(&mut self) -> Flow {
         let entries = self.keymap.help_entries();
         self.open_overlay(Overlay::help(entries)).await
+    }
+
+    /// `display-panes`: numbers on the panes until a digit picks one, a key is pressed or the time
+    /// runs out (`-d`, else `display-panes-time`). A time of 0 waits for a key.
+    fn open_panes(&mut self, duration_ms: Option<u64>) -> Flow {
+        if self.panes.is_empty() {
+            return Flow::Continue;
+        }
+        let ms = duration_ms.unwrap_or(self.config.display_panes_time_ms);
+        let until = (ms > 0).then(|| Instant::now() + Duration::from_millis(ms));
+        self.mode = Mode::Panes { until };
+        Flow::Continue
+    }
+
+    /// `clock-mode`: the clock fills `target` (a visible pane), else the active pane.
+    fn open_clock(&mut self, target: Option<String>) -> Flow {
+        let raw = target.unwrap_or_else(|| self.active_pane.clone());
+        let (_, pane) = split_target(&raw);
+        if self.panes.iter().any(|(name, ..)| name.as_str() == pane) {
+            self.mode = Mode::Clock {
+                pane: pane.to_string(),
+            };
+            Flow::Continue
+        } else {
+            self.say(format!("no pane {raw}"))
+        }
+    }
+
+    /// `list-buffers`: one line per paste buffer, newest first.
+    async fn list_buffers(&mut self) -> Flow {
+        match self.client.list_buffers().await {
+            Ok(buffers) => {
+                let lines = buffers.iter().map(buffer_summary).collect();
+                self.open_overlay(Overlay::text("list-buffers", lines))
+                    .await
+            }
+            Err(e) => self.say(e),
+        }
+    }
+
+    /// `suspend-client`: the event loop stops the process once the command has run.
+    fn suspend_client(&mut self) -> Flow {
+        if cfg!(unix) {
+            self.suspend_requested = true;
+            Flow::Continue
+        } else {
+            self.say("suspend-client is not supported on this platform")
+        }
     }
 
     async fn open_palette(&mut self, tab: Option<crate::tui::command::PaletteTab>) -> Flow {
@@ -520,6 +590,18 @@ impl App {
         self.parked_copy.remove(&self.active_pane);
         self.mode = Mode::Copy(cs);
         Flow::Continue
+    }
+
+    async fn enter_copy_page_up(&mut self) -> Flow {
+        self.enter_copy().await;
+        let Mode::Copy(cs) = std::mem::replace(&mut self.mode, Mode::Normal) else {
+            return Flow::Continue;
+        };
+        let page_up = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::PageUp,
+            crossterm::event::KeyModifiers::NONE,
+        );
+        self.copy_key(cs, page_up).await
     }
 
     async fn kill_server(&mut self) -> Flow {

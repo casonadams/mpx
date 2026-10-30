@@ -293,3 +293,129 @@ fn pane_count_spans_windows() {
     ws.new_window("second".into(), "s".into());
     assert_eq!(ws.pane_count(), 3);
 }
+
+/// Three panes side by side, `c` focused: slot order `a b c`.
+fn three_ws() -> Workspace {
+    let mut ws = Workspace::new("main".to_string());
+    ws.add_or_split("a".to_string(), Direction::Horizontal);
+    ws.add_or_split("b".to_string(), Direction::Horizontal);
+    ws.add_or_split("c".to_string(), Direction::Horizontal);
+    ws
+}
+
+fn slot_names(ws: &Workspace) -> Vec<String> {
+    ws.compute_layout(90, 10)
+        .into_iter()
+        .map(|(n, ..)| n)
+        .collect()
+}
+
+fn focused(ws: &Workspace) -> Option<String> {
+    ws.compute_layout(90, 10)
+        .into_iter()
+        .find(|(_, _, f)| *f)
+        .map(|(n, ..)| n)
+}
+
+#[test]
+fn rotate_up_moves_each_pane_to_the_slot_before_and_focus_follows_the_pane() {
+    let mut ws = three_ws();
+    assert_eq!(focused(&ws).as_deref(), Some("c"));
+    assert!(ws.rotate_active(false));
+    assert_eq!(slot_names(&ws), ["b", "c", "a"]);
+    assert_eq!(focused(&ws).as_deref(), Some("c"));
+}
+
+#[test]
+fn rotate_down_moves_each_pane_to_the_slot_after_and_rotating_back_restores_the_order() {
+    let mut ws = three_ws();
+    assert!(ws.rotate_active(true));
+    assert_eq!(slot_names(&ws), ["c", "a", "b"]);
+    assert_eq!(focused(&ws).as_deref(), Some("c"));
+    assert!(ws.rotate_active(false));
+    assert_eq!(slot_names(&ws), ["a", "b", "c"]);
+    assert_eq!(focused(&ws).as_deref(), Some("c"));
+}
+
+#[test]
+fn rotate_keeps_the_geometry_and_only_moves_names() {
+    let mut ws = three_ws();
+    let before: Vec<Rect> = ws
+        .compute_layout(90, 10)
+        .into_iter()
+        .map(|(_, r, _)| r)
+        .collect();
+    assert!(ws.rotate_active(false));
+    let after: Vec<Rect> = ws
+        .compute_layout(90, 10)
+        .into_iter()
+        .map(|(_, r, _)| r)
+        .collect();
+    assert_eq!(before, after);
+}
+
+#[test]
+fn rotate_with_one_pane_is_a_no_op_and_without_a_window_is_refused() {
+    let mut ws = Workspace::new("main".to_string());
+    assert!(!ws.rotate_active(false));
+    ws.add_or_split("solo".to_string(), Direction::Horizontal);
+    assert!(ws.rotate_active(true));
+    assert_eq!(slot_names(&ws), ["solo"]);
+}
+
+#[test]
+fn mirrored_main_vertical_puts_the_main_pane_on_the_right() {
+    let mut ws = three_ws();
+    assert!(ws.select_layout(Some(LayoutPreset::MainVerticalMirrored)));
+    let layout = ws.compute_layout(100, 50);
+    let main = layout.iter().find(|(n, ..)| n == "a").unwrap().1;
+    assert_eq!(main.height, 50);
+    for (name, rect, _) in layout.iter().filter(|(n, ..)| n != "a") {
+        assert!(
+            rect.x + rect.width <= main.x,
+            "{name} is left of the main pane"
+        );
+    }
+}
+
+#[test]
+fn mirrored_main_horizontal_puts_the_main_pane_at_the_bottom() {
+    let mut ws = three_ws();
+    assert!(ws.select_layout(Some(LayoutPreset::MainHorizontalMirrored)));
+    let layout = ws.compute_layout(100, 50);
+    let main = layout.iter().find(|(n, ..)| n == "a").unwrap().1;
+    assert_eq!(main.width, 100);
+    for (name, rect, _) in layout.iter().filter(|(n, ..)| n != "a") {
+        assert!(
+            rect.y + rect.height <= main.y,
+            "{name} is above the main pane"
+        );
+    }
+}
+
+#[test]
+fn next_layout_cycles_through_every_preset_including_the_mirrored_ones() {
+    let mut ws = three_ws();
+    let mut seen = Vec::new();
+    for _ in LayoutPreset::ALL {
+        assert!(ws.select_layout(None));
+        seen.push(ws.active_window().and_then(|w| w.preset).unwrap());
+    }
+    assert_eq!(seen, LayoutPreset::ALL);
+}
+
+#[test]
+fn every_preset_name_parses_back_to_itself() {
+    for preset in LayoutPreset::ALL {
+        assert_eq!(LayoutPreset::parse(preset.name()), Some(preset));
+    }
+    assert_eq!(
+        LayoutPreset::parse("main-vertical-mirrored"),
+        Some(LayoutPreset::MainVerticalMirrored)
+    );
+    assert_eq!(
+        LayoutPreset::parse("main-horizontal-mirrored"),
+        Some(LayoutPreset::MainHorizontalMirrored)
+    );
+    assert_eq!(LayoutPreset::parse("main-mirrored"), None);
+}

@@ -135,3 +135,38 @@ fn buffer_samples_escape_control_characters_and_truncate() {
     assert_eq!(buffer_sample(&long), format!("{}...", "x".repeat(50)));
     assert_eq!(buffer_sample(&"y".repeat(50)), "y".repeat(50));
 }
+
+#[test]
+fn rotate_find_and_respawn_parse_their_flags_targets_and_operands() {
+    let inv = parse_invocation(&argv(&["rotatew", "-D"])).unwrap();
+    assert_eq!(inv.command, "rotate-window");
+    assert!(inv.has('D') && !inv.has('U'));
+    assert!(parse_invocation(&argv(&["rotate-window", "-x"])).is_err());
+
+    let inv = parse_invocation(&argv(&[
+        "respawn-pane",
+        "-k",
+        "-c",
+        "/tmp",
+        "-t",
+        "%2",
+        "sleep",
+        "1",
+    ]))
+    .unwrap();
+    assert_eq!(inv.command, "respawn-pane");
+    assert!(inv.has('k'));
+    assert_eq!(inv.value('c'), Some("/tmp"));
+    assert_eq!(inv.value('t'), Some("%2"));
+    assert_eq!(inv.operands, ["sleep", "1"]);
+
+    let inv = parse_invocation(&argv(&["respawn-window", "-t", "@1"])).unwrap();
+    assert_eq!(inv.command, "respawn-window");
+    assert_eq!(inv.value('t'), Some("@1"));
+
+    let inv = parse_invocation(&argv(&["find-window", "-r", "-C", "-t", "@2", "build.*"])).unwrap();
+    assert_eq!(inv.command, "find-window");
+    assert!(inv.has('r') && inv.has('C') && !inv.has('N'));
+    assert_eq!(inv.value('t'), Some("@2"));
+    assert_eq!(inv.operands, ["build.*"]);
+}

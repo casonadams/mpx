@@ -12,4 +12,5 @@ mod prompt_cmds;
 mod reload;
 mod sessions;
 pub mod support;
+mod views;
 mod windows;

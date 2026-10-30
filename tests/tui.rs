@@ -6,6 +6,7 @@ mod tui {
     mod frame;
     mod input;
     mod keymap;
+    mod labels;
     mod overlay;
     mod panes;
     mod prompt;

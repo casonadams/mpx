@@ -49,8 +49,9 @@ fn default_table_binds_digits_and_core_keys() {
     assert_eq!(find("\""), Some("split-window"));
     assert_eq!(find("x"), Some("kill-pane"));
     assert_eq!(find("]"), Some("paste"));
-    assert_eq!(find("f"), Some("palette sessions"));
-    assert_eq!(find("."), Some("command-prompt -I 'select-window -t '"));
+    assert_eq!(find("f"), Some("command-prompt -I 'find-window '"));
+    assert_eq!(find("."), Some("command-prompt -I 'move-window -t '"));
+    assert_eq!(find("'"), Some("command-prompt -I 'select-window -t '"));
     assert_eq!(find("A"), None);
     assert_eq!(find("7"), Some("select-window -t 7"));
 }
@@ -238,4 +239,40 @@ fn runtime_bind_refuses_bad_keys_commands_and_the_prefix_key() {
     assert!(keymap.bind(false, "y", "nosuchcommand").is_err());
     assert!(keymap.bind(false, "C-b", "kill-pane").unwrap_err().contains("prefix"));
     assert_eq!(keymap, default_keymap(), "failed binds change nothing");
+}
+
+/// tmux's default prefix table (3.4) that mpx binds the same way, plus the keys mpx keeps for
+/// itself. Every key is looked up through a real key event, so notation errors show up here.
+#[test]
+fn tmux_default_prefix_keys_are_bound_to_their_tmux_commands() {
+    let keymap = default_keymap();
+    let bound = |ev: KeyEvent| command_of(&keymap, &ev);
+    let named = |code: KeyCode, mods: KeyModifiers| KeyEvent::new(code, mods);
+    let ctrl_code = |code| named(code, KeyModifiers::CONTROL);
+    let alt_code = |code| named(code, KeyModifiers::ALT);
+
+    assert!(matches!(bound(ctrl('o')), Some(Command::Tmux { ref words }) if words.as_slice() == ["rotate-window"]));
+    assert!(matches!(bound(alt('o')), Some(Command::Tmux { ref words }) if words.as_slice() == ["rotate-window", "-D"]));
+    assert!(matches!(bound(ctrl('z')), Some(Command::SuspendClient)));
+    assert!(matches!(bound(key('q')), Some(Command::DisplayPanes { .. })), "q shows pane numbers, d detaches");
+    assert!(matches!(bound(key('d')), Some(Command::Detach)));
+    assert!(matches!(bound(key('t')), Some(Command::ClockMode { .. })));
+    assert!(matches!(bound(key('~')), Some(Command::ShowMessages)));
+    assert!(matches!(bound(key('#')), Some(Command::ListBuffers)));
+    assert!(matches!(bound(key('=')), Some(Command::ChooseBuffer)));
+    assert!(matches!(bound(key('E')), Some(Command::SpreadLayout)));
+    assert!(matches!(bound(key('i')), Some(Command::Tmux { ref words }) if words[0] == "display-message" && words.contains(&"-p".to_string())));
+    assert!(matches!(bound(named(KeyCode::PageUp, KeyModifiers::NONE)), Some(Command::CopyModePageUp)));
+    assert!(matches!(bound(ctrl_code(KeyCode::Up)), Some(Command::ResizePane { side: Side::Up, cells: 1 })));
+    assert!(matches!(bound(alt_code(KeyCode::Right)), Some(Command::ResizePane { side: Side::Right, cells: 5 })));
+    assert!(matches!(bound(alt('1')), Some(Command::SelectLayout { preset: Some(_) })));
+    assert!(matches!(bound(alt('7')), Some(Command::SelectLayout { preset: Some(_) })));
+    assert!(matches!(bound(alt('n')), Some(Command::Tmux { .. })));
+    // The vim motions stay where they are.
+    for c in ['h', 'j', 'k', 'l'] {
+        assert!(matches!(bound(key(c)), Some(Command::SelectPaneDir { .. })), "{c}");
+    }
+    for c in ['H', 'J', 'K', 'L'] {
+        assert!(matches!(bound(key(c)), Some(Command::ResizePane { .. })), "{c}");
+    }
 }

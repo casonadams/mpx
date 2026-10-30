@@ -334,8 +334,9 @@ impl Session {
                 self.fanout(&event);
             }
             PaneNotice::Exited { name, id, code } => {
-                self.finish(&name, id);
-                self.fanout(&StreamEvent::Exit { name, code });
+                if self.finish(&name, id) {
+                    self.fanout(&StreamEvent::Exit { name, code });
+                }
             }
         }
     }
@@ -424,7 +425,9 @@ impl Session {
             | Request::JoinPane { .. }
             | Request::SwapWindow { .. }
             | Request::MoveWindow { .. }
-            | Request::PipePane { .. }) => self.tmux_request(req),
+            | Request::PipePane { .. }
+            | Request::RotateWindow { .. }
+            | Request::Respawn { .. }) => self.tmux_request(req),
             req => self.target_request(req).await,
         }
     }
@@ -485,6 +488,15 @@ impl Session {
                 command,
                 toggle,
             } => self.pipe_pane(&name, command, toggle),
+            Request::RotateWindow { down } => {
+                check(self.workspace.rotate_active(down), "No window")
+            }
+            Request::Respawn {
+                name,
+                kill,
+                cwd,
+                command,
+            } => self.respawn(&name, kill, cwd, command),
             other => Response::Error(format!("not a tmux request: {other:?}")),
         }
     }
@@ -1024,18 +1036,19 @@ impl Session {
         );
     }
 
-    /// Records an exit: keeps or removes the pane. Ignores stale or repeated notices.
-    fn finish(&mut self, name: &str, id: PaneId) {
+    /// Records an exit: keeps or removes the pane. Ignores stale or repeated notices; returns
+    /// whether the exit belonged to the pane's current process.
+    fn finish(&mut self, name: &str, id: PaneId) -> bool {
         let Some(entry) = self.nodes.get_mut(name) else {
-            return;
+            return false;
         };
         if entry.handle.id() != id {
-            return;
+            return false;
         }
         entry.exited = true;
         self.fire_hook("pane-exited");
         let Some(entry) = self.nodes.get_mut(name) else {
-            return;
+            return true;
         };
         if !entry.remain {
             if let Some(entry) = self.nodes.remove(name) {
@@ -1047,6 +1060,51 @@ impl Session {
             }
         }
         self.schedule_save();
+        true
+    }
+
+    /// Restarts a pane's process in its place (tmux `respawn-pane`): the pane keeps its name and
+    /// layout slot. An exited pane keeps its id. A running one must be killed first (`kill`), and
+    /// its replacement takes a new id, so the old process's exit cannot end the new one.
+    fn respawn(
+        &mut self,
+        target: &str,
+        kill: bool,
+        cwd: Option<String>,
+        command: Option<Vec<String>>,
+    ) -> Response {
+        let name = match self.target_name(target) {
+            Ok(name) => name,
+            Err(e) => return Response::Error(e),
+        };
+        let Some(entry) = self.nodes.get(&name) else {
+            return Response::Error(format!("can't respawn pane: {name}"));
+        };
+        let (exited, remain, old_id) = (entry.exited, entry.remain, entry.handle.id());
+        if !exited && !kill {
+            return Response::Error(format!("pane %{old_id} still active"));
+        }
+        let mut opts = entry.opts.clone();
+        if let Some(argv) = command.filter(|argv| !argv.is_empty()) {
+            let mut argv = argv.into_iter();
+            opts.command = argv.next().unwrap_or_default();
+            opts.args = argv.collect();
+        }
+        if cwd.is_some() {
+            opts.cwd = cwd;
+        }
+        let id = if exited { old_id } else { self.next_pane_id };
+        let spawn_cwd = opts.cwd.clone().or_else(current_dir);
+        let handle = match self.spawn_pane(&name, id, &opts, spawn_cwd) {
+            Ok(handle) => handle,
+            Err(e) => return Response::Error(e),
+        };
+        if !exited {
+            drop(self.nodes[&name].handle.request_kill());
+            self.next_pane_id += 1;
+        }
+        self.register(name, handle, opts, remain);
+        Response::Ok
     }
 
     /// Starts a kill of a live pane (the receiver resolves on exit), or removes an exited one.

@@ -21,7 +21,7 @@ use crate::tui::app::AppOptions;
 use crate::tui::status::{clock_hms, local_utc_offset};
 use crate::tui::{StartView, run_tui};
 
-const SPAWN_RETRIES: u32 = 20;
+const SPAWN_RETRIES: u32 = 200;
 const SHUTDOWN_POLLS: u32 = 20;
 
 pub async fn run_cli(cli: Cli) -> Result<i32, String> {
@@ -153,7 +153,7 @@ pub async fn ensure_client(r: &Resolved) -> Result<Client, String> {
     clear_stale_socket(&r.endpoint).await;
     spawn_daemon(r)?;
     for _ in 0..SPAWN_RETRIES {
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::sleep(Duration::from_millis(10)).await;
         if let Probe::Ready(client) = probe(&r.endpoint).await {
             return Ok(client);
         }

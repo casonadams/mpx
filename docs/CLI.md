@@ -122,7 +122,7 @@ Timeout exits with `124`, matching coreutils `timeout`.
 | `mpx select-pane [-t <pane>] [-m] [-M]` | Focus a pane, mark it (`-m`), or clear the mark (`-M`). |
 | `mpx swap-pane [--source <pane>] [-t <pane>]` | Swap two panes. |
 | `mpx break-pane <pane>` | Move a pane into its own window. |
-| `mpx select-layout [preset]` | `even-horizontal`, `even-vertical`, `main-vertical`, `main-horizontal`, `tiled`, `-E`. |
+| `mpx select-layout [preset]` | `even-horizontal`, `even-vertical`, `main-vertical`, `main-vertical-mirrored`, `main-horizontal`, `main-horizontal-mirrored`, `tiled`, `-E`. |
 | `mpx resize-pane [-t pane] -L\|-R\|-U\|-D [cells]` | Move split border (or `-x`/`-y` for absolute size). |
 | `mpx layout [--width W --height H]` | Print the computed pane geometry. |
 
@@ -192,6 +192,10 @@ A tmux server holds many sessions; `mpx` runs one daemon per session. A *server*
 | `detach-client`, `switch-client -t session` / `-n` / `-p` | Run in every attached terminal of the session. |
 | `set-buffer`, `show-buffer`, `list-buffers`, `delete-buffer`, `load-buffer`, `save-buffer`, `paste-buffer` | The session's paste buffers, newest first, at most 50. Copy-mode yanks and `capture-pane` without `-p` push a buffer. `paste-buffer` turns line feeds into carriage returns unless `-r` / `-s`; `-p` pastes bracketed. |
 | `wait-for [-S\|-L\|-U] channel` | Blocks until signaled (a signal sent first is remembered), or takes / releases the channel lock. |
+| `rotate-window [-D] [-U] [-Z] [-t window]` | Rotates the active window's panes through its layout: by default each pane moves to the slot before its own (the first pane goes last); `-D` moves each pane to the slot after. Geometry stays, and focus stays on the same pane. `-t` must name the active window. `-Z` is accepted but has no effect, since zoom is tracked by the TUI, not the daemon. |
+| `find-window [-CNTrZ] [-t window] match` | Lists the windows whose name (`-N`), pane title (`-T`) or screen (`-C`) contains `match`, one `index: name [WxH] (N panes) "title"` line each. Without `-C`, `-N` or `-T` all three are searched; `-r` reads `match` as a regex. No match fails with `no windows matching: match`. `-Z` is accepted with no effect, as for `rotate-window`. |
+| `respawn-pane [-k] [-c dir] [-t pane] [command]` | Restarts the pane's process in place: same name and layout slot, and the same command and directory unless given. A running process needs `-k`, otherwise the command fails with `pane %N still active`. An exited pane keeps its `%N`; a process replaced with `-k` gets a new one. |
+| `respawn-window [-k] [-c dir] [-t window] [command]` | Respawns the focused pane of the active window, as `respawn-pane` does. `-t` must name the active window. |
 | `run-shell [-b] [-C] [-d secs] command` | Prints the output; a non-zero exit fails with `'command' returned N`. `-C` runs a tmux command instead. |
 | `if-shell [-F] condition then [else]` | The condition is a shell command (exit 0), or with `-F` a format. The branches are tmux command strings (`;` separates commands). |
 | `source-file [-nq] file...` | Runs each line as a tmux command, honoring `%if` / `%elif` / `%else` / `%endif` (conditions are formats) and `~` in paths; failures are reported as `file:line: error`. `-n` only checks. Also works at the `:` prompt, so `:source-file ~/.tmux.conf` applies a tmux config to the running session. |
@@ -205,6 +209,6 @@ Options and environment:
 - `set-environment` does apply: later panes of the session start with the variable.
 - Reading an option that was never set fails with `invalid option` unless `-q` is given.
 
-Accepted and ignored, so tools that configure tmux keep working: `respawn-pane`, `refresh-client`. Any other command fails with `unknown command`. Not supported: `display-popup`, `choose-*`, `copy-mode`, `command-prompt`, control mode (`-C`).
+Accepted and ignored, so tools that configure tmux keep working: `refresh-client`. Any other command fails with `unknown command`. Not supported: `display-popup`, `choose-*`, `copy-mode`, `command-prompt`, control mode (`-C`).
 
 Buffers, options, the environment and `wait-for` channels belong to one session, so a tool that sets a buffer in one session and pastes it in another will not find it. Inside an mpx pane every command reaches the pane's own session, which is what such tools expect.

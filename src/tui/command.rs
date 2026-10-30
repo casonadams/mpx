@@ -84,6 +84,8 @@ pub enum Command {
     SpreadLayout,
     Zoom,
     CopyMode,
+    /// `copy-mode -u`: enter copy mode one page up in the history.
+    CopyModePageUp,
     Detach,
     KillServer,
     /// Send the prefix key itself to the active pane.
@@ -120,24 +122,45 @@ pub enum Command {
     Tmux {
         words: Vec<String>,
     },
+    /// `display-panes [-d ms]`: number each visible pane until a digit picks one, a key is
+    /// pressed or the time runs out. `None` takes `display-panes-time`; `Some(0)` waits for a key.
+    DisplayPanes {
+        duration_ms: Option<u64>,
+    },
+    /// `clock-mode [-t pane]`: a large clock fills the pane until a key is pressed.
+    ClockMode {
+        target: Option<String>,
+    },
+    /// `show-messages`: the status-row messages of this session, oldest first.
+    ShowMessages,
+    /// `list-buffers`: the paste buffers, one line each, in an overlay.
+    ListBuffers,
+    /// `choose-buffer`: the paste buffers, newest first; Enter pastes, `d` deletes.
+    ChooseBuffer,
+    /// `suspend-client`: stop the process as Ctrl-Z does; the TUI resumes on SIGCONT.
+    SuspendClient,
 }
 
 /// Command names and aliases accepted by `parse`; used for `:` completion.
 pub const COMMAND_NAMES: &[&str] = &[
     "bind-key",
     "break-pane",
+    "choose-buffer",
     "choose-tree",
+    "clock-mode",
     "command-palette",
     "command-prompt",
     "copy-mode",
     "detach",
     "detach-client",
+    "display-panes",
     "help",
     "kill-pane",
     "kill-server",
     "kill-window",
     "last-pane",
     "last-window",
+    "list-buffers",
     "list-keys",
     "mark-pane",
     "new",
@@ -165,9 +188,11 @@ pub const COMMAND_NAMES: &[&str] = &[
     "send-keys",
     "send-prefix",
     "session",
+    "show-messages",
     "sp",
     "split",
     "split-window",
+    "suspend-client",
     "swap-pane",
     "switch-client",
     "tabn",
@@ -219,7 +244,26 @@ fn tmux_fallback(name: &str, args: &[String]) -> Result<Command, String> {
     }
     let mut words = vec![name.to_string()];
     words.extend_from_slice(args);
+    if crate::tmux_shim::canonical(name) == "display-message" {
+        add_display_defaults(&mut words)?;
+    }
     Ok(Command::Tmux { words })
+}
+
+/// `display-message` shows its text on the status row, so it prints (`-p`), and with no format it
+/// describes the current pane as tmux does.
+fn add_display_defaults(words: &mut Vec<String>) -> Result<(), String> {
+    let inv = crate::tmux_shim::parse_invocation(words)?;
+    if !inv.has('p') {
+        words.insert(1, "-p".to_string());
+    }
+    if inv.operands.is_empty() {
+        words.push(
+            "[#{session_name}] #{window_index}:#{window_name}, current pane #{pane_index} - (#{pane_title})"
+                .to_string(),
+        );
+    }
+    Ok(())
 }
 
 const BIND: Spec = Spec {
@@ -325,6 +369,8 @@ fn window_cmd(name: &str, args: &[String]) -> Option<Result<Command, String>> {
         "kill-window" => kill_window(name, args),
         "rename-window" => rename_window(args),
         "select-window" => select_window(name, args),
+        "next-window" if args == ["-a"] => tmux_fallback(name, args),
+        "previous-window" if args == ["-a"] => tmux_fallback(name, args),
         "next-window" | "tabnext" | "tabn" => bare(name, args, Command::NextWindow),
         "previous-window" | "prev-window" | "tabprevious" | "tabp" => {
             bare(name, args, Command::PrevWindow)
@@ -356,6 +402,7 @@ fn pane_cmd(name: &str, args: &[String]) -> Option<Result<Command, String>> {
 
 fn misc_cmd(name: &str, args: &[String]) -> Option<Result<Command, String>> {
     let cmd = match name {
+        "copy-mode" if args == ["-u"] => Ok(Command::CopyModePageUp),
         "copy-mode" => bare(name, args, Command::CopyMode),
         "detach-client" | "detach" | "q" | "quit" => bare(name, args, Command::Detach),
         "kill-server" | "qa" => bare(
@@ -367,6 +414,13 @@ fn misc_cmd(name: &str, args: &[String]) -> Option<Result<Command, String>> {
             },
         ),
         "choose-tree" => bare(name, args, Command::OpenTree),
+        "choose-buffer" => bare(name, args, Command::ChooseBuffer),
+        "display-panes" | "displayp" => display_panes(name, args),
+        "clock-mode" => clock_mode(name, args),
+        "show-messages" | "showmsgs" => bare(name, args, Command::ShowMessages),
+        "list-buffers" | "lsb" if args.is_empty() => Ok(Command::ListBuffers),
+        "list-buffers" | "lsb" => tmux_fallback(name, args),
+        "suspend-client" | "suspendc" => bare(name, args, Command::SuspendClient),
         "list-keys" | "help" => bare(name, args, Command::OpenHelp),
         "send-prefix" => bare(name, args, Command::SendPrefix),
         "reload-config" => bare(name, args, Command::ReloadConfig),
@@ -456,6 +510,16 @@ const PROMPT: Spec = Spec {
     bools: &[],
     values: &["-I"],
     stop_at_arg: true,
+};
+const DISPLAY_PANES: Spec = Spec {
+    bools: &[],
+    values: &["-d"],
+    stop_at_arg: false,
+};
+const CLOCK_MODE: Spec = Spec {
+    bools: &[],
+    values: &["-t"],
+    stop_at_arg: false,
 };
 
 #[derive(Debug, Default)]
@@ -743,6 +807,27 @@ fn command_prompt(name: &str, args: &[String]) -> Result<Command, String> {
         None => o.rest.join(" "),
     };
     Ok(Command::CommandPrompt { initial })
+}
+
+fn display_panes(name: &str, args: &[String]) -> Result<Command, String> {
+    let o = parse_opts(name, args, DISPLAY_PANES)?;
+    o.no_rest(name)?;
+    let duration_ms = match o.value("-d") {
+        Some(ms) => Some(
+            ms.parse::<u64>()
+                .map_err(|_| format!("{name}: bad duration '{ms}'"))?,
+        ),
+        None => None,
+    };
+    Ok(Command::DisplayPanes { duration_ms })
+}
+
+fn clock_mode(name: &str, args: &[String]) -> Result<Command, String> {
+    let o = parse_opts(name, args, CLOCK_MODE)?;
+    o.no_rest(name)?;
+    Ok(Command::ClockMode {
+        target: o.value("-t").map(str::to_string),
+    })
 }
 
 fn palette_cmd(name: &str, args: &[String]) -> Result<Command, String> {

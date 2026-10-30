@@ -409,6 +409,30 @@ impl Client {
         self.call_ok("SelectLayout", Request::SelectLayout { preset })
             .await
     }
+
+    /// Rotates the active window's panes through its layout slots (`rotate-window`).
+    pub async fn rotate_window(&mut self, down: bool) -> Result<(), String> {
+        self.call_ok("RotateWindow", Request::RotateWindow { down })
+            .await
+    }
+
+    /// Restarts a pane's process in place (`respawn-pane`); see `Request::Respawn`.
+    pub async fn respawn(
+        &mut self,
+        name: &str,
+        kill: bool,
+        cwd: Option<String>,
+        command: Option<Vec<String>>,
+    ) -> Result<(), String> {
+        let req = Request::Respawn {
+            name: name.to_string(),
+            kill,
+            cwd,
+            command,
+        };
+        self.call_ok("Respawn", req).await
+    }
+
     pub async fn rename_session(&mut self, name: &str) -> Result<(), String> {
         self.call_ok(
             "RenameSession",

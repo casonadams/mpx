@@ -6,22 +6,35 @@ use crossterm::event::KeyCode;
 
 use mpx::config::Config;
 use mpx::layout::Direction;
+use mpx::layout::Rect;
+use mpx::tui::app::ClockSource;
+use mpx::tui::labels::{label, label_rect, pane_numbers};
 
 use super::support::{ECHO, Harness, MAIN, split};
 
-/// Draws a frame and asserts that every visible pane shows exactly its own screen; the focused
-/// (undimmed) pane must also match attribute for attribute.
-async fn check(h: &mut Harness, step: &str) {
+/// Whether the cell at (`x`, `y`) lies inside `area`.
+fn inside(area: Rect, x: u16, y: u16) -> bool {
+    x >= area.x && x < area.x + area.width && y >= area.y && y < area.y + area.height
+}
+
+/// Draws a frame and asserts that every visible pane shows exactly its own screen, except the cells
+/// inside `masked`, which an overlay covers on purpose. The focused (undimmed) pane must also match
+/// attribute for attribute.
+async fn check_masked(h: &mut Harness, step: &str, masked: &[Rect]) {
     h.frame().await;
     for (name, rect, focused) in h.app.panes.clone() {
         let pane = h.app.vt.get(&name).expect("pane screen");
         for y in 0..rect.height as usize {
             for x in 0..rect.width as usize {
+                let (tx, ty) = (rect.x + x as u16, rect.y + y as u16);
+                if masked.iter().any(|area| inside(*area, tx, ty)) {
+                    continue;
+                }
                 let want = pane.grid().get_cell(x, y).copied().unwrap_or_default();
                 let got = h
                     .terminal
                     .grid()
-                    .get_cell(rect.x as usize + x, rect.y as usize + y)
+                    .get_cell(tx as usize, ty as usize)
                     .copied()
                     .unwrap_or_default();
                 assert_eq!(
@@ -31,14 +44,29 @@ async fn check(h: &mut Harness, step: &str) {
                     h.terminal.snapshot()
                 );
                 if focused {
-                    assert_eq!(
-                        got.style, want.style,
-                        "{step}: pane {name} style at ({x},{y})"
-                    );
+                    assert_eq!(got.style, want.style, "{step}: pane {name} style at ({x},{y})");
                 }
             }
         }
     }
+}
+
+/// Draws a frame and asserts that every visible pane shows exactly its own screen; the focused
+/// (undimmed) pane must also match attribute for attribute.
+async fn check(h: &mut Harness, step: &str) {
+    check_masked(h, step, &[]).await;
+}
+
+/// The cells the display-panes numbers cover in the last frame.
+fn number_areas(h: &Harness) -> Vec<Rect> {
+    pane_numbers(&h.app.panes, &h.app.nodes)
+        .into_iter()
+        .filter_map(|(number, name)| {
+            let (_, area, _) = h.app.panes.iter().find(|(n, ..)| *n == name)?;
+            let rows = label(&number.to_string(), area.width as usize, area.height as usize);
+            Some(label_rect(*area, &rows))
+        })
+        .collect()
 }
 
 /// Sends `bytes` to `pane` (an `ECHO` pane prints them back) and waits until its screen shows `marker`.
@@ -173,4 +201,38 @@ async fn frames_keep_the_terminal_identical_to_the_panes() {
     check(&mut h, "upper pane scrolls inside its own rows").await;
     emit(&mut h, MAIN, VIM_LIKE, "VIM-DONE").await;
     check(&mut h, "scroll regions inside a stacked pane").await;
+}
+
+#[tokio::test]
+async fn pane_overlays_cover_only_their_own_cells() {
+    let config = Config {
+        which_key_delay_ms: 0,
+        ..Config::default()
+    };
+    let mut h = Harness::start(config, ECHO).await;
+    h.app.canvas.set_lr_margins(true);
+    split(&mut h.probe, MAIN, "side", Direction::Horizontal).await;
+    check(&mut h, "after split").await;
+    emit(&mut h, "side", "side text", "side text").await;
+    check(&mut h, "two panes").await;
+
+    h.prefixed_char(':').await;
+    h.type_str("display-panes -d 0").await;
+    h.key(KeyCode::Enter).await;
+    h.frame().await;
+    let numbers = number_areas(&h);
+    assert_eq!(numbers.len(), 2, "one number per pane");
+    check_masked(&mut h, "pane numbers shown", &numbers).await;
+    h.key(KeyCode::Esc).await;
+    check(&mut h, "pane numbers dismissed").await;
+
+    h.prefixed_char(':').await;
+    h.type_str("clock-mode").await;
+    h.key(KeyCode::Enter).await;
+    h.app.clock = ClockSource::Fixed(9, 41);
+    h.frame().await;
+    let clock = h.rect_of(MAIN);
+    check_masked(&mut h, "clock fills the active pane", &[clock]).await;
+    h.key(KeyCode::Char('x')).await;
+    check(&mut h, "clock dismissed").await;
 }

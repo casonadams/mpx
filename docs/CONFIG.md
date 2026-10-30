@@ -21,6 +21,7 @@ tmux_compat = true      # export TMUX/TMUX_PANE + the tmux shim in every pane (d
 allow_passthrough = true # allow terminal passthrough sequences (DCS tmux, OSC 4/10/11/12/52) from active pane
 restore = true          # when a session starts, recreate its last layout and resume processes
 which_key_delay_ms = 300  # wait after the prefix key before showing the shortcut popup (0 = at once)
+display_panes_time_ms = 1000  # how long display-panes numbers stay up (0 = until a key)
 
 [style]
 border_active = "bright-green"      # active border color or hex ("#3fb950")
@@ -84,6 +85,7 @@ fallback = ["nvim", "-S", "Session.vim"]
 | `allow_passthrough` | bool | `true` | TUI | Allow terminal passthrough sequences (DCS tmux passthrough, OSC 4/10/11/12/52) from the active pane to forward to the host terminal. |
 | `restore` | bool | `true` | Daemon | On startup, automatically restore the last saved session layout and resume registered processes, however the previous run ended. `mpx --no-restore` skips it for one start. |
 | `which_key_delay_ms` | integer | `300` | TUI | Milliseconds to wait after pressing the prefix before displaying the which-key HUD popup (`0` displays immediately). |
+| `display_panes_time_ms` | integer | `1000` | TUI | Milliseconds the `display-panes` numbers stay on screen before they go away (`0` keeps them until a key is pressed). Also set with `set-option display-panes-time`. |
 
 ### Inactive panes (`[style]`)
 

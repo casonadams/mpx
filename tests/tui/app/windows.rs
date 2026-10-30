@@ -348,7 +348,7 @@ async fn focusing_a_pane_resized_elsewhere_gives_it_back_its_size() {
 }
 
 #[tokio::test]
-async fn prefix_space_cycles_layouts_and_prefix_equals_spreads_panes() {
+async fn prefix_space_cycles_layouts_and_prefix_e_spreads_panes() {
     let mut h = start().await;
     split(&mut h.probe, MAIN, "side", Direction::Horizontal).await;
     h.frame().await;
@@ -364,7 +364,7 @@ async fn prefix_space_cycles_layouts_and_prefix_equals_spreads_panes() {
         .expect("uneven");
     h.frame().await;
     assert!(h.rect_of(MAIN).height > h.rect_of("side").height + 1);
-    h.prefixed_char('=').await;
+    h.prefixed_char('E').await;
     h.frame().await;
     assert!(h.rect_of(MAIN).height.abs_diff(h.rect_of("side").height) <= 1);
 }

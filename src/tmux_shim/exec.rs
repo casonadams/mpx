@@ -1,6 +1,7 @@
 use std::future::Future;
 use std::pin::Pin;
 
+use regex::Regex;
 use uuid::Uuid;
 
 use super::args::{Invocation, is_noop, parse};
@@ -496,17 +497,23 @@ fn fresh_name() -> String {
     format!("pane-{}", &id[..8])
 }
 
+/// The program and arguments a trailing command runs: its operands through `sh -c`, as tmux does,
+/// or the default shell when there are none.
+fn command_argv(inv: &Invocation) -> Vec<String> {
+    if inv.operands.is_empty() {
+        vec![default_shell()]
+    } else {
+        vec!["sh".to_string(), "-c".to_string(), inv.operand_text()]
+    }
+}
+
 /// Spawn options for a tmux pane: trailing operands run through `sh -c`, as tmux does.
 pub fn spawn_opts(inv: &Invocation) -> SpawnOpts {
-    let (command, args) = if inv.operands.is_empty() {
-        (default_shell(), Vec::new())
-    } else {
-        ("sh".to_string(), vec!["-c".to_string(), inv.operand_text()])
-    };
+    let mut argv = command_argv(inv).into_iter();
     SpawnOpts {
         name: fresh_name(),
-        command,
-        args,
+        command: argv.next().unwrap_or_default(),
+        args: argv.collect(),
         pty: true,
         cwd: inv.value('c').map(str::to_string),
         env: Vec::new(),
@@ -543,8 +550,12 @@ impl Shim {
             .iter()
             .map(|v| views.iter().filter(|o| o.window == v.window).count())
             .collect();
+        let mut next_in_window: std::collections::HashMap<usize, usize> = Default::default();
         for (view, count) in views.iter_mut().zip(counts) {
             view.window_panes = count;
+            let slot = next_in_window.entry(view.window).or_default();
+            view.index = *slot;
+            *slot += 1;
         }
         Ok(views)
     }
@@ -606,10 +617,16 @@ impl Shim {
             "resize-pane" => self.resize_pane(inv).await,
             "swap-pane" => self.swap_pane(inv).await,
             "break-pane" => self.break_pane(inv).await,
+            "rotate-window" => self.rotate_window(inv).await,
+            "respawn-pane" => self.respawn_pane(inv).await,
+            "respawn-window" => self.respawn_window(inv).await,
+            "find-window" => self.find_window(inv).await,
             "last-pane" => self.client.focus_last().await.map(|_| String::new()),
             "last-window" => self.client.last_window().await.map(|_| String::new()),
             "rename-window" => self.rename_window(inv).await,
             "rename-session" => self.rename_session(inv).await,
+            "next-window" if inv.has('a') => self.step_alert(true).await,
+            "previous-window" if inv.has('a') => self.step_alert(false).await,
             "next-window" => self.client.next_window().await.map(|_| String::new()),
             "previous-window" => self.client.prev_window().await.map(|_| String::new()),
             "detach-client" => self.detach_client().await,
@@ -752,6 +769,22 @@ impl Shim {
                 format!("{}\n", expand(fmt, &pane_vars(&first)))
             })
             .collect())
+    }
+
+    /// `next-window -a` / `previous-window -a`: the next window in that direction with an alert
+    /// (activity or bell).
+    async fn step_alert(&mut self, forward: bool) -> Result<String, String> {
+        let (w, h) = terminal_view();
+        let (_, _, tabs) = self.client.layout(w, h).await?;
+        let count = tabs.len();
+        let current = tabs.iter().position(|t| t.is_active).unwrap_or(0);
+        let alert = (1..count)
+            .map(|step| if forward { (current + step) % count } else { (current + count - step) % count })
+            .find(|&i| tabs[i].has_activity || tabs[i].has_bell);
+        match alert {
+            Some(index) => self.client.select_window(index).await.map(|_| String::new()),
+            None => Err(format!("no {} window with an alert", if forward { "next" } else { "previous" })),
+        }
     }
 
     async fn display_message(&mut self, inv: &Invocation) -> Result<String, String> {
@@ -921,6 +954,119 @@ impl Shim {
             .swap_pane(&src, &dst)
             .await
             .map(|_| String::new())
+    }
+
+    /// The daemon acts on the active window only, so a `-t` naming another window is refused.
+    async fn check_active_window(
+        &mut self,
+        target: Option<&str>,
+        command: &str,
+    ) -> Result<(), String> {
+        let Some(target) = target else {
+            return Ok(());
+        };
+        let index = window_key(target).ok_or_else(|| format!("can't find window: {target}"))?;
+        let (w, h) = terminal_view();
+        let (_, _, tabs) = self.client.layout(w, h).await?;
+        if tabs.iter().any(|t| t.is_active && t.index == index) {
+            Ok(())
+        } else {
+            Err(format!("{command}: only the active window can be targeted"))
+        }
+    }
+
+    async fn rotate_window(&mut self, inv: &Invocation) -> Result<String, String> {
+        self.check_active_window(inv.value('t'), "rotate-window")
+            .await?;
+        self.client
+            .rotate_window(inv.has('D'))
+            .await
+            .map(|_| String::new())
+    }
+
+    async fn respawn_pane(&mut self, inv: &Invocation) -> Result<String, String> {
+        let node = self.resolve(inv.value('t')).await?;
+        self.respawn(&node.name, inv).await
+    }
+
+    /// Respawns the window's focused pane, as tmux does for the window's active pane.
+    async fn respawn_window(&mut self, inv: &Invocation) -> Result<String, String> {
+        self.check_active_window(inv.value('t'), "respawn-window")
+            .await?;
+        let (w, h) = terminal_view();
+        let (rects, _, _) = self.client.layout(w, h).await?;
+        let focused = rects
+            .iter()
+            .find(|(_, _, focused)| *focused)
+            .map(|(name, ..)| name.clone())
+            .ok_or_else(|| "no pane in the window".to_string())?;
+        self.respawn(&focused, inv).await
+    }
+
+    /// Restarts the pane `name`; a trailing command replaces the pane's own.
+    async fn respawn(&mut self, name: &str, inv: &Invocation) -> Result<String, String> {
+        let command = (!inv.operands.is_empty()).then(|| command_argv(inv));
+        let cwd = inv.value('c').map(str::to_string);
+        self.client
+            .respawn(name, inv.has('k'), cwd, command)
+            .await
+            .map(|_| String::new())
+    }
+
+    /// Lists the windows whose name, pane title or screen contains the match string (tmux
+    /// `find-window`). Without `-C`, `-N` or `-T`, all three are searched.
+    async fn find_window(&mut self, inv: &Invocation) -> Result<String, String> {
+        let [needle] = inv.operands.as_slice() else {
+            return Err("find-window: match-string required".to_string());
+        };
+        let text = if inv.has('r') {
+            needle.clone()
+        } else {
+            regex::escape(needle)
+        };
+        let pattern = Regex::new(&text).map_err(|e| format!("invalid regex: {e}"))?;
+        let any = !(inv.has('C') || inv.has('N') || inv.has('T'));
+        let (content, names, titles) = (
+            any || inv.has('C'),
+            any || inv.has('N'),
+            any || inv.has('T'),
+        );
+        let (w, h) = terminal_view();
+        let panes = self.panes().await?;
+        let mut windows: Vec<usize> = panes.iter().map(|p| p.window).collect();
+        windows.sort_unstable();
+        windows.dedup();
+        let mut out = String::new();
+        for index in windows {
+            let members: Vec<&PaneView> = panes.iter().filter(|p| p.window == index).collect();
+            let Some(&focus) = members.iter().find(|p| p.active).or(members.first()) else {
+                continue;
+            };
+            let mut hit = (names && pattern.is_match(&focus.window_name))
+                || (titles && members.iter().any(|p| pattern.is_match(&p.title)));
+            if !hit && content {
+                for pane in &members {
+                    let screen = self.client.screen(&format!("%{}", pane.id)).await?;
+                    if pattern.is_match(&screen) {
+                        hit = true;
+                        break;
+                    }
+                }
+            }
+            if hit {
+                out.push_str(&format!(
+                    "{index}: {} [{w}x{h}] ({} panes) \"{}\"\n",
+                    focus.window_name,
+                    members.len(),
+                    focus.title
+                ));
+            }
+        }
+        if out.is_empty() {
+            Err(format!("no windows matching: {needle}"))
+        } else {
+            Ok(out)
+        }
     }
 
     async fn break_pane(&mut self, inv: &Invocation) -> Result<String, String> {

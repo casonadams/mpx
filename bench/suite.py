@@ -473,7 +473,7 @@ def render(results: dict, reps: int, machine: str) -> str:
         for label, key in (("attached", "flood_attached"), ("detached", "flood_detached")):
             for engine in ("mpx", "tmux"):
                 vals = results.get(key, {}).get(engine)
-                if vals is None:
+                if not vals:
                     continue
                 med = summarize(vals)[0]
                 lines.append(

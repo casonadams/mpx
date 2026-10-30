@@ -450,7 +450,8 @@ pub enum Commands {
         name: String,
     },
 
-    /// Apply a layout preset (even-horizontal, even-vertical, main-vertical, main-horizontal, tiled); none cycles
+    /// Apply a layout preset (even-horizontal, even-vertical, main-vertical, main-vertical-mirrored,
+    /// main-horizontal, main-horizontal-mirrored, tiled); none cycles
     #[command(name = "select-layout")]
     SelectLayout {
         preset: Option<String>,

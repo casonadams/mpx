@@ -19,6 +19,8 @@ pub struct Config {
     pub restore: bool,
     /// Milliseconds after the prefix key before the shortcut popup appears; 0 shows it at once.
     pub which_key_delay_ms: u64,
+    /// Milliseconds the display-panes numbers stay up (tmux `display-panes-time`); 0 waits for a key.
+    pub display_panes_time_ms: u64,
     /// Extra or overriding key bindings: key (tmux notation) -> command line.
     pub bind: BTreeMap<String, String>,
     /// Extra or overriding bindings for keys pressed without the prefix (tmux `bind -n`).
@@ -195,6 +197,7 @@ impl Default for Config {
             allow_passthrough: true,
             restore: true,
             which_key_delay_ms: 300,
+            display_panes_time_ms: 1000,
             bind: BTreeMap::new(),
             bind_root: BTreeMap::new(),
             resume: default_resume_rules(),
@@ -221,6 +224,22 @@ impl Config {
     /// Applies one tmux option (`set-option name value`) that mpx has an equivalent for.
     /// `Ok(false)` for an option with none, which is then only stored.
     pub fn apply_option(&mut self, name: &str, value: &str) -> Result<bool, String> {
+        for apply in [Self::apply_session_option, Self::apply_ui_option] {
+            if apply(self, name, value)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Options the daemon acts on: panes, windows, output tracking.
+    fn apply_session_option(&mut self, name: &str, value: &str) -> Result<bool, String> {
+        let _ = (name, value);
+        Ok(false)
+    }
+
+    /// Options the terminal UI acts on: keys, status line, mouse, numbering.
+    fn apply_ui_option(&mut self, name: &str, value: &str) -> Result<bool, String> {
         match name {
             "prefix" => self.prefix = value.to_string(),
             _ => return Ok(false),
@@ -268,4 +287,13 @@ pub fn home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from)
+}
+
+/// A tmux on/off value: `on`, `yes`, `true`, `1` / `off`, `no`, `false`, `0`.
+pub fn parse_switch(value: &str) -> Result<bool, String> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "on" | "yes" | "true" | "1" => Ok(true),
+        "off" | "no" | "false" | "0" => Ok(false),
+        other => Err(format!("expected on or off, got '{other}'")),
+    }
 }

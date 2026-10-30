@@ -5,6 +5,7 @@ use super::app::{App, Flow, Mode};
 use super::command::{self, COMMAND_NAMES, Command};
 use super::copy::{CopyOutcome, CopyState, apply_key};
 use super::keymap::Table;
+use super::labels;
 use super::overlay::{Overlay, OverlayAction};
 use super::prompt::PromptState;
 use crate::keys::encode_key;
@@ -16,6 +17,8 @@ pub enum OverlayNext {
     Stay,
     /// The overlay closes; these commands run in order.
     Close(Vec<Command>),
+    /// The paste buffer named is deleted; the overlay stays open and reloads.
+    Delete(String),
 }
 
 /// Maps an overlay's key result onto the app's next step.
@@ -24,6 +27,7 @@ pub fn overlay_next(action: OverlayAction) -> OverlayNext {
         OverlayAction::None => OverlayNext::Stay,
         OverlayAction::Close => OverlayNext::Close(Vec::new()),
         OverlayAction::Run(cmds) => OverlayNext::Close(cmds),
+        OverlayAction::DeleteBuffer(name) => OverlayNext::Delete(name),
     }
 }
 
@@ -101,6 +105,12 @@ impl App {
                 Flow::Continue
             }
             OverlayNext::Close(cmds) => self.run_all(cmds).await,
+            OverlayNext::Delete(name) => {
+                self.mode = Mode::Overlay(overlay);
+                let result = self.client.delete_buffer(Some(&name)).await;
+                self.refresh_overlay().await;
+                self.settle(result)
+            }
         }
     }
 
@@ -112,6 +122,25 @@ impl App {
             }
         }
         Flow::Continue
+    }
+
+    /// display-panes: a digit selects the pane numbered with it. The numbers are already gone (the
+    /// mode is back to normal), so any other key just dismisses them.
+    pub async fn panes_key(&mut self, key: KeyEvent) -> Flow {
+        let KeyCode::Char(c) = key.code else {
+            return Flow::Continue;
+        };
+        let Some(number) = c.to_digit(10) else {
+            return Flow::Continue;
+        };
+        let picked = labels::pane_numbers(&self.panes, &self.nodes)
+            .into_iter()
+            .find(|(n, _)| *n == number as usize)
+            .map(|(_, pane)| pane);
+        match picked {
+            Some(target) => self.run(Command::SelectPane { target }).await,
+            None => Flow::Continue,
+        }
     }
 
     pub async fn prompt_key(&mut self, mut prompt: PromptState, key: KeyEvent) -> Flow {

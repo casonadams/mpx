@@ -1,4 +1,6 @@
-use mpx::tui::terminal::{margins_reply, osc_color_reply, parse_color_spec, report_from};
+use mpx::tui::terminal::{
+    enter_sequence, leave_sequence, margins_reply, osc_color_reply, parse_color_spec, report_from,
+};
 
 #[test]
 fn a_terminal_reporting_mode_69_supports_margins() {
@@ -46,4 +48,18 @@ fn color_answers_are_found_among_the_other_replies_whatever_ends_them() {
     assert_eq!((silent.fg, silent.bg, silent.margins), (None, None, false));
     assert_eq!(osc_color_reply(b"\x1b]11;rgb:0000/0000/0000", 11), None, "unterminated");
     assert_eq!(osc_color_reply(b"\x1b]10;rgb:ffff/ffff/ffff\x07", 11), None, "other code");
+}
+
+#[test]
+fn entering_the_tui_switches_screens_and_leaving_hands_the_shell_its_own_back() {
+    let enter = String::from_utf8(enter_sequence()).unwrap();
+    for wanted in ["\x1b[?1049h", "\x1b[?25l", "\x1b[?2004h", "\x1b[?1004h", "\x1b[?7l"] {
+        assert!(enter.contains(wanted), "enter lacks {wanted:?}");
+    }
+    let leave = String::from_utf8(leave_sequence()).unwrap();
+    for wanted in ["\x1b[?1049l", "\x1b[?25h", "\x1b[?2004l", "\x1b[?1004l", "\x1b[?7h"] {
+        assert!(leave.contains(wanted), "leave lacks {wanted:?}");
+    }
+    assert!(!leave.contains("\x1b[?1049h"), "leave must not enter the alternate screen");
+    assert!(!enter.contains("\x1b[?1049l"), "enter must not leave it");
 }

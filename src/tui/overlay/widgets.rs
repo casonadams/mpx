@@ -370,3 +370,15 @@ pub fn draw_prompt<W: Write>(out: &mut W, area: Rect, text: &str) -> io::Result<
         false,
     )
 }
+
+/// `text` with tabs as spaces and other control characters as `?`, so no escape sequence reaches
+/// the terminal from program output.
+pub fn printable(text: &str) -> String {
+    text.chars()
+        .map(|c| match c {
+            '\t' => ' ',
+            c if c.is_control() => '?',
+            c => c,
+        })
+        .collect()
+}

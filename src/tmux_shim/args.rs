@@ -48,6 +48,7 @@ pub fn canonical(name: &str) -> &str {
         "resizep" => "resize-pane",
         "swapp" => "swap-pane",
         "breakp" => "break-pane",
+        "rotatew" => "rotate-window",
         "renamew" => "rename-window",
         "rename" => "rename-session",
         "joinp" => "join-pane",
@@ -132,16 +133,16 @@ pub fn spec(command: &str) -> Option<(&'static str, &'static str)> {
         "swap-pane" => ("dDUZ", "st"),
         "break-pane" => ("dP", "sFnt"),
         "last-pane" => ("deZ", "t"),
+        "rotate-window" => ("DUZ", "t"),
+        "find-window" => ("CNTrZ", "t"),
+        "respawn-pane" | "respawn-window" => ("k", "ct"),
         _ => return None,
     })
 }
 
 /// Commands accepted and ignored so that tools configuring tmux keep working.
 pub fn is_noop(command: &str) -> bool {
-    matches!(
-        command,
-        "respawn-pane" | "refresh-client"
-    )
+    matches!(command, "refresh-client")
 }
 
 /// Parses a tmux argv (without the program name). Option parsing stops at the first operand,

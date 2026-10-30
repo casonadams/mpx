@@ -1,7 +1,9 @@
 //! Full-screen popups drawn over the panes: agent manager, session/window/pane tree, key help.
+pub mod buffer_view;
 pub mod help_view;
 pub mod nav;
 pub mod palette_view;
+pub mod text_view;
 pub mod tree_view;
 pub mod widgets;
 
@@ -13,7 +15,10 @@ use crate::client::Client;
 use crate::config::Config;
 use crate::layout::Rect;
 use crate::tui::command::Command;
+use buffer_view::BufferView;
+use text_view::TextView;
 
+pub use buffer_view::buffer_summary;
 pub use help_view::HelpView;
 pub use palette_view::{PaletteItem, PaletteView};
 pub use tree_view::{TreePane, TreeSession, TreeView, TreeWindow};
@@ -25,6 +30,8 @@ pub enum OverlayAction {
     Close,
     /// Close the overlay, then run the commands in order.
     Run(Vec<Command>),
+    /// Delete the named paste buffer; the overlay stays open and reloads.
+    DeleteBuffer(String),
 }
 
 pub struct OverlayCtx<'a> {
@@ -47,6 +54,8 @@ pub enum Overlay {
     Tree(TreeView),
     Help(HelpView),
     Palette(PaletteView),
+    Buffers(BufferView),
+    Text(TextView),
 }
 
 impl Overlay {
@@ -62,12 +71,23 @@ impl Overlay {
         Overlay::Palette(view)
     }
 
+    /// Read-only text lines in a scrollable box.
+    pub fn text(title: impl Into<String>, lines: Vec<String>) -> Self {
+        Overlay::Text(TextView::new(title, lines))
+    }
+
+    pub fn buffers() -> Self {
+        Overlay::Buffers(BufferView::default())
+    }
+
     /// Reload data; called on open, once per second while open, and after actions.
     pub async fn refresh(&mut self, ctx: &mut OverlayCtx<'_>) {
         match self {
             Overlay::Tree(view) => view.refresh(ctx).await,
             Overlay::Help(_) => {}
             Overlay::Palette(view) => view.refresh(ctx).await,
+            Overlay::Buffers(view) => view.refresh(ctx).await,
+            Overlay::Text(_) => {}
         }
     }
 
@@ -85,6 +105,8 @@ impl Overlay {
             Overlay::Tree(view) => view.handle_key(key),
             Overlay::Help(view) => view.handle_key(key),
             Overlay::Palette(view) => view.handle_key(key),
+            Overlay::Buffers(view) => view.handle_key(key),
+            Overlay::Text(view) => view.handle_key(key),
         }
     }
 
@@ -94,6 +116,8 @@ impl Overlay {
             Overlay::Tree(view) => view.render(out, area),
             Overlay::Help(view) => view.render(out, area),
             Overlay::Palette(view) => view.render(out, area),
+            Overlay::Buffers(view) => view.render(out, area),
+            Overlay::Text(view) => view.render(out, area),
         }
     }
 }

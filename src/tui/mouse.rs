@@ -18,7 +18,7 @@ impl App {
     pub async fn on_mouse(&mut self, ev: MouseEvent) -> Flow {
         if matches!(
             self.mode,
-            Mode::Overlay(_) | Mode::Prompt(_) | Mode::Confirm(..)
+            Mode::Overlay(_) | Mode::Prompt(_) | Mode::Confirm(..) | Mode::Clock { .. }
         ) {
             return Flow::Continue;
         }

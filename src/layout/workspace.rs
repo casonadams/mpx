@@ -172,6 +172,26 @@ impl Window {
         self.root.iter_mut().for_each(LayoutNode::spread);
     }
 
+    /// Moves every pane to the slot before it, or after it when `down`: the pane names turn
+    /// through the fixed layout slots, so geometry stays and focus stays on the same pane.
+    pub fn rotate(&mut self, down: bool) {
+        let Some(root) = self.root.as_mut() else {
+            return;
+        };
+        let mut names = root.all_leaves();
+        if down {
+            names.rotate_right(1);
+        } else {
+            names.rotate_left(1);
+        }
+        let mut names = names.into_iter();
+        root.map_leaves(&mut |slot| {
+            if let Some(name) = names.next() {
+                *slot = name;
+            }
+        });
+    }
+
     pub fn resize_split(&mut self, name: &str, side: Side, cells: u16, bounds: Rect) -> bool {
         match self.root.as_mut() {
             Some(root) => root.resize_border(name, side, cells, bounds),
@@ -654,6 +674,11 @@ impl Workspace {
     /// Spreads the active window's panes evenly, keeping their arrangement.
     pub fn spread_layout(&mut self) -> bool {
         self.in_active_window(Window::spread_layout)
+    }
+
+    /// Rotates the active window's panes through its layout slots; false when there is no window.
+    pub fn rotate_active(&mut self, down: bool) -> bool {
+        self.in_active_window(|win| win.rotate(down))
     }
 
     /// Runs `change` on the active window; false when there is none.

@@ -387,6 +387,62 @@ fn commands_only_the_shim_knows_run_through_it() {
     assert!(matches!(ok("source-file ~/.tmux.conf"), Command::Tmux { .. }));
     assert_eq!(ok("source-file"), Command::ReloadConfig, "without a file it reloads the config");
     assert!(matches!(ok("display-message hi"), Command::Tmux { .. }));
+    match ok("rotate-window -D") {
+        Command::Tmux { words } => assert_eq!(words, ["rotate-window", "-D"]),
+        other => panic!("{other:?}"),
+    }
+    assert!(matches!(ok("respawn-pane -k"), Command::Tmux { .. }));
+    assert!(matches!(ok("find-window -C build"), Command::Tmux { .. }));
+}
+
+#[test]
+fn display_panes_takes_an_optional_duration() {
+    assert!(matches!(
+        ok("display-panes"),
+        Command::DisplayPanes { duration_ms: None }
+    ));
+    assert!(matches!(
+        ok("display-panes -d 500"),
+        Command::DisplayPanes {
+            duration_ms: Some(500)
+        }
+    ));
+    assert!(matches!(
+        ok("displayp -d 0"),
+        Command::DisplayPanes {
+            duration_ms: Some(0)
+        }
+    ));
+    assert!(err("display-panes -d soon").contains("bad duration"));
+    assert!(err("display-panes extra").contains("unexpected argument"));
+}
+
+#[test]
+fn clock_mode_takes_an_optional_target() {
+    assert!(matches!(ok("clock-mode"), Command::ClockMode { target: None }));
+    assert!(matches!(
+        ok("clock-mode -t work"),
+        Command::ClockMode { target: Some(t) } if t == "work"
+    ));
+}
+
+#[test]
+fn buffer_and_message_commands_parse_bare() {
+    assert!(matches!(ok("show-messages"), Command::ShowMessages));
+    assert!(matches!(ok("showmsgs"), Command::ShowMessages));
+    assert!(matches!(ok("choose-buffer"), Command::ChooseBuffer));
+    assert!(matches!(ok("list-buffers"), Command::ListBuffers));
+    assert!(matches!(ok("lsb"), Command::ListBuffers));
+    assert!(matches!(ok("suspend-client"), Command::SuspendClient));
+    assert!(matches!(ok("suspendc"), Command::SuspendClient));
+}
+
+#[test]
+fn list_buffers_with_flags_goes_through_the_shim() {
+    assert!(matches!(
+        ok("list-buffers -F #{buffer_name}"),
+        Command::Tmux { .. }
+    ));
 }
 
 #[test]

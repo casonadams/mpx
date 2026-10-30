@@ -3,6 +3,7 @@ use std::io::{self, Write};
 
 use super::app::{App, Mode};
 use super::copy::{CopyState, SelectionKind};
+use super::labels::{clock_lines, label, label_rect, pane_numbers};
 use super::panes::PaneRect;
 use super::render::{
     Compositor, DividerStyle, PaneColors, RenderPaneContext, SelectionRange, StatusBar, hud_rect,
@@ -14,6 +15,11 @@ use crate::protocol::NodeInfo;
 use crate::vt::Color as VtColor;
 use crate::vt::VtScreen;
 use crate::vt::grid::Grid;
+use crossterm::{
+    cursor::MoveTo,
+    queue,
+    style::{Color, Print, ResetColor, SetForegroundColor},
+};
 
 /// What one pane shows beyond its cells: badge, scroll, selection and dimming.
 #[derive(Debug, Clone, PartialEq)]
@@ -48,6 +54,13 @@ pub fn draw_body<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
     let hud = shortcut_popup(app, screen_w, screen_h);
     let covered: Vec<Rect> = match &app.mode {
         Mode::Overlay(_) => vec![overlay_area(screen_w, screen_h)],
+        Mode::Clock { pane } => app
+            .panes
+            .iter()
+            .filter(|(name, ..)| name == pane)
+            .map(|(_, rect, _)| *rect)
+            .collect(),
+        Mode::Panes { .. } => number_boxes(app).into_iter().map(|(at, ..)| at).collect(),
         _ => hud.into_iter().collect(),
     };
     app.canvas.begin(screen_w, layout_h, covered);
@@ -73,6 +86,11 @@ pub fn draw_body<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
     }
     app.canvas.finish(out)?;
     draw_status_row(app, out)?;
+    match &app.mode {
+        Mode::Panes { .. } => draw_pane_numbers(app, out)?,
+        Mode::Clock { pane } => draw_clock(app, pane, out)?,
+        _ => {}
+    }
     if hud.is_some() {
         Compositor::draw_shortcut_hud(out, screen_w, screen_h)?;
     }
@@ -321,4 +339,43 @@ fn exit_badge_for(nodes: &[NodeInfo], name: &str) -> Option<String> {
 /// Panes other than the focused one dim when several are visible and none is zoomed.
 fn is_dimmed(count: usize, zoomed: bool, focused: bool, dim_inactive: bool) -> bool {
     dim_inactive && count > 1 && !zoomed && !focused
+}
+
+/// display-panes: each visible pane's number as large text centered on the pane, with the rectangle
+/// it covers, the rows to draw and whether the pane is the active one.
+fn number_boxes(app: &App) -> Vec<(Rect, Vec<String>, bool)> {
+    pane_numbers(&app.panes, &app.nodes)
+        .into_iter()
+        .filter_map(|(number, name)| {
+            let (_, area, focused) = app.panes.iter().find(|(n, ..)| *n == name)?;
+            let text = number.to_string();
+            let rows = label(&text, area.width as usize, area.height as usize);
+            Some((label_rect(*area, &rows), rows, *focused))
+        })
+        .collect()
+}
+
+fn draw_pane_numbers<W: Write>(app: &App, out: &mut W) -> io::Result<()> {
+    for (at, rows, focused) in number_boxes(app) {
+        let color = if focused { Color::Green } else { Color::Yellow };
+        queue!(out, SetForegroundColor(color))?;
+        for (y, row) in rows.iter().enumerate() {
+            queue!(out, MoveTo(at.x, at.y + y as u16), Print(row))?;
+        }
+    }
+    queue!(out, ResetColor)
+}
+
+/// clock-mode: the clock in `pane`, filling its area.
+fn draw_clock<W: Write>(app: &App, pane: &str, out: &mut W) -> io::Result<()> {
+    let Some((_, area, _)) = app.panes.iter().find(|(name, ..)| name.as_str() == pane) else {
+        return Ok(());
+    };
+    let (hour, minute) = app.clock.hour_minute();
+    let rows = clock_lines(hour, minute, area.width as usize, area.height as usize);
+    queue!(out, SetForegroundColor(Color::Cyan))?;
+    for (y, row) in rows.iter().enumerate() {
+        queue!(out, MoveTo(area.x, area.y + y as u16), Print(row))?;
+    }
+    queue!(out, ResetColor)
 }

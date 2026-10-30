@@ -4,13 +4,45 @@ use crossterm::{
         DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
         EnableFocusChange, EnableMouseCapture,
     },
-    execute,
+    queue,
     terminal::{
         Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode,
         enable_raw_mode,
     },
 };
 use std::io::{self, Write, stdout};
+
+/// What the terminal is sent to show the TUI: the alternate screen, cleared, cursor hidden, mouse,
+/// paste and focus reporting on, autowrap off so the status bar never scrolls the screen.
+pub fn enter_sequence() -> Vec<u8> {
+    let mut out = Vec::new();
+    let _ = queue!(
+        out,
+        EnterAlternateScreen,
+        Clear(ClearType::All),
+        Hide,
+        EnableMouseCapture,
+        EnableBracketedPaste,
+        EnableFocusChange
+    );
+    out.extend_from_slice(b"\x1b[?7l");
+    out
+}
+
+/// What the terminal is sent to hand the screen back to the shell: the synchronized update ended,
+/// autowrap on, focus, paste and mouse reporting off, the main screen and the cursor shown.
+pub fn leave_sequence() -> Vec<u8> {
+    let mut out = b"\x1b[?2026l\x1b[?7h".to_vec();
+    let _ = queue!(
+        out,
+        DisableFocusChange,
+        DisableBracketedPaste,
+        DisableMouseCapture,
+        LeaveAlternateScreen,
+        Show
+    );
+    out
+}
 
 pub struct TerminalGuard {
     _private: (),
@@ -20,38 +52,46 @@ impl TerminalGuard {
     pub fn enter() -> io::Result<Self> {
         enable_raw_mode()?;
         let mut out = stdout();
-        execute!(
-            out,
-            EnterAlternateScreen,
-            Clear(ClearType::All),
-            Hide,
-            EnableMouseCapture,
-            EnableBracketedPaste,
-            EnableFocusChange
-        )?;
-        let _ = out.write_all(b"\x1b[?7l"); // Disable autowrap so status bar never scrolls screen
+        out.write_all(&enter_sequence())?;
         out.flush()?;
         Ok(Self { _private: () })
+    }
+
+    /// Stops the process as Ctrl-Z does: the shell gets its screen and cooked mode back, and the
+    /// TUI takes the terminal again once the shell continues the process (SIGCONT).
+    pub fn suspend(&self) -> io::Result<()> {
+        let mut out = stdout();
+        out.write_all(&leave_sequence())?;
+        out.flush()?;
+        disable_raw_mode()?;
+        stop_process();
+        enable_raw_mode()?;
+        out.write_all(&enter_sequence())?;
+        out.flush()
     }
 }
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let mut out = stdout();
-        let _ = out.write_all(b"\x1b[?2026l");
-        let _ = out.write_all(b"\x1b[?7h"); // Re-enable autowrap
-        let _ = execute!(
-            out,
-            DisableFocusChange,
-            DisableBracketedPaste,
-            DisableMouseCapture,
-            LeaveAlternateScreen,
-            Show
-        );
+        let _ = out.write_all(&leave_sequence());
         let _ = out.flush();
         let _ = disable_raw_mode();
     }
 }
+
+/// Sends SIGTSTP to this process. Its default action stops the process, so the call returns once
+/// the shell continues it.
+#[cfg(unix)]
+fn stop_process() {
+    // SAFETY: getpid and kill take no pointers and touch no memory of this process.
+    unsafe {
+        libc::kill(libc::getpid(), libc::SIGTSTP);
+    }
+}
+
+#[cfg(not(unix))]
+fn stop_process() {}
 
 /// Longest wait for the terminal to answer the margin query at startup. Every terminal answers
 /// the DA1 that ends it, so the wait is one round trip; the limit only matters for one that never
