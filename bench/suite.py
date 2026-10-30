@@ -153,7 +153,10 @@ class Engine:
         except BenchError:
             pass
         if pid is not None and pid_alive(pid):
-            os.kill(pid, signal.SIGKILL)
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
 
 class MpxEngine(Engine):

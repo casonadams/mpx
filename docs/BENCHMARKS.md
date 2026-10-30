@@ -86,3 +86,15 @@ BENCH_OUT=/path/to/dir bench/run.sh   # keep results.json and results.md
 ```
 
 The script exits non-zero if any step fails. Raw samples are in `results.json` and the rendered table in `results.md`, both under the output directory it prints on start.
+
+## Update after performance work (mpx only)
+
+tmux was no longer installed when these were taken, so there is no same-run tmux column. Compare against the tmux medians above (same machine, earlier the same day).
+
+| Metric | mpx now | tmux (table above) |
+| :--- | :--- | :--- |
+| Startup: launch to first status-bar bytes | 11.5 ms (11.2-12.2) | 15.6 ms |
+| Flood 30 MB detached (single runs, not the 100 MB suite) | 6.1 s, 6.8 s | 6.9 s (one run) |
+| Daemon RSS idle, 20 panes | 8.2 MB | 3.9 MB |
+
+What changed: the daemon readiness poll is 2 ms instead of 100 ms; the pane reader pauses 40 us after a read under 1 KB so output arrives in fewer, larger reads; the scrollback ring grows on demand instead of reserving 2 MB per pane. mpx is still about 2x tmux on idle memory with many panes: each pane holds a full 80x24 cell grid plus three OS threads.

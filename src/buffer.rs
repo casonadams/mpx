@@ -12,7 +12,7 @@ pub struct RingBuffer {
 impl RingBuffer {
     pub fn new(capacity: usize) -> Self {
         Self {
-            buffer: VecDeque::with_capacity(capacity),
+            buffer: VecDeque::new(),
             capacity,
             written: 0,
         }
