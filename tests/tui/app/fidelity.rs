@@ -7,9 +7,12 @@ use crossterm::event::KeyCode;
 use mpx::config::Config;
 use mpx::layout::Direction;
 use mpx::layout::Rect;
-use mpx::tui::app::ClockSource;
+use mpx::protocol::PopupExit;
+use mpx::tui::app::{ClockSource, Mode};
 use mpx::tui::labels::{label, label_rect, pane_numbers};
+use mpx::tui::popup::{area, inner_rect};
 
+use super::popup::{open, popup_name, popup_screen};
 use super::support::{ECHO, Harness, MAIN, split};
 
 /// Whether the cell at (`x`, `y`) lies inside `area`.
@@ -20,7 +23,7 @@ fn inside(area: Rect, x: u16, y: u16) -> bool {
 /// Draws a frame and asserts that every visible pane shows exactly its own screen, except the cells
 /// inside `masked`, which an overlay covers on purpose. The focused (undimmed) pane must also match
 /// attribute for attribute.
-async fn check_masked(h: &mut Harness, step: &str, masked: &[Rect]) {
+pub(super) async fn check_masked(h: &mut Harness, step: &str, masked: &[Rect]) {
     h.frame().await;
     for (name, rect, focused) in h.app.panes.clone() {
         let pane = h.app.vt.get(&name).expect("pane screen");
@@ -190,6 +193,18 @@ async fn frames_keep_the_terminal_identical_to_the_panes() {
     h.prefixed_char('z').await;
     check(&mut h, "unzoomed after scrolling").await;
 
+    // Zoom set on the daemon by another client: the terminal follows it, scrolling included.
+    h.probe.zoom(None, None).await.expect("zoom from another client");
+    check(&mut h, "zoomed by another client").await;
+    let scrolled = format!("{}DAEMON-ZOOM-DONE", numbered_lines("daemon", 12));
+    emit(&mut h, MAIN, &scrolled, "DAEMON-ZOOM-DONE").await;
+    check(&mut h, "zoomed by another client scrolls").await;
+    h.probe
+        .zoom(None, Some(false))
+        .await
+        .expect("unzoom from another client");
+    check(&mut h, "unzoomed by another client").await;
+
     h.probe.kill("side").await.expect("kill side");
     split(&mut h.probe, MAIN, "below", Direction::Vertical).await;
     check(&mut h, "stacked panes").await;
@@ -235,4 +250,56 @@ async fn pane_overlays_cover_only_their_own_cells() {
     check_masked(&mut h, "clock fills the active pane", &[clock]).await;
     h.key(KeyCode::Char('x')).await;
     check(&mut h, "clock dismissed").await;
+}
+
+/// The popup's program screen matches the terminal inside the popup's border, cell for cell.
+async fn check_popup(h: &mut Harness, step: &str) {
+    h.frame().await;
+    let outer = area(&h.app).expect("a popup is open");
+    let name = popup_name(&h.app);
+    let inner = inner_rect(outer, true);
+    let screen = h.app.vt.get(&name).expect("popup screen");
+    for y in 0..inner.height {
+        for x in 0..inner.width {
+            let want = screen
+                .grid()
+                .get_cell(x as usize, y as usize)
+                .copied()
+                .unwrap_or_default();
+            let got = h
+                .terminal
+                .grid()
+                .get_cell((inner.x + x) as usize, (inner.y + y) as usize)
+                .copied()
+                .unwrap_or_default();
+            assert_eq!(
+                got.c,
+                want.c,
+                "{step}: popup char at ({x},{y})\nterminal:\n{}",
+                h.terminal.snapshot()
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_popup_shows_its_program_and_the_panes_beneath_repaint_when_it_closes() {
+    let mut h = Harness::start(Config::default(), ECHO).await;
+    h.app.canvas.set_lr_margins(true);
+    split(&mut h.probe, MAIN, "side", Direction::Horizontal).await;
+    check(&mut h, "two panes").await;
+    emit(&mut h, "side", "side text", "side text").await;
+    check(&mut h, "two panes with text").await;
+
+    open(&mut h, "printf popup-text; exec cat", PopupExit::Stay).await;
+    h.until("popup text", |app| popup_screen(app).contains("popup-text"))
+        .await;
+    let outer = area(&h.app).expect("popup area");
+    check_masked(&mut h, "popup open", &[outer]).await;
+    check_popup(&mut h, "popup open").await;
+
+    h.probe.close_popup().await.expect("close");
+    h.until("popup closed", |app| matches!(app.mode, Mode::Normal))
+        .await;
+    check(&mut h, "popup closed").await;
 }

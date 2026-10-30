@@ -1,7 +1,7 @@
 //! The session actor: sole owner of the workspace, pane handles, exited history, session-wide
 //! subscribers, the idempotency cache and snapshot saving. Pane exits arrive on the same mailbox
 //! as requests, so a request sent after an exit was observed always sees the updated layout.
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -26,8 +26,8 @@ use crate::node::process::basename;
 use crate::node::sink::Sink;
 use crate::node::{SpawnSpec, now_ms};
 use crate::protocol::{
-    NewWindowOpts, NodeInfo, PaneId, Request, Response, SessionInfo, SpawnOpts, SplitOpts,
-    StreamEvent, VarKind,
+    NewWindowOpts, NodeInfo, PaneId, PopupExit, PopupOpts, PopupSpec, Request, Response,
+    SessionInfo, SpawnOpts, SplitOpts, StreamEvent, VarKind,
 };
 use crate::store::{SessionSnapshot, SnapshotStore, WindowPlan, plan_restore};
 use crate::tmux_shim;
@@ -82,6 +82,12 @@ pub(super) enum SessionMsg {
         key: String,
     },
     Notice(PaneNotice),
+    /// Opens the popup (tmux `display-popup`). The reply carries a receiver for the popup's
+    /// status when the caller waits for it to close.
+    Popup {
+        opts: Box<PopupOpts>,
+        reply: Reply<Result<Option<oneshot::Receiver<Option<i32>>>, String>>,
+    },
 }
 
 /// Which session-wide events a subscriber receives.
@@ -96,7 +102,13 @@ impl Filter {
     /// Whether `event` goes to this subscriber; `shown` says if a pane is in the active window.
     fn accepts(&self, event: &StreamEvent, shown: impl Fn(&str) -> bool) -> bool {
         match (self, event) {
-            (_, StreamEvent::Layout | StreamEvent::ClientCommand { .. }) => {
+            (
+                _,
+                StreamEvent::Layout
+                | StreamEvent::ClientCommand { .. }
+                | StreamEvent::PopupOpen { .. }
+                | StreamEvent::PopupClose { .. },
+            ) => {
                 matches!(self, Filter::ActiveWindow { layout: true })
             }
             (Filter::Everything, _) => true,
@@ -137,6 +149,21 @@ pub(super) struct Entry {
     pub opts: SpawnOpts,
     /// The process has ended and the exit was processed.
     pub exited: bool,
+}
+
+/// The session's open popup (tmux `display-popup`): an unplaced pane that terminals draw over their
+/// view. Its program's exit closes the popup when `exit` says so; otherwise a key does.
+struct Popup {
+    name: String,
+    spec: PopupSpec,
+    exit: PopupExit,
+    /// The program has exited; its pane stays until the popup closes.
+    exited: bool,
+    /// The program was asked to stop: the popup closes when it exits.
+    closing: bool,
+    status: Option<i32>,
+    /// Callers waiting for the popup to close, answered with its status.
+    waiters: Vec<Reply<Option<i32>>>,
 }
 
 /// Where a new pane goes in the layout.
@@ -185,9 +212,16 @@ struct Session {
     pacing: Arc<Pacing>,
     /// Named subscribers waiting for a pane of that name: name, replay offset, sink.
     pending: Vec<(String, Option<u64>, Sink)>,
+    /// The open popup, if any.
+    popup: Option<Popup>,
     idem: IdemCache<Response>,
     snapshots: SnapshotStore,
     stores: Stores,
+    /// Sequence number of the last client command sent to the terminals.
+    command_seq: u64,
+    /// Client commands not yet applied by every terminal: sequence number and the terminals still
+    /// to report.
+    command_pending: BTreeMap<u64, usize>,
     pipes: Pipes,
     save_due: Option<Instant>,
     shutting_down: bool,
@@ -223,9 +257,12 @@ pub(super) async fn run(boot: Boot, mut rx: mpsc::UnboundedReceiver<SessionMsg>)
         relay: Arc::new(AtomicBool::new(false)),
         pacing,
         pending: Vec::new(),
+        popup: None,
         idem: IdemCache::default(),
         snapshots: SnapshotStore::in_dir(&state_dir),
         stores: Stores::default(),
+        command_seq: 0,
+        command_pending: BTreeMap::new(),
         pipes: Pipes::default(),
         save_due: None,
         shutting_down: false,
@@ -290,10 +327,16 @@ impl Session {
             }
             SessionMsg::Subscribe {
                 filter,
-                sink,
+                mut sink,
                 reply,
             } => {
                 let terminal = matches!(filter, Filter::ActiveWindow { layout: true });
+                if let Some(popup) = self.popup.as_ref().filter(|_| terminal) {
+                    let _ = sink.push(StreamEvent::PopupOpen {
+                        name: popup.name.clone(),
+                        spec: popup.spec.clone(),
+                    });
+                }
                 self.filters.push((filter, sink));
                 self.sync_relay();
                 let _ = reply.send(());
@@ -316,6 +359,10 @@ impl Session {
             SessionMsg::IdemFinish { key, value } => self.idem.finish(&key, *value, now_ms()),
             SessionMsg::IdemAbandon { key } => self.idem.abandon(&key),
             SessionMsg::Notice(notice) => self.notice(notice),
+            SessionMsg::Popup { opts, reply } => {
+                let result = self.popup_open(*opts).await;
+                let _ = reply.send(result);
+            }
         }
     }
 
@@ -334,7 +381,11 @@ impl Session {
             }
             PaneNotice::Exited { name, id, code } => {
                 if self.finish(&name, id, code) {
-                    self.fanout(&StreamEvent::Exit { name, code });
+                    self.fanout(&StreamEvent::Exit {
+                        name: name.clone(),
+                        code,
+                    });
+                    self.popup_exited(&name, code);
                 }
             }
         }
@@ -384,13 +435,20 @@ impl Session {
         self.filters.iter().filter(|(f, _)| terminal(f)).count()
     }
 
-    fn fanout(&mut self, event: &StreamEvent) {
+    /// Sends `event` to every subscriber it reaches; returns how many subscribers accepted it.
+    fn fanout(&mut self, event: &StreamEvent) -> usize {
         let workspace = &self.workspace;
-        let shown = |name: &str| workspace.active_window().is_some_and(|w| w.contains(name));
+        let popup = self.popup.as_ref().map(|p| p.name.as_str());
+        let shown = |name: &str| {
+            workspace.active_window().is_some_and(|w| w.contains(name)) || popup == Some(name)
+        };
         let before = self.terminal_count();
+        let mut accepted = 0;
         self.filters.retain_mut(|(filter, sink)| {
             if filter.accepts(event, shown) {
-                sink.push(event.clone())
+                let kept = sink.push(event.clone());
+                accepted += usize::from(kept);
+                kept
             } else {
                 !sink.is_closed()
             }
@@ -399,6 +457,7 @@ impl Session {
             self.fire_hook("client-detached");
         }
         self.sync_relay();
+        accepted
     }
 
     async fn request(&mut self, req: Request) -> Response {
@@ -428,6 +487,13 @@ impl Session {
                     Err(e) => Response::Error(e),
                 }
             }
+            Request::Popup(_) => {
+                Response::Error("display-popup is opened by a client connection".to_string())
+            }
+            Request::ClosePopup => {
+                self.close_popup();
+                Response::Ok
+            }
             req @ (Request::SetVar { .. }
             | Request::GetVars { .. }
             | Request::SetBuffer { .. }
@@ -441,6 +507,11 @@ impl Session {
             | Request::PipePane { .. }
             | Request::RotateWindow { .. }
             | Request::SetSynchronized { .. }
+            | Request::SetPaneMode { .. }
+            | Request::ForgetPaneModes { .. }
+            | Request::PaneModes
+            | Request::CommandApplied { .. }
+            | Request::CommandSettled { .. }
             | Request::Respawn { .. }) => self.tmux_request(req),
             req => self.target_request(req).await,
         }
@@ -467,11 +538,21 @@ impl Session {
                 if matches!(kind, VarKind::Option | VarKind::Binding) {
                     self.fanout(&StreamEvent::ClientCommand {
                         line: "refresh-runtime".to_string(),
+                        seq: 0,
                     });
                 }
                 Response::Ok
             }
             Request::GetVars { kind } => Response::Vars(self.stores.vars(kind)),
+            Request::SetPaneMode { name, on, terminal } => {
+                self.stores.set_pane_mode(&name, terminal, on);
+                Response::Ok
+            }
+            Request::ForgetPaneModes { terminal } => {
+                self.stores.forget_terminal(terminal);
+                Response::Ok
+            }
+            Request::PaneModes => Response::PaneModes(self.stores.pane_modes()),
             Request::SetBuffer { name, data } => {
                 self.stores.push_buffer(name, data);
                 Response::Ok
@@ -489,8 +570,25 @@ impl Session {
                 }
             }
             Request::ClientCommand { line } => {
-                self.fanout(&StreamEvent::ClientCommand { line });
+                self.command_seq += 1;
+                let seq = self.command_seq;
+                let accepted = self.fanout(&StreamEvent::ClientCommand { line, seq });
+                if accepted > 0 {
+                    self.command_pending.insert(seq, accepted);
+                }
+                Response::Seq(seq)
+            }
+            Request::CommandApplied { seq } => {
+                if let Some(left) = self.command_pending.get_mut(&seq) {
+                    *left -= 1;
+                    if *left == 0 {
+                        self.command_pending.remove(&seq);
+                    }
+                }
                 Response::Ok
+            }
+            Request::CommandSettled { seq } => {
+                Response::Settled(!self.command_pending.contains_key(&seq))
             }
             Request::JoinPane {
                 src,
@@ -564,12 +662,19 @@ impl Session {
                 self.workspace.focus_next();
                 Response::Ok
             }
-            Request::FocusLast => check(self.workspace.focus_last(), "No previous pane"),
-            Request::Focus { name } => match self.target_name(&name) {
+            Request::FocusLast { keep_zoom } => check(
+                self.workspace.focus_last_with(keep_zoom),
+                "No previous pane",
+            ),
+            Request::Focus { name, keep_zoom } => match self.target_name(&name) {
                 Ok(n) => {
-                    let ok = self.workspace.focus(&n);
+                    let ok = self.workspace.focus_with(&n, keep_zoom);
                     check(ok, &not_found(&n))
                 }
+                Err(e) => Response::Error(e),
+            },
+            Request::Zoom { pane, on } => match self.zoom(pane, on) {
+                Ok(()) => Response::Ok,
                 Err(e) => Response::Error(e),
             },
             Request::ResizeSplit {
@@ -585,7 +690,7 @@ impl Session {
                 ),
                 Err(e) => Response::Error(e),
             },
-            Request::SwapPane { a, b } => self.swap_pane_req(a, b),
+            Request::SwapPane { a, b, keep_zoom } => self.swap_pane_req(a, b, keep_zoom),
             Request::MarkPane { name, clear } => self.mark_pane_req(name, clear),
             Request::BreakPane { name } => match self.target_name(&name) {
                 Ok(n) => check(self.workspace.break_pane(&n), "Pane is alone in its window"),
@@ -599,7 +704,7 @@ impl Session {
         }
     }
 
-    fn swap_pane_req(&mut self, a: Option<String>, b: Option<String>) -> Response {
+    fn swap_pane_req(&mut self, a: Option<String>, b: Option<String>, keep_zoom: bool) -> Response {
         let marked = self.workspace.marked_pane.clone();
         let active = self.workspace.active_window().and_then(|w| w.focused.clone());
         let src = match a {
@@ -626,9 +731,26 @@ impl Session {
             },
         };
         if src == dst {
-            Response::Ok
+            return Response::Ok;
+        }
+        let swapped = self.workspace.swap(&src, &dst);
+        if swapped && !keep_zoom {
+            self.workspace.unzoom();
+        }
+        check(swapped, "Cannot swap panes")
+    }
+
+    /// Zooms or unzooms the active window (`on`, else toggled). A `pane` is focused first, which
+    /// keeps the zoom; without one the window's focused pane is zoomed.
+    fn zoom(&mut self, pane: Option<String>, on: Option<bool>) -> Result<(), String> {
+        if let Some(pane) = pane {
+            let name = self.target_name(&pane)?;
+            self.workspace.focus_with(&name, true);
+        }
+        if self.workspace.set_zoom(on) {
+            Ok(())
         } else {
-            check(self.workspace.swap(&src, &dst), "Cannot swap panes")
+            Err("No window".to_string())
         }
     }
 
@@ -771,7 +893,11 @@ impl Session {
 
     async fn list(&self) -> Vec<NodeInfo> {
         let mut infos = Vec::new();
-        for entry in self.nodes.values() {
+        for entry in self
+            .nodes
+            .values()
+            .filter(|e| !self.is_popup(e.handle.name()))
+        {
             if let Ok(mut info) = entry.handle.info(true).await {
                 info.window = self.workspace.window_of(entry.handle.name());
                 info.marked =
@@ -1104,6 +1230,7 @@ impl Session {
                 self.history.push_back(entry);
             }
             self.workspace.remove(name);
+            self.stores.forget_pane_mode(name);
             while self.history.len() > self.config.history_limit {
                 self.history.pop_front();
             }
@@ -1169,12 +1296,112 @@ impl Session {
             }
             self.nodes.remove(name);
             self.workspace.remove(name);
+            self.stores.forget_pane_mode(name);
             return None;
         }
         if let Some(pos) = self.history.iter().rposition(|e| e.handle.name() == name) {
             self.history.remove(pos);
         }
         None
+    }
+
+    /// Whether `name` is the open popup's pane.
+    fn is_popup(&self, name: &str) -> bool {
+        self.popup.as_ref().is_some_and(|p| p.name == name)
+    }
+
+    /// Opens a popup: its program runs as an unplaced pane that every terminal draws over its view.
+    /// With `wait`, the receiver resolves with the status once the popup closes.
+    async fn popup_open(
+        &mut self,
+        opts: PopupOpts,
+    ) -> Result<Option<oneshot::Receiver<Option<i32>>>, String> {
+        if self.popup.is_some() {
+            return Err("a popup is already open".to_string());
+        }
+        let PopupOpts {
+            mut spawn,
+            spec,
+            exit,
+            wait,
+        } = opts;
+        // The pane stays after its program exits: the popup decides when it closes.
+        spawn.remain_on_exit = Some(true);
+        self.resolve_command(&mut spawn);
+        let id = self.next_pane_id;
+        let name = format!("popup-{id}");
+        let cwd = match spawn.cwd.clone() {
+            Some(cwd) => Some(cwd),
+            None => {
+                let anchor = self
+                    .workspace
+                    .active_window()
+                    .and_then(|w| w.focused.clone());
+                self.anchor_cwd(anchor).await.or_else(current_dir)
+            }
+        };
+        let handle = self.spawn_pane(&name, id, &spawn, cwd)?;
+        self.next_pane_id += 1;
+        self.register(name.clone(), handle, spawn);
+        let (rx, waiters) = if wait {
+            let (tx, rx) = oneshot::channel();
+            (Some(rx), vec![tx])
+        } else {
+            (None, Vec::new())
+        };
+        self.popup = Some(Popup {
+            name: name.clone(),
+            spec: spec.clone(),
+            exit,
+            exited: false,
+            closing: false,
+            status: None,
+            waiters,
+        });
+        self.fanout(&StreamEvent::PopupOpen { name, spec });
+        Ok(rx)
+    }
+
+    /// The popup's program exited: the popup closes when its exit rule or a pending close says so,
+    /// and otherwise stays until a key closes it.
+    fn popup_exited(&mut self, name: &str, code: Option<i32>) {
+        let Some(popup) = self.popup.as_mut().filter(|p| p.name == name) else {
+            return;
+        };
+        popup.exited = true;
+        popup.status = code;
+        if popup.closing || popup.exit.closes(code) {
+            self.finish_popup();
+        }
+    }
+
+    /// Closes the popup. A running program is stopped and the popup closes when it exits; a
+    /// finished one closes now.
+    fn close_popup(&mut self) {
+        let Some(popup) = self.popup.as_mut() else {
+            return;
+        };
+        let running = self.nodes.get(&popup.name).is_some_and(|e| !e.exited);
+        if !running {
+            self.finish_popup();
+            return;
+        }
+        popup.closing = true;
+        if let Some(entry) = self.nodes.get(&popup.name) {
+            drop(entry.handle.request_kill());
+        }
+    }
+
+    /// Removes the popup's pane, answers its waiters with the status, and tells every terminal.
+    fn finish_popup(&mut self) {
+        let Some(popup) = self.popup.take() else {
+            return;
+        };
+        let _ = self.kill_entry(&popup.name);
+        for waiter in popup.waiters {
+            let _ = waiter.send(popup.status);
+        }
+        self.fanout(&StreamEvent::PopupClose { name: popup.name });
     }
 
     fn kill_window(&mut self, index: Option<usize>) -> Result<Vec<oneshot::Receiver<()>>, String> {
@@ -1344,6 +1571,7 @@ fn is_read_only(req: &Request) -> bool {
         Request::Ping
             | Request::Info
             | Request::List
+            | Request::PaneModes
             | Request::Logs { .. }
             | Request::Screen { .. }
             | Request::Layout { .. }

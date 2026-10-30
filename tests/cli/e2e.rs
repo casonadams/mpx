@@ -651,7 +651,10 @@ fn tmux_multicall_binds_keys_sets_hooks_and_sources_conditional_files() {
     let bad = t(&["bind-key", "q", "nosuchcommand"]);
     assert!(String::from_utf8_lossy(&bad.stderr).contains("unknown command"));
     let table = t(&["bind-key", "-T", "copy-mode-vi", "v", "send-keys", "x"]);
-    assert!(String::from_utf8_lossy(&table.stderr).contains("not supported"));
+    assert!(String::from_utf8_lossy(&table.stderr).contains("send-keys -X"));
+    ok(&["bind-key", "-T", "copy-mode-vi", "v", "send-keys", "-X", "cancel"]);
+    assert!(out(&["list-keys", "-T", "copy-mode-vi"]).contains("send-keys -X cancel"));
+    ok(&["unbind-key", "-T", "copy-mode-vi", "v"]);
     ok(&["unbind-key", "-a", "-n"]);
     assert_eq!(out(&["list-keys", "-T", "root"]), "");
 
@@ -831,4 +834,116 @@ fn tmux_multicall_numbers_windows_from_base_index_and_reports_ui_options() {
     assert_eq!(out(&["show-options", "-gv", "mouse"]), "off");
     assert!(t(&["set", "-g", "escape-time", "0"]).status.success());
     assert_eq!(out(&["show-options", "-gv", "escape-time"]), "0");
+}
+
+/// `display-popup -E` from a script blocks until the popup's program exits, and exits with its status.
+#[cfg(unix)]
+#[test]
+fn display_popup_with_e_blocks_until_the_program_exits_and_returns_its_status() {
+    let s = Session::new("dp");
+    let _ = s.run(&["run", "-n", "base", "--pty", "cat"]);
+    let started = std::time::Instant::now();
+    let out = tmux(&s, &["display-popup", "-E", "sleep 1; exit 3"]);
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        started.elapsed() >= std::time::Duration::from_millis(900),
+        "the call waited for the popup to close"
+    );
+}
+
+/// Without -E the call returns at once; the popup stays until `display-popup -C` closes it.
+#[cfg(unix)]
+#[test]
+fn display_popup_without_e_returns_at_once_and_c_closes_it() {
+    let s = Session::new("dq");
+    let _ = s.run(&["run", "-n", "base", "--pty", "cat"]);
+    let started = std::time::Instant::now();
+    let opened = tmux(&s, &["display-popup", "sleep 30"]);
+    assert_eq!(opened.status.code(), Some(0));
+    assert!(started.elapsed() < std::time::Duration::from_secs(10));
+    let closed = tmux(&s, &["display-popup", "-C"]);
+    assert_eq!(closed.status.code(), Some(0));
+}
+
+#[test]
+fn tmux_multicall_zooms_with_resize_pane_and_reports_it_in_formats() {
+    let s = Session::new("tz");
+    let _ = s.run(&["run", "-n", "base", "--pty", "cat"]);
+    let t = |args: &[&str]| tmux(&s, args);
+    assert!(
+        t(&["split-window", "-d", "-t", "base", "cat"])
+            .status
+            .success()
+    );
+    let flag = |args: &[&str]| stdout(&tmux(&s, args));
+    assert_eq!(flag(&["display-message", "-p", "#{window_zoomed_flag}"]), "0");
+    assert_eq!(flag(&["display-message", "-p", "#{window_flags}"]), "*");
+
+    let mark = s.runtime.join("zoomed.txt");
+    let command = format!("run-shell 'touch {}'", mark.display());
+    assert!(
+        t(&["set-hook", "-g", "after-resize-pane", &command])
+            .status
+            .success()
+    );
+    assert!(t(&["resize-pane", "-Z", "-t", "base"]).status.success());
+    assert_eq!(flag(&["display-message", "-p", "#{window_zoomed_flag}"]), "1");
+    assert_eq!(flag(&["display-message", "-p", "#{window_flags}"]), "*Z");
+    assert!(
+        (0..60).any(|_| {
+            std::thread::sleep(Duration::from_millis(50));
+            mark.exists()
+        }),
+        "after-resize-pane never ran on the toggle"
+    );
+
+    assert!(t(&["resize-pane", "-Z"]).status.success());
+    assert_eq!(flag(&["display-message", "-p", "#{window_zoomed_flag}"]), "0");
+    assert_eq!(flag(&["display-message", "-p", "#{window_flags}"]), "*");
+    assert!(
+        t(&["set-hook", "-gu", "after-resize-pane"])
+            .status
+            .success()
+    );
+}
+
+#[test]
+fn tmux_multicall_copy_mode_commands_and_key_tables_are_checked_before_use() {
+    let s = Session::new("cm");
+    let _ = s.run(&["run", "-n", "base", "--pty", "cat"]);
+    let t = |args: &[&str]| tmux(&s, args);
+    let err = |args: &[&str]| String::from_utf8_lossy(&t(args).stderr).into_owned();
+
+    // No terminal is attached: copy-mode reaches nobody, and that is not an error.
+    assert!(t(&["copy-mode"]).status.success());
+    assert!(t(&["copy-mode", "-e", "-u"]).status.success());
+    assert!(t(&["copy-mode", "-q"]).status.success());
+
+    // Commands need the pane in a mode; their names and arguments are checked first.
+    assert!(err(&["send-keys", "-t", "base", "-X", "cancel"]).contains("pane %0 not in a mode"));
+    assert!(err(&["send-keys", "-X", "copy-selection-and-cancel"]).contains("not in a mode"));
+    assert!(err(&["send-keys", "-X", "no-such-command"]).contains("copy-mode command not supported: no-such-command"));
+    assert!(err(&["send-keys", "-X"]).contains("needs a copy-mode command"));
+    assert!(err(&["send-keys", "-X", "-N", "0", "cancel"]).contains("invalid repeat count '0'"));
+    assert!(err(&["send-keys", "-X", "goto-line", "x"]).contains("invalid line 'x'"));
+    assert!(err(&["send-keys", "-X", "search-forward"]).contains("needs an argument"));
+    assert!(err(&["send-keys", "-N", "2", "cancel"]).contains("-N needs -X"));
+
+    // Key tables take only copy commands, and list what they bind.
+    assert!(t(&["bind-key", "-T", "copy-mode-vi", "C-x", "send-keys", "-X", "rectangle-toggle"]).status.success());
+    assert!(err(&["bind-key", "-T", "copy-mode-vi", "K", "send-keys", "-X", "bogus"]).contains("copy-mode command not supported: bogus"));
+    assert!(err(&["bind-key", "-T", "copy-mode", "K", "send-keys", "x"]).contains("send-keys -X"));
+    let vi = stdout(&t(&["list-keys", "-T", "copy-mode-vi"]));
+    assert!(vi.contains("bind-key -T copy-mode-vi C-x send-keys -X rectangle-toggle"), "{vi}");
+    assert!(vi.contains("bind-key -T copy-mode-vi C-v send-keys -X rectangle-toggle"), "{vi}");
+    let emacs = stdout(&t(&["list-keys", "-T", "copy-mode"]));
+    assert!(emacs.contains("bind-key -T copy-mode C-g send-keys -X cancel"), "{emacs}");
+    assert!(!emacs.contains("copy-mode-vi"), "{emacs}");
+    assert!(t(&["unbind-key", "-T", "copy-mode-vi", "C-x"]).status.success());
+    assert!(!stdout(&t(&["list-keys", "-T", "copy-mode-vi"])).contains("C-x"));
 }

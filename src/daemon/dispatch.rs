@@ -7,7 +7,7 @@ use super::idempotency::Claim;
 use super::session::{SessionMsg, reply};
 use super::{DaemonState, KILL_GRACE};
 use crate::node::pane::LogQuery;
-use crate::protocol::{ChannelAction, Request, Response};
+use crate::protocol::{ChannelAction, PopupOpts, Request, Response};
 
 pub(super) async fn dispatch(state: &Arc<DaemonState>, req: Request) -> Response {
     match req {
@@ -69,6 +69,7 @@ impl Drop for IdemTicket {
 pub(super) async fn execute(state: &Arc<DaemonState>, req: Request) -> Response {
     match req {
         Request::Shutdown => shutdown(state).await,
+        Request::Popup(opts) => popup(state, opts).await,
         Request::Kill { name } => kill(state, &name).await,
         Request::KillWindow { index } => kill_window(state, index).await,
         Request::Wait {
@@ -121,6 +122,19 @@ async fn kill(state: &Arc<DaemonState>, name: &str) -> Response {
             Response::Ok
         }
         Ok(Ok(None)) => Response::Ok,
+        Ok(Err(e)) | Err(e) => Response::Error(e),
+    }
+}
+
+/// Opens a popup. A waiting caller is answered when the popup closes, with its program's status.
+async fn popup(state: &Arc<DaemonState>, opts: PopupOpts) -> Response {
+    let opts = Box::new(opts);
+    match state.ask(|reply| SessionMsg::Popup { opts, reply }).await {
+        Ok(Ok(None)) => Response::Ok,
+        Ok(Ok(Some(closed))) => match closed.await {
+            Ok(status) => Response::PopupClosed { status },
+            Err(_) => Response::Error("the popup closed without a status".to_string()),
+        },
         Ok(Err(e)) | Err(e) => Response::Error(e),
     }
 }

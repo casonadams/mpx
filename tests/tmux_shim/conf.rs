@@ -129,8 +129,11 @@ fn sample_skips_unsupported_bindings() {
         "split-window -v is not an mpx option"
     );
     assert!(
-        !config.bind.contains_key("x"),
-        "confirm-before is not an mpx command"
+        config
+            .bind
+            .get("x")
+            .is_some_and(|cmd| cmd.contains("confirm-before")),
+        "confirm-before is an mpx command now"
     );
 }
 
@@ -149,7 +152,7 @@ fn sample_output_resolves_to_a_keymap() {
 #[test]
 fn sample_notes_carry_original_line_numbers() {
     let c = convert(SAMPLE);
-    for line in [2, 13, 14, 15, 17, 18, 23, 26, 28, 31, 32, 33] {
+    for line in [2, 13, 14, 15, 17, 18, 23, 26, 31, 32, 33] {
         assert!(
             has_note(&c, line),
             "expected a note for line {line}: {:?}",
@@ -157,7 +160,7 @@ fn sample_notes_carry_original_line_numbers() {
         );
     }
     for line in [
-        3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 19, 20, 21, 22, 24, 25, 27, 34, 35,
+        3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 19, 20, 21, 22, 24, 25, 27, 28, 34, 35,
     ] {
         assert!(
             !has_note(&c, line),
@@ -177,7 +180,6 @@ fn sample_notes_name_the_skipped_command() {
             .cloned()
             .unwrap_or_default()
     };
-    assert!(note(28).contains("'confirm-before'"), "{}", note(28));
     assert!(
         note(32).contains("plugin/shell commands are not run"),
         "{}",
@@ -191,7 +193,6 @@ fn sample_notes_name_the_skipped_command() {
 #[test]
 fn unsupported_lines_are_also_commented_in_toml() {
     let c = convert(SAMPLE);
-    assert!(c.toml.contains("# unsupported (line 28): "), "{}", c.toml);
     assert!(c.toml.contains("# unsupported (line 33): "), "{}", c.toml);
     assert_eq!(
         c.notes.len(),

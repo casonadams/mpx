@@ -50,8 +50,19 @@ fn default_table_binds_digits_and_core_keys() {
     assert_eq!(find("x"), Some("kill-pane"));
     assert_eq!(find("]"), Some("paste"));
     assert_eq!(find("f"), Some("command-prompt -I 'find-window '"));
-    assert_eq!(find("."), Some("command-prompt -I 'move-window -t '"));
-    assert_eq!(find("'"), Some("command-prompt -I 'select-window -t '"));
+    assert_eq!(find("."), Some("command-prompt \"move-window -t '%%'\""));
+    assert_eq!(
+        find("'"),
+        Some("command-prompt -T window-target -p index \"select-window -t ':%%'\"")
+    );
+    assert_eq!(
+        find(","),
+        Some("command-prompt -F -I \"#W\" \"rename-window -- '%%'\"")
+    );
+    assert_eq!(
+        find("$"),
+        Some("command-prompt -F -I \"#S\" \"rename-session -- '%%'\"")
+    );
     assert_eq!(find("A"), None);
     assert_eq!(find("7"), Some("select-window -t 7"));
 }
@@ -218,26 +229,26 @@ fn runtime_bind_adds_replaces_and_removes_keys_in_either_table() {
     let mut keymap = default_keymap();
     assert!(matches!(command_of(&keymap, &key('x')), Some(Command::KillPane { .. })));
 
-    keymap.bind(false, "x", "kill-window").unwrap();
+    keymap.bind(Table::Prefix, "x", "kill-window").unwrap();
     assert!(matches!(command_of(&keymap, &key('x')), Some(Command::KillWindow { .. })));
-    keymap.bind(false, "x", "").unwrap();
+    keymap.bind(Table::Prefix, "x", "").unwrap();
     assert!(command_of(&keymap, &key('x')).is_none(), "an empty line unbinds");
 
-    keymap.bind(true, "M-h", "select-pane -L").unwrap();
+    keymap.bind(Table::Root, "M-h", "select-pane -L").unwrap();
     assert!(command_in(&keymap, Table::Root, &alt('h')).is_some());
     assert!(command_of(&keymap, &alt('h')).is_none(), "the prefix table is separate");
 
-    keymap.bind(false, "F5", "split-window ; select-layout tiled").unwrap();
+    keymap.bind(Table::Prefix, "F5", "split-window ; select-layout tiled").unwrap();
     let rows = keymap.entries();
-    assert!(rows.iter().any(|(root, k, line)| !root && k == "F5" && line.contains("select-layout")));
+    assert!(rows.iter().any(|(table, k, line)| *table == Table::Prefix && k == "F5" && line.contains("select-layout")));
 }
 
 #[test]
 fn runtime_bind_refuses_bad_keys_commands_and_the_prefix_key() {
     let mut keymap = default_keymap();
-    assert!(keymap.bind(false, "NoSuchKey", "kill-pane").is_err());
-    assert!(keymap.bind(false, "y", "nosuchcommand").is_err());
-    assert!(keymap.bind(false, "C-b", "kill-pane").unwrap_err().contains("prefix"));
+    assert!(keymap.bind(Table::Prefix, "NoSuchKey", "kill-pane").is_err());
+    assert!(keymap.bind(Table::Prefix, "y", "nosuchcommand").is_err());
+    assert!(keymap.bind(Table::Prefix, "C-b", "kill-pane").unwrap_err().contains("prefix"));
     assert_eq!(keymap, default_keymap(), "failed binds change nothing");
 }
 
@@ -262,7 +273,7 @@ fn tmux_default_prefix_keys_are_bound_to_their_tmux_commands() {
     assert!(matches!(bound(key('=')), Some(Command::ChooseBuffer)));
     assert!(matches!(bound(key('E')), Some(Command::SpreadLayout)));
     assert!(matches!(bound(key('i')), Some(Command::Tmux { ref words }) if words[0] == "display-message" && words.contains(&"-p".to_string())));
-    assert!(matches!(bound(named(KeyCode::PageUp, KeyModifiers::NONE)), Some(Command::CopyModePageUp)));
+    assert!(matches!(bound(named(KeyCode::PageUp, KeyModifiers::NONE)), Some(Command::CopyMode(o)) if o.page_up));
     assert!(matches!(bound(ctrl_code(KeyCode::Up)), Some(Command::ResizePane { side: Side::Up, cells: 1 })));
     assert!(matches!(bound(alt_code(KeyCode::Right)), Some(Command::ResizePane { side: Side::Right, cells: 5 })));
     assert!(matches!(bound(alt('1')), Some(Command::SelectLayout { preset: Some(_) })));

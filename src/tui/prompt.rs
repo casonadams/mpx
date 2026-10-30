@@ -1,5 +1,7 @@
 //! Line editor for the `:` command prompt. Pure: no terminal or daemon access.
 
+use std::collections::VecDeque;
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PromptState {
     chars: Vec<char>,
@@ -10,6 +12,12 @@ pub struct PromptState {
     /// Text typed before history browsing started.
     draft: Vec<char>,
     comp: Option<CompletionState>,
+    /// Text before the input (`(command) `, `:`, or a `command-prompt -p` text).
+    label: String,
+    /// What Tab completes (`command-prompt -T`).
+    kind: PromptKind,
+    /// Only digits are accepted (`command-prompt -N`).
+    numeric: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,7 +28,13 @@ struct CompletionState {
 }
 
 impl PromptState {
+    /// The `:` prompt: the typed line is a command, completing command names.
     pub fn new(initial: &str) -> Self {
+        Self::with(":", initial, PromptKind::Command, false)
+    }
+
+    /// A prompt showing `label` before its text, completing `kind`; `numeric` accepts digits only.
+    pub fn with(label: &str, initial: &str, kind: PromptKind, numeric: bool) -> Self {
         let chars: Vec<char> = initial.chars().collect();
         Self {
             cursor: chars.len(),
@@ -28,7 +42,18 @@ impl PromptState {
             hist: None,
             draft: Vec::new(),
             comp: None,
+            label: label.to_string(),
+            kind,
+            numeric,
         }
+    }
+
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+
+    pub fn kind(&self) -> PromptKind {
+        self.kind
     }
 
     pub fn text(&self) -> String {
@@ -40,6 +65,9 @@ impl PromptState {
     }
 
     pub fn insert(&mut self, c: char) {
+        if self.numeric && !c.is_ascii_digit() {
+            return;
+        }
         self.edit();
         self.chars.insert(self.cursor, c);
         self.cursor += 1;
@@ -229,4 +257,130 @@ fn common_prefix(names: &[&str]) -> String {
         len = len.min(shared);
     }
     first[..len].to_string()
+}
+
+/// What a prompt's Tab completes, as `command-prompt -T` names it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum PromptKind {
+    /// Command names (the default).
+    #[default]
+    Command,
+    /// Accepted for tmux compatibility; nothing to complete.
+    Search,
+    /// Accepted for tmux compatibility; nothing to complete.
+    Target,
+    /// Window names.
+    WindowTarget,
+}
+
+/// One question of a `command-prompt`: its label, the text it starts with, and its completion.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Question {
+    pub label: String,
+    pub initial: String,
+    pub kind: PromptKind,
+    pub numeric: bool,
+}
+
+/// A `command-prompt` in progress: the question on screen, the questions still to come, and the
+/// answers so far. Without a template the typed line is the command; with one, every answer is
+/// substituted into it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromptRun {
+    pub line: PromptState,
+    /// Questions after the one on screen, in order.
+    pub queued: VecDeque<Question>,
+    /// Answers given so far, in question order.
+    pub answers: Vec<String>,
+    /// Command template with `%%` and `%1`..`%9` placeholders; `None` runs the typed line.
+    pub template: Option<String>,
+    /// `-1` / `-k`: the first key typed is the answer, with no Enter.
+    pub single_key: bool,
+}
+
+impl PromptRun {
+    /// A run asking `questions` in order (the `:` prompt when there are none).
+    pub fn new(
+        mut questions: VecDeque<Question>,
+        template: Option<String>,
+        single_key: bool,
+    ) -> Self {
+        let default_label = if template.is_some() { "(command) " } else { ":" };
+        let first = questions.pop_front().unwrap_or(Question {
+            label: default_label.to_string(),
+            initial: String::new(),
+            kind: PromptKind::Command,
+            numeric: false,
+        });
+        Self {
+            line: PromptState::with(&first.label, &first.initial, first.kind, first.numeric),
+            queued: questions,
+            answers: Vec::new(),
+            template,
+            single_key,
+        }
+    }
+
+    /// Records the answer to the question on screen. Returns the command line to run once every
+    /// question is answered; until then it moves on to the next question and returns `None`.
+    pub fn answer(&mut self, text: String) -> Option<String> {
+        let Some(template) = self.template.clone() else {
+            return Some(text);
+        };
+        self.answers.push(text.trim().to_string());
+        match self.queued.pop_front() {
+            Some(next) => {
+                self.line = PromptState::with(&next.label, &next.initial, next.kind, next.numeric);
+                None
+            }
+            None => Some(expand_template(&template, &self.answers)),
+        }
+    }
+}
+
+/// Expands a `command-prompt` template: `%%` is the first answer, `%1`..`%9` the answer with that
+/// number, and `%%%` the first answer escaped for the command parser. A placeholder without an
+/// answer stays as written.
+pub fn expand_template(template: &str, answers: &[String]) -> String {
+    let chars: Vec<char> = template.chars().collect();
+    let mut out = String::with_capacity(template.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '%' && chars.get(i + 1) == Some(&'%') {
+            let escaped = chars.get(i + 2) == Some(&'%');
+            let width = if escaped { 3 } else { 2 };
+            match answers.first() {
+                Some(answer) if escaped => out.push_str(&escape_word(answer)),
+                Some(answer) => out.push_str(answer),
+                None => out.extend(&chars[i..i + width]),
+            }
+            i += width;
+            continue;
+        }
+        if chars[i] == '%'
+            && let Some(answer) = chars
+                .get(i + 1)
+                .and_then(|c| c.to_digit(10))
+                .and_then(|n| n.checked_sub(1).and_then(|k| answers.get(k as usize)))
+        {
+            out.push_str(answer);
+            i += 2;
+            continue;
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
+}
+
+/// Backslash-escapes the characters the command parser treats specially.
+fn escape_word(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        if matches!(c, '\\' | ';' | '\'' | '"' | '$') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
 }

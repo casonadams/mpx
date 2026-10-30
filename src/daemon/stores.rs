@@ -1,5 +1,6 @@
-//! Session-owned name/value state of the tmux surface: options, environment and paste buffers.
-use std::collections::{BTreeMap, VecDeque};
+//! Session-owned name/value state of the tmux surface: options, environment, paste buffers and the
+//! panes in a mode.
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use crate::protocol::{Buffer, VarKind};
 
@@ -13,9 +14,49 @@ pub(super) struct Stores {
     /// Newest first.
     buffers: VecDeque<Buffer>,
     next_buffer: u64,
+    /// Panes (by name) and the terminals that have each in a mode (copy mode). A pane is in a mode
+    /// while any terminal has it; an entry is removed once no terminal does.
+    modes: BTreeMap<String, BTreeSet<u64>>,
 }
 
 impl Stores {
+    pub(super) fn set_pane_mode(&mut self, name: &str, terminal: u64, on: bool) {
+        if on {
+            self.modes
+                .entry(name.to_string())
+                .or_default()
+                .insert(terminal);
+        } else {
+            self.unset_pane_mode(name, terminal);
+        }
+    }
+
+    fn unset_pane_mode(&mut self, name: &str, terminal: u64) {
+        if let Some(terminals) = self.modes.get_mut(name) {
+            terminals.remove(&terminal);
+            if terminals.is_empty() {
+                self.modes.remove(name);
+            }
+        }
+    }
+
+    /// Forgets a pane that left the session, so a later pane of the same name starts out of mode.
+    pub(super) fn forget_pane_mode(&mut self, name: &str) {
+        self.modes.remove(name);
+    }
+
+    /// Forgets every mode `terminal` reported, when its connection closes.
+    pub(super) fn forget_terminal(&mut self, terminal: u64) {
+        let names: Vec<String> = self.modes.keys().cloned().collect();
+        for name in names {
+            self.unset_pane_mode(&name, terminal);
+        }
+    }
+
+    pub(super) fn pane_modes(&self) -> Vec<String> {
+        self.modes.keys().cloned().collect()
+    }
+
     pub(super) fn set_var(&mut self, kind: VarKind, name: String, value: Option<String>) {
         let vars = &mut self.vars[kind as usize];
         match value {

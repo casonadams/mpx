@@ -3,6 +3,7 @@ mod tui {
     mod canvas;
     mod command;
     mod copy;
+    mod copy_commands;
     mod copy_emacs;
     mod frame;
     mod input;
@@ -10,6 +11,7 @@ mod tui {
     mod labels;
     mod overlay;
     mod panes;
+    mod popup;
     mod prompt;
     mod render;
     mod status;

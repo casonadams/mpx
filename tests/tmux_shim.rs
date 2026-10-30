@@ -3,4 +3,5 @@ mod tmux_shim {
     mod commands;
     mod conf;
     mod format;
+    mod popup;
 }

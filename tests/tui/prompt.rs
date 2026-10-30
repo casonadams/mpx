@@ -1,5 +1,7 @@
+use std::collections::VecDeque;
+
 use mpx::tui::command::COMMAND_NAMES;
-use mpx::tui::prompt::PromptState;
+use mpx::tui::prompt::{PromptKind, PromptRun, PromptState, Question, expand_template};
 
 fn typed(text: &str) -> PromptState {
     let mut p = PromptState::new("");
@@ -157,4 +159,77 @@ fn tab_cycles_through_matches_and_backtab_reverses() {
     assert_eq!(p.text(), "kill-window");
     p.complete_prev(COMMAND_NAMES);
     assert_eq!(p.text(), "kill-server");
+}
+
+fn question(label: &str, initial: &str) -> Question {
+    Question {
+        label: label.into(),
+        initial: initial.into(),
+        kind: PromptKind::Command,
+        numeric: false,
+    }
+}
+
+#[test]
+fn placeholders_take_the_answers_by_number() {
+    let answers = vec!["work".to_string(), "two".to_string()];
+    assert_eq!(
+        expand_template("rename-window -- '%%'", &answers),
+        "rename-window -- 'work'"
+    );
+    assert_eq!(
+        expand_template("join %1 %2 %3 %0", &answers),
+        "join work two %3 %0"
+    );
+}
+
+#[test]
+fn triple_percent_quotes_the_answer_for_the_command_parser() {
+    let answers = vec!["it's $HOME; \"x\" \\".to_string()];
+    assert_eq!(
+        expand_template("echo %%%", &answers),
+        r#"echo it\'s \$HOME\; \"x\" \\"#
+    );
+}
+
+#[test]
+fn answers_fill_a_template_one_question_at_a_time() {
+    let questions = VecDeque::from([question("from", "a"), question("to", "")]);
+    let mut run = PromptRun::new(questions, Some("move '%1' '%2'".into()), false);
+    assert_eq!(run.line.label(), "from");
+    assert_eq!(
+        run.line.text(),
+        "a",
+        "the first question starts with its initial text"
+    );
+    assert_eq!(run.answer("x".into()), None, "a second question follows");
+    assert_eq!(run.line.label(), "to");
+    assert_eq!(run.answer(" y ".into()), Some("move 'x' 'y'".into()));
+}
+
+#[test]
+fn without_a_template_the_typed_line_is_the_answer() {
+    let mut run = PromptRun::new(VecDeque::new(), None, false);
+    assert_eq!(run.line.label(), ":");
+    assert_eq!(
+        run.answer("split-window".into()),
+        Some("split-window".into())
+    );
+}
+
+#[test]
+fn a_template_prompt_without_a_text_asks_for_a_command() {
+    let run = PromptRun::new(VecDeque::new(), Some("kill-pane".into()), true);
+    assert_eq!(run.line.label(), "(command) ");
+    assert!(run.single_key);
+}
+
+#[test]
+fn numeric_prompts_accept_digits_only() {
+    let mut p = PromptState::with("index", "", PromptKind::Target, true);
+    for c in "1a2 3-".chars() {
+        p.insert(c);
+    }
+    assert_eq!(p.text(), "123");
+    assert_eq!(p.label(), "index");
 }

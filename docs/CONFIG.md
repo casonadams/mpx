@@ -52,7 +52,7 @@ bg = ""                             # optional: replaces the default background 
 
 [bind]                  # prefix key -> command line (see KEYBINDINGS.md)
 "M-h" = "select-pane -L"
-"$" = "command-prompt -I 'rename-session '"
+"$" = "command-prompt -F -I \"#S\" \"rename-session -- '%%'\""
 
 [bind_root]             # keys without the prefix; "" unbinds
 "F12" = "palette"

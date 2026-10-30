@@ -123,7 +123,7 @@ status_fg = "black"
 
 [bind]
 "M-h" = "select-pane -L"
-"$" = "command-prompt -I 'rename-session '"
+"$" = "command-prompt -F -I \"#S\" \"rename-session -- '%%'\""
 
 # Process resumption rules for crash &amp; reboot recovery
 [[resume]]

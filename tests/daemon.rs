@@ -9,9 +9,11 @@ mod daemon {
     mod lifecycle;
     mod logs;
     mod options;
+    mod pane_modes;
     mod pacing;
     mod panes;
     mod plan;
+    mod popup;
     mod prompt;
     mod snapshot;
     mod stream;
@@ -20,4 +22,5 @@ mod daemon {
     mod tmux_ops;
     mod tmux_state;
     mod wait;
+    mod zoom;
 }

@@ -4,7 +4,7 @@ use crossterm::event::{Event, KeyCode};
 use mpx::config::Config;
 use mpx::tui::app::Mode;
 
-use super::support::{ECHO, Harness, MAIN, wait_for};
+use super::support::{ECHO, Harness, MAIN, wait_for, window};
 
 fn echo_line(command: &str) -> String {
     format!("{command} sh -c '{ECHO}'")
@@ -132,4 +132,90 @@ async fn empty_prompt_submits_nothing() {
     assert!(h.mode_is_normal());
     assert!(h.app.live_message().is_none());
     assert_eq!(h.windows().await, [MAIN]);
+}
+
+fn active_window(h: &Harness) -> String {
+    h.app
+        .layout
+        .tabs
+        .iter()
+        .find(|t| t.is_active)
+        .map(|t| t.name.clone())
+        .unwrap_or_default()
+}
+
+#[tokio::test]
+async fn templated_prompt_asks_for_its_text_and_runs_the_filled_template() {
+    let mut h = start().await;
+    h.frame().await;
+    h.prefixed_char(':').await;
+    h.type_str("command-prompt -p 'window name' \"rename-window -- '%%'\"")
+        .await;
+    h.key(KeyCode::Enter).await;
+    assert!(matches!(&h.app.mode, Mode::Prompt(run) if run.line.label() == "window name"));
+    h.type_str("logs").await;
+    h.key(KeyCode::Enter).await;
+    assert_eq!(h.windows().await, ["logs"]);
+    assert!(h.mode_is_normal());
+}
+
+#[tokio::test]
+async fn comma_asks_for_the_window_name_with_the_current_one_filled_in() {
+    let mut h = start().await;
+    h.frame().await;
+    h.prefixed_char(',').await;
+    assert!(matches!(&h.app.mode, Mode::Prompt(run) if run.line.text() == MAIN));
+    for _ in MAIN.chars() {
+        h.key(KeyCode::Backspace).await;
+    }
+    h.type_str("logs").await;
+    h.key(KeyCode::Enter).await;
+    assert_eq!(h.windows().await, ["logs"]);
+}
+
+#[tokio::test]
+async fn quote_binding_completes_window_names_as_its_target() {
+    let mut h = start().await;
+    h.frame().await;
+    window(&mut h.probe, "other", ECHO).await;
+    h.frame().await;
+    assert_eq!(active_window(&h), "other");
+    h.prefixed_char('\'').await;
+    h.type_str("ma").await;
+    h.key(KeyCode::Tab).await;
+    h.key(KeyCode::Enter).await;
+    h.frame().await;
+    assert_eq!(active_window(&h), MAIN);
+}
+
+#[tokio::test]
+async fn single_key_prompt_answers_with_one_key_and_no_enter() {
+    let mut h = start().await;
+    h.frame().await;
+    h.prefixed_char(':').await;
+    h.type_str("command-prompt -1 -p key \"rename-window '%%'\"")
+        .await;
+    h.key(KeyCode::Enter).await;
+    h.key(KeyCode::Char('k')).await;
+    assert_eq!(h.windows().await, ["k"]);
+    assert!(h.mode_is_normal());
+}
+
+#[tokio::test]
+async fn confirm_before_runs_its_command_only_on_y() {
+    let mut h = start().await;
+    h.frame().await;
+    let line = "confirm-before -p 'rename?' \"rename-window gone\"";
+    h.prefixed_char(':').await;
+    h.type_str(line).await;
+    h.key(KeyCode::Enter).await;
+    assert!(matches!(&h.app.mode, Mode::Confirm(question, _) if question.as_str() == "rename?"));
+    h.key(KeyCode::Char('n')).await;
+    assert_eq!(h.windows().await, [MAIN]);
+
+    h.prefixed_char(':').await;
+    h.type_str(line).await;
+    h.key(KeyCode::Enter).await;
+    h.key(KeyCode::Char('y')).await;
+    assert_eq!(h.windows().await, ["gone"]);
 }

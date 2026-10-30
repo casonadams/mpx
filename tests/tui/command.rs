@@ -1,5 +1,7 @@
 use mpx::protocol::{LayoutPreset, Side};
-use mpx::tui::command::{Command, parse, split_words};
+use mpx::tui::command::{Command, CopyModeOpts, PromptSpec, parse, split_words};
+use mpx::tui::keymap::Table;
+use mpx::tui::prompt::PromptKind;
 
 fn ok(line: &str) -> Command {
     parse(line).unwrap_or_else(|e| panic!("`{line}` should parse: {e}"))
@@ -284,12 +286,13 @@ fn detach_quit_and_prompts() {
     for name in ["detach-client", "detach", "q", "quit"] {
         assert_eq!(ok(name), Command::Detach, "{name}");
     }
-    assert_eq!(ok("copy-mode"), Command::CopyMode);
+    assert_eq!(ok("copy-mode"), Command::CopyMode(CopyModeOpts::default()));
     assert_eq!(
         ok("command-prompt -I 'rename-window '"),
-        Command::CommandPrompt {
-            initial: "rename-window ".into()
-        }
+        Command::CommandPrompt(PromptSpec {
+            initial: vec!["rename-window ".into()],
+            ..PromptSpec::default()
+        })
     );
     assert_eq!(ok("list-keys"), Command::OpenHelp);
     assert_eq!(ok("choose-tree"), Command::OpenTree);
@@ -297,6 +300,94 @@ fn detach_quit_and_prompts() {
         ok("rename-session new-name"),
         Command::RenameSession {
             name: "new-name".into()
+        }
+    );
+}
+
+#[test]
+fn command_prompt_reads_its_prompts_initial_texts_template_and_flags() {
+    assert_eq!(
+        ok("command-prompt -1 -N -F -T window-target -p index,name -I 2,x \"select-window -t ':%%'\""),
+        Command::CommandPrompt(PromptSpec {
+            prompts: vec!["index".into(), "name".into()],
+            initial: vec!["2".into(), "x".into()],
+            template: Some("select-window -t ':%%'".into()),
+            kind: PromptKind::WindowTarget,
+            single_key: true,
+            numeric: true,
+            expand: true,
+        })
+    );
+    assert_eq!(
+        ok("command-prompt -k 'kill-pane'"),
+        Command::CommandPrompt(PromptSpec {
+            template: Some("kill-pane".into()),
+            single_key: true,
+            ..PromptSpec::default()
+        })
+    );
+    assert!(err("command-prompt -T nonsense").contains("unknown prompt type"));
+}
+
+#[test]
+fn confirm_before_asks_then_runs_the_command() {
+    assert_eq!(
+        ok("confirm-before -p 'really?' \"kill-window\""),
+        Command::Confirm {
+            prompt: "really?".into(),
+            then: Box::new(Command::KillWindow { index: None }),
+        }
+    );
+    assert_eq!(
+        ok("confirm-before kill-window"),
+        Command::Confirm {
+            prompt: "Confirm 'kill-window'? (y/n)".into(),
+            then: Box::new(Command::KillWindow { index: None }),
+        }
+    );
+    assert_eq!(
+        ok("confirm-before -y kill-window"),
+        Command::KillWindow { index: None }
+    );
+    assert!(err("confirm-before -p x").contains("need a command"));
+}
+
+#[test]
+fn zoom_and_keep_zoom_forms_route_as_tmux_does() {
+    assert_eq!(ok("resize-pane -Z"), Command::Zoom);
+    assert_eq!(
+        ok("resize-pane -Z -t work"),
+        Command::Tmux {
+            words: vec![
+                "resize-pane".into(),
+                "-Z".into(),
+                "-t".into(),
+                "work".into(),
+            ],
+        }
+    );
+    assert!(matches!(ok("select-pane -Z -t x"), Command::Tmux { .. }));
+    assert!(matches!(ok("last-pane -Z"), Command::Tmux { .. }));
+    assert!(matches!(ok("swap-pane -Z -s a -t b"), Command::Tmux { .. }));
+    assert_eq!(ok("last-pane"), Command::LastPane);
+}
+
+#[test]
+fn rename_window_accepts_the_end_of_options_marker() {
+    assert_eq!(
+        ok("rename-window -- -dash"),
+        Command::RenameWindow {
+            name: "-dash".into()
+        }
+    );
+}
+
+#[test]
+fn select_window_by_name_is_left_to_the_shim() {
+    assert_eq!(
+        ok("select-window -t ':logs'"),
+        Command::Tmux {
+            words: vec!["select-window".into(), "-t".into(), ":logs".into()],
         }
     );
 }
@@ -360,21 +451,29 @@ fn semicolons_chain_commands_and_escaped_ones_are_literal() {
 fn bind_and_unbind_name_the_table_and_the_command_line() {
     assert_eq!(
         ok("bind-key x kill-pane"),
-        Command::Bind { root: false, key: "x".into(), line: "kill-pane".into() }
+        Command::Bind { table: Table::Prefix, key: "x".into(), line: "kill-pane".into() }
     );
     assert_eq!(
         ok("bind -n M-h select-pane -L"),
-        Command::Bind { root: true, key: "M-h".into(), line: "select-pane -L".into() }
+        Command::Bind { table: Table::Root, key: "M-h".into(), line: "select-pane -L".into() }
     );
     assert_eq!(
         ok("bind -T root F5 split-window -h \\; select-pane -R"),
-        Command::Bind { root: true, key: "F5".into(), line: "split-window -h ; select-pane -R".into() }
+        Command::Bind { table: Table::Root, key: "F5".into(), line: "split-window -h ; select-pane -R".into() }
     );
     assert_eq!(
         ok("unbind-key -n M-h"),
-        Command::Bind { root: true, key: "M-h".into(), line: String::new() }
+        Command::Bind { table: Table::Root, key: "M-h".into(), line: String::new() }
     );
-    assert!(err("bind-key -T copy-mode-vi v send -X begin-selection").contains("not supported"));
+    assert_eq!(
+        ok("bind -T copy-mode-vi v send-keys -X begin-selection"),
+        Command::Bind {
+            table: Table::CopyVi,
+            key: "v".into(),
+            line: "send-keys -X begin-selection".into(),
+        }
+    );
+    assert!(err("bind-key -T copy-mode-vi v send -X begin-selection").contains("send-keys -X"));
     assert!(err("bind-key x").contains("need a command"));
 }
 

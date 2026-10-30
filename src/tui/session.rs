@@ -65,7 +65,6 @@ impl App {
         self.expected.clear();
         self.layout.dirty = true;
         self.layout.raw.clear();
-        self.zoomed = None;
         self.mode = Mode::Normal;
         self.parked_copy.clear();
         self.nodes.clear();

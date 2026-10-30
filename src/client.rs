@@ -5,9 +5,9 @@ use tokio_util::codec::{Framed, FramedParts, LengthDelimitedCodec, LinesCodec};
 use crate::ipc::{IpcStream, connect_stream};
 use crate::layout::{Divider, Rect, WindowTab};
 use crate::protocol::{
-    Buffer, ChannelAction, DaemonMessage, LayoutPreset, NewWindowOpts, NodeInfo, PROTOCOL, Request,
-    Response, SessionInfo, Side, SpawnOpts, SplitOpts, StreamEvent, VarKind, WaitCondition,
-    WaitOutcome,
+    Buffer, ChannelAction, DaemonMessage, LayoutPreset, NewWindowOpts, NodeInfo, PROTOCOL,
+    PopupOpts, Request, Response, SessionInfo, Side, SpawnOpts, SplitOpts, StreamEvent, VarKind,
+    WaitCondition, WaitOutcome,
 };
 use crate::wire;
 
@@ -217,6 +217,20 @@ impl Client {
         self.call_ok("Paste", req).await
     }
 
+    /// Opens a popup. With `opts.wait`, returns once it closes, with its program's status.
+    pub async fn popup(&mut self, opts: PopupOpts) -> Result<Option<i32>, String> {
+        match self.call(Request::Popup(opts)).await? {
+            Response::PopupClosed { status } => Ok(status),
+            Response::Ok => Ok(None),
+            other => Err(unexpected("Popup", other)),
+        }
+    }
+
+    /// Closes the open popup (tmux `display-popup -C`).
+    pub async fn close_popup(&mut self) -> Result<(), String> {
+        self.call_ok("ClosePopup", Request::ClosePopup).await
+    }
+
     pub async fn kill(&mut self, name: &str) -> Result<(), String> {
         self.call_ok(
             "Kill",
@@ -318,17 +332,38 @@ impl Client {
     }
 
     pub async fn focus_last(&mut self) -> Result<(), String> {
-        self.call_ok("FocusLast", Request::FocusLast).await
+        self.focus_last_with(false).await
+    }
+
+    /// `keep_zoom` (tmux `last-pane -Z`) leaves a zoomed window zoomed.
+    pub async fn focus_last_with(&mut self, keep_zoom: bool) -> Result<(), String> {
+        self.call_ok("FocusLast", Request::FocusLast { keep_zoom })
+            .await
     }
 
     pub async fn focus(&mut self, name: &str) -> Result<(), String> {
+        self.focus_with(name, false).await
+    }
+
+    /// `keep_zoom` (tmux `select-pane -Z`) leaves a zoomed window zoomed.
+    pub async fn focus_with(&mut self, name: &str, keep_zoom: bool) -> Result<(), String> {
         self.call_ok(
             "Focus",
             Request::Focus {
                 name: name.to_string(),
+                keep_zoom,
             },
         )
         .await
+    }
+
+    /// Zooms or unzooms the window of `pane` (the active pane when `None`); `on` None toggles.
+    pub async fn zoom(&mut self, pane: Option<&str>, on: Option<bool>) -> Result<(), String> {
+        let req = Request::Zoom {
+            pane: pane.map(str::to_string),
+            on,
+        };
+        self.call_ok("Zoom", req).await
     }
 
     pub async fn status(&mut self, name: &str) -> Result<NodeInfo, String> {
@@ -368,7 +403,7 @@ impl Client {
     }
 
     pub async fn swap_pane(&mut self, a: &str, b: &str) -> Result<(), String> {
-        self.swap_pane_targets(Some(a), Some(b)).await
+        self.swap_pane_with(Some(a), Some(b), false).await
     }
 
     pub async fn swap_pane_targets(
@@ -376,9 +411,20 @@ impl Client {
         a: Option<&str>,
         b: Option<&str>,
     ) -> Result<(), String> {
+        self.swap_pane_with(a, b, false).await
+    }
+
+    /// `keep_zoom` (tmux `swap-pane -Z`) leaves a zoomed window zoomed.
+    pub async fn swap_pane_with(
+        &mut self,
+        a: Option<&str>,
+        b: Option<&str>,
+        keep_zoom: bool,
+    ) -> Result<(), String> {
         let req = Request::SwapPane {
             a: a.map(str::to_string),
             b: b.map(str::to_string),
+            keep_zoom,
         };
         self.call_ok("SwapPane", req).await
     }
@@ -476,6 +522,25 @@ impl Client {
         }
     }
 
+    /// Records whether pane `name` is in a mode (copy mode) in terminal `terminal`; the daemon's
+    /// `pane_in_mode` reads it.
+    pub async fn set_pane_mode(&mut self, name: &str, on: bool, terminal: u64) -> Result<(), String> {
+        let req = Request::SetPaneMode {
+            name: name.to_string(),
+            on,
+            terminal,
+        };
+        self.call_ok("SetPaneMode", req).await
+    }
+
+    /// The names of the panes that are in a mode.
+    pub async fn pane_modes(&mut self) -> Result<Vec<String>, String> {
+        match self.call(Request::PaneModes).await? {
+            Response::PaneModes(names) => Ok(names),
+            other => Err(unexpected("PaneModes", other)),
+        }
+    }
+
     /// Pushes a paste buffer; `name` replaces the buffer of that name.
     pub async fn set_buffer(&mut self, name: Option<&str>, data: &str) -> Result<(), String> {
         let req = Request::SetBuffer {
@@ -520,12 +585,35 @@ impl Client {
         self.call_ok("WaitFor", req).await
     }
 
-    /// Has every attached terminal run `line` as a command.
-    pub async fn client_command(&mut self, line: &str) -> Result<(), String> {
+    /// Has every attached terminal run `line` as a command; returns its sequence number.
+    pub async fn client_command(&mut self, line: &str) -> Result<u64, String> {
         let req = Request::ClientCommand {
             line: line.to_string(),
         };
-        self.call_ok("ClientCommand", req).await
+        match self.call(req).await? {
+            Response::Seq(seq) => Ok(seq),
+            other => Err(unexpected("ClientCommand", other)),
+        }
+    }
+
+    /// Waits (bounded) until every terminal has applied client command `seq`. With no terminal
+    /// attached it returns at once; a terminal that never reports only delays it to the bound.
+    pub async fn wait_command(&mut self, seq: u64) -> Result<(), String> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            match self.call(Request::CommandSettled { seq }).await? {
+                Response::Settled(false) if std::time::Instant::now() < deadline => {
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                }
+                Response::Settled(_) => return Ok(()),
+                other => return Err(unexpected("CommandSettled", other)),
+            }
+        }
+    }
+
+    /// Reports that this terminal has run client command `seq` and applied its effects.
+    pub async fn command_applied(&mut self, seq: u64) -> Result<(), String> {
+        self.call_ok("CommandApplied", Request::CommandApplied { seq }).await
     }
 
     /// Moves pane `src` next to `dst`, splitting it side by side or stacked.

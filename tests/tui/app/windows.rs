@@ -7,7 +7,7 @@ use mpx::tui::app::{Flow, Mode};
 
 use mpx::layout::Direction;
 
-use super::support::{ECHO, Harness, MAIN, SESSION, connect, split, wait_for, window};
+use super::support::{ECHO, Harness, MAIN, SESSION, SIZE, connect, split, wait_for, window};
 
 /// Default bindings that would spawn the user's shell, rebound to run `ECHO`.
 fn echo_config() -> Config {
@@ -52,6 +52,8 @@ async fn rename_window_through_the_command_prompt() {
     let mut h = start().await;
     h.frame().await;
     h.prefixed_char(',').await;
+    // `,` starts with the current name, which the user replaces.
+    h.ctrl('u').await;
     h.type_str("logs").await;
     h.key(KeyCode::Enter).await;
     assert_eq!(h.windows().await, ["logs"]);
@@ -144,7 +146,7 @@ async fn break_pane_moves_the_pane_into_its_own_window() {
 }
 
 #[tokio::test]
-async fn zoom_shows_only_the_active_pane_until_toggled_back() {
+async fn zoom_shows_only_the_focused_pane_until_toggled_back() {
     let mut h = start().await;
     h.frame().await;
     h.prefixed_char('%').await;
@@ -152,14 +154,66 @@ async fn zoom_shows_only_the_active_pane_until_toggled_back() {
     assert_eq!(h.app.panes.len(), 2);
 
     h.prefixed_char('z').await;
-    h.frame().await;
-    assert_eq!(h.app.zoomed.as_deref(), Some("pane-2"));
+    let screen = h.frame().await;
+    assert!(h.app.zoomed());
     assert_eq!(h.app.panes.len(), 1);
+    assert_eq!(h.app.panes[0].0, "pane-2");
+    assert_eq!(
+        h.app.panes[0].1.width, SIZE.0,
+        "the zoomed pane fills the width"
+    );
+    assert!(
+        screen.contains("*Z"),
+        "the window tab shows the zoom: {screen}"
+    );
 
     h.prefixed_char('z').await;
-    h.frame().await;
-    assert!(h.app.zoomed.is_none());
+    let screen = h.frame().await;
+    assert!(!h.app.zoomed());
     assert_eq!(h.app.panes.len(), 2);
+    assert!(!screen.contains("*Z"));
+}
+
+#[tokio::test]
+async fn zoom_set_on_the_daemon_by_another_client_is_drawn() {
+    let mut h = start().await;
+    h.frame().await;
+    h.prefixed_char('%').await;
+    h.frame().await;
+    h.probe.zoom(None, None).await.expect("zoom on the daemon");
+    let screen = h.frame().await;
+    assert!(h.app.zoomed());
+    assert_eq!(h.app.panes.len(), 1);
+    assert!(screen.contains("*Z"));
+
+    h.probe.zoom(None, Some(false)).await.expect("unzoom");
+    h.frame().await;
+    assert!(!h.app.zoomed());
+    assert_eq!(h.app.panes.len(), 2);
+}
+
+#[tokio::test]
+async fn resize_pane_z_through_the_shim_toggles_the_zoom() {
+    let mut h = start().await;
+    h.frame().await;
+    h.prefixed_char('%').await;
+    h.frame().await;
+    let target = mpx::tmux_shim::EnvTarget {
+        endpoint: h.sandbox.endpoint(SESSION),
+        session: SESSION.to_string(),
+    };
+    mpx::tmux_shim::run_in(&target, "resize-pane -Z")
+        .await
+        .expect("resize-pane -Z");
+    h.frame().await;
+    assert!(h.app.zoomed());
+    assert_eq!(h.app.panes.len(), 1);
+
+    mpx::tmux_shim::run_in(&target, "resize-pane -Z")
+        .await
+        .expect("resize-pane -Z again");
+    h.frame().await;
+    assert!(!h.app.zoomed());
 }
 
 #[tokio::test]

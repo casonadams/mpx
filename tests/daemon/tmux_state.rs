@@ -166,7 +166,7 @@ async fn client_commands_reach_terminals_and_no_other_subscriber() {
     client.client_command("detach-client").await.unwrap();
     let heard = tokio::time::timeout(Duration::from_secs(2), async {
         while let Some(event) = term_rx.recv().await {
-            if let StreamEvent::ClientCommand { line } = event {
+            if let StreamEvent::ClientCommand { line, .. } = event {
                 return Some(line);
             }
         }

@@ -22,6 +22,13 @@ pub enum SelectionRange {
         start_abs_y: usize,
         end_abs_y: usize,
     },
+    /// A rectangle: the columns between the corners, on the rows between them.
+    Rectangle {
+        anchor_x: usize,
+        anchor_abs_y: usize,
+        cursor_x: usize,
+        cursor_abs_y: usize,
+    },
 }
 
 impl SelectionRange {
@@ -60,6 +67,16 @@ impl SelectionRange {
                     true
                 }
             }
+            Self::Rectangle {
+                anchor_x,
+                anchor_abs_y,
+                cursor_x,
+                cursor_abs_y,
+            } => {
+                let (x0, x1) = (*anchor_x.min(cursor_x), *anchor_x.max(cursor_x));
+                let (y0, y1) = (*anchor_abs_y.min(cursor_abs_y), *anchor_abs_y.max(cursor_abs_y));
+                abs_y >= y0 && abs_y <= y1 && x >= x0 && x <= x1
+            }
         }
     }
 }
@@ -96,6 +113,14 @@ impl PaneColors {
 pub struct HostColors {
     pub fg: Option<VtColor>,
     pub bg: Option<VtColor>,
+}
+
+impl PaneColors {
+    /// What a default-colored background becomes in an inactive pane: the configured color, else
+    /// the terminal's (or the active template's) default, desaturated.
+    pub fn inactive_default_bg(&self) -> Option<VtColor> {
+        inactive_color(None, self.inactive_bg, self.active_bg.or(self.host_bg), self.dim_factor)
+    }
 }
 
 impl HostColors {
@@ -174,6 +199,9 @@ pub struct DividerStyle {
     pub inactive_color: VtColor,
     pub marked_color: VtColor,
     pub border_style: BorderStyle,
+    /// Background of the border cells: the inactive panes' default background, so a border
+    /// beside an inactive pane does not show the terminal's own.
+    pub bg: Option<VtColor>,
 }
 
 impl Default for DividerStyle {
@@ -183,6 +211,7 @@ impl Default for DividerStyle {
             inactive_color: VtColor::BrightBlack,
             marked_color: VtColor::BrightMagenta,
             border_style: BorderStyle::Single,
+            bg: None,
         }
     }
 }
@@ -226,6 +255,7 @@ fn divider_cell(
         c: get_divider_char(div, x, y, all, style.border_style),
         style: CellStyle {
             fg: Some(divider_color(x, y, active, marked, style)),
+            bg: style.bg,
             ..CellStyle::default()
         },
     }

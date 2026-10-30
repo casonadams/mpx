@@ -177,6 +177,12 @@ fn spawn_writer(mut writer: Box<dyn Write + Send>, mut rx: mpsc::UnboundedReceiv
     });
 }
 
+/// A read this small means the program writes in pieces and the next one is already on its way:
+/// pausing briefly lets them add up, so the reader makes far fewer reads and wake-ups. The chunk
+/// is sent before the pause, so no output waits on it.
+const SMALL_READ: usize = 1024;
+const SETTLE: Duration = Duration::from_micros(40);
+
 fn pump_output(
     mut reader: Box<dyn Read + Send>,
     out: &mpsc::UnboundedSender<PaneMsg>,
@@ -193,6 +199,9 @@ fn pump_output(
                 inflight.add();
                 if out.send(PaneMsg::Output(chunk[..n].to_vec())).is_err() {
                     break;
+                }
+                if n < SMALL_READ {
+                    std::thread::sleep(SETTLE);
                 }
             }
         }

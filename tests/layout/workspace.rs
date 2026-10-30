@@ -419,3 +419,83 @@ fn every_preset_name_parses_back_to_itself() {
     );
     assert_eq!(LayoutPreset::parse("main-mirrored"), None);
 }
+
+/// Two panes in window 0 (`a` focused, `b` beside it), then a second window `w`.
+fn zoomable() -> Workspace {
+    let mut ws = Workspace::new("main".to_string());
+    ws.add_or_split("a".to_string(), Direction::Horizontal);
+    ws.split_pane(
+        Some("a"),
+        "b".to_string(),
+        Direction::Horizontal,
+        None,
+        true,
+    )
+    .unwrap();
+    ws.new_window("w".to_string(), "c".to_string());
+    ws.select_window(0);
+    ws
+}
+
+#[test]
+fn zoom_applies_to_the_active_window_and_toggles() {
+    let mut ws = zoomable();
+    assert!(!ws.window_tabs()[0].zoomed);
+    assert!(ws.set_zoom(None));
+    assert!(ws.window_tabs()[0].zoomed);
+    assert!(ws.set_zoom(Some(true)));
+    assert!(ws.window_tabs()[0].zoomed, "on stays on");
+    assert!(ws.set_zoom(None));
+    assert!(!ws.window_tabs()[0].zoomed);
+}
+
+#[test]
+fn zoom_is_cleared_by_split_removal_layout_and_window_switches() {
+    let mut ws = zoomable();
+    ws.set_zoom(Some(true));
+    ws.select_layout(Some(LayoutPreset::Tiled));
+    assert!(!ws.window_tabs()[0].zoomed, "a layout change unzooms");
+
+    ws.set_zoom(Some(true));
+    ws.split_pane(Some("b"), "d".to_string(), Direction::Vertical, None, false)
+        .unwrap();
+    assert!(!ws.window_tabs()[0].zoomed, "a split unzooms");
+
+    ws.set_zoom(Some(true));
+    ws.remove("d");
+    assert!(!ws.window_tabs()[0].zoomed, "losing a pane of the window unzooms it");
+
+    ws.set_zoom(Some(true));
+    ws.next_window();
+    assert!(!ws.window_tabs()[0].zoomed, "the window left behind unzooms");
+}
+
+#[test]
+fn focus_unzooms_unless_kept_and_keeps_the_window_active() {
+    let mut ws = zoomable();
+    ws.set_zoom(Some(true));
+    assert!(ws.focus_with("b", true));
+    assert!(ws.window_tabs()[0].zoomed);
+    assert!(ws.focus_last_with(true));
+    assert!(ws.window_tabs()[0].zoomed);
+    assert!(ws.focus("a"));
+    assert!(!ws.window_tabs()[0].zoomed);
+    assert!(!ws.focus("nosuch"));
+}
+
+#[test]
+fn window_tabs_report_the_active_pane_of_each_window() {
+    let mut ws = zoomable();
+    ws.focus("b");
+    let tabs = ws.window_tabs();
+    assert_eq!(tabs[0].focused.as_deref(), Some("b"));
+    assert_eq!(tabs[1].focused.as_deref(), Some("c"));
+}
+
+#[test]
+fn window_tabs_without_zoom_fields_deserialize_as_unzoomed() {
+    let tab: mpx::layout::WindowTab =
+        serde_json::from_str(r#"{"index":0,"name":"a","is_active":true}"#).unwrap();
+    assert!(!tab.zoomed);
+    assert_eq!(tab.focused, None);
+}

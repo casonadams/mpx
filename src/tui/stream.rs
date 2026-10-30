@@ -48,9 +48,21 @@ impl App {
                 false
             }
             StreamEvent::Exit { name, .. } => {
-                self.vt.remove(&name);
-                self.expected.remove(&name);
-                self.pane_dims.remove(&name);
+                if self.is_popup(&name) {
+                    self.mark_popup_finished(&name);
+                } else {
+                    self.vt.remove(&name);
+                    self.expected.remove(&name);
+                    self.pane_dims.remove(&name);
+                }
+                true
+            }
+            StreamEvent::PopupOpen { name, spec } => {
+                self.open_popup(name, spec).await;
+                true
+            }
+            StreamEvent::PopupClose { name } => {
+                self.close_popup_screen(&name);
                 true
             }
             // Panes created or rearranged from outside (an agent's split, `mpx focus`) show at
@@ -114,7 +126,9 @@ impl App {
     /// view. Other panes are rebuilt from their log when they come into view, so output nobody
     /// sees costs no parsing.
     pub fn keeps_screen(&self, name: &str) -> bool {
-        self.panes.iter().any(|(pane, ..)| pane == name) || self.parked_copy.contains_key(name)
+        self.panes.iter().any(|(pane, ..)| pane == name)
+            || self.parked_copy.contains_key(name)
+            || self.is_popup(name)
     }
 
     /// Panes that just came into view may have missed output while hidden (the daemon sends only

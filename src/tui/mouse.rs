@@ -21,7 +21,11 @@ impl App {
         }
         if matches!(
             self.mode,
-            Mode::Overlay(_) | Mode::Prompt(_) | Mode::Confirm(..) | Mode::Clock { .. }
+            Mode::Overlay(_)
+                | Mode::Prompt(_)
+                | Mode::Confirm(..)
+                | Mode::Clock { .. }
+                | Mode::Popup(_)
         ) {
             return Flow::Continue;
         }
@@ -94,12 +98,10 @@ impl App {
                 .map(|(_, _, target)| target.clone());
             match target {
                 Some(super::statusline::Target::Window(idx)) => {
-                    self.zoomed = None;
                     let _ = self.client.select_window(idx).await;
                     self.layout.dirty = true;
                 }
                 Some(super::statusline::Target::Pane(name)) if name != self.active_pane => {
-                    self.zoomed = None;
                     let _ = self.client.focus(&name).await;
                     self.layout.dirty = true;
                 }
@@ -183,7 +185,7 @@ impl App {
 
     /// Takes hold of the split border under the pointer, if there is one.
     fn grab_border(&mut self, col: u16, row: u16) -> bool {
-        if self.zoomed.is_some() {
+        if self.zoomed() {
             return false;
         }
         self.border_drag = border_at(&self.layout.dividers, &self.panes, (col, row));

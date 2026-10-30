@@ -1,17 +1,20 @@
 //! Command execution: maps each `Command` onto daemon requests and TUI state.
 use super::app::{App, Flow, Mode};
-use super::command::Command;
-use super::copy::CopyState;
+use super::command::{Command, CopyModeOpts, PromptSpec};
+use super::copy::{CopyAction, CopyOutcome, CopyState, Motion, apply_action};
 use super::keymap;
 use super::overlay::{Overlay, OverlayCtx, buffer_summary};
 use super::panes::{find_directional, neighbor_pane};
-use super::prompt::PromptState;
+use super::prompt::{PromptRun, Question};
 use super::session::neighbor_session;
 use super::session::{pick, split_target};
 use crate::config::Config;
 use crate::ipc;
 use crate::layout::Direction;
 use crate::protocol::{LayoutPreset, NewWindowOpts, Side, SpawnOpts, SplitOpts, VarKind};
+use std::collections::VecDeque;
+use std::io::Write;
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 /// Client calls that need only the active window.
@@ -29,38 +32,32 @@ enum Simple {
     SpreadLayout,
 }
 
-/// Commands that change which pane or window is shown; they drop zoom.
-fn clears_zoom(cmd: &Command) -> bool {
-    !matches!(
-        cmd,
-        Command::Zoom
-            | Command::CopyMode
-            | Command::OpenTree
-            | Command::OpenHelp
-            | Command::CommandPrompt { .. }
-            | Command::Confirm { .. }
-            | Command::SendKeys { .. }
-            | Command::Paste { .. }
-            | Command::ResizePane { .. }
-            | Command::Detach
-            | Command::KillServer
-            | Command::SendPrefix
-            | Command::ReloadConfig
-            | Command::DisplayPanes { .. }
-            | Command::ClockMode { .. }
-            | Command::ShowMessages
-            | Command::ListBuffers
-            | Command::ChooseBuffer
-            | Command::SuspendClient
-    )
-}
-
 /// Commands that destroy something interactively need a `y` first.
 fn needs_confirm(cmd: &Command) -> Option<String> {
     match cmd {
         Command::KillWindow { index: None } => Some("kill-window? (y/n)".to_string()),
         _ => None,
     }
+}
+
+/// Pipes `text` to the shell `command` (`copy-pipe`). Its output is discarded and the TUI does not
+/// wait for it: the text is written and the child reaped on a thread of its own.
+fn pipe_text(command: &str, text: &str) {
+    let spawned = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(command)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+    let Ok(mut child) = spawned else { return };
+    let text = text.to_string();
+    std::thread::spawn(move || {
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(text.as_bytes());
+        }
+        let _ = child.wait();
+    });
 }
 
 impl App {
@@ -89,9 +86,6 @@ impl App {
 
     /// Runs a command without the interactive confirmation step (used once confirmed).
     pub async fn run(&mut self, cmd: Command) -> Flow {
-        if clears_zoom(&cmd) {
-            self.zoomed = None;
-        }
         let cmd = match self.run_windows(cmd).await {
             Ok(flow) => return flow,
             Err(cmd) => cmd,
@@ -147,6 +141,11 @@ impl App {
             Command::LastPane => self.simple(Simple::FocusLast).await,
             Command::ResizePane { side, cells } => self.resize(side, cells).await,
             Command::SendKeys { target, keys } => self.send_keys(target, keys).await,
+            Command::CopyCommand {
+                target,
+                action,
+                count,
+            } => self.copy_command(target, action, count).await,
             Command::Paste {
                 target,
                 text,
@@ -166,16 +165,15 @@ impl App {
             Command::PrevSession => self.step_session(false).await,
             Command::KillServer => self.kill_server().await,
             Command::ReloadConfig => self.reload_config().await,
-            Command::Bind { root, key, line } => self.bind_key(root, &key, &line).await,
+            Command::Bind { table, key, line } => self.bind_key(table, &key, &line).await,
             Command::RefreshRuntime => {
                 self.apply_runtime().await;
                 Flow::Continue
             }
             Command::Tmux { words } => self.run_tmux(&words).await,
             Command::Sequence(commands) => Box::pin(self.run_sequence(commands)).await,
-            Command::Zoom => self.toggle_zoom(),
-            Command::CopyMode => self.enter_copy().await,
-            Command::CopyModePageUp => self.enter_copy_page_up().await,
+            Command::Zoom => self.toggle_zoom().await,
+            Command::CopyMode(opts) => self.copy_mode_cmd(opts).await,
             Command::Detach => Flow::Quit,
             Command::RenameSession { name } => {
                 let result = self.client.rename_session(&name).await;
@@ -187,7 +185,7 @@ impl App {
             Command::OpenTree => self.open_overlay(Overlay::tree()).await,
             Command::OpenHelp => self.open_help().await,
             Command::OpenPalette { tab } => self.open_palette(tab).await,
-            Command::CommandPrompt { initial } => self.open_prompt(&initial),
+            Command::CommandPrompt(spec) => self.open_prompt(spec),
             Command::Confirm { prompt, then } => self.ask(prompt, *then),
             Command::DisplayPanes { duration_ms } => self.open_panes(duration_ms),
             Command::ClockMode { target } => self.open_clock(target),
@@ -245,7 +243,8 @@ impl App {
         };
         for (name, line) in self.client.get_vars(VarKind::Binding).await.unwrap_or_default() {
             let (table, key) = name.split_once(':').unwrap_or(("prefix", &name));
-            if let Err(e) = keymap.bind(table == "root", key, &line) {
+            let table = keymap::Table::from_name(table).unwrap_or(keymap::Table::Prefix);
+            if let Err(e) = keymap.bind(table, key, &line) {
                 problems.push(e);
             }
         }
@@ -259,11 +258,11 @@ impl App {
 
     /// `bind-key` / `unbind-key`: changes this keymap and records the binding in the session, so
     /// terminals attaching later have it too.
-    async fn bind_key(&mut self, root: bool, key: &str, line: &str) -> Flow {
-        if let Err(e) = self.keymap.bind(root, key, line) {
+    async fn bind_key(&mut self, table: keymap::Table, key: &str, line: &str) -> Flow {
+        if let Err(e) = self.keymap.bind(table, key, line) {
             return self.say(e);
         }
-        let name = format!("{}:{key}", if root { "root" } else { "prefix" });
+        let name = format!("{}:{key}", table.name());
         let result = self.client.set_var(VarKind::Binding, &name, Some(line)).await;
         self.settle(result)
     }
@@ -366,9 +365,39 @@ impl App {
         self.open_overlay(Overlay::palette(view)).await
     }
 
-    fn open_prompt(&mut self, initial: &str) -> Flow {
-        self.mode = Mode::Prompt(PromptState::new(initial));
+    /// `command-prompt`: one question per prompt, each starting with its initial text. The answers
+    /// fill the template and the result runs; without a template the typed line runs.
+    fn open_prompt(&mut self, spec: PromptSpec) -> Flow {
+        let questions = self.prompt_questions(&spec);
+        self.mode = Mode::Prompt(PromptRun::new(questions, spec.template, spec.single_key));
         Flow::Continue
+    }
+
+    /// The questions a `command-prompt` asks, with formats expanded when `-F` is given.
+    fn prompt_questions(&self, spec: &PromptSpec) -> VecDeque<Question> {
+        let fmt = |text: &str| {
+            if spec.expand {
+                super::frame::expand_active(self, text)
+            } else {
+                text.to_string()
+            }
+        };
+        let default_label = if spec.template.is_some() {
+            "(command) "
+        } else {
+            ":"
+        };
+        (0..spec.prompts.len().max(1))
+            .map(|i| {
+                let label = spec.prompts.get(i).or(spec.prompts.last());
+                Question {
+                    label: fmt(label.map_or(default_label, String::as_str)),
+                    initial: fmt(spec.initial.get(i).map_or("", String::as_str)),
+                    kind: spec.kind,
+                    numeric: spec.numeric,
+                }
+            })
+            .collect()
     }
 
     fn ask(&mut self, prompt: String, then: Command) -> Flow {
@@ -386,10 +415,7 @@ impl App {
 
     async fn simple(&mut self, op: Simple) -> Flow {
         let result = match op {
-            Simple::NextWindow => {
-                self.zoomed = None;
-                self.client.next_window().await
-            }
+            Simple::NextWindow => self.client.next_window().await,
             Simple::PrevWindow => self.client.prev_window().await,
             Simple::LastWindow => self.client.last_window().await,
             Simple::SelectWindow(index) => self.client.select_window(index).await,
@@ -571,36 +597,162 @@ impl App {
         self.settle(result)
     }
 
-    fn toggle_zoom(&mut self) -> Flow {
-        if self.zoomed.is_some() {
-            self.zoomed = None;
-        } else if !self.active_pane.is_empty() {
-            self.zoomed = Some(self.active_pane.clone());
-        }
-        Flow::Continue
+    /// `resize-pane -Z`: the daemon zooms or unzooms the active window.
+    async fn toggle_zoom(&mut self) -> Flow {
+        let result = self.client.zoom(None, None).await;
+        self.settle(result)
     }
 
-    async fn enter_copy(&mut self) -> Flow {
-        if self.active_pane.is_empty() {
+    /// `copy-mode [-equ] [-t pane]`. A pane that is not focused gets its copy state parked, so
+    /// focus does not move. A pane already in copy mode stays so (`-u` still pages up).
+    async fn copy_mode_cmd(&mut self, o: CopyModeOpts) -> Flow {
+        let raw = o.target.clone().unwrap_or_else(|| self.active_pane.clone());
+        let (_, name) = split_target(&raw);
+        let name = name.to_string();
+        if name.is_empty() {
             return self.say("no active pane");
         }
-        self.load_scrollback(&self.active_pane.clone()).await;
-        let cs = CopyState::enter(self.active_vt().map(|vt| vt.grid()));
-        self.parked_copy.remove(&self.active_pane);
-        self.mode = Mode::Copy(cs);
+        if !self.panes.iter().any(|(pane, ..)| *pane == name) {
+            return self.say(format!("no pane {raw}"));
+        }
+        if o.quit {
+            if self.in_copy_mode(&name) {
+                if name == self.active_pane {
+                    self.mode = Mode::Normal;
+                }
+                self.parked_copy.remove(&name);
+                self.release_scrollback(&name);
+            }
+            return Flow::Continue;
+        }
+        let page_up = CopyAction::Move {
+            motion: Motion::PageUp,
+            cancel_at_bottom: false,
+        };
+        if self.in_copy_mode(&name) {
+            return if o.page_up {
+                self.run_copy(&name, &page_up, 1).await
+            } else {
+                Flow::Continue
+            };
+        }
+        self.load_scrollback(&name).await;
+        let mut cs = CopyState::enter(self.vt.get(&name).map(|vt| vt.grid()));
+        cs.wheel_exit = o.exit_at_bottom;
+        if name == self.active_pane {
+            self.mode = Mode::Copy(cs);
+        } else {
+            self.parked_copy.insert(name.clone(), cs);
+        }
+        if o.page_up {
+            return self.run_copy(&name, &page_up, 1).await;
+        }
         Flow::Continue
     }
 
-    async fn enter_copy_page_up(&mut self) -> Flow {
-        self.enter_copy().await;
-        let Mode::Copy(cs) = std::mem::replace(&mut self.mode, Mode::Normal) else {
-            return Flow::Continue;
+    /// Whether pane `name` is in copy mode in this terminal: focused in it, or parked.
+    pub fn in_copy_mode(&self, name: &str) -> bool {
+        (name == self.active_pane && matches!(self.mode, Mode::Copy(_)))
+            || self.parked_copy.contains_key(name)
+    }
+
+    /// `send-keys -X`: a copy-mode command in the copy mode of `target`, the active pane when
+    /// `None`. Nothing happens in a terminal that does not have that pane in copy mode.
+    async fn copy_command(
+        &mut self,
+        target: Option<String>,
+        action: CopyAction,
+        count: usize,
+    ) -> Flow {
+        let raw = target.unwrap_or_else(|| self.active_pane.clone());
+        let (_, name) = split_target(&raw);
+        let name = name.to_string();
+        self.run_copy(&name, &action, count).await
+    }
+
+    /// Runs `action` `count` times in the copy mode of pane `name`, stopping at the first outcome
+    /// that is not a plain move.
+    async fn run_copy(&mut self, name: &str, action: &CopyAction, count: usize) -> Flow {
+        let active = name == self.active_pane;
+        let mut cs = if active {
+            match std::mem::replace(&mut self.mode, Mode::Normal) {
+                Mode::Copy(cs) => cs,
+                other => {
+                    self.mode = other;
+                    return Flow::Continue;
+                }
+            }
+        } else {
+            match self.parked_copy.remove(name) {
+                Some(cs) => cs,
+                None => return Flow::Continue,
+            }
         };
-        let page_up = crossterm::event::KeyEvent::new(
-            crossterm::event::KeyCode::PageUp,
-            crossterm::event::KeyModifiers::NONE,
-        );
-        self.copy_key(cs, page_up).await
+        let size = self.copy_pane_size(name);
+        let grid = self.vt.get(name).map(|vt| vt.grid());
+        let mut outcome = CopyOutcome::Stay;
+        for _ in 0..count.max(1) {
+            outcome = apply_action(&mut cs, action, grid, size);
+            if outcome != CopyOutcome::Stay {
+                break;
+            }
+        }
+        self.apply_copy_outcome(name, active, cs, outcome);
+        Flow::Continue
+    }
+
+    /// The size of pane `name` in cells, which copy-mode motions are clamped to.
+    fn copy_pane_size(&self, name: &str) -> (u16, u16) {
+        match self.active_rect {
+            Some(rect) if name == self.active_pane => (rect.width, rect.height),
+            _ => self.pane_dims.get(name).copied().unwrap_or((80, 24)),
+        }
+    }
+
+    /// Carries out what a copy-mode command decided for pane `name` and puts its copy state back:
+    /// `active` says whether the pane is the focused one, else its state is parked.
+    pub fn apply_copy_outcome(
+        &mut self,
+        name: &str,
+        active: bool,
+        cs: CopyState,
+        outcome: CopyOutcome,
+    ) {
+        let (text, pipe, exit) = match outcome {
+            CopyOutcome::Stay => (None, None, false),
+            CopyOutcome::Exit => (None, None, true),
+            CopyOutcome::Yank(text) => (Some(text), None, true),
+            CopyOutcome::Copy(text) => (Some(text), None, false),
+            CopyOutcome::Pipe {
+                text,
+                command,
+                exit,
+            } => (Some(text), Some(command), exit),
+            CopyOutcome::SearchFailed(query) => {
+                self.say(format!("Pattern not found: {query}"));
+                (None, None, false)
+            }
+        };
+        if let Some(text) = &text {
+            if self.config.set_clipboard {
+                self.clipboard.copy(text);
+            }
+            self.yanks.push(text.clone());
+            self.last_copy = Some(text.clone());
+        }
+        if let (Some(command), Some(text)) = (pipe, &text) {
+            pipe_text(&command, text);
+        }
+        if exit {
+            if active {
+                self.mode = Mode::Normal;
+            }
+            self.release_scrollback(name);
+        } else if active {
+            self.mode = Mode::Copy(cs);
+        } else {
+            self.parked_copy.insert(name.to_string(), cs);
+        }
     }
 
     async fn kill_server(&mut self) -> Flow {

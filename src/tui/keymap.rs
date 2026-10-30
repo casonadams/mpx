@@ -1,11 +1,13 @@
-//! Prefix-key table: default bindings, config overrides and the resolved keymap.
+//! Key tables: default bindings, config overrides, runtime bindings and the resolved keymap.
 use std::collections::BTreeMap;
+use std::sync::LazyLock;
 
 use crossterm::event::KeyEvent;
 
 use super::command::{Command, parse};
+use super::copy::CopyAction;
 use super::overlay::HelpEntry;
-use crate::config::Config;
+use crate::config::{Config, ModeKeys};
 use crate::keys::KeySpec;
 
 /// Bindings typed after the prefix: key (tmux notation) -> command line.
@@ -14,7 +16,7 @@ const DEFAULT_BINDINGS: &[(&str, &str)] = &[
     ("n", "next-window"),
     ("p", "previous-window"),
     ("^", "last-window"),
-    (",", "command-prompt -I 'rename-window '"),
+    (",", "command-prompt -F -I \"#W\" \"rename-window -- '%%'\""),
     ("&", "kill-window"),
     ("%", "split-window -h"),
     ("|", "split-window -h"),
@@ -80,9 +82,15 @@ const DEFAULT_BINDINGS: &[(&str, &str)] = &[
     ("?", "palette help"),
     ("s", "palette sessions"),
     ("w", "palette sessions"),
-    ("$", "command-prompt -I 'rename-session '"),
-    (".", "command-prompt -I 'move-window -t '"),
-    ("'", "command-prompt -I 'select-window -t '"),
+    (
+        "$",
+        "command-prompt -F -I \"#S\" \"rename-session -- '%%'\"",
+    ),
+    (".", "command-prompt \"move-window -t '%%'\""),
+    (
+        "'",
+        "command-prompt -T window-target -p index \"select-window -t ':%%'\"",
+    ),
     ("(", "prev-session"),
     (")", "next-session"),
     ("C-Space", "palette"),
@@ -91,6 +99,74 @@ const DEFAULT_BINDINGS: &[(&str, &str)] = &[
 /// Bindings for keys pressed without the prefix: they never reach the pane.
 const ROOT_BINDINGS: &[(&str, &str)] = &[
     ("C-Space", "palette"),
+];
+
+/// The copy-mode table of `mode-keys vi`: a `send-keys -X` command per key. mpx keeps its own
+/// behavior for `w`, `b`, `y`, `Enter` and `Escape` (see `docs/KEYBINDINGS.md`).
+const COPY_VI_BINDINGS: &[(&str, &str)] = &[
+    ("h", "send-keys -X cursor-left"),
+    ("Left", "send-keys -X cursor-left"),
+    ("j", "send-keys -X cursor-down"),
+    ("Down", "send-keys -X cursor-down"),
+    ("k", "send-keys -X cursor-up"),
+    ("Up", "send-keys -X cursor-up"),
+    ("l", "send-keys -X cursor-right"),
+    ("Right", "send-keys -X cursor-right"),
+    ("0", "send-keys -X start-of-line"),
+    ("^", "send-keys -X start-of-line"),
+    ("$", "send-keys -X end-of-line"),
+    ("w", "send-keys -X forward-four-columns"),
+    ("b", "send-keys -X back-four-columns"),
+    ("C-u", "send-keys -X page-up"),
+    ("C-d", "send-keys -X page-down"),
+    ("PageUp", "send-keys -X page-up"),
+    ("PageDown", "send-keys -X page-down"),
+    ("g", "send-keys -X history-top"),
+    ("G", "send-keys -X history-bottom"),
+    ("?", "send-keys -X search-prompt-backward"),
+    ("/", "send-keys -X search-prompt-forward"),
+    ("n", "send-keys -X search-again"),
+    ("N", "send-keys -X search-reverse"),
+    ("v", "send-keys -X toggle-selection"),
+    ("V", "send-keys -X toggle-line-selection"),
+    ("C-v", "send-keys -X rectangle-toggle"),
+    ("y", "send-keys -X copy-selection-or-line-and-cancel"),
+    ("Enter", "send-keys -X copy-selection-or-line-and-cancel"),
+    ("Escape", "send-keys -X clear-selection-or-cancel"),
+    ("q", "send-keys -X cancel"),
+];
+
+/// The copy-mode table of `mode-keys emacs`.
+const COPY_EMACS_BINDINGS: &[(&str, &str)] = &[
+    ("C-b", "send-keys -X cursor-left"),
+    ("Left", "send-keys -X cursor-left"),
+    ("C-f", "send-keys -X cursor-right"),
+    ("Right", "send-keys -X cursor-right"),
+    ("C-p", "send-keys -X cursor-up"),
+    ("Up", "send-keys -X cursor-up"),
+    ("C-n", "send-keys -X cursor-down"),
+    ("Down", "send-keys -X cursor-down"),
+    ("M-b", "send-keys -X back-four-columns"),
+    ("M-f", "send-keys -X forward-four-columns"),
+    ("C-a", "send-keys -X start-of-line"),
+    ("Home", "send-keys -X start-of-line"),
+    ("C-e", "send-keys -X end-of-line"),
+    ("End", "send-keys -X end-of-line"),
+    ("C-v", "send-keys -X page-down"),
+    ("PageDown", "send-keys -X page-down"),
+    ("M-v", "send-keys -X page-up"),
+    ("PageUp", "send-keys -X page-up"),
+    ("M-<", "send-keys -X history-top"),
+    ("M->", "send-keys -X history-bottom"),
+    ("C-Space", "send-keys -X toggle-selection"),
+    ("C-w", "send-keys -X copy-selection-and-cancel"),
+    ("M-w", "send-keys -X copy-selection-and-cancel"),
+    ("Enter", "send-keys -X copy-selection-if-any"),
+    ("C-g", "send-keys -X cancel"),
+    ("Escape", "send-keys -X cancel"),
+    ("q", "send-keys -X cancel"),
+    ("C-s", "send-keys -X search-prompt-forward"),
+    ("C-r", "send-keys -X search-prompt-backward"),
 ];
 
 /// What macOS terminals send for Option-j and Option-k (US and ABC layouts) unless Option is set
@@ -117,11 +193,37 @@ pub struct Binding {
     pub command: Command,
 }
 
-/// Where a key is looked up: typed after the prefix, or without it (tmux's root table).
+/// A key table: the prefix table, the root table (keys without the prefix), or one of the two
+/// copy-mode tables (`copy-mode-vi` for `mode-keys vi`, `copy-mode` for `mode-keys emacs`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Table {
     Prefix,
     Root,
+    CopyVi,
+    CopyEmacs,
+}
+
+impl Table {
+    /// tmux's name for the table, as `bind-key -T` and `list-keys -T` spell it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Prefix => "prefix",
+            Self::Root => "root",
+            Self::CopyVi => "copy-mode-vi",
+            Self::CopyEmacs => "copy-mode",
+        }
+    }
+
+    /// The table `name` names, or `None` for an unknown name.
+    pub fn from_name(name: &str) -> Option<Self> {
+        [Self::Prefix, Self::Root, Self::CopyVi, Self::CopyEmacs]
+            .into_iter()
+            .find(|table| table.name() == name)
+    }
+
+    pub fn is_copy(self) -> bool {
+        matches!(self, Self::CopyVi | Self::CopyEmacs)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -130,6 +232,10 @@ pub struct Keymap {
     bindings: Vec<Binding>,
     /// Keys bound without the prefix.
     root: Vec<Binding>,
+    /// Copy-mode keys of `mode-keys vi`.
+    copy_vi: Vec<Binding>,
+    /// Copy-mode keys of `mode-keys emacs`.
+    copy_emacs: Vec<Binding>,
 }
 
 impl Keymap {
@@ -143,19 +249,36 @@ impl Keymap {
 
     /// The binding of `ev` in `table`, if it has one.
     pub fn lookup(&self, table: Table, ev: &KeyEvent) -> Option<&Binding> {
-        let bindings = match table {
-            Table::Prefix => &self.bindings,
-            Table::Root => &self.root,
-        };
-        bindings.iter().find(|b| b.key.matches(ev))
+        self.rows(table).iter().find(|b| b.key.matches(ev))
     }
 
-    /// Binds `key` (tmux notation) to `line` in the root table when `root`, else after the prefix,
-    /// replacing an earlier binding of the key; an empty `line` removes it. The prefix key itself
-    /// stays bound to `send-prefix`.
-    pub fn bind(&mut self, root: bool, key: &str, line: &str) -> Result<(), String> {
+    fn rows(&self, table: Table) -> &[Binding] {
+        match table {
+            Table::Prefix => &self.bindings,
+            Table::Root => &self.root,
+            Table::CopyVi => &self.copy_vi,
+            Table::CopyEmacs => &self.copy_emacs,
+        }
+    }
+
+    /// The copy-mode command `ev` runs in the table `keys` selects (`mode-keys`), if any.
+    pub fn copy_action(&self, keys: ModeKeys, ev: &KeyEvent) -> Option<CopyAction> {
+        let table = match keys {
+            ModeKeys::Vi => Table::CopyVi,
+            ModeKeys::Emacs => Table::CopyEmacs,
+        };
+        match &self.lookup(table, ev)?.command {
+            Command::CopyCommand { action, .. } => Some(action.clone()),
+            _ => None,
+        }
+    }
+
+    /// Binds `key` (tmux notation) to `line` in `table`, replacing an earlier binding of the key;
+    /// an empty `line` removes it. The prefix key itself stays bound to `send-prefix`. The copy
+    /// tables take only `send-keys -X` commands.
+    pub fn bind(&mut self, table: Table, key: &str, line: &str) -> Result<(), String> {
         let spec = parse_key(key)?;
-        if !root && spec == self.prefix {
+        if table == Table::Prefix && spec == self.prefix {
             return Err(format!("{key} is the prefix key"));
         }
         let new = if line.trim().is_empty() {
@@ -163,23 +286,33 @@ impl Keymap {
         } else {
             Some(binding(spec, line.to_string())?)
         };
-        let table = if root { &mut self.root } else { &mut self.bindings };
-        table.retain(|b| b.key != spec);
-        table.extend(new);
+        if let Some(b) = &new
+            && table.is_copy()
+            && !matches!(b.command, Command::CopyCommand { .. })
+        {
+            return Err(format!("{}: only send-keys -X commands can be bound", table.name()));
+        }
+        let rows = match table {
+            Table::Prefix => &mut self.bindings,
+            Table::Root => &mut self.root,
+            Table::CopyVi => &mut self.copy_vi,
+            Table::CopyEmacs => &mut self.copy_emacs,
+        };
+        rows.retain(|b| b.key != spec);
+        rows.extend(new);
         Ok(())
     }
 
-    /// Every binding as (root table, key in tmux notation, command line).
-    pub fn entries(&self) -> Vec<(bool, String, String)> {
-        let rows = |root: bool, table: &Vec<Binding>| {
-            table
-                .iter()
-                .map(|b| (root, b.key.display(), b.source.clone()))
-                .collect::<Vec<_>>()
-        };
-        let mut all = rows(false, &self.bindings);
-        all.extend(rows(true, &self.root));
-        all
+    /// Every binding as (table, key in tmux notation, command line).
+    pub fn entries(&self) -> Vec<(Table, String, String)> {
+        [Table::Prefix, Table::Root, Table::CopyVi, Table::CopyEmacs]
+            .into_iter()
+            .flat_map(|table| {
+                self.rows(table)
+                    .iter()
+                    .map(move |b| (table, b.key.display(), b.source.clone()))
+            })
+            .collect()
     }
 
     pub fn bindings(&self) -> &[Binding] {
@@ -214,11 +347,25 @@ pub fn resolve(config: &Config) -> Result<Keymap, String> {
         .into_iter()
         .map(|(key, line)| binding(key, line))
         .collect::<Result<_, _>>()?;
+    let copy = |rows: &[(&str, &str)]| -> Result<Vec<Binding>, String> {
+        rows.iter()
+            .map(|(key, line)| binding(parse_key(key)?, line.to_string()))
+            .collect()
+    };
     Ok(Keymap {
         prefix,
         bindings,
         root,
+        copy_vi: copy(COPY_VI_BINDINGS)?,
+        copy_emacs: copy(COPY_EMACS_BINDINGS)?,
     })
+}
+
+/// The copy-mode command `ev` runs with the default table of `keys`, without any user binding.
+pub fn default_copy_action(keys: ModeKeys, ev: &KeyEvent) -> Option<CopyAction> {
+    static DEFAULTS: LazyLock<Keymap> =
+        LazyLock::new(|| resolve(&Config::default()).expect("default key tables resolve"));
+    DEFAULTS.copy_action(keys, ev)
 }
 
 /// `defaults` with `overrides` replacing or adding keys; an empty command line unbinds a key.

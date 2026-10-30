@@ -270,3 +270,53 @@ fn session_vars_expose_session_context() {
     );
     assert_eq!(expand("#{session_id}|#{window_zoomed_flag}", &v), "|");
 }
+
+#[test]
+fn zoom_is_a_z_flag_after_the_active_flag_and_its_own_variable() {
+    let tabs = vec![WindowTab {
+        is_active: true,
+        zoomed: true,
+        has_marked: true,
+        ..tab(1)
+    }];
+    let vars = pane_vars(&pane_view("dev", 0, &node("p", 1), &[], &tabs));
+    assert_eq!(
+        expand("#{window_flags}|#{window_zoomed_flag}", &vars),
+        "*ZM|1"
+    );
+    let unzoomed = vec![WindowTab {
+        is_active: true,
+        ..tab(1)
+    }];
+    let vars = pane_vars(&pane_view("dev", 0, &node("p", 1), &[], &unzoomed));
+    assert_eq!(
+        expand("#{window_flags}|#{window_zoomed_flag}", &vars),
+        "*|0"
+    );
+}
+
+#[test]
+fn pane_active_is_each_windows_focused_pane() {
+    let tabs = vec![
+        WindowTab {
+            focused: Some("p".into()),
+            ..tab(0)
+        },
+        WindowTab {
+            is_active: true,
+            focused: Some("q".into()),
+            ..tab(1)
+        },
+    ];
+    let active = |name: &str, window: usize| {
+        let vars = pane_vars(&pane_view("dev", 0, &node(name, window), &[], &tabs));
+        expand("#{pane_active}", &vars)
+    };
+    assert_eq!(
+        active("p", 0),
+        "1",
+        "the focused pane of an inactive window"
+    );
+    assert_eq!(active("q", 1), "1");
+    assert_eq!(active("x", 1), "0");
+}

@@ -6,11 +6,15 @@ use uuid::Uuid;
 
 use super::args::{Invocation, is_noop, parse};
 use super::format::{PaneView, expand, pane_vars, session_vars};
-use super::shell;
+use super::shell::{self, command_line};
 use crate::client::Client;
+use crate::config::BorderStyle;
 use crate::ipc;
 use crate::layout::{Rect, WindowTab};
-use crate::protocol::{LayoutPreset, NewWindowOpts, NodeInfo, Side, SpawnOpts, SplitOpts};
+use crate::protocol::{
+    LayoutPreset, NewWindowOpts, NodeInfo, PopupAnchor, PopupExit, PopupOpts, PopupSize, PopupSpec,
+    Side, SpawnOpts, SplitOpts,
+};
 use crate::store;
 
 const VERSION: &str = "tmux 3.4\n";
@@ -51,6 +55,17 @@ impl EnvTarget {
 
 /// Multicall entry point. Returns the process exit code and prints tmux-style output.
 pub async fn run(argv: Vec<String>) -> i32 {
+    if let Ok(inv) = parse(&argv)
+        && inv.command == "display-popup"
+    {
+        return match popup_cli(&inv).await {
+            Ok(code) => code,
+            Err(e) => {
+                eprintln!("tmux: {e}");
+                1
+            }
+        };
+    }
     match execute(&argv, None).await {
         Ok(out) => {
             print!("{out}");
@@ -435,8 +450,17 @@ impl Shim {
     /// from `base-index`; `@N` is the daemon's own index (what `#{window_id}` shows).
     pub(super) async fn window_of(&mut self, target: &str) -> Result<usize, String> {
         let not_found = || format!("can't find window: {target}");
-        let number = window_key(target).ok_or_else(not_found)?;
         let last = target.rsplit(':').next().unwrap_or(target);
+        let Some(number) = window_key(target) else {
+            // A window name (`select-window -t ':name'`) is the daemon index of its tab.
+            let (w, h) = terminal_view();
+            let (_, _, tabs) = self.client.layout(w, h).await?;
+            return tabs
+                .iter()
+                .find(|t| t.name == last)
+                .map(|t| t.index)
+                .ok_or_else(not_found);
+        };
         if last.starts_with('@') {
             return Ok(number);
         }
@@ -533,6 +557,146 @@ pub fn spawn_opts(inv: &Invocation) -> SpawnOpts {
     }
 }
 
+/// Size of a popup along one axis: cells, or `N%` of the terminal (tmux `-w`, `-h`). Default 50%.
+fn popup_size(value: Option<&str>) -> Result<PopupSize, String> {
+    let Some(text) = value else {
+        return Ok(PopupSize::Percent(50));
+    };
+    let bad = || format!("display-popup: bad size '{text}'");
+    match text.strip_suffix('%') {
+        Some(percent) => percent
+            .parse::<u8>()
+            .ok()
+            .filter(|p| (1..=100).contains(p))
+            .map(PopupSize::Percent)
+            .ok_or_else(bad),
+        None => text
+            .parse::<u16>()
+            .ok()
+            .filter(|n| *n > 0)
+            .map(PopupSize::Cells)
+            .ok_or_else(bad),
+    }
+}
+
+/// Position of a popup along one axis (tmux `-x`, `-y`): `start` and `end` name the edges of that
+/// axis. Default centred.
+fn popup_anchor(value: Option<&str>, start: &str, end: &str) -> Result<PopupAnchor, String> {
+    let Some(text) = value else {
+        return Ok(PopupAnchor::Centre);
+    };
+    match text {
+        "C" => Ok(PopupAnchor::Centre),
+        "P" => Ok(PopupAnchor::Pane),
+        "W" => Ok(PopupAnchor::Start),
+        t if t == start => Ok(PopupAnchor::Start),
+        t if t == end => Ok(PopupAnchor::End),
+        t => t
+            .parse::<u16>()
+            .map(PopupAnchor::Cells)
+            .map_err(|_| format!("display-popup: bad position '{t}'")),
+    }
+}
+
+/// Border of a popup (tmux `-B`, `-b`): whether it has one, and its line style.
+fn popup_border(inv: &Invocation) -> Result<(bool, Option<BorderStyle>), String> {
+    let lines = match inv.value('b') {
+        None => None,
+        Some("single") => Some(BorderStyle::Single),
+        Some("double") => Some(BorderStyle::Double),
+        Some("rounded") => Some(BorderStyle::Rounded),
+        Some("simple") => Some(BorderStyle::Ascii),
+        Some("none") => return Ok((false, None)),
+        Some(other) => {
+            return Err(format!(
+                "display-popup: border-lines '{other}' is not supported"
+            ));
+        }
+    };
+    Ok((!inv.has('B'), lines))
+}
+
+/// The colour from a `-S` border style (`fg=...`). Other items of the style are not used.
+fn popup_border_color(value: Option<&str>) -> Option<String> {
+    value?
+        .split(',')
+        .map(str::trim)
+        .find_map(|item| item.strip_prefix("fg="))
+        .map(str::to_string)
+}
+
+/// The popup a `display-popup` command line asks for: its program (the trailing operands, through
+/// `sh -c`), size, position, border and exit rule. `wait` makes the request answer only once the
+/// popup has closed.
+pub fn popup_opts(inv: &Invocation, wait: bool) -> Result<PopupOpts, String> {
+    let mut env = Vec::new();
+    for pair in inv.lists.get(&'e').into_iter().flatten() {
+        let (name, value) = pair
+            .split_once('=')
+            .ok_or_else(|| format!("display-popup: -e needs VAR=val, got '{pair}'"))?;
+        env.push((name.to_string(), value.to_string()));
+    }
+    let (border, lines) = popup_border(inv)?;
+    let mut argv = command_argv(inv).into_iter();
+    let exit = match inv.counts.get(&'E').copied().unwrap_or(0) {
+        0 => PopupExit::Stay,
+        1 => PopupExit::Close,
+        _ => PopupExit::CloseOnSuccess,
+    };
+    Ok(PopupOpts {
+        spawn: SpawnOpts {
+            name: String::new(),
+            command: argv.next().unwrap_or_default(),
+            args: argv.collect(),
+            pty: true,
+            cwd: inv.value('d').map(str::to_string),
+            env,
+            remain_on_exit: None,
+            tmux_compat: true,
+        },
+        spec: PopupSpec {
+            width: popup_size(inv.value('w'))?,
+            height: popup_size(inv.value('h'))?,
+            x: popup_anchor(inv.value('x'), "L", "R")?,
+            y: popup_anchor(inv.value('y'), "T", "B")?,
+            border,
+            lines,
+            border_color: popup_border_color(inv.value('S')),
+        },
+        exit,
+        wait,
+    })
+}
+
+/// `tmux display-popup` from a script: with -E or -EE the call blocks until the popup closes and
+/// exits with the program's status (1 when there is none, e.g. the popup was closed with -C).
+async fn popup_cli(inv: &Invocation) -> Result<i32, String> {
+    let env = EnvTarget::for_invocation(inv);
+    let mut client = Client::connect(&env.endpoint)
+        .await
+        .map_err(|_| format!("no server running on {}", env.endpoint))?;
+    if inv.has('C') {
+        client.close_popup().await?;
+        return Ok(0);
+    }
+    let wait = inv.has('E');
+    let status = client.popup(popup_opts(inv, wait)?).await?;
+    Ok(if wait { status.unwrap_or(1) } else { 0 })
+}
+
+impl Shim {
+    /// `display-popup` from a command line run inside mpx (the prompt, hooks, `if-shell`): the popup
+    /// opens and the call returns at once. Only the script's own call blocks (`popup_cli`).
+    pub(super) async fn display_popup(&mut self, inv: &Invocation) -> Result<String, String> {
+        if inv.has('C') {
+            self.client.close_popup().await?;
+        } else {
+            self.client.popup(popup_opts(inv, false)?).await?;
+        }
+        Ok(String::new())
+    }
+}
+
 fn terminal_view() -> (u16, u16) {
     crossterm::terminal::size().unwrap_or(DEFAULT_VIEW)
 }
@@ -567,6 +731,10 @@ impl Shim {
             let slot = next_in_window.entry(view.window).or_default();
             view.index = *slot;
             *slot += 1;
+        }
+        let modes = self.client.pane_modes().await?;
+        for (view, node) in views.iter_mut().zip(&nodes) {
+            view.in_mode = modes.contains(&node.name);
         }
         let window_base = self.number_option("base-index").await?;
         let pane_base = self.number_option("pane-base-index").await?;
@@ -621,10 +789,13 @@ impl Shim {
             "new-window" => self.new_window(inv, true).await,
             "new-session" => self.new_window(inv, false).await,
             "send-keys" => self.send_keys(inv).await,
+            "copy-mode" => self.copy_mode(inv).await,
+            "choose-tree" | "choose-buffer" | "choose-client" => self.choose(inv).await,
             "capture-pane" => self.capture_pane(inv).await,
             "list-panes" => self.list_panes(inv).await,
             "list-windows" => self.list_windows(inv).await,
             "display-message" => self.display_message(inv).await,
+            "display-popup" => self.display_popup(inv).await,
             "kill-pane" => self.kill_pane(inv).await,
             "kill-window" => self.kill_window(inv).await,
             "kill-session" => self.client.shutdown().await.map(|_| String::new()),
@@ -638,7 +809,11 @@ impl Shim {
             "respawn-pane" => self.respawn_pane(inv).await,
             "respawn-window" => self.respawn_window(inv).await,
             "find-window" => self.find_window(inv).await,
-            "last-pane" => self.client.focus_last().await.map(|_| String::new()),
+            "last-pane" => self
+                .client
+                .focus_last_with(inv.has('Z'))
+                .await
+                .map(|_| String::new()),
             "last-window" => self.client.last_window().await.map(|_| String::new()),
             "rename-window" => self.rename_window(inv).await,
             "rename-session" => self.rename_session(inv).await,
@@ -647,6 +822,7 @@ impl Shim {
             "next-window" => self.client.next_window().await.map(|_| String::new()),
             "previous-window" => self.client.prev_window().await.map(|_| String::new()),
             "detach-client" => self.detach_client().await,
+            "command-prompt" | "confirm-before" => self.client_prompt(inv).await,
             "switch-client" => self.switch_client(inv).await,
             "set-option" => self.set_option(inv).await,
             "show-options" => self.show_options(inv).await,
@@ -720,6 +896,12 @@ impl Shim {
 
     async fn send_keys(&mut self, inv: &Invocation) -> Result<String, String> {
         let node = self.resolve(inv.value('t')).await?;
+        if inv.has('X') {
+            return self.copy_command(inv, &node).await;
+        }
+        if inv.value('N').is_some() {
+            return Err("send-keys: -N needs -X".to_string());
+        }
         if inv.has('l') {
             self.client
                 .send_keys(&node.name, vec![inv.operands.concat()], true)
@@ -729,6 +911,29 @@ impl Shim {
                 .send_keys(&node.name, inv.operands.clone(), false)
                 .await?;
         }
+        Ok(String::new())
+    }
+
+    /// `send-keys -X command [args]`: a copy-mode command in the copy mode of the pane. A pane that
+    /// is not in a mode, or a command mpx does not support, is refused here, before it is sent.
+    async fn copy_command(&mut self, inv: &Invocation, node: &NodeInfo) -> Result<String, String> {
+        let mut words = vec![
+            "send-keys".to_string(),
+            "-t".to_string(),
+            node.name.clone(),
+            "-X".to_string(),
+        ];
+        if let Some(count) = inv.value('N') {
+            words.extend(["-N".to_string(), count.to_string()]);
+        }
+        words.extend(inv.operands.iter().cloned());
+        let line = command_line(&words);
+        crate::tui::command::parse(&line)?;
+        if !self.client.pane_modes().await?.contains(&node.name) {
+            return Err(format!("pane %{} not in a mode", node.id));
+        }
+        let seq = self.client.client_command(&line).await?;
+        self.client.wait_command(seq).await?;
         Ok(String::new())
     }
 
@@ -832,6 +1037,7 @@ impl Shim {
     }
 
     async fn select_pane(&mut self, inv: &Invocation) -> Result<String, String> {
+        let keep = inv.has('Z');
         if inv.has('M') {
             return self.client.mark_pane(None, true).await.map(|_| String::new());
         }
@@ -851,16 +1057,27 @@ impl Shim {
             let rects = self.layout().await?;
             let target = neighbor(&rects, &node.name, side)
                 .ok_or_else(|| "no pane in that direction".to_string())?;
-            return self.client.focus(&target).await.map(|_| String::new());
+            return self
+                .client
+                .focus_with(&target, keep)
+                .await
+                .map(|_| String::new());
         }
         if inv.has('l') {
-            return self.client.focus_last().await.map(|_| String::new());
+            return self
+                .client
+                .focus_last_with(keep)
+                .await
+                .map(|_| String::new());
         }
         if inv.value('T').is_some() {
             return Ok(String::new());
         }
         let node = self.resolve(inv.value('t')).await?;
-        self.client.focus(&node.name).await.map(|_| String::new())
+        self.client
+            .focus_with(&node.name, keep)
+            .await
+            .map(|_| String::new())
     }
 
     async fn select_window(&mut self, inv: &Invocation) -> Result<String, String> {
@@ -900,6 +1117,14 @@ impl Shim {
     }
 
     async fn resize_pane(&mut self, inv: &Invocation) -> Result<String, String> {
+        if inv.has('Z') {
+            let node = self.resolve(inv.value('t')).await?;
+            return self
+                .client
+                .zoom(Some(&node.name), None)
+                .await
+                .map(|_| String::new());
+        }
         let node = self.resolve(inv.value('t')).await?;
         if inv.value('x').is_some() || inv.value('y').is_some() {
             let view = self.pane_view_of(&node).await?;
@@ -930,6 +1155,7 @@ impl Shim {
     }
 
     async fn swap_pane(&mut self, inv: &Invocation) -> Result<String, String> {
+        let keep = inv.has('Z');
         let (w, h) = terminal_view();
         let (rects, _, tabs) = self.client.layout(w, h).await?;
         if inv.has('U') || inv.has('D') {
@@ -951,7 +1177,7 @@ impl Shim {
             }
             return self
                 .client
-                .swap_pane(&target.name, &names[other_idx])
+                .swap_pane_with(Some(&target.name), Some(&names[other_idx]), keep)
                 .await
                 .map(|_| String::new());
         }
@@ -971,7 +1197,7 @@ impl Shim {
             return Ok(String::new());
         }
         self.client
-            .swap_pane(&src, &dst)
+            .swap_pane_with(Some(&src), Some(&dst), keep)
             .await
             .map(|_| String::new())
     }
@@ -1148,10 +1374,11 @@ pub fn pane_view(
             path: node.cwd.clone().unwrap_or_default(),
             width,
             height,
-            active,
+            active: tab.map_or(active, |t| t.focused.as_deref() == Some(node.name.as_str())),
             dead: !node.is_running(),
             marked,
             marked_set,
+            in_mode: false,
             window,
             window_name: tab.map(|t| t.name.clone()).unwrap_or_default(),
             start_command: node.command.clone(),
@@ -1166,6 +1393,7 @@ pub fn pane_view(
             window_activity: tab.is_some_and(|t| t.has_activity),
             window_bell: tab.is_some_and(|t| t.has_bell),
             window_marked: tab.is_some_and(|t| t.has_marked),
+            window_zoomed: tab.is_some_and(|t| t.zoomed),
             window_synchronized: tab.is_some_and(|t| t.synchronized),
             session_windows: tabs.len(),
             ..Default::default()

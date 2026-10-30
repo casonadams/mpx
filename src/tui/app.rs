@@ -1,10 +1,11 @@
 use crossterm::event::{Event, KeyEvent, KeyEventKind, MouseEventKind};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::io::{BufWriter, Write, stdout};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{self, UnboundedReceiver, unbounded_channel};
 use tokio::task::JoinHandle;
+use uuid::Uuid;
 
 use super::canvas::Canvas;
 use super::command::Command;
@@ -13,7 +14,8 @@ use super::frame;
 use super::keymap::{self, Keymap};
 use super::overlay::Overlay;
 use super::panes::{BorderGrab, LayoutCache, PaneRect, resized_elsewhere, sync_dims};
-use super::prompt::PromptState;
+use super::popup::PopupView;
+use super::prompt::PromptRun;
 use super::render::copy_to_clipboard;
 use super::statusline::{self, Rows, Target};
 use super::status::{local_utc_offset, restored_notice, time_of_day};
@@ -45,7 +47,7 @@ pub enum Mode {
     Prefix,
     Copy(CopyState),
     Overlay(Overlay),
-    Prompt(PromptState),
+    Prompt(PromptRun),
     Confirm(String, Command),
     /// display-panes: pane numbers on screen until `until` (`None`: until a key is pressed).
     Panes {
@@ -55,6 +57,8 @@ pub enum Mode {
     Clock {
         pane: String,
     },
+    /// A popup (tmux `display-popup`) drawn over the panes until its program's pane closes.
+    Popup(PopupView),
 }
 
 /// Event-stream subscription for the attached session. Events tagged with an older
@@ -115,6 +119,10 @@ pub struct App {
     /// Copy-mode state of panes that are not in the foreground: a pane keeps its scroll position,
     /// cursor and selection while the prefix is pending or focus moves elsewhere.
     pub parked_copy: HashMap<String, CopyState>,
+    /// Names this terminal to the daemon, which keeps the pane modes it reports apart from others'.
+    pub terminal_id: u64,
+    /// Panes this terminal last told the daemon it has in copy mode.
+    pub reported_modes: BTreeSet<String>,
     pub vt: HashMap<String, VtScreen>,
     pub passthroughs: Vec<Vec<u8>>,
     pub pane_dims: HashMap<String, (u16, u16)>,
@@ -135,7 +143,6 @@ pub struct App {
     pub active_rect: Option<Rect>,
     pub marked_rect: Option<Rect>,
     pub focus_pane: Option<String>,
-    pub zoomed: Option<String>,
     pub split_counter: usize,
     /// Nodes of the attached session, refreshed every tick.
     pub nodes: Vec<NodeInfo>,
@@ -158,6 +165,8 @@ pub struct App {
     pub clipboard: Clipboard,
     /// What the terminal currently shows, so frames send only changed cells.
     pub canvas: Canvas,
+    /// The popup's border and program screen: drawn on their own canvas, over the panes.
+    pub popup_canvas: Canvas,
     pub last_copy: Option<String>,
     /// Text yanked while handling the current event, pushed to the session's paste buffers after it.
     pub yanks: Vec<String>,
@@ -256,6 +265,8 @@ impl App {
             press: None,
             border_drag: None,
             parked_copy: HashMap::new(),
+            terminal_id: Uuid::new_v4().as_u128() as u64,
+            reported_modes: BTreeSet::new(),
             vt: HashMap::new(),
             passthroughs: Vec::new(),
             pane_dims: HashMap::new(),
@@ -270,7 +281,6 @@ impl App {
             active_rect: None,
             marked_rect: None,
             focus_pane: None,
-            zoomed: None,
             split_counter: 1,
             nodes: Vec::new(),
             sub: Subscription {
@@ -287,6 +297,7 @@ impl App {
             fixed_size: size,
             clipboard: Clipboard::System,
             canvas: Canvas::default(),
+            popup_canvas: Canvas::default(),
             last_copy: None,
             yanks: Vec::new(),
             host_colors: super::render::HostColors::default(),
@@ -347,9 +358,22 @@ impl App {
             .unwrap_or_default();
         self.follow_focus(focused);
         let shown_before: Vec<String> = self.panes.iter().map(|(name, ..)| name.clone()).collect();
-        self.panes = match &self.zoomed {
-            Some(name) => vec![(name.clone(), Rect::new(0, rows.pane_top, w, rows.pane_h), true)],
-            None => self.layout.raw.clone(),
+        self.panes = if self.zoomed() {
+            // Zoomed: the focused pane alone fills the pane area.
+            self.layout
+                .raw
+                .iter()
+                .filter(|(.., focused)| *focused)
+                .map(|(name, ..)| {
+                    (
+                        name.clone(),
+                        Rect::new(0, rows.pane_top, w, rows.pane_h),
+                        true,
+                    )
+                })
+                .collect()
+        } else {
+            self.layout.raw.clone()
         };
         self.active_rect = self.panes.iter().find(|(.., f)| *f).map(|(_, r, _)| *r);
         let marked_name = self.layout.marked_pane();
@@ -364,6 +388,7 @@ impl App {
         // their terminals and rebuilding their screens waits for the release.
         if self.border_drag.is_none() {
             self.sync_pane_sizes().await;
+            self.sync_popup().await;
         }
         self.route_focus().await;
         true
@@ -417,6 +442,11 @@ impl App {
     /// Width and height of the area the panes are laid out in, right of the sidebar.
     pub fn pane_viewport(&self) -> (u16, u16) {
         self.viewport
+    }
+
+    /// Whether the active window is zoomed (the daemon's flag, as the layout reports it).
+    pub fn zoomed(&self) -> bool {
+        self.layout.tabs.iter().any(|t| t.is_active && t.zoomed)
     }
 
     pub fn modes_of(&self, name: &str) -> TermModes {
@@ -539,12 +569,20 @@ impl App {
     }
 
     /// Applies the events of the current subscription; a client command may end the session view.
+    /// Each client command is acknowledged once its copies and pane modes have reached the daemon,
+    /// so the shim that sent it can rely on them.
     async fn apply_batch(&mut self, batch: Vec<(u64, StreamEvent)>) -> Flow {
+        let mut acks = Vec::new();
         for (generation, event) in batch {
+            if let StreamEvent::ClientCommand { seq, .. } = &event
+                && *seq != 0
+            {
+                acks.push(*seq);
+            }
             if generation != self.sub.generation {
                 continue;
             }
-            if let StreamEvent::ClientCommand { line } = event {
+            if let StreamEvent::ClientCommand { line, .. } = event {
                 if matches!(self.run_line(&line).await, Flow::Quit) {
                     return Flow::Quit;
                 }
@@ -552,15 +590,42 @@ impl App {
                 self.layout.dirty = true;
             }
         }
+        self.after_input().await;
+        for seq in acks {
+            let _ = self.client.command_applied(seq).await;
+        }
         Flow::Continue
     }
 
     pub async fn on_event(&mut self, ev: Event) -> Flow {
         let flow = self.handle_event(ev).await;
+        self.after_input().await;
+        flow
+    }
+
+    /// Work that follows every input or stream batch: copies made reach the paste buffers, and the
+    /// daemon hears which panes this terminal has in copy mode.
+    async fn after_input(&mut self) {
         for text in std::mem::take(&mut self.yanks) {
             let _ = self.client.set_buffer(None, &text).await;
         }
-        flow
+        self.sync_pane_modes().await;
+    }
+
+    /// Tells the daemon which panes this terminal has in copy mode, so `pane_in_mode` is right.
+    async fn sync_pane_modes(&mut self) {
+        let mut now: BTreeSet<String> = self.parked_copy.keys().cloned().collect();
+        if matches!(self.mode, Mode::Copy(_)) && !self.active_pane.is_empty() {
+            now.insert(self.active_pane.clone());
+        }
+        let terminal = self.terminal_id;
+        for name in now.difference(&self.reported_modes) {
+            let _ = self.client.set_pane_mode(name, true, terminal).await;
+        }
+        for name in self.reported_modes.difference(&now) {
+            let _ = self.client.set_pane_mode(name, false, terminal).await;
+        }
+        self.reported_modes = now;
     }
 
     async fn handle_event(&mut self, ev: Event) -> Flow {
@@ -669,6 +734,7 @@ impl App {
             Mode::Panes { .. } => self.panes_key(key).await,
             // The mode is already back to normal: any key ends clock mode and is not forwarded.
             Mode::Clock { .. } => Flow::Continue,
+            Mode::Popup(view) => self.popup_key(view, key).await,
         }
     }
 }

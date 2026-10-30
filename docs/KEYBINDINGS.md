@@ -19,10 +19,10 @@ If you pause after the prefix, a shortcut popup lists common action keys after `
 | `0`..`9` | `select-window` | Jump to a window by index |
 | `^` | `last-window` | Previous window |
 | `M-n` / `M-p` | `next-window -a` / `previous-window -a` | Next / previous window with activity or a bell |
-| `'` | `select-window -t` | Prompt for a window index |
-| `.` | `move-window -t` | Prompt for an index to move this window to |
+| `'` | `command-prompt -T window-target` | Prompt for a window name or index (Tab completes names), then select it |
+| `.` | `command-prompt` | Prompt for a target and move this window there (`move-window -t`) |
 | `f` | `find-window` | Prompt for text; lists windows whose name, title or content match |
-| `,` | `rename-window` | Rename window (opens prompt prefilled) |
+| `,` | `command-prompt -I "#W"` | Rename window (prompt prefilled with the current name) |
 | `&` | `kill-window` | Close window (asks y/n) |
 
 ### Panes
@@ -52,7 +52,7 @@ If you pause after the prefix, a shortcut popup lists common action keys after `
 | :--- | :--- | :--- |
 | `s` | `palette sessions` / `choose-tree` | Interactive session and pane picker |
 | `w` | `palette sessions` / `choose-tree` | Interactive window and pane picker |
-| `$` | `rename-session` | Rename current session |
+| `$` | `command-prompt -I "#S"` | Rename current session (prompt prefilled with the current name) |
 | `(` / `)` | `prev-session` / `next-session` | Switch sessions |
 | `d` | `detach-client` | Detach (daemon and panes keep running) |
 | `Ctrl-z` | `suspend-client` | Suspend mpx and return to the shell (`fg` resumes) |
@@ -98,6 +98,9 @@ Vim-style command line on the status row. Supports tab-completion, history (`Up`
 | `choose-tree` | | Interactive session/window tree |
 | `display-panes [-d ms]` | `displayp` | Number each pane large; a digit selects that pane, any other key dismisses. Stays `display-panes-time` ms (`-d 0`: until a key) |
 | `clock-mode [-t PANE]` | | Big clock filling the pane until a key is pressed |
+| `command-prompt [-1bFkN] [-I initial,...] [-p prompt,...] [-T type] [template]` | | Asks each prompt (`-p`, default `(command) ` with a template). With a template the answers replace `%%` (`%1`..`%9` for the nth prompt; `%%%` quotes the answer for the command parser) and the result runs; without one the typed line runs. `-1`/`-k`: one key, no Enter. `-N`: digits only. `-F`: formats in the prompt and initial text |
+| `confirm-before [-y] [-p prompt] command` | | Asks `y`/`n` (default `Confirm 'command'? (y/n)`), then runs the command on `y`. `-y` runs it at once |
+| `display-popup [-BCE] [-b LINES] [-w W] [-h H] [-x X] [-y Y] [-d DIR] [-e VAR=val] [cmd]` | | Open `cmd` in a popup over the panes; see [Popups](#popups). `-s` and `-t` are accepted and not used |
 | `show-messages` | `showmsgs` | Status-row messages of this session, oldest first (last 100) |
 | `list-buffers` | `lsb` | Paste buffers in a list: `name: N bytes: "sample"` |
 | `choose-buffer` | | Paste buffers, newest first, with a preview: Enter pastes the highlighted one, `d` deletes it, `/` filters |
@@ -105,6 +108,12 @@ Vim-style command line on the status row. Supports tab-completion, history (`Up`
 | `palette [commands\|sessions\|help]` | `command-palette` | Fuzzy command palette |
 
 ---
+
+## Popups
+
+While a popup is open (see [Popups in the CLI reference](CLI.md#popups)), every key goes to its program: the prefix is not intercepted, `Ctrl-c` reaches the program, and the panes beneath get no input. Mouse events are ignored.
+
+When the program exits, a popup opened with `-E` closes by itself. Otherwise it stays on screen with its output and a note, and the next key closes it (`Esc` included). `display-popup -C` from a script closes it at any time, stopping the program if it still runs.
 
 ## Vi Copy Mode (`Prefix [`)
 
@@ -117,10 +126,13 @@ Vim-style command line on the status row. Supports tab-completion, history (`Up`
 | `w` / `b` | Forward / backward word |
 | `v` | Start character selection |
 | `V` | Start line selection |
+| `C-v` | Start or stop rectangle selection: the selection covers the block between its corners |
 | `y` | Yank selection (syncs to OS clipboard via OSC 52) |
 | `/` | Regex search forward |
 | `n` / `N` | Next / previous search match |
 | `q` / `Esc` | Exit copy mode |
+
+These keys are the `copy-mode-vi` table, and each is a `send-keys -X` command: `v` runs `toggle-selection`, `y` runs `copy-selection-or-line-and-cancel`, `C-v` runs `rectangle-toggle`. Scripts run the same commands with `send-keys -t pane -X`, and rebind keys with `bind-key -T copy-mode-vi KEY send-keys -X command`; `unbind-key -T copy-mode-vi KEY` removes one, and `list-keys -T copy-mode-vi` lists the table. A binding takes effect in every attached terminal at once. The full command list is in [CLI.md](CLI.md#copy-mode). The emacs table, `copy-mode`, is bound the same way.
 
 ## Emacs Copy Mode (`mode-keys emacs`)
 

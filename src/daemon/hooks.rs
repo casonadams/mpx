@@ -32,8 +32,12 @@ pub fn after_request(req: &Request) -> Option<&'static str> {
         | Request::NextWindow
         | Request::PrevWindow
         | Request::LastWindow => "after-select-window",
-        Request::Focus { .. } | Request::FocusNext | Request::FocusLast => "after-select-pane",
-        Request::ResizePane { .. } | Request::ResizeSplit { .. } => "after-resize-pane",
+        Request::Focus { .. } | Request::FocusNext | Request::FocusLast { .. } => {
+            "after-select-pane"
+        }
+        Request::ResizePane { .. } | Request::ResizeSplit { .. } | Request::Zoom { .. } => {
+            "after-resize-pane"
+        }
         Request::SelectLayout { .. } | Request::SpreadLayout => "after-select-layout",
         Request::RenameWindow { .. } => "after-rename-window",
         Request::RenameSession { .. } => "after-rename-session",

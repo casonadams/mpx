@@ -5,9 +5,10 @@ use std::io::{Read, Write};
 use super::args::Invocation;
 use super::exec::Shim;
 use super::format::{Vars, expand};
-use super::shell::command_line;
+use super::shell::{command_line, join_words};
 use crate::config::{Config, Justify, ModeKeys, StatusPosition, parse_switch};
 use crate::protocol::{Buffer, ChannelAction, VarKind};
+use crate::tui::keymap::Table;
 
 /// Longest buffer prefix `list-buffers` shows.
 const SAMPLE_CHARS: usize = 50;
@@ -390,6 +391,20 @@ impl Shim {
         Ok(String::new())
     }
 
+    /// `command-prompt` and `confirm-before`: the attached terminals run the same command line, so
+    /// the prompt or confirmation appears on them.
+    pub(super) async fn client_prompt(&mut self, inv: &Invocation) -> Result<String, String> {
+        let mut words = vec![inv.command.clone()];
+        words.extend(inv.switches.iter().map(|s| format!("-{s}")));
+        for (flag, value) in &inv.values {
+            words.push(format!("-{flag}"));
+            words.push(value.clone());
+        }
+        words.extend(inv.operands.iter().cloned());
+        self.client.client_command(&join_words(&words)).await?;
+        Ok(String::new())
+    }
+
     /// `switch-client -t session`, or `-n` / `-p` for the next / previous session.
     pub(super) async fn switch_client(&mut self, inv: &Invocation) -> Result<String, String> {
         let line = if inv.has('n') {
@@ -465,12 +480,15 @@ impl Shim {
     }
 }
 
-/// Key table named by `-n` / `-T`: `true` for root. Tables mpx has no equivalent for are refused.
-fn root_table(inv: &Invocation) -> Result<bool, String> {
+/// Key table named by `-T`, else the root table with `-n`, else the prefix table. Tables mpx has no
+/// equivalent for are refused.
+fn key_table(inv: &Invocation) -> Result<Table, String> {
     match (inv.value('T'), inv.has('n')) {
-        (Some("root"), _) | (None, true) => Ok(true),
-        (Some("prefix"), _) | (None, false) => Ok(false),
-        (Some(table), _) => Err(format!("key table '{table}' is not supported")),
+        (Some(name), _) => {
+            Table::from_name(name).ok_or_else(|| format!("key table '{name}' is not supported"))
+        }
+        (None, true) => Ok(Table::Root),
+        (None, false) => Ok(Table::Prefix),
     }
 }
 
@@ -478,7 +496,7 @@ impl Shim {
     /// `bind-key [-n] [-T table] key command [arguments]`: recorded in the session, so every
     /// attached terminal, and any that attaches later, has the binding.
     pub(super) async fn bind_key(&mut self, inv: &Invocation) -> Result<String, String> {
-        let root = root_table(inv)?;
+        let table = key_table(inv)?;
         let (key, command) = inv
             .operands
             .split_first()
@@ -486,22 +504,22 @@ impl Shim {
             .ok_or_else(|| "too few arguments: key and command required".to_string())?;
         let line = command_line(command);
         crate::tui::command::parse(&line).map_err(|e| format!("bind {key}: {e}"))?;
-        crate::tui::keymap::resolve(&Config::default())?.bind(root, key, &line)?;
+        crate::tui::keymap::resolve(&Config::default())?.bind(table, key, &line)?;
         self.client
-            .set_var(VarKind::Binding, &binding_name(root, key), Some(&line))
+            .set_var(VarKind::Binding, &binding_name(table, key), Some(&line))
             .await?;
         Ok(String::new())
     }
 
     /// `unbind-key [-a] [-n] [-T table] key`. `-a` removes every binding of the table.
     pub(super) async fn unbind_key(&mut self, inv: &Invocation) -> Result<String, String> {
-        let root = root_table(inv)?;
+        let table = key_table(inv)?;
         if inv.has('a') {
             let keymap = self.effective_keymap().await?;
-            for (table_root, key, _) in keymap.entries() {
-                if table_root == root {
+            for (bound_in, key, _) in keymap.entries() {
+                if bound_in == table {
                     self.client
-                        .set_var(VarKind::Binding, &binding_name(root, &key), Some(""))
+                        .set_var(VarKind::Binding, &binding_name(table, &key), Some(""))
                         .await?;
                 }
             }
@@ -511,9 +529,9 @@ impl Shim {
             .operands
             .first()
             .ok_or_else(|| "too few arguments: key required".to_string())?;
-        crate::tui::keymap::resolve(&Config::default())?.bind(root, key, "")?;
+        crate::tui::keymap::resolve(&Config::default())?.bind(table, key, "")?;
         self.client
-            .set_var(VarKind::Binding, &binding_name(root, key), Some(""))
+            .set_var(VarKind::Binding, &binding_name(table, key), Some(""))
             .await?;
         Ok(String::new())
     }
@@ -528,7 +546,8 @@ impl Shim {
         let mut keymap = crate::tui::keymap::resolve(&config)?;
         for (name, line) in self.client.get_vars(VarKind::Binding).await? {
             let (table, key) = name.split_once(':').unwrap_or(("prefix", &name));
-            keymap.bind(table == "root", key, &line)?;
+            let table = Table::from_name(table).unwrap_or(Table::Prefix);
+            keymap.bind(table, key, &line)?;
         }
         Ok(keymap)
     }
@@ -537,14 +556,17 @@ impl Shim {
     pub(super) async fn list_keys(&mut self, inv: &Invocation) -> Result<String, String> {
         let only = inv.value('T');
         let keymap = self.effective_keymap().await?;
-        Ok(keymap.entries()
+        Ok(keymap
+            .entries()
             .into_iter()
-            .map(|(root, key, line)| {
-                let table = if root { "root" } else { "prefix" };
-                (table, key, line)
+            .filter(|(table, ..)| only.is_none_or(|t| t == table.name()))
+            .map(|(table, key, line)| {
+                format!(
+                    "bind-key -T {} {} {line}\n",
+                    table.name(),
+                    quote_option_value(&key)
+                )
             })
-            .filter(|(table, ..)| only.is_none_or(|t| t == *table))
-            .map(|(table, key, line)| format!("bind-key -T {table} {} {line}\n", quote_option_value(&key)))
             .collect())
     }
 
@@ -584,6 +606,45 @@ impl Shim {
     }
 }
 
-fn binding_name(root: bool, key: &str) -> String {
-    format!("{}:{key}", if root { "root" } else { "prefix" })
+fn binding_name(table: Table, key: &str) -> String {
+    format!("{}:{key}", table.name())
+}
+
+impl Shim {
+    /// `copy-mode [-eHMqu] [-t pane]`: the attached terminals hold the copy state, so the command
+    /// goes to them. `-H` and `-M` are accepted without effect.
+    pub(super) async fn copy_mode(&mut self, inv: &Invocation) -> Result<String, String> {
+        let mut words = vec!["copy-mode".to_string()];
+        for flag in ['e', 'q', 'u'] {
+            if inv.has(flag) {
+                words.push(format!("-{flag}"));
+            }
+        }
+        if let Some(target) = inv.value('t') {
+            let node = self.resolve(Some(target)).await?;
+            words.extend(["-t".to_string(), node.name]);
+        }
+        let seq = self.client.client_command(&command_line(&words)).await?;
+        self.client.wait_command(seq).await?;
+        Ok(String::new())
+    }
+
+    /// `choose-tree [-swZ]`, `choose-buffer`: the overlay opens on every attached terminal.
+    /// `choose-client` has no overlay in mpx and is refused.
+    pub(super) async fn choose(&mut self, inv: &Invocation) -> Result<String, String> {
+        let line = match inv.command.as_str() {
+            "choose-tree" => {
+                let flags: String = ['s', 'w', 'Z']
+                    .into_iter()
+                    .filter(|flag| inv.has(*flag))
+                    .map(|flag| format!(" -{flag}"))
+                    .collect();
+                format!("choose-tree{flags}")
+            }
+            "choose-buffer" => "choose-buffer".to_string(),
+            _ => return Err("choose-client is not supported: mpx has no client chooser".to_string()),
+        };
+        self.client.client_command(&line).await?;
+        Ok(String::new())
+    }
 }

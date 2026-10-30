@@ -24,6 +24,12 @@ pub struct WindowTab {
     /// Typed input and paste go to every pane of the window (tmux `synchronize-panes`).
     #[serde(default)]
     pub synchronized: bool,
+    /// The window is zoomed: its focused pane fills the window's area (tmux `Z` flag).
+    #[serde(default)]
+    pub zoomed: bool,
+    /// The window's active pane (tmux `pane_active`), whether or not the window is shown.
+    #[serde(default)]
+    pub focused: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -50,6 +56,9 @@ pub struct Window {
     /// Typed input and paste go to every pane of the window (tmux `synchronize-panes`).
     #[serde(default)]
     pub synchronized: bool,
+    /// Zoomed: only the focused pane is shown. Any change to the layout unzooms the window.
+    #[serde(default)]
+    pub zoomed: bool,
 }
 
 impl Window {
@@ -66,6 +75,7 @@ impl Window {
             has_activity: false,
             has_bell: false,
             synchronized: false,
+            zoomed: false,
         }
     }
 
@@ -105,6 +115,7 @@ impl Window {
         if !root.split_leaf_with(&anchor, node_name.clone(), dir, ratio) {
             return false;
         }
+        self.zoomed = false;
         if focus {
             self.set_focus(&node_name);
         }
@@ -112,6 +123,9 @@ impl Window {
     }
 
     pub fn remove(&mut self, node_name: &str) {
+        if self.contains(node_name) {
+            self.zoomed = false;
+        }
         if let Some(root) = self.root.take() {
             self.root = root.remove_leaf(node_name);
         }
@@ -167,6 +181,7 @@ impl Window {
 
     /// Applies `preset` (or the one after the current preset when `None`) to the leaves.
     pub fn select_layout(&mut self, preset: Option<LayoutPreset>) {
+        self.zoomed = false;
         let next = preset.unwrap_or_else(|| next_preset(self.preset));
         if let Some(root) = preset_tree(next, &self.leaves()) {
             self.root = Some(root);
@@ -176,12 +191,14 @@ impl Window {
 
     /// Spreads the panes evenly without rearranging them.
     pub fn spread_layout(&mut self) {
+        self.zoomed = false;
         self.root.iter_mut().for_each(LayoutNode::spread);
     }
 
     /// Moves every pane to the slot before it, or after it when `down`: the pane names turn
     /// through the fixed layout slots, so geometry stays and focus stays on the same pane.
     pub fn rotate(&mut self, down: bool) {
+        self.zoomed = false;
         let Some(root) = self.root.as_mut() else {
             return;
         };
@@ -300,6 +317,7 @@ impl Workspace {
             has_activity: false,
             has_bell: false,
             synchronized: false,
+            zoomed: false,
         });
         self.windows.len() - 1
     }
@@ -307,6 +325,9 @@ impl Workspace {
     fn set_active(&mut self, idx: usize) {
         if idx < self.windows.len() {
             if idx != self.active_idx {
+                if let Some(left) = self.windows.get_mut(self.active_idx) {
+                    left.zoomed = false;
+                }
                 self.last_window = Some(self.active_idx);
                 self.active_idx = idx;
             }
@@ -369,6 +390,8 @@ impl Workspace {
                     has_activity: w.has_activity,
                     has_bell: w.has_bell,
                     synchronized: w.synchronized,
+                    zoomed: w.zoomed,
+                    focused: w.focused.clone(),
                     has_marked,
                     marked_pane,
                     agent_badge: None,
@@ -494,20 +517,39 @@ impl Workspace {
     pub fn focus_next(&mut self) {
         if let Some(win) = self.windows.get_mut(self.active_idx) {
             win.focus_next();
+            win.zoomed = false;
         }
     }
 
     pub fn focus_last(&mut self) -> bool {
-        self.windows
-            .get_mut(self.active_idx)
-            .is_some_and(Window::focus_last)
+        self.focus_last_with(false)
     }
 
-    /// Focuses a pane, switching to its window.
+    /// Focuses the last pane of the active window. Unless `keep_zoom`, a move unzooms the window.
+    pub fn focus_last_with(&mut self, keep_zoom: bool) -> bool {
+        let Some(win) = self.windows.get_mut(self.active_idx) else {
+            return false;
+        };
+        let moved = win.focus_last();
+        if moved && !keep_zoom {
+            win.zoomed = false;
+        }
+        moved
+    }
+
+    /// Focuses a pane, switching to its window. Focusing unzooms that window.
     pub fn focus(&mut self, name: &str) -> bool {
+        self.focus_with(name, false)
+    }
+
+    /// Focuses a pane, switching to its window. Unless `keep_zoom`, focusing unzooms that window.
+    pub fn focus_with(&mut self, name: &str, keep_zoom: bool) -> bool {
         match self.window_of(name) {
             Some(idx) => {
                 self.windows[idx].set_focus(name);
+                if !keep_zoom {
+                    self.windows[idx].zoomed = false;
+                }
                 self.set_active(idx);
                 true
             }
@@ -694,6 +736,16 @@ impl Workspace {
     /// Spreads the active window's panes evenly, keeping their arrangement.
     pub fn spread_layout(&mut self) -> bool {
         self.in_active_window(Window::spread_layout)
+    }
+
+    /// Zooms (`on`), unzooms, or toggles (`None`) the active window. False when there is none.
+    pub fn set_zoom(&mut self, on: Option<bool>) -> bool {
+        self.in_active_window(|win| win.zoomed = on.unwrap_or(!win.zoomed))
+    }
+
+    /// Unzooms the active window.
+    pub fn unzoom(&mut self) {
+        self.in_active_window(|win| win.zoomed = false);
     }
 
     /// Rotates the active window's panes through its layout slots; false when there is no window.

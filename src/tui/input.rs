@@ -3,11 +3,11 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::app::{App, Flow, Mode};
 use super::command::{self, COMMAND_NAMES, Command};
-use super::copy::{CopyOutcome, CopyState, apply_key};
+use super::copy::{CopyState, apply_bound_key};
 use super::keymap::Table;
 use super::labels;
 use super::overlay::{Overlay, OverlayAction};
-use super::prompt::PromptState;
+use super::prompt::{PromptKind, PromptRun, PromptState};
 use crate::keys::encode_key;
 
 /// What happens to an overlay after it handled a key.
@@ -79,24 +79,11 @@ impl App {
             return Flow::Continue;
         }
         let pane = self.active_rect.map_or((80, 24), |r| (r.width, r.height));
+        let action = self.keymap.copy_action(self.config.mode_keys, &key);
         let grid = self.active_vt().map(|vt| vt.grid());
-        let outcome = apply_key(&mut cs, &key, grid, pane, self.config.mode_keys);
-        match outcome {
-            CopyOutcome::Stay => self.mode = Mode::Copy(cs),
-            CopyOutcome::Exit => self.release_scrollback(&self.active_pane.clone()),
-            CopyOutcome::Yank(text) => {
-                if self.config.set_clipboard {
-                    self.clipboard.copy(&text);
-                }
-                self.yanks.push(text.clone());
-                self.last_copy = Some(text);
-                self.release_scrollback(&self.active_pane.clone());
-            }
-            CopyOutcome::SearchFailed(query) => {
-                self.say(format!("Pattern not found: {query}"));
-                self.mode = Mode::Copy(cs);
-            }
-        }
+        let outcome = apply_bound_key(&mut cs, &key, action.as_ref(), grid, pane);
+        let active = self.active_pane.clone();
+        self.apply_copy_outcome(&active, true, cs, outcome);
         Flow::Continue
     }
 
@@ -146,13 +133,33 @@ impl App {
         }
     }
 
-    pub async fn prompt_key(&mut self, mut prompt: PromptState, key: KeyEvent) -> Flow {
+    pub async fn prompt_key(&mut self, mut run: PromptRun, key: KeyEvent) -> Flow {
         match key.code {
             KeyCode::Esc => Flow::Continue,
-            KeyCode::Enter => self.submit(prompt.text()).await,
+            KeyCode::Enter => {
+                let text = run.line.text();
+                self.answer_prompt(run, text).await
+            }
+            KeyCode::Char(c)
+                if run.single_key && !key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.answer_prompt(run, c.to_string()).await
+            }
             _ => {
-                self.edit_prompt(&mut prompt, &key);
-                self.mode = Mode::Prompt(prompt);
+                self.edit_prompt(&mut run.line, &key);
+                self.mode = Mode::Prompt(run);
+                Flow::Continue
+            }
+        }
+    }
+
+    /// Records the answer to the question on screen. Once every question is answered, the command
+    /// line they produce runs; until then the next question is shown.
+    async fn answer_prompt(&mut self, mut run: PromptRun, text: String) -> Flow {
+        match run.answer(text) {
+            Some(line) => self.submit(line).await,
+            None => {
+                self.mode = Mode::Prompt(run);
                 Flow::Continue
             }
         }
@@ -172,9 +179,24 @@ impl App {
             (KeyCode::End, _) => prompt.end(),
             (KeyCode::Up, _) => prompt.history_prev(&self.history),
             (KeyCode::Down, _) => prompt.history_next(&self.history),
-            (KeyCode::Tab, _) => prompt.complete(COMMAND_NAMES),
-            (KeyCode::BackTab, _) => prompt.complete_prev(COMMAND_NAMES),
+            (KeyCode::Tab, _) => self.complete_prompt(prompt, true),
+            (KeyCode::BackTab, _) => self.complete_prompt(prompt, false),
             _ => {}
+        }
+    }
+
+    /// Tab completion for a prompt of its kind: command names, or window names for a window target.
+    fn complete_prompt(&self, prompt: &mut PromptState, forward: bool) {
+        let windows: Vec<&str> = self.layout.tabs.iter().map(|t| t.name.as_str()).collect();
+        let names: &[&str] = match prompt.kind() {
+            PromptKind::Command => COMMAND_NAMES,
+            PromptKind::WindowTarget => &windows,
+            PromptKind::Search | PromptKind::Target => &[],
+        };
+        if forward {
+            prompt.complete(names);
+        } else {
+            prompt.complete_prev(names);
         }
     }
 
@@ -245,9 +267,14 @@ impl App {
     pub async fn on_paste(&mut self, text: &str) -> Flow {
         if let Mode::Prompt(prompt) = &mut self.mode {
             for c in text.chars().filter(|c| !c.is_control()) {
-                prompt.insert(c);
+                prompt.line.insert(c);
             }
             return Flow::Continue;
+        }
+        if let Mode::Popup(view) = &self.mode {
+            let name = view.name.clone();
+            let result = self.client.paste(&name, text, false).await;
+            return self.settle(result);
         }
         if self.active_pane.is_empty() {
             return Flow::Continue;

@@ -274,6 +274,8 @@ async fn subscribe_node<S: AsyncStream>(
 
 pub async fn handle_client<S: AsyncStream>(state: Arc<DaemonState>, stream: S) {
     let mut framed = Framed::new(stream, LinesCodec::new());
+    // Terminals that reported pane modes over this connection: their marks go when it closes.
+    let mut terminals = std::collections::BTreeSet::new();
 
     while let Some(line_res) = framed.next().await {
         let line = match line_res {
@@ -309,6 +311,9 @@ pub async fn handle_client<S: AsyncStream>(state: Arc<DaemonState>, stream: S) {
             }
             req => {
                 let shutdown = matches!(req, Request::Shutdown);
+                if let Request::SetPaneMode { terminal, .. } = &req {
+                    terminals.insert(*terminal);
+                }
                 let resp = dispatch::dispatch(&state, req).await;
                 if !send_message(&mut framed, &DaemonMessage::Response(resp)).await {
                     break;
@@ -319,6 +324,9 @@ pub async fn handle_client<S: AsyncStream>(state: Arc<DaemonState>, stream: S) {
                 }
             }
         }
+    }
+    for terminal in terminals {
+        dispatch::dispatch(&state, Request::ForgetPaneModes { terminal }).await;
     }
 }
 

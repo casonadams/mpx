@@ -29,6 +29,8 @@ pub struct PaneView {
     pub dead: bool,
     pub marked: bool,
     pub marked_set: bool,
+    /// The pane is in a mode (copy mode), as an attached terminal reports it (`pane_in_mode`).
+    pub in_mode: bool,
     pub window: usize,
     pub window_name: String,
     /// Command the pane was started with (`#{pane_start_command}`).
@@ -43,6 +45,8 @@ pub struct PaneView {
     pub window_bell: bool,
     /// The window holds the marked pane.
     pub window_marked: bool,
+    /// The window is zoomed (tmux `window_zoomed_flag`).
+    pub window_zoomed: bool,
     /// The window's panes share typed input (tmux `synchronize-panes`).
     pub window_synchronized: bool,
     /// Number of panes in this pane's window.
@@ -391,7 +395,11 @@ pub fn pane_vars(p: &PaneView) -> Vars {
     vars.insert("pane_dead", flag(p.dead));
     vars.insert("pane_marked", flag(p.marked));
     vars.insert("pane_marked_set", flag(p.marked_set));
-    vars.insert("pane_in_mode", "0".to_string());
+    vars.insert("pane_in_mode", flag(p.in_mode));
+    vars.insert(
+        "pane_mode",
+        if p.in_mode { "copy-mode" } else { "" }.to_string(),
+    );
     vars.insert("pane_tty", p.tty.clone());
     vars.insert("pane_start_command", p.start_command.clone());
     if let Some(r) = p.rect {
@@ -414,12 +422,13 @@ pub fn pane_vars(p: &PaneView) -> Vars {
     vars.insert("window_active", flag(p.window_active));
     vars.insert("window_panes", p.window_panes.to_string());
     vars.insert("window_flags", window_flags(p));
+    vars.insert("window_zoomed_flag", flag(p.window_zoomed));
     vars.insert("pane_synchronized", flag(p.window_synchronized));
     shared_vars(&mut vars, &p.session);
     vars
 }
 
-/// tmux's window flag order: `#` activity, `!` bell, `*` active, `-` last, `M` marked pane. `Z` (zoom) is not tracked by the daemon.
+/// tmux's window flag order: `#` activity, `!` bell, `*` active, `Z` zoomed, `-` last, `M` marked pane.
 fn window_flags(p: &PaneView) -> String {
     let mut flags = String::new();
     if p.window_activity {
@@ -430,6 +439,9 @@ fn window_flags(p: &PaneView) -> String {
     }
     if p.window_active {
         flags.push('*');
+    }
+    if p.window_zoomed {
+        flags.push('Z');
     }
     if p.window_last {
         flags.push('-');

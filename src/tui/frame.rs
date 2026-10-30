@@ -5,6 +5,7 @@ use super::app::{App, Mode};
 use super::copy::{CopyState, SelectionKind};
 use super::labels::{clock_lines, label, label_rect, pane_numbers};
 use super::panes::PaneRect;
+use super::popup;
 use super::render::{
     Compositor, DividerStyle, PaneColors, RenderPaneContext, SelectionRange, StatusBar, hud_rect,
     parse_color,
@@ -68,6 +69,7 @@ pub fn draw_body<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
             .map(|(_, rect, _)| *rect)
             .collect(),
         Mode::Panes { .. } => number_boxes(app).into_iter().map(|(at, ..)| at).collect(),
+        Mode::Popup(_) => popup::area(app).into_iter().collect(),
         _ => hud.into_iter().collect(),
     };
     if app.rows.status.is_none() && chrome_text(app).is_some() {
@@ -75,7 +77,7 @@ pub fn draw_body<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
     }
     app.canvas.begin(screen_w, screen_h, covered);
     draw_panes(app, out)?;
-    if app.zoomed.is_none() && !app.layout.dividers.is_empty() {
+    if !app.zoomed() && !app.layout.dividers.is_empty() {
         let style = DividerStyle {
             active_color: parse_color(&app.config.style.border_active)
                 .unwrap_or(VtColor::BrightGreen),
@@ -84,6 +86,12 @@ pub fn draw_body<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
             marked_color: parse_color(&app.config.style.border_marked)
                 .unwrap_or(VtColor::BrightMagenta),
             border_style: app.config.style.border_style,
+            bg: app
+                .config
+                .style
+                .dim_inactive
+                .then(|| PaneColors::new(&app.config.style, app.host_colors).inactive_default_bg())
+                .flatten(),
         };
         Compositor::draw_dividers(
             &mut app.canvas,
@@ -96,6 +104,7 @@ pub fn draw_body<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
     }
     app.canvas.finish(out)?;
     draw_status_row(app, out)?;
+    popup::draw(app, out)?;
     match &app.mode {
         Mode::Panes { .. } => draw_pane_numbers(app, out)?,
         Mode::Clock { pane } => draw_clock(app, pane, out)?,
@@ -175,11 +184,7 @@ fn pane_view_with(
 fn draw_panes<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
     let mut panes = drawable(&app.panes);
     panes.sort_by_key(|(_, rect, _)| (rect.x, rect.y));
-    let crowd = (
-        app.panes.len(),
-        app.zoomed.is_some(),
-        app.config.style.dim_inactive,
-    );
+    let crowd = (app.panes.len(), app.zoomed(), app.config.style.dim_inactive);
     let colors = PaneColors::new(&app.config.style, app.host_colors);
     for pane in &panes {
         let (_, rect, _) = pane;
@@ -260,7 +265,7 @@ fn chrome_text(app: &App) -> Option<String> {
         _ => None,
     };
     search.or_else(|| match &app.mode {
-        Mode::Prompt(prompt) => Some(format!(":{}", prompt.text())),
+        Mode::Prompt(prompt) => Some(format!("{}{}", prompt.line.label(), prompt.line.text())),
         Mode::Confirm(question, _) => Some(question.clone()),
         _ => app.live_message().map(str::to_string),
     })
@@ -269,7 +274,7 @@ fn chrome_text(app: &App) -> Option<String> {
 /// The status line for a row `width` cells wide, laid out from the configuration and the state.
 fn status_line(app: &App, width: usize) -> Line {
     let config = &app.config;
-    let zoomed = app.zoomed.is_some();
+    let zoomed = app.zoomed();
     let base = config.base_index;
     let tab = app.layout.tabs.iter().find(|t| t.is_active);
     let focused = app
@@ -364,6 +369,24 @@ fn shim_view(app: &App, node: &crate::protocol::NodeInfo) -> crate::tmux_shim::P
     view
 }
 
+/// `fmt` expanded the way the status line expands its formats: the active pane's variables.
+pub fn expand_active(app: &App, fmt: &str) -> String {
+    let focused = app
+        .nodes
+        .iter()
+        .find(|n| n.name == app.active_pane)
+        .map(|n| shim_view(app, n));
+    let tab = app.layout.tabs.iter().find(|t| t.is_active);
+    let vars = status_vars(
+        &app.session,
+        focused.as_ref(),
+        tab,
+        app.zoomed(),
+        app.config.base_index,
+    );
+    expand(fmt, &vars)
+}
+
 /// mpx's built-in right side: the copy-mode badge, the zoom flag and the clock.
 fn built_in_right(app: &App) -> String {
     let copy_pane = match &app.mode {
@@ -380,7 +403,7 @@ fn built_in_right(app: &App) -> String {
         y: 0,
         bg: None,
         fg: None,
-        zoomed: app.zoomed.is_some(),
+        zoomed: app.zoomed(),
         copy_pane,
         marked_pane: None,
     };
@@ -395,7 +418,7 @@ pub fn place_cursor<W: Write>(app: &App, out: &mut W) -> io::Result<()> {
         Mode::Prompt(prompt) => Compositor::position_cursor(
             out,
             Rect::new(0, y, width, 1),
-            1 + prompt.cursor(),
+            prompt.line.label().chars().count() + prompt.line.cursor(),
             0,
             true,
         ),
@@ -412,6 +435,7 @@ pub fn place_cursor<W: Write>(app: &App, out: &mut W) -> io::Result<()> {
         Mode::Overlay(_) | Mode::Confirm(..) => {
             Compositor::position_cursor(out, Rect::new(0, 0, 1, 1), 0, 0, false)
         }
+        Mode::Popup(_) => popup::place_cursor(app, out),
         Mode::Copy(cs) => place_pane_cursor(app, out, Some(cs)),
         _ => place_pane_cursor(app, out, app.parked_copy.get(&app.active_pane)),
     }
@@ -443,6 +467,7 @@ fn copy_label(cs: &CopyState, hist_len: usize) -> String {
         SelectionKind::None => "COPY",
         SelectionKind::Character => "VISUAL",
         SelectionKind::Line => "VISUAL LINE",
+        SelectionKind::Rectangle => "VISUAL BLOCK",
     };
     format!(
         "[{} -{}/{} | y: yank | q: exit]",

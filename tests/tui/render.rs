@@ -416,6 +416,7 @@ fn divider_styles_render_distinct_characters() {
             inactive_color: VtColor::BrightBlack,
             marked_color: VtColor::BrightMagenta,
             border_style: BorderStyle::Double,
+            bg: None,
         },
     )
     .unwrap();
@@ -436,6 +437,7 @@ fn divider_styles_render_distinct_characters() {
             inactive_color: VtColor::BrightBlack,
             marked_color: VtColor::BrightMagenta,
             border_style: BorderStyle::Ascii,
+            bg: None,
         },
     )
     .unwrap();
@@ -560,4 +562,36 @@ fn pane_context_takes_defaults_from_the_active_template_before_the_host() {
     );
     assert_eq!(ctx.default_fg, Some(VtColor::Rgb(0xd8, 0xde, 0xe9)));
     assert_eq!(ctx.default_bg, host.bg);
+}
+
+#[test]
+fn dividers_take_the_inactive_background_so_no_stripe_shows_between_panes() {
+    let dividers = vec![Divider { is_vertical: false, x: 0, y: 2, length: 4 }];
+    let mut canvas = Canvas::default();
+    canvas.begin(10, 5, None);
+    let mut buf = Vec::new();
+    Compositor::draw_dividers(
+        &mut canvas,
+        &mut buf,
+        &dividers,
+        None,
+        None,
+        DividerStyle { bg: Some(VtColor::Rgb(30, 40, 50)), ..DividerStyle::default() },
+    )
+    .unwrap();
+    assert!(String::from_utf8_lossy(&buf).contains(";48;2;30;40;50"));
+
+    let host = HostColors { fg: None, bg: Some(VtColor::Rgb(46, 52, 64)) };
+    let mut style = mpx::config::StyleConfig::default();
+    style.dim_factor = 1.0;
+    let colors = PaneColors::new(&style, host);
+    let lum = (0.299 * 46.0 + 0.587 * 52.0 + 0.114 * 64.0_f32).round() as u8;
+    assert_eq!(colors.inactive_default_bg(), Some(VtColor::Rgb(lum, lum, lum)));
+    style.inactive.bg = "#102030".into();
+    assert_eq!(
+        PaneColors::new(&style, host).inactive_default_bg(),
+        Some(VtColor::Rgb(0x10, 0x20, 0x30)),
+        "a configured inactive background wins"
+    );
+    assert_eq!(PaneColors::new(&mpx::config::StyleConfig::default(), HostColors::default()).inactive_default_bg(), None);
 }

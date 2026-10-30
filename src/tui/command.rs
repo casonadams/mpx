@@ -1,6 +1,22 @@
 //! Typed TUI commands. Key bindings, the `:` prompt and overlays all produce `Command`s.
 //! Targets use `[session:]pane` where pane is a node name or `%id`.
+use super::copy::CopyAction;
+use super::keymap::Table;
+use super::prompt::PromptKind;
 use crate::protocol::{LayoutPreset, Side};
+
+/// The options of `copy-mode`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CopyModeOpts {
+    /// `-t`: the pane; `None` is the active pane.
+    pub target: Option<String>,
+    /// `-u`: also one page up into the history.
+    pub page_up: bool,
+    /// `-e`: leave copy mode once scrolling brings the view back to the live screen.
+    pub exit_at_bottom: bool,
+    /// `-q`: leave copy mode instead of entering it.
+    pub quit: bool,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PaletteTab {
@@ -8,6 +24,25 @@ pub enum PaletteTab {
     Commands,
     Sessions,
     Help,
+}
+
+/// What a `command-prompt` asks and how its answers are used.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PromptSpec {
+    /// Prompt texts (`-p`), one question each; commas separate them.
+    pub prompts: Vec<String>,
+    /// Initial text per question (`-I`).
+    pub initial: Vec<String>,
+    /// Command template with `%%` / `%1`..`%9` placeholders; `None` runs the typed line.
+    pub template: Option<String>,
+    /// What Tab completes (`-T`).
+    pub kind: PromptKind,
+    /// The first key typed answers (`-1`, `-k`), with no Enter.
+    pub single_key: bool,
+    /// Digits only (`-N`).
+    pub numeric: bool,
+    /// The prompts and initial texts are formats, expanded for the active pane (`-F`).
+    pub expand: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -83,9 +118,15 @@ pub enum Command {
     /// `select-layout -E`: spread the panes evenly, keeping their arrangement.
     SpreadLayout,
     Zoom,
-    CopyMode,
-    /// `copy-mode -u`: enter copy mode one page up in the history.
-    CopyModePageUp,
+    /// `copy-mode [-eHMqu] [-t pane]`: enters copy mode, or with `quit` leaves it.
+    CopyMode(CopyModeOpts),
+    /// `send-keys -X command [args]`: runs one copy-mode command in the copy mode of `target`
+    /// (the active pane when `None`), `count` times.
+    CopyCommand {
+        target: Option<String>,
+        action: CopyAction,
+        count: usize,
+    },
     Detach,
     KillServer,
     /// Send the prefix key itself to the active pane.
@@ -100,19 +141,19 @@ pub enum Command {
     OpenPalette {
         tab: Option<PaletteTab>,
     },
-    CommandPrompt {
-        initial: String,
-    },
+    /// `command-prompt`: one question per `prompts` entry (`-p`), each starting with its `initial`
+    /// text (`-I`). With a `template` the answers fill it in (`%%`, `%1`..`%9`); without one the
+    /// typed line runs as a command.
+    CommandPrompt(PromptSpec),
     Confirm {
         prompt: String,
         then: Box<Command>,
     },
     /// Commands run one after the other (`a ; b`), stopping at the first that fails or quits.
     Sequence(Vec<Command>),
-    /// `bind-key`: bind `key` in the prefix table, or the root table with `root`; an empty `line`
-    /// is `unbind-key`.
+    /// `bind-key`: bind `key` in `table`; an empty `line` is `unbind-key`.
     Bind {
-        root: bool,
+        table: Table,
         key: String,
         line: String,
     },
@@ -150,6 +191,7 @@ pub const COMMAND_NAMES: &[&str] = &[
     "clock-mode",
     "command-palette",
     "command-prompt",
+    "confirm-before",
     "copy-mode",
     "detach",
     "detach-client",
@@ -277,18 +319,24 @@ const UNBIND: Spec = Spec {
     stop_at_arg: false,
 };
 
-/// Whether `-n` or `-T` names the root table; tables other than prefix and root are refused.
-fn root_table(name: &str, o: &Opts) -> Result<bool, String> {
+/// The key table `-T` names, else the root table with `-n`, else the prefix table.
+fn key_table(name: &str, o: &Opts) -> Result<Table, String> {
     match (o.value("-T"), o.has("-n")) {
-        (Some("root"), _) | (None, true) => Ok(true),
-        (Some("prefix"), _) | (None, false) => Ok(false),
-        (Some(table), _) => Err(format!("{name}: key table '{table}' is not supported")),
+        (Some(table), _) => Table::from_name(table)
+            .ok_or_else(|| format!("{name}: key table '{table}' is not supported")),
+        (None, true) => Ok(Table::Root),
+        (None, false) => Ok(Table::Prefix),
     }
+}
+
+/// Whether a command line is `send-keys -X ...`, the only kind a copy-mode table binds.
+fn is_copy_command(command: &[String]) -> bool {
+    matches!(command, [name, flag, ..] if name == "send-keys" && flag == "-X")
 }
 
 fn bind_key(name: &str, args: &[String]) -> Result<Command, String> {
     let o = parse_opts(name, args, BIND)?;
-    let root = root_table(name, &o)?;
+    let table = key_table(name, &o)?;
     let (key, command) = o
         .rest
         .split_first()
@@ -296,8 +344,11 @@ fn bind_key(name: &str, args: &[String]) -> Result<Command, String> {
     if command.is_empty() {
         return Err(format!("{name}: need a command for key {key}"));
     }
+    if table.is_copy() && !is_copy_command(command) {
+        return Err(format!("{name}: {} takes only send-keys -X commands", table.name()));
+    }
     Ok(Command::Bind {
-        root,
+        table,
         key: key.clone(),
         line: crate::tmux_shim::command_line(command),
     })
@@ -305,13 +356,13 @@ fn bind_key(name: &str, args: &[String]) -> Result<Command, String> {
 
 fn unbind_key(name: &str, args: &[String]) -> Result<Command, String> {
     let o = parse_opts(name, args, UNBIND)?;
-    let root = root_table(name, &o)?;
+    let table = key_table(name, &o)?;
     let key = o
         .rest
         .first()
         .ok_or_else(|| format!("{name}: need a key"))?;
     Ok(Command::Bind {
-        root,
+        table,
         key: key.clone(),
         line: String::new(),
     })
@@ -391,7 +442,7 @@ fn pane_cmd(name: &str, args: &[String]) -> Option<Result<Command, String>> {
         "resize-pane" => resize_pane(name, args),
         "swap-pane" => swap_pane(name, args),
         "break-pane" => bare(name, args, Command::BreakPane),
-        "last-pane" => bare(name, args, Command::LastPane),
+        "last-pane" => last_pane(name, args),
         "next-pane" => bare(name, args, Command::NextPane),
         "select-layout" => select_layout(name, args),
         "next-layout" => bare(name, args, Command::SelectLayout { preset: None }),
@@ -402,8 +453,7 @@ fn pane_cmd(name: &str, args: &[String]) -> Option<Result<Command, String>> {
 
 fn misc_cmd(name: &str, args: &[String]) -> Option<Result<Command, String>> {
     let cmd = match name {
-        "copy-mode" if args == ["-u"] => Ok(Command::CopyModePageUp),
-        "copy-mode" => bare(name, args, Command::CopyMode),
+        "copy-mode" => copy_mode(name, args),
         "detach-client" | "detach" | "q" | "quit" => bare(name, args, Command::Detach),
         "kill-server" | "qa" => bare(
             name,
@@ -413,7 +463,7 @@ fn misc_cmd(name: &str, args: &[String]) -> Option<Result<Command, String>> {
                 then: Box::new(Command::KillServer),
             },
         ),
-        "choose-tree" => bare(name, args, Command::OpenTree),
+        "choose-tree" => choose_tree(name, args),
         "choose-buffer" => bare(name, args, Command::ChooseBuffer),
         "display-panes" | "displayp" => display_panes(name, args),
         "clock-mode" => clock_mode(name, args),
@@ -434,6 +484,7 @@ fn misc_cmd(name: &str, args: &[String]) -> Option<Result<Command, String>> {
         "rename-session" | "rename" => rename_session(name, args),
         "palette" | "command-palette" => palette_cmd(name, args),
         "command-prompt" => command_prompt(name, args),
+        "confirm-before" | "confirm" => confirm_before(name, args),
         _ => return None,
     };
     Some(cmd)
@@ -444,6 +495,15 @@ fn bare(name: &str, args: &[String], cmd: Command) -> Result<Command, String> {
         Ok(cmd)
     } else {
         Err(format!("{name}: takes no arguments"))
+    }
+}
+
+/// `last-pane` alone is the TUI's; with options (`-Z`) the shim handles it.
+fn last_pane(name: &str, args: &[String]) -> Result<Command, String> {
+    if args.is_empty() {
+        Ok(Command::LastPane)
+    } else {
+        tmux_fallback(name, args)
     }
 }
 
@@ -472,23 +532,23 @@ const KILL_TARGET: Spec = Spec {
     stop_at_arg: false,
 };
 const SELECT_PANE: Spec = Spec {
-    bools: &["-L", "-R", "-U", "-D", "-m", "-M"],
+    bools: &["-L", "-R", "-U", "-D", "-m", "-M", "-Z"],
     values: &["-t"],
     stop_at_arg: false,
 };
 const RESIZE_PANE: Spec = Spec {
     bools: &["-L", "-R", "-U", "-D", "-Z"],
-    values: &[],
+    values: &["-t"],
     stop_at_arg: false,
 };
 const SWAP_PANE: Spec = Spec {
-    bools: &["-U", "-D"],
+    bools: &["-U", "-D", "-Z"],
     values: &["-s", "-t"],
     stop_at_arg: false,
 };
 const SEND_KEYS: Spec = Spec {
-    bools: &[],
-    values: &["-t"],
+    bools: &["-X"],
+    values: &["-t", "-N"],
     stop_at_arg: true,
 };
 const PASTE: Spec = Spec {
@@ -506,9 +566,14 @@ const RENAME: Spec = Spec {
     values: &["-t"],
     stop_at_arg: false,
 };
-const PROMPT: Spec = Spec {
-    bools: &[],
-    values: &["-I"],
+const COMMAND_PROMPT: Spec = Spec {
+    bools: &["-1", "-b", "-F", "-k", "-N"],
+    values: &["-I", "-p", "-T", "-t"],
+    stop_at_arg: true,
+};
+const CONFIRM: Spec = Spec {
+    bools: &["-b", "-y"],
+    values: &["-p", "-t"],
     stop_at_arg: true,
 };
 const DISPLAY_PANES: Spec = Spec {
@@ -519,6 +584,17 @@ const DISPLAY_PANES: Spec = Spec {
 const CLOCK_MODE: Spec = Spec {
     bools: &[],
     values: &["-t"],
+    stop_at_arg: false,
+};
+const COPY_MODE: Spec = Spec {
+    bools: &["-e", "-H", "-M", "-q", "-u"],
+    values: &["-t"],
+    stop_at_arg: false,
+};
+/// `choose-tree` flags: `-s` (sessions) and `-w` (windows) pick what the tree opens on, `-Z` zooms.
+const CHOOSE_TREE: Spec = Spec {
+    bools: &["-s", "-w", "-Z"],
+    values: &[],
     stop_at_arg: false,
 };
 
@@ -658,7 +734,9 @@ fn kill_window(name: &str, args: &[String]) -> Result<Command, String> {
 }
 
 fn rename_window(args: &[String]) -> Result<Command, String> {
-    let name = args.join(" ");
+    // tmux's `rename-window -- name` ends the options: the name may start with a dash.
+    let words = args.strip_prefix(&["--".to_string()]).unwrap_or(args);
+    let name = words.join(" ");
     if name.trim().is_empty() {
         return Err("rename-window: missing name".to_string());
     }
@@ -671,9 +749,11 @@ fn select_window(name: &str, args: &[String]) -> Result<Command, String> {
     let raw = o
         .value("-t")
         .ok_or_else(|| format!("{name}: need -t <index>"))?;
-    Ok(Command::SelectWindow {
-        index: parse_index(raw)?,
-    })
+    match parse_index(raw) {
+        Ok(index) => Ok(Command::SelectWindow { index }),
+        // A window name (`-t ':name'`) is resolved by the shim.
+        Err(_) => tmux_fallback(name, args),
+    }
 }
 
 fn kill_pane(name: &str, args: &[String]) -> Result<Command, String> {
@@ -687,6 +767,9 @@ fn kill_pane(name: &str, args: &[String]) -> Result<Command, String> {
 fn select_pane(name: &str, args: &[String]) -> Result<Command, String> {
     let o = parse_opts(name, args, SELECT_PANE)?;
     o.no_rest(name)?;
+    if o.has("-Z") {
+        return tmux_fallback(name, args);
+    }
     if o.has("-M") {
         return Ok(Command::ClearMark);
     }
@@ -721,7 +804,11 @@ fn mark_pane(name: &str, args: &[String]) -> Result<Command, String> {
 fn resize_pane(name: &str, args: &[String]) -> Result<Command, String> {
     let o = parse_opts(name, args, RESIZE_PANE)?;
     if o.has("-Z") {
-        return Ok(Command::Zoom);
+        return if o.value("-t").is_some() {
+            tmux_fallback(name, args)
+        } else {
+            Ok(Command::Zoom)
+        };
     }
     let side = direction_flag(&o).ok_or_else(|| format!("{name}: need -L/-R/-U/-D or -Z"))?;
     let cells = match o.rest.first() {
@@ -736,6 +823,9 @@ fn resize_pane(name: &str, args: &[String]) -> Result<Command, String> {
 fn swap_pane(name: &str, args: &[String]) -> Result<Command, String> {
     let o = parse_opts(name, args, SWAP_PANE)?;
     o.no_rest(name)?;
+    if o.has("-Z") {
+        return tmux_fallback(name, args);
+    }
     if o.has("-D") {
         Ok(Command::SwapPane { next: true })
     } else if o.has("-U") {
@@ -760,11 +850,35 @@ fn select_layout(name: &str, args: &[String]) -> Result<Command, String> {
 
 fn send_keys(name: &str, args: &[String]) -> Result<Command, String> {
     let o = parse_opts(name, args, SEND_KEYS)?;
+    let target = o.value("-t").map(str::to_string);
+    if o.has("-X") {
+        let (command, command_args) = o
+            .rest
+            .split_first()
+            .ok_or_else(|| format!("{name}: -X needs a copy-mode command"))?;
+        let count = match o.value("-N") {
+            None => 1,
+            Some(raw) => raw
+                .parse::<usize>()
+                .ok()
+                .filter(|n| *n > 0)
+                .ok_or_else(|| format!("{name}: invalid repeat count '{raw}'"))?,
+        };
+        let action = super::copy::parse_copy_command(command, command_args)?;
+        return Ok(Command::CopyCommand {
+            target,
+            action,
+            count,
+        });
+    }
+    if o.value("-N").is_some() {
+        return Err(format!("{name}: -N needs -X"));
+    }
     if o.rest.is_empty() {
         return Err(format!("{name}: no keys given"));
     }
     Ok(Command::SendKeys {
-        target: o.value("-t").map(str::to_string),
+        target,
         keys: o.rest,
     })
 }
@@ -801,12 +915,51 @@ fn rename_session(name: &str, args: &[String]) -> Result<Command, String> {
     Ok(Command::RenameSession { name: session })
 }
 fn command_prompt(name: &str, args: &[String]) -> Result<Command, String> {
-    let o = parse_opts(name, args, PROMPT)?;
-    let initial = match o.value("-I") {
-        Some(text) => text.to_string(),
-        None => o.rest.join(" "),
+    let o = parse_opts(name, args, COMMAND_PROMPT)?;
+    let kind = match o.value("-T") {
+        None | Some("command") => PromptKind::Command,
+        Some("search") => PromptKind::Search,
+        Some("target") => PromptKind::Target,
+        Some("window-target") => PromptKind::WindowTarget,
+        Some(other) => return Err(format!("{name}: unknown prompt type '{other}'")),
     };
-    Ok(Command::CommandPrompt { initial })
+    let template = (!o.rest.is_empty()).then(|| o.rest.join(" "));
+    Ok(Command::CommandPrompt(PromptSpec {
+        prompts: split_list(o.value("-p")),
+        initial: split_list(o.value("-I")),
+        template,
+        kind,
+        single_key: o.has("-1") || o.has("-k"),
+        numeric: o.has("-N"),
+        expand: o.has("-F"),
+    }))
+}
+
+/// A comma-separated option value as its parts; an absent option has none.
+fn split_list(value: Option<&str>) -> Vec<String> {
+    value.map_or_else(Vec::new, |v| v.split(',').map(str::to_string).collect())
+}
+
+/// `confirm-before [-y] [-p prompt] command`: runs `command` once the user answers `y`; `-y`
+/// runs it at once.
+fn confirm_before(name: &str, args: &[String]) -> Result<Command, String> {
+    let o = parse_opts(name, args, CONFIRM)?;
+    if o.rest.is_empty() {
+        return Err(format!("{name}: need a command"));
+    }
+    let line = crate::tmux_shim::command_line(&o.rest);
+    let then = parse(&line)?;
+    if o.has("-y") {
+        return Ok(then);
+    }
+    let prompt = match o.value("-p") {
+        Some(text) => text.to_string(),
+        None => format!("Confirm '{line}'? (y/n)"),
+    };
+    Ok(Command::Confirm {
+        prompt,
+        then: Box::new(then),
+    })
 }
 
 fn display_panes(name: &str, args: &[String]) -> Result<Command, String> {
@@ -839,4 +992,24 @@ fn palette_cmd(name: &str, args: &[String]) -> Result<Command, String> {
         Some(other) => return Err(format!("{name}: unknown tab '{other}'")),
     };
     Ok(Command::OpenPalette { tab })
+}
+
+/// `copy-mode [-eHMqu] [-t pane]`. `-H` (hide position) and `-M` (mouse) are accepted; mpx has no
+/// position indicator to hide and mouse drags always start copy mode.
+fn copy_mode(name: &str, args: &[String]) -> Result<Command, String> {
+    let o = parse_opts(name, args, COPY_MODE)?;
+    o.no_rest(name)?;
+    Ok(Command::CopyMode(CopyModeOpts {
+        target: o.value("-t").map(str::to_string),
+        page_up: o.has("-u"),
+        exit_at_bottom: o.has("-e"),
+        quit: o.has("-q"),
+    }))
+}
+
+/// `choose-tree [-swZ]`: the tree overlay; the flags are accepted, the overlay opens the same way.
+fn choose_tree(name: &str, args: &[String]) -> Result<Command, String> {
+    let o = parse_opts(name, args, CHOOSE_TREE)?;
+    o.no_rest(name)?;
+    Ok(Command::OpenTree)
 }

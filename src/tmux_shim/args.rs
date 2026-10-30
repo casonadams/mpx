@@ -11,6 +11,10 @@ pub struct Invocation {
     pub socket_name: Option<String>,
     /// `-S path`: a socket path naming the server.
     pub socket_path: Option<String>,
+    /// How many times each switch was given (`-EE` is two).
+    pub counts: BTreeMap<char, usize>,
+    /// Every value given to each value flag, in order (`-e A=1 -e B=2`).
+    pub lists: BTreeMap<char, Vec<String>>,
 }
 
 impl Invocation {
@@ -92,7 +96,10 @@ pub fn spec(command: &str) -> Option<(&'static str, &'static str)> {
         "new-window" => ("dPkab", "ncFt"),
         "new-session" => ("dPA", "sncxyFt"),
         "kill-pane" | "kill-window" | "kill-session" => ("a", "t"),
-        "send-keys" => ("lHRM", "t"),
+        "send-keys" => ("lHRMX", "tN"),
+        "copy-mode" => ("eHMqu", "t"),
+        "choose-tree" => ("swZ", "t"),
+        "choose-buffer" | "choose-client" => ("Z", "t"),
         "capture-pane" => ("apeJqCM", "tSEb"),
         "list-panes" => ("as", "tF"),
         "list-windows" => ("a", "tF"),
@@ -132,10 +139,13 @@ pub fn spec(command: &str) -> Option<(&'static str, &'static str)> {
         "resize-pane" => ("LRUDMZ", "txyt"),
         "swap-pane" => ("dDUZ", "st"),
         "break-pane" => ("dP", "sFnt"),
+        "command-prompt" => ("1bFkN", "IpTt"),
+        "confirm-before" => ("by", "pt"),
         "last-pane" => ("deZ", "t"),
         "rotate-window" => ("DUZ", "t"),
         "find-window" => ("CNTrZ", "t"),
         "respawn-pane" | "respawn-window" => ("k", "ct"),
+        "display-popup" => ("BCE", "bdehsStwxy"),
         _ => return None,
     })
 }
@@ -218,18 +228,21 @@ fn parse_cluster(
     for (j, c) in body.iter().enumerate() {
         if values.contains(*c) {
             let attached: String = body[j + 1..].iter().collect();
-            if !attached.is_empty() {
-                inv.values.insert(*c, attached);
-                return Ok(false);
-            }
-            let value = next.ok_or_else(|| format!("command requires an argument for -{c}"))?;
-            inv.values.insert(*c, value.clone());
-            return Ok(true);
+            let (value, consumed) = if attached.is_empty() {
+                let value = next.ok_or_else(|| format!("command requires an argument for -{c}"))?;
+                (value.clone(), true)
+            } else {
+                (attached, false)
+            };
+            inv.lists.entry(*c).or_default().push(value.clone());
+            inv.values.insert(*c, value);
+            return Ok(consumed);
         }
         if !switches.contains(*c) {
             return Err(format!("unknown option -- {c}"));
         }
         inv.switches.insert(*c);
+        *inv.counts.entry(*c).or_default() += 1;
     }
     Ok(false)
 }

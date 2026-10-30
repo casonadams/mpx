@@ -11,7 +11,10 @@ mod shell;
 
 pub use args::{Invocation, canonical, is_noop, parse as parse_invocation, spec};
 pub use conf::{Converted, convert};
-pub use exec::{EnvTarget, neighbor, run_in, pane_key, pane_view, run, side_of, spawn_opts, split_direction, window_key};
+pub use exec::{
+    EnvTarget, neighbor, pane_key, pane_view, popup_opts, run, run_in, side_of, spawn_opts,
+    split_direction, window_key,
+};
 pub use extra::{buffer_sample, builtin_option, quote_option_value};
 pub use format::{PaneView, Vars, expand, pane_vars, session_vars};
 pub use server::{default_session, server_key};
