@@ -1,9 +1,9 @@
 //! Builds the persisted session snapshot from the workspace and the live panes. Pure: the caller
-//! gathers the pane facts (live cwd, agent) and the clock.
+//! gathers the pane facts (live cwd, process) and the clock.
 use crate::layout::Workspace;
 use crate::protocol::SpawnOpts;
 use crate::store::{
-    AgentSnapshot, PaneSnapshot, SNAPSHOT_VERSION, SessionSnapshot, WindowSnapshot,
+    PaneSnapshot, SNAPSHOT_VERSION, SessionSnapshot, WindowSnapshot,
 };
 
 /// What the snapshot knows about one pane in the layout.
@@ -15,7 +15,8 @@ pub struct PaneRecord {
     pub running: bool,
     /// Live working directory when the snapshot was taken.
     pub cwd: Option<String>,
-    pub agent: Option<AgentSnapshot>,
+    pub resume_rule: Option<String>,
+    pub session_id: Option<String>,
 }
 
 /// Snapshot of the running panes. Exited panes leave the layout, windows without running panes are
@@ -81,6 +82,7 @@ fn pane_snapshot(pane: &PaneRecord) -> PaneSnapshot {
         env: pane.opts.env.clone(),
         remain_on_exit: pane.opts.remain_on_exit,
         tmux_compat: pane.opts.tmux_compat,
-        agent: pane.agent.clone(),
+        resume_rule: pane.resume_rule.clone(),
+        session_id: pane.session_id.clone(),
     }
 }

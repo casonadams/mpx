@@ -70,6 +70,10 @@ async fn execute(argv: &[String]) -> Result<String, String> {
     match cmd {
         "list-sessions" => Ok(list_sessions(&inv, &env.socket_dir())),
         "has-session" => has_session(&inv, &env).await,
+        "attach-session" => attach_session(&inv).await,
+        "new-session" if !inv.has('d') && inv.operands.is_empty() => {
+            attach_session(&inv).await
+        }
         _ => {
             let client = Client::connect(&env.endpoint)
                 .await
@@ -80,6 +84,26 @@ async fn execute(argv: &[String]) -> Result<String, String> {
             };
             shim.pane_command(&inv).await
         }
+    }
+}
+async fn attach_session(inv: &Invocation) -> Result<String, String> {
+    let target = inv.value('t').or_else(|| inv.value('s')).map(str::to_string);
+    let code = crate::cli::run_cli(crate::cli::Cli {
+        session: target.clone(),
+        endpoint: None,
+        config: None,
+        state_dir: None,
+        idempotency_key: None,
+        command: Some(crate::cli::Commands::Attach {
+            target,
+            force: inv.has('d'),
+        }),
+    })
+    .await?;
+    if code == 0 {
+        Ok(String::new())
+    } else {
+        Err(String::new())
     }
 }
 
@@ -283,6 +307,7 @@ impl Shim {
             "last-pane" => self.client.focus_last().await.map(|_| String::new()),
             "last-window" => self.client.last_window().await.map(|_| String::new()),
             "rename-window" => self.rename_window(inv).await,
+            "rename-session" => self.rename_session(inv).await,
             other => Err(format!("unknown command: {other}")),
         }
     }
@@ -454,6 +479,9 @@ impl Shim {
                 .ok_or_else(|| "no pane in that direction".to_string())?;
             return self.client.focus(&target).await.map(|_| String::new());
         }
+        if inv.has('l') {
+            return self.client.focus_last().await.map(|_| String::new());
+        }
         if inv.value('T').is_some() {
             return Ok(String::new());
         }
@@ -578,6 +606,14 @@ impl Shim {
         let index = inv.value('t').and_then(window_key);
         self.client
             .rename_window(index, &name)
+            .await
+            .map(|_| String::new())
+    }
+
+    async fn rename_session(&mut self, inv: &Invocation) -> Result<String, String> {
+        let name = inv.operand_text();
+        self.client
+            .rename_session(&name)
             .await
             .map(|_| String::new())
     }

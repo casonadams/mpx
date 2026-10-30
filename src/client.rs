@@ -5,8 +5,8 @@ use tokio_util::codec::{Framed, FramedParts, LengthDelimitedCodec, LinesCodec};
 use crate::ipc::{IpcStream, connect_stream};
 use crate::layout::{Divider, Rect, WindowTab};
 use crate::protocol::{
-    AgentState, DaemonMessage, LayoutPreset, NewWindowOpts, NodeInfo, PROTOCOL, PipeInfo,
-    PipeMessage, Request, Response, SessionInfo, Side, SpawnOpts, SplitOpts, StreamEvent,
+    DaemonMessage, LayoutPreset, NewWindowOpts, NodeInfo, PROTOCOL,
+    Request, Response, SessionInfo, Side, SpawnOpts, SplitOpts, StreamEvent,
     WaitCondition, WaitOutcome,
 };
 use crate::wire;
@@ -22,25 +22,6 @@ pub struct Client {
     pending_key: Option<String>,
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct AgentReportArgs {
-    pub harness: Option<String>,
-    pub state: Option<AgentState>,
-    pub session_id: Option<String>,
-    pub detail: Option<String>,
-    pub clear: bool,
-    pub task: Option<String>,
-    pub reply: Option<String>,
-    pub edited: Option<String>,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct PipeReadArgs {
-    pub since: Option<u64>,
-    pub consumer: Option<String>,
-    pub wait_ms: Option<u64>,
-    pub limit: Option<usize>,
-}
 
 /// What answered on a session socket.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -428,68 +409,15 @@ impl Client {
         self.call_ok("SelectLayout", Request::SelectLayout { preset })
             .await
     }
-
-    pub async fn create_pipe(&mut self, name: &str, capacity: Option<usize>) -> Result<(), String> {
-        let req = Request::CreatePipe {
-            name: name.to_string(),
-            capacity,
-        };
-        self.call_ok("CreatePipe", req).await
+    pub async fn rename_session(&mut self, name: &str) -> Result<(), String> {
+        self.call_ok(
+            "RenameSession",
+            Request::RenameSession {
+                name: name.to_string(),
+            },
+        )
+        .await
     }
-
-    /// Returns the sequence number assigned to the message.
-    pub async fn write_pipe(&mut self, name: &str, data: &str) -> Result<u64, String> {
-        let req = Request::WritePipe {
-            name: name.to_string(),
-            data: data.to_string(),
-        };
-        match self.call(req).await? {
-            Response::PipeSeq(seq) => Ok(seq),
-            other => Err(unexpected("WritePipe", other)),
-        }
-    }
-
-    /// Returns `(messages, next_seq)`.
-    pub async fn read_pipe(
-        &mut self,
-        name: &str,
-        args: PipeReadArgs,
-    ) -> Result<(Vec<PipeMessage>, u64), String> {
-        let req = Request::ReadPipe {
-            name: name.to_string(),
-            since: args.since,
-            consumer: args.consumer,
-            wait_ms: args.wait_ms,
-            limit: args.limit,
-        };
-        match self.call(req).await? {
-            Response::PipeMessages { messages, next } => Ok((messages, next)),
-            other => Err(unexpected("ReadPipe", other)),
-        }
-    }
-
-    pub async fn list_pipes(&mut self) -> Result<Vec<PipeInfo>, String> {
-        match self.call(Request::ListPipes).await? {
-            Response::PipeList(pipes) => Ok(pipes),
-            other => Err(unexpected("ListPipes", other)),
-        }
-    }
-
-    pub async fn agent_report(&mut self, name: &str, args: AgentReportArgs) -> Result<(), String> {
-        let req = Request::AgentReport {
-            name: name.to_string(),
-            harness: args.harness,
-            state: args.state,
-            session_id: args.session_id,
-            detail: args.detail,
-            clear: args.clear,
-            task: args.task,
-            reply: args.reply,
-            edited: args.edited,
-        };
-        self.call_ok("AgentReport", req).await
-    }
-
     /// Recreates the session from its last snapshot.
     pub async fn restore(&mut self) -> Result<(), String> {
         self.call_ok("Restore", Request::Restore).await
@@ -582,21 +510,6 @@ impl Client {
         }
         Ok(())
     }
-
-    /// Streams `StreamEvent::Pipe` messages for one pipe; the handler returns false to stop.
-    pub async fn subscribe_pipe<F>(&mut self, name: &str, handler: F) -> Result<(), String>
-    where
-        F: FnMut(StreamEvent) -> bool,
-    {
-        self.stream(
-            Request::SubscribePipe {
-                name: name.to_string(),
-            },
-            handler,
-        )
-        .await
-    }
-
     async fn stream<F>(&mut self, req: Request, mut handler: F) -> Result<(), String>
     where
         F: FnMut(StreamEvent) -> bool,

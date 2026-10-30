@@ -137,7 +137,6 @@ fn wait_rejects_conflicting_or_unknown_conditions() {
     let f = Fixture::start();
     let conflicting = ["wait", "x", "--idle", "5", "--match", "a"];
     assert_eq!(run_command(&f, &conflicting), 1);
-    assert_eq!(run_command(&f, &["wait", "x", "--state", "bogus"]), 1);
 }
 
 #[test]

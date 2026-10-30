@@ -3,7 +3,6 @@ use super::render::{FollowStep, follow_step};
 use super::resolve::{Resolved, parse_env_pairs, wait_condition, wait_exit_code};
 use super::sessions::{apply_key, ensure_client};
 use super::windows;
-use crate::agents::state_label;
 use crate::client::Client;
 use crate::layout::Direction;
 use crate::protocol::{NodeInfo, SpawnOpts, SplitOpts, StreamEvent};
@@ -160,7 +159,6 @@ pub async fn run(cmd: Commands, r: &Resolved) -> Result<i32, String> {
             timeout,
             idle,
             pattern,
-            state,
         } => {
             wait(
                 r,
@@ -168,7 +166,6 @@ pub async fn run(cmd: Commands, r: &Resolved) -> Result<i32, String> {
                 timeout,
                 idle,
                 pattern.as_deref(),
-                state.as_deref(),
             )
             .await
         }
@@ -392,9 +389,8 @@ async fn wait(
     timeout: Option<u64>,
     idle: Option<u64>,
     pattern: Option<&str>,
-    state: Option<&str>,
 ) -> Result<i32, String> {
-    let condition = wait_condition(idle, pattern, state)?;
+    let condition = wait_condition(idle, pattern)?;
     let mut client = ensure_client(r).await?;
     let outcome = client
         .wait(name, condition.clone(), timeout.map(|s| s * 1000))
@@ -455,9 +451,6 @@ async fn status(r: &Resolved, name: &str) -> Result<i32, String> {
     println!("PID: {}", pid_label(info.pid));
     println!("PTY: {}", info.pty);
     println!("Status: {}", info.status_label());
-    if let Some(agent) = &info.agent {
-        println!("Agent: {} ({})", agent.harness, state_label(agent.state));
-    }
     if !info.command.is_empty() {
         println!("Command: {}", info.command);
     }

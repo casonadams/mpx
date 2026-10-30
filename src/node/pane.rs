@@ -12,10 +12,8 @@ use super::sink::Sink;
 use super::task::TaskNode;
 use super::waits::Cond;
 use super::{NodeError, Process, SpawnSpec};
-use crate::agents::Harness;
 use crate::buffer::{RingBuffer, strip_ansi};
 use crate::keys::TermModes;
-use crate::node::agent::Report;
 use crate::protocol::{NodeInfo, PaneId, StreamEvent, WaitCondition, WaitOutcome};
 use crate::vt::VtScreen;
 
@@ -119,10 +117,6 @@ pub enum PaneMsg {
     Kill {
         reply: Reply<()>,
     },
-    Report {
-        report: Report,
-        reply: Reply<()>,
-    },
     Wait {
         cond: Cond,
         timeout: Option<Duration>,
@@ -153,8 +147,6 @@ pub type Notifier = Arc<dyn Fn(PaneNotice) + Send + Sync>;
 /// What a pane needs from its session to start.
 pub struct PaneCtx {
     pub notify: Notifier,
-    pub harnesses: Arc<Vec<Harness>>,
-    pub idle_ms: u64,
     /// Set while session-wide subscribers exist; events are relayed to the session only then.
     pub relay: Arc<AtomicBool>,
     /// Attached terminals' backlogs; the PTY reader waits while one is behind.
@@ -200,7 +192,7 @@ impl PaneHandle {
         self.ask(|reply| PaneMsg::Info { full, reply }).await
     }
 
-    /// Automatic window label: the agent harness, else the foreground process name.
+    /// Automatic window label: the foreground process name.
     pub async fn label(&self) -> Result<Option<String>, String> {
         self.ask(|reply| PaneMsg::Label { reply }).await
     }
@@ -231,10 +223,6 @@ impl PaneHandle {
         let (reply, rx) = oneshot::channel();
         let _ = self.tx.send(PaneMsg::Kill { reply });
         rx
-    }
-
-    pub async fn report(&self, report: Report) -> Result<(), String> {
-        self.ask(|reply| PaneMsg::Report { report, reply }).await
     }
 
     pub async fn wait(

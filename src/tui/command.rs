@@ -6,7 +6,6 @@ use crate::protocol::{LayoutPreset, Side};
 pub enum PaletteTab {
     #[default]
     Commands,
-    Agents,
     Sessions,
     Help,
 }
@@ -89,31 +88,17 @@ pub enum Command {
     KillServer,
     /// Send the prefix key itself to the active pane.
     SendPrefix,
-    OpenAgents,
-    /// Jump to the next agent (any session) in `needs_input`.
-    NextAttention,
+    RenameSession {
+        name: String,
+    },
     OpenTree,
     OpenHelp,
-    /// Open the unified command palette with an optional initial tab.
     OpenPalette {
         tab: Option<PaletteTab>,
-    },
-    /// Focus the agents rail, expanding it, or collapse it again.
-    ToggleSidebar,
-    /// Show the next (or previous) agent in the rail without focusing it.
-    StepAgent {
-        next: bool,
     },
     CommandPrompt {
         initial: String,
     },
-    LaunchAgent {
-        harness: String,
-        resume: Option<String>,
-        cwd: Option<String>,
-        split: bool,
-    },
-    /// Ask `prompt (y/n)` on the command line; run `then` on `y`.
     Confirm {
         prompt: String,
         then: Box<Command>,
@@ -122,7 +107,6 @@ pub enum Command {
 
 /// Command names and aliases accepted by `parse`; used for `:` completion.
 pub const COMMAND_NAMES: &[&str] = &[
-    "agents",
     "break-pane",
     "choose-tree",
     "command-palette",
@@ -136,26 +120,24 @@ pub const COMMAND_NAMES: &[&str] = &[
     "kill-window",
     "last-pane",
     "last-window",
-    "launch-agent",
     "list-keys",
     "mark-pane",
     "new",
     "new-window",
-    "next-agent",
-    "next-attention",
     "next-layout",
     "next-pane",
     "next-session",
     "next-window",
     "palette",
     "paste",
-    "prev-agent",
     "prev-session",
     "prev-window",
     "previous-window",
     "q",
     "qa",
     "quit",
+    "rename",
+    "rename-session",
     "rename-window",
     "resize-pane",
     "select-layout",
@@ -164,7 +146,6 @@ pub const COMMAND_NAMES: &[&str] = &[
     "send-keys",
     "send-prefix",
     "session",
-    "sidebar",
     "sp",
     "split",
     "split-window",
@@ -288,18 +269,13 @@ fn misc_cmd(name: &str, args: &[String]) -> Option<Result<Command, String>> {
                 then: Box::new(Command::KillServer),
             },
         ),
-        "agents" => bare(name, args, Command::OpenAgents),
-        "next-attention" => bare(name, args, Command::NextAttention),
         "choose-tree" => bare(name, args, Command::OpenTree),
         "list-keys" | "help" => bare(name, args, Command::OpenHelp),
-        "sidebar" => bare(name, args, Command::ToggleSidebar),
-        "next-agent" => bare(name, args, Command::StepAgent { next: true }),
-        "prev-agent" => bare(name, args, Command::StepAgent { next: false }),
         "send-prefix" => bare(name, args, Command::SendPrefix),
         "next-session" => bare(name, args, Command::NextSession),
         "prev-session" => bare(name, args, Command::PrevSession),
         "switch-client" | "session" => switch_client(name, args),
-        "launch-agent" => launch_agent(name, args),
+        "rename-session" | "rename" => rename_session(name, args),
         "palette" | "command-palette" => palette_cmd(name, args),
         "command-prompt" => command_prompt(name, args),
         _ => return None,
@@ -369,9 +345,9 @@ const SWITCH: Spec = Spec {
     values: &["-t"],
     stop_at_arg: false,
 };
-const LAUNCH: Spec = Spec {
-    bools: &["--split"],
-    values: &["--resume", "--cwd"],
+const RENAME: Spec = Spec {
+    bools: &[],
+    values: &["-t"],
     stop_at_arg: false,
 };
 const PROMPT: Spec = Spec {
@@ -629,9 +605,6 @@ fn send_keys(name: &str, args: &[String]) -> Result<Command, String> {
 
 fn paste(name: &str, args: &[String]) -> Result<Command, String> {
     let o = parse_opts(name, args, PASTE)?;
-    if o.rest.is_empty() {
-        return Err(format!("{name}: missing text"));
-    }
     Ok(Command::Paste {
         target: o.value("-t").map(str::to_string),
         text: o.rest.join(" "),
@@ -639,34 +612,28 @@ fn paste(name: &str, args: &[String]) -> Result<Command, String> {
     })
 }
 
+fn target_or_first(
+    name: &str,
+    args: &[String],
+    spec: Spec,
+    missing: &str,
+) -> Result<String, String> {
+    let o = parse_opts(name, args, spec)?;
+    o.value("-t")
+        .map(str::to_string)
+        .or_else(|| o.rest.first().cloned())
+        .ok_or_else(|| format!("{name}: {missing}"))
+}
+
 fn switch_client(name: &str, args: &[String]) -> Result<Command, String> {
-    let o = parse_opts(name, args, SWITCH)?;
-    let session = match o.value("-t") {
-        Some(s) => s.to_string(),
-        None => o
-            .rest
-            .first()
-            .cloned()
-            .ok_or_else(|| format!("{name}: need -t <session>"))?,
-    };
+    let session = target_or_first(name, args, SWITCH, "need -t <session>")?;
     Ok(Command::SwitchSession { name: session })
 }
 
-fn launch_agent(name: &str, args: &[String]) -> Result<Command, String> {
-    let o = parse_opts(name, args, LAUNCH)?;
-    let harness = match o.rest.as_slice() {
-        [one] => one.clone(),
-        [] => return Err(format!("{name}: missing harness")),
-        [_, extra, ..] => return Err(format!("{name}: unexpected argument '{extra}'")),
-    };
-    Ok(Command::LaunchAgent {
-        harness,
-        resume: o.value("--resume").map(str::to_string),
-        cwd: o.value("--cwd").map(str::to_string),
-        split: o.has("--split"),
-    })
+fn rename_session(name: &str, args: &[String]) -> Result<Command, String> {
+    let session = target_or_first(name, args, RENAME, "need new name")?;
+    Ok(Command::RenameSession { name: session })
 }
-
 fn command_prompt(name: &str, args: &[String]) -> Result<Command, String> {
     let o = parse_opts(name, args, PROMPT)?;
     let initial = match o.value("-I") {
@@ -680,7 +647,6 @@ fn palette_cmd(name: &str, args: &[String]) -> Result<Command, String> {
     let tab = match args.first().map(|s| s.as_str()) {
         None => None,
         Some("commands" | "cmd") => Some(PaletteTab::Commands),
-        Some("agents" | "agent") => Some(PaletteTab::Agents),
         Some("sessions" | "session" | "tree") => Some(PaletteTab::Sessions),
         Some("help" | "keys") => Some(PaletteTab::Help),
         Some(other) => return Err(format!("{name}: unknown tab '{other}'")),

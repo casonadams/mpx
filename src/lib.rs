@@ -1,4 +1,3 @@
-pub mod agents;
 pub mod buffer;
 pub mod cli;
 pub mod client;
@@ -7,9 +6,7 @@ pub mod daemon;
 pub mod ipc;
 pub mod keys;
 pub mod layout;
-pub mod mcp;
 pub mod node;
-pub mod pipe;
 pub mod protocol;
 pub mod store;
 pub mod tmux_shim;

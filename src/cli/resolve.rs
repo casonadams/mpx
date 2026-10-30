@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use crate::config::Config;
 use crate::ipc::endpoint_in;
-use crate::protocol::{AgentState, WaitCondition, WaitOutcome};
+use crate::protocol::{WaitCondition, WaitOutcome};
 use crate::store;
 
 /// Exit code of `mpx wait` when the timeout elapses first (same as coreutils `timeout`).
@@ -87,30 +87,13 @@ pub fn parse_env_pairs(items: &[String]) -> Result<Vec<(String, String)>, String
         .collect()
 }
 
-pub fn parse_agent_state(text: &str) -> Result<AgentState, String> {
-    match text {
-        "needs_input" => Ok(AgentState::NeedsInput),
-        "working" => Ok(AgentState::Working),
-        "idle" => Ok(AgentState::Idle),
-        "exited" => Ok(AgentState::Exited),
-        other => Err(format!(
-            "unknown agent state: {other} (expected needs_input, working, idle, exited)"
-        )),
-    }
-}
-
-/// Condition selected by `--idle`, `--match` or `--state`; none means process exit.
+/// Condition selected by `--idle` or `--match`; none means process exit.
 pub fn wait_condition(
     idle: Option<u64>,
     pattern: Option<&str>,
-    state: Option<&str>,
 ) -> Result<WaitCondition, String> {
-    let chosen = [idle.is_some(), pattern.is_some(), state.is_some()]
-        .into_iter()
-        .filter(|b| *b)
-        .count();
-    if chosen > 1 {
-        return Err("use only one of --idle, --match, --state".to_string());
+    if idle.is_some() && pattern.is_some() {
+        return Err("use only one of --idle, --match".to_string());
     }
     if let Some(quiet_ms) = idle {
         return Ok(WaitCondition::Idle { quiet_ms });
@@ -119,11 +102,6 @@ pub fn wait_condition(
         regex::Regex::new(pattern).map_err(|e| format!("invalid --match regex: {e}"))?;
         return Ok(WaitCondition::Match {
             pattern: pattern.to_string(),
-        });
-    }
-    if let Some(state) = state {
-        return Ok(WaitCondition::State {
-            state: parse_agent_state(state)?,
         });
     }
     Ok(WaitCondition::Exit)

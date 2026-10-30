@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>mpx — Ultra-Performant Process & Terminal Multiplexer in Rust</title>
-  <meta name="description" content="A simple, fast, and intuitive terminal multiplexer in Rust. Built for human developers and autonomous AI coding agents with native MCP support.">
+  <title>mpx — Ultra-Performant Modern Terminal Multiplexer in Rust</title>
+  <meta name="description" content="A modern, ultra-fast terminal multiplexer in Rust: 100% tmux-compatible, crash-resilient with automatic session recovery, zero-flicker rendering, and a sleek fuzzy command palette.">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
   <link rel="stylesheet" href="css/style.css?v=2">
 </head>
@@ -112,7 +112,7 @@ Your branch is up to date with 'origin/main'.
 
     <section id="features" class="container">
       <h2 class="section-title">Built for Speed and Modern Workflows</h2>
-      <p class="section-desc">Zero bloat, instant startup, and seamless orchestration for human engineers collaborating with AI agent harnesses.</p>
+      <p class="section-desc">Zero bloat, instant startup, seamless session recovery, and pure tmux ergonomics.</p>
 
       <div class="grid">
         <div class="card">
@@ -136,20 +136,19 @@ Your branch is up to date with 'origin/main'.
         </div>
 
         <div class="card">
-          <h3>Agent Manager</h3>
-          <p><code>Prefix + s</code> lists every Claude Code, oh-my-pi, Codex, rho, Antigravity, and OpenCode session across sessions, grouped by needs-you / working / idle, plus stored sessions you can resume. <code>Prefix + A</code> jumps to the agent waiting longest.</p>
+          <h3>Continuous Session Recovery</h3>
+          <p>The daemon saves continuous atomic snapshots of your workspace. After a crash or reboot, <code>mpx restore</code> instantly reconstitutes your windows, splits, and working directories.</p>
         </div>
 
         <div class="card">
-          <h3>Native Model Context Protocol</h3>
-          <p>Built-in stdio MCP server with 23 tools. Agents can wait on exit, regex, or agent state, send tmux key names and bracketed pastes, launch and prompt other agents, and retry safely with idempotency keys, all without terminal scraping.</p>
+          <h3>Config-Driven Process Resumption</h3>
+          <p>Configurable <code>[[resume]]</code> rules automatically resume tools like Claude Code, oh-my-pi, Codex, or Neovim in their project directories without fragile terminal scraping.</p>
         </div>
 
         <div class="card">
-          <h3>Inter-Agent Virtual Pipes</h3>
-          <p>In-memory, sequenced message queues with per-consumer cursors and long-polling, so agents coordinate exactly-once with zero disk I/O.</p>
+          <h3>Instant Command Palette (Ctrl-Space)</h3>
+          <p>Fuzzy-search across sessions, windows, panes, commands, and key bindings with zero prefix required.</p>
         </div>
-      </div>
     </section>
 
     <section id="comparison" class="container">

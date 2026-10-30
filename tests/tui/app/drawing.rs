@@ -339,13 +339,6 @@ async fn a_keypress_lets_only_a_few_frames_skip_the_budget() {
 async fn full_width_pane_scroll_sends_only_the_new_line() {
     let mut h = start().await;
     h.app.canvas.set_lr_margins(true);
-    let working = mpx::client::AgentReportArgs {
-        harness: Some("claude".to_string()),
-        state: Some(mpx::protocol::AgentState::Working),
-        ..Default::default()
-    };
-    h.probe.agent_report(MAIN, working).await.expect("report agent");
-    h.app.refresh_sidebar().await;
     h.frame().await;
     assert_eq!(h.rect_of(MAIN).x, 0, "panes keep 100% width with zero stolen columns");
     for i in 0..40 {

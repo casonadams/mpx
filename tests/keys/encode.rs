@@ -191,3 +191,27 @@ fn focus_event_reports_focus_changes() {
     assert_eq!(focus_event(true), b"\x1b[I");
     assert_eq!(focus_event(false), b"\x1b[O");
 }
+
+#[test]
+fn sgr_mouse_encoding_formats_clicks_and_wheel() {
+    use crossterm::event::{MouseButton, MouseEventKind};
+    use mpx::keys::{MouseTracking, encode_mouse_event};
+
+    let modes = TermModes {
+        mouse_tracking: MouseTracking::ButtonEvent,
+        mouse_sgr: true,
+        ..Default::default()
+    };
+
+    let down = encode_mouse_event(&modes, MouseEventKind::Down(MouseButton::Left), 15, 5, NONE).unwrap();
+    assert_eq!(down, b"\x1b[<0;15;5M");
+
+    let up = encode_mouse_event(&modes, MouseEventKind::Up(MouseButton::Left), 15, 5, NONE).unwrap();
+    assert_eq!(up, b"\x1b[<0;15;5m");
+
+    let scroll = encode_mouse_event(&modes, MouseEventKind::ScrollUp, 10, 20, NONE).unwrap();
+    assert_eq!(scroll, b"\x1b[<64;10;20M");
+
+    let disabled = TermModes::default();
+    assert_eq!(encode_mouse_event(&disabled, MouseEventKind::Down(MouseButton::Left), 15, 5, NONE), None);
+}

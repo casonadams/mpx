@@ -1,5 +1,5 @@
 use super::support::{connect, pty, start, task};
-use mpx::protocol::{AgentState, WaitCondition};
+use mpx::protocol::WaitCondition;
 
 #[tokio::test]
 async fn exit_condition_reports_the_exit_code() {
@@ -116,50 +116,3 @@ async fn invalid_regex_is_an_error() {
     client.kill("bad-re").await.unwrap();
 }
 
-#[tokio::test]
-async fn state_condition_follows_hook_reports() {
-    let daemon = start().await;
-    let mut client = connect(&daemon.endpoint).await;
-    client
-        .spawn(task("agent-state", "sleep", &["5"]))
-        .await
-        .unwrap();
-    client
-        .agent_report(
-            "agent-state",
-            mpx::client::AgentReportArgs {
-                harness: Some("claude".into()),
-                state: Some(AgentState::Working),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-
-    let reached = client
-        .wait(
-            "agent-state",
-            WaitCondition::State {
-                state: AgentState::Working,
-            },
-            Some(2_000),
-        )
-        .await
-        .unwrap();
-    assert!(reached.satisfied);
-    assert_eq!(reached.state, Some(AgentState::Working));
-
-    let pending = client
-        .wait(
-            "agent-state",
-            WaitCondition::State {
-                state: AgentState::Idle,
-            },
-            Some(100),
-        )
-        .await
-        .unwrap();
-    assert!(!pending.satisfied);
-    assert_eq!(pending.state, Some(AgentState::Working));
-    client.kill("agent-state").await.unwrap();
-}

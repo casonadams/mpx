@@ -23,21 +23,81 @@ pub struct PaneView {
     pub window_name: String,
 }
 
-/// Expands `#{name}` references; unknown names expand to nothing.
+/// Expands `#{name}` and single-letter `#S`, `#I`, `#P`, `#W`, `#T`, `#D`, `##` references.
 pub fn expand(fmt: &str, vars: &Vars) -> String {
     let mut out = String::with_capacity(fmt.len());
-    let mut rest = fmt;
-    while let Some(start) = rest.find("#{") {
-        out.push_str(&rest[..start]);
-        let after = &rest[start + 2..];
-        let Some(end) = after.find('}') else {
-            rest = &rest[start..];
-            break;
-        };
-        out.push_str(vars.get(&after[..end]).map(String::as_str).unwrap_or(""));
-        rest = &after[end + 1..];
+    let mut chars = fmt.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '#' {
+            match chars.peek() {
+                Some('{') => {
+                    chars.next();
+                    let mut name = String::new();
+                    let mut closed = false;
+                    for nc in chars.by_ref() {
+                        if nc == '}' {
+                            closed = true;
+                            break;
+                        }
+                        name.push(nc);
+                    }
+                    if closed {
+                        if let Some(val) = vars.get(name.as_str()) {
+                            out.push_str(val);
+                        }
+                    } else {
+                        out.push_str("#{");
+                        out.push_str(&name);
+                    }
+                }
+                Some('#') => {
+                    chars.next();
+                    out.push('#');
+                }
+                Some('S') => {
+                    chars.next();
+                    if let Some(val) = vars.get("session_name") {
+                        out.push_str(val);
+                    }
+                }
+                Some('I') => {
+                    chars.next();
+                    if let Some(val) = vars.get("window_index") {
+                        out.push_str(val);
+                    }
+                }
+                Some('P') => {
+                    chars.next();
+                    if let Some(val) = vars.get("pane_index") {
+                        out.push_str(val);
+                    }
+                }
+                Some('W') => {
+                    chars.next();
+                    if let Some(val) = vars.get("window_name") {
+                        out.push_str(val);
+                    }
+                }
+                Some('T') => {
+                    chars.next();
+                    if let Some(val) = vars.get("pane_title") {
+                        out.push_str(val);
+                    }
+                }
+                Some('D') => {
+                    chars.next();
+                    if let Some(val) = vars.get("pane_id") {
+                        out.push_str(val);
+                    }
+                }
+                _ => {
+                    out.push('#');
+                }
+            }
+        } else {
+            out.push(c);
+        }
     }
-    out.push_str(rest);
     out
 }
 

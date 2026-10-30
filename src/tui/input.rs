@@ -52,30 +52,19 @@ impl App {
         Flow::Continue
     }
 
-    /// Whether a root binding takes its key: stepping through agents only while there are any,
-    /// so with none Alt-j and Alt-k still reach the program.
-    fn takes_root_key(&self, command: &Command) -> bool {
-        !matches!(command, Command::StepAgent { .. }) || !self.sidebar.agents.is_empty()
+    fn takes_root_key(&self, _command: &Command) -> bool {
+        true
     }
 
     pub async fn prefix_key(&mut self, key: KeyEvent) -> Flow {
-        // The rail had focus when the prefix was pressed: an unbound key goes back to it, and a
-        // command sees it (`prefix e` collapses it, `prefix l` leaves it), but nothing after.
-        let resume = std::mem::take(&mut self.sidebar.resume);
         let Some(binding) = self.keymap.lookup(Table::Prefix, &key) else {
-            if resume {
-                self.mode = Mode::Sidebar;
-            }
             return Flow::Continue;
         };
         let cmd = binding.command.clone();
         if matches!(cmd, Command::ResizePane { .. }) {
             self.arm_repeat();
         }
-        self.sidebar.resume = resume;
-        let flow = self.dispatch(cmd).await;
-        self.sidebar.resume = false;
-        flow
+        self.dispatch(cmd).await
     }
 
     pub async fn copy_key(&mut self, mut cs: CopyState, key: KeyEvent) -> Flow {
@@ -92,6 +81,7 @@ impl App {
             CopyOutcome::Exit => self.release_scrollback(&self.active_pane.clone()),
             CopyOutcome::Yank(text) => {
                 self.clipboard.copy(&text);
+                self.last_copy = Some(text);
                 self.release_scrollback(&self.active_pane.clone());
             }
             CopyOutcome::SearchFailed(query) => {

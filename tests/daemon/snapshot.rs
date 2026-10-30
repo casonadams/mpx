@@ -1,7 +1,6 @@
 use mpx::daemon::snapshot::{PaneRecord, build_snapshot};
 use mpx::layout::{Direction, Workspace};
 use mpx::protocol::SpawnOpts;
-use mpx::store::AgentSnapshot;
 
 fn record(name: &str, running: bool, cwd: Option<&str>) -> PaneRecord {
     PaneRecord {
@@ -18,7 +17,8 @@ fn record(name: &str, running: bool, cwd: Option<&str>) -> PaneRecord {
         },
         running,
         cwd: cwd.map(str::to_string),
-        agent: None,
+        resume_rule: None,
+        session_id: None,
     }
 }
 
@@ -35,10 +35,8 @@ fn snapshot_keeps_running_panes_with_their_live_cwd_and_user_settings() {
     )
     .unwrap();
     let mut a = record("a", true, None);
-    a.agent = Some(AgentSnapshot {
-        harness: "claude".to_string(),
-        session_id: Some("s-1".to_string()),
-    });
+    a.resume_rule = Some("claude".to_string());
+    a.session_id = Some("s-1".to_string());
     let panes = vec![a, record("b", true, Some("/live"))];
 
     let snap = build_snapshot("main", 42, false, &ws, &panes);
@@ -61,7 +59,7 @@ fn snapshot_keeps_running_panes_with_their_live_cwd_and_user_settings() {
     assert_eq!(a.args, ["--resume"]);
     assert!(a.pty && a.tmux_compat);
     assert_eq!(a.remain_on_exit, Some(true));
-    assert_eq!(a.agent.as_ref().unwrap().session_id.as_deref(), Some("s-1"));
+    assert_eq!(a.session_id.as_deref(), Some("s-1"));
     assert_eq!(win.panes[1].cwd.as_deref(), Some("/live"));
 }
 

@@ -1,5 +1,5 @@
 //! Key encoding shared by the TUI (crossterm events), `send-keys` (tmux key names) and key binding specs.
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEventKind};
 use serde::{Deserialize, Serialize};
 
 const ESC: u8 = 0x1b;
@@ -7,6 +7,19 @@ const CR: u8 = b'\r';
 const HT: u8 = b'\t';
 const DEL: u8 = 0x7f;
 const BS: u8 = 0x08;
+
+/// Mouse tracking mode requested by an application.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MouseTracking {
+    #[default]
+    None,
+    /// `CSI ? 1000 h`: report clicks only.
+    X10,
+    /// `CSI ? 1002 h`: report clicks and button-down drags.
+    ButtonEvent,
+    /// `CSI ? 1003 h`: report all mouse movement.
+    AnyEvent,
+}
 
 /// Terminal input modes requested by the program running inside a pane.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -17,6 +30,10 @@ pub struct TermModes {
     pub bracketed_paste: bool,
     /// `CSI ? 1004 h`.
     pub focus_events: bool,
+    /// Mouse tracking protocol.
+    pub mouse_tracking: MouseTracking,
+    /// `CSI ? 1006 h`: SGR extended coordinates format.
+    pub mouse_sgr: bool,
 }
 
 /// A key with modifiers, parsed from tmux notation (`C-b`, `M-x`, `S-Tab`, `F5`, `h`, `H`, `Space`).
@@ -346,4 +363,121 @@ fn function_key(n: u8, mods: KeyModifiers) -> Vec<u8> {
         5..=12 => tilde_key(TILDE_CODES[usize::from(n - 5)], mods),
         _ => Vec::new(),
     }
+}
+
+pub fn encode_mouse_event(
+    modes: &TermModes,
+    kind: MouseEventKind,
+    col: u16,
+    row: u16,
+    mods: KeyModifiers,
+) -> Option<Vec<u8>> {
+    match modes.mouse_tracking {
+        MouseTracking::None => None,
+        MouseTracking::X10 => match kind {
+            MouseEventKind::Down(_) => {
+                if modes.mouse_sgr {
+                    encode_sgr_mouse(kind, col, row, mods)
+                } else {
+                    encode_x10_mouse(kind, col, row, mods)
+                }
+            }
+            _ => None,
+        },
+        MouseTracking::ButtonEvent => match kind {
+            MouseEventKind::Down(_)
+            | MouseEventKind::Up(_)
+            | MouseEventKind::Drag(_)
+            | MouseEventKind::ScrollUp
+            | MouseEventKind::ScrollDown
+            | MouseEventKind::ScrollLeft
+            | MouseEventKind::ScrollRight => {
+                if modes.mouse_sgr {
+                    encode_sgr_mouse(kind, col, row, mods)
+                } else {
+                    encode_x10_mouse(kind, col, row, mods)
+                }
+            }
+            _ => None,
+        },
+        MouseTracking::AnyEvent => {
+            if modes.mouse_sgr {
+                encode_sgr_mouse(kind, col, row, mods)
+            } else {
+                encode_x10_mouse(kind, col, row, mods)
+            }
+        }
+    }
+}
+
+pub fn encode_sgr_mouse(
+    kind: MouseEventKind,
+    col: u16,
+    row: u16,
+    mods: KeyModifiers,
+) -> Option<Vec<u8>> {
+    let (mut btn, release) = match kind {
+        MouseEventKind::Down(MouseButton::Left) => (0, false),
+        MouseEventKind::Down(MouseButton::Middle) => (1, false),
+        MouseEventKind::Down(MouseButton::Right) => (2, false),
+        MouseEventKind::Up(MouseButton::Left) => (0, true),
+        MouseEventKind::Up(MouseButton::Middle) => (1, true),
+        MouseEventKind::Up(MouseButton::Right) => (2, true),
+        MouseEventKind::Drag(MouseButton::Left) => (32, false),
+        MouseEventKind::Drag(MouseButton::Middle) => (33, false),
+        MouseEventKind::Drag(MouseButton::Right) => (34, false),
+        MouseEventKind::Moved => (35, false),
+        MouseEventKind::ScrollUp => (64, false),
+        MouseEventKind::ScrollDown => (65, false),
+        MouseEventKind::ScrollLeft => (66, false),
+        MouseEventKind::ScrollRight => (67, false),
+    };
+
+    if mods.contains(KeyModifiers::SHIFT) {
+        btn += 4;
+    }
+    if mods.contains(KeyModifiers::ALT) {
+        btn += 8;
+    }
+    if mods.contains(KeyModifiers::CONTROL) {
+        btn += 16;
+    }
+
+    let final_char = if release { 'm' } else { 'M' };
+    Some(format!("\x1b[<{btn};{col};{row}{final_char}").into_bytes())
+}
+
+pub fn encode_x10_mouse(
+    kind: MouseEventKind,
+    col: u16,
+    row: u16,
+    mods: KeyModifiers,
+) -> Option<Vec<u8>> {
+    let (mut btn, release) = match kind {
+        MouseEventKind::Down(MouseButton::Left) => (0, false),
+        MouseEventKind::Down(MouseButton::Middle) => (1, false),
+        MouseEventKind::Down(MouseButton::Right) => (2, false),
+        MouseEventKind::Up(_) => (3, true),
+        MouseEventKind::Drag(MouseButton::Left) => (32, false),
+        MouseEventKind::Drag(MouseButton::Middle) => (33, false),
+        MouseEventKind::Drag(MouseButton::Right) => (34, false),
+        MouseEventKind::ScrollUp => (64, false),
+        MouseEventKind::ScrollDown => (65, false),
+        _ => return None,
+    };
+    if release {
+        btn = 3;
+    }
+    if mods.contains(KeyModifiers::SHIFT) {
+        btn += 4;
+    }
+    if mods.contains(KeyModifiers::ALT) {
+        btn += 8;
+    }
+    if mods.contains(KeyModifiers::CONTROL) {
+        btn += 16;
+    }
+    let col = col.clamp(1, 223) as u8;
+    let row = row.clamp(1, 223) as u8;
+    Some(vec![0x1b, b'[', b'M', 32 + btn, 32 + col, 32 + row])
 }

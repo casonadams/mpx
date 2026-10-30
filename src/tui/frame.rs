@@ -2,13 +2,12 @@
 use std::io::{self, Write};
 
 use super::app::{App, Mode};
-use super::canvas::write_sgr;
 use super::copy::{CopyState, SelectionKind};
 use super::panes::PaneRect;
 use super::render::{
     Compositor, DividerStyle, RenderPaneContext, SelectionRange, StatusBar, hud_rect, parse_color,
 };
-use super::status::{exit_badge, node_named, update_tab_agent_badges};
+use super::status::{exit_badge, node_named};
 use crate::layout::geometry::Rect;
 use crate::protocol::NodeInfo;
 use crate::vt::Color as VtColor;
@@ -46,17 +45,11 @@ pub fn draw_body<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
     let (screen_w, layout_h) = app.viewport;
     let screen_h = layout_h + 1;
     let hud = shortcut_popup(app, screen_w, screen_h);
-    let expanded = app.expanded_width();
     let covered: Vec<Rect> = match &app.mode {
         Mode::Overlay(_) => vec![overlay_area(screen_w, screen_h)],
-        _ => (expanded > 0)
-            .then(|| Rect::new(0, 0, expanded, layout_h))
-            .into_iter()
-            .chain(hud)
-            .collect(),
+        _ => hud.into_iter().collect(),
     };
     app.canvas.begin(screen_w, layout_h, covered);
-    draw_sidebar(app, out)?;
     draw_panes(app, out)?;
     if app.zoomed.is_none() && !app.layout.dividers.is_empty() {
         let style = DividerStyle {
@@ -78,7 +71,6 @@ pub fn draw_body<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
         )?;
     }
     app.canvas.finish(out)?;
-    draw_expanded(app, out)?;
     draw_status_row(app, out)?;
     if hud.is_some() {
         Compositor::draw_shortcut_hud(out, screen_w, screen_h)?;
@@ -148,44 +140,6 @@ fn pane_view_with(
     }
 }
 
-/// The collapsed rail goes first: a row it reprints forgets the cells to its right, which the
-/// panes drawn next then repaint.
-fn draw_sidebar<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
-    if app.sidebar_width() == 0 || app.expanded_width() > 0 {
-        return Ok(());
-    }
-    let border = parse_color(&app.config.style.border_inactive).unwrap_or(VtColor::BrightBlack);
-    for (y, row) in app.rail(border).iter().enumerate() {
-        app.canvas.put_row(out, 0, y as u16, row)?;
-    }
-    Ok(())
-}
-
-/// The expanded list, drawn over the panes once they are: the canvas leaves the cells under it
-/// alone and repaints them when it collapses, so the panes never resize for it.
-fn draw_expanded<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
-    if app.expanded_width() == 0 {
-        return Ok(());
-    }
-    let style = &app.config.style;
-    let border = if matches!(app.mode, Mode::Sidebar) {
-        parse_color(&style.border_active).unwrap_or(VtColor::BrightGreen)
-    } else {
-        parse_color(&style.border_inactive).unwrap_or(VtColor::BrightBlack)
-    };
-    for (y, row) in app.sidebar_rows(border).iter().enumerate() {
-        write!(out, "\x1b[{};1H", y + 1)?;
-        let mut sent = None;
-        for cell in row {
-            if sent != Some(cell.style) {
-                write_sgr(out, &cell.style)?;
-                sent = Some(cell.style);
-            }
-            write!(out, "{}", cell.c)?;
-        }
-    }
-    out.write_all(b"\x1b[0m")
-}
 
 /// Panes are drawn left to right so a row that spills past its pane is repainted over by its neighbor.
 /// A pane whose content scrolled is scrolled on the terminal first, so only the rows that changed
@@ -241,7 +195,6 @@ fn draw_panes<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
 /// Bottom row: the command line while typing or confirming, else a live message, else the status bar.
 /// Sent only when it differs from the row already on screen.
 fn draw_status_row<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
-    update_tab_agent_badges(&mut app.layout.tabs, &app.sidebar.agents, &app.session);
     let mut row = Vec::new();
     status_row(app, &mut row)?;
     if app.canvas.status_changed(&row) {
@@ -278,7 +231,6 @@ fn status_row(app: &App, out: &mut Vec<u8>) -> io::Result<()> {
                     tabs: &app.layout.tabs,
                     panes: &app.panes,
                     prefix_active: matches!(app.mode, Mode::Prefix),
-                    waiting_agents: app.watch.badge,
                     width,
                     y,
                     bg,
@@ -319,7 +271,7 @@ pub fn place_cursor<W: Write>(app: &App, out: &mut W) -> io::Result<()> {
                 true,
             )
         }
-        Mode::Overlay(_) | Mode::Confirm(..) | Mode::Sidebar => {
+        Mode::Overlay(_) | Mode::Confirm(..) => {
             Compositor::position_cursor(out, Rect::new(0, 0, 1, 1), 0, 0, false)
         }
         Mode::Copy(cs) => place_pane_cursor(app, out, Some(cs)),

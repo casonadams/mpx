@@ -269,7 +269,14 @@ fn send_keys_and_paste() {
         }
     );
     assert!(err("send-keys").contains("no keys"));
-    assert!(err("paste").contains("missing text"));
+    assert_eq!(
+        ok("paste"),
+        Command::Paste {
+            target: None,
+            text: String::new(),
+            submit: false,
+        }
+    );
 }
 
 #[test]
@@ -286,22 +293,12 @@ fn detach_quit_and_prompts() {
     );
     assert_eq!(ok("list-keys"), Command::OpenHelp);
     assert_eq!(ok("choose-tree"), Command::OpenTree);
-    assert_eq!(ok("agents"), Command::OpenAgents);
-    assert_eq!(ok("next-attention"), Command::NextAttention);
-}
-
-#[test]
-fn launch_agent_options() {
     assert_eq!(
-        ok("launch-agent claude --resume abc --cwd /repo --split"),
-        Command::LaunchAgent {
-            harness: "claude".into(),
-            resume: Some("abc".into()),
-            cwd: Some("/repo".into()),
-            split: true,
+        ok("rename-session new-name"),
+        Command::RenameSession {
+            name: "new-name".into()
         }
     );
-    assert!(err("launch-agent").contains("missing harness"));
 }
 
 #[test]

@@ -2,7 +2,6 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
-mod agents;
 mod panes;
 pub mod render;
 mod resolve;
@@ -10,7 +9,7 @@ mod sessions;
 mod windows;
 
 pub use resolve::{
-    Resolved, nested_attach_refused, parse_agent_state, parse_env_pairs, resolve,
+    Resolved, nested_attach_refused, parse_env_pairs, resolve,
     resolve_idempotency_key, wait_condition, wait_exit_code,
 };
 pub use sessions::{RestoreOutcome, apply_key, daemon_args, restore_session, run_cli};
@@ -259,12 +258,7 @@ pub enum Commands {
         /// Wait until the screen or output matches this regex
         #[arg(long = "match")]
         pattern: Option<String>,
-
-        /// Wait until the agent reaches this state: needs_input, working, idle, exited
-        #[arg(long)]
-        state: Option<String>,
     },
-
     /// Snapshot the 2D virtual terminal screen of a node
     Screen {
         /// Name of the node
@@ -487,109 +481,13 @@ pub enum Commands {
         height: Option<u16>,
     },
 
-    /// Manage inter-agent virtual pipes
-    Pipe {
-        #[command(subcommand)]
-        command: PipeCommands,
-    },
+    /// Rename a session (tmux rename-session)
+    #[command(name = "rename-session", alias = "rename")]
+    RenameSession {
+        /// Target session (defaults to current session)
+        #[arg(short = 't', long = "target")]
+        target: Option<String>,
 
-    /// Agent sessions: `mpx agents` opens the TUI on the agent view; `--json` lists live and resumable agents
-    Agents {
-        /// Print {live, resumable} as JSON
-        #[arg(long)]
-        json: bool,
-
-        #[command(subcommand)]
-        command: Option<AgentCommands>,
-    },
-
-    /// Report a harness hook event (reads JSON on stdin); `print-config claude` prints the settings JSON
-    Hook {
-        /// Harness name (claude, omp) or `print-config`
-        harness: String,
-
-        /// Event name for harnesses that pass it as an argument (omp), or the harness for print-config
-        event: Option<String>,
-    },
-
-    /// Launch stdio Model Context Protocol (MCP) server for AI agent harnesses
-    Mcp,
-}
-
-#[derive(Subcommand, Debug)]
-pub enum PipeCommands {
-    /// Create a new virtual pipe
-    Create {
-        /// Name of the pipe
         name: String,
-        /// Maximum capacity in bytes
-        #[arg(long)]
-        capacity: Option<usize>,
-    },
-    /// Write data to a virtual pipe
-    Write {
-        /// Name of the pipe
-        name: String,
-        /// Content data string
-        data: String,
-    },
-    /// Read messages from a virtual pipe
-    Read {
-        /// Name of the pipe
-        name: String,
-        /// Only messages with a sequence number after this one
-        #[arg(long)]
-        since: Option<u64>,
-        /// Daemon-side cursor name; reads resume where the consumer left off
-        #[arg(long)]
-        consumer: Option<String>,
-        /// Block up to this many milliseconds for a message
-        #[arg(long = "wait")]
-        wait_ms: Option<u64>,
-        /// Maximum number of messages
-        #[arg(long)]
-        limit: Option<usize>,
-        /// Print {"messages": [...], "next": n}
-        #[arg(long)]
-        json: bool,
-    },
-    /// List active virtual pipes
-    List {
-        #[arg(long)]
-        json: bool,
-    },
-    /// Stream messages as they are written
-    Subscribe {
-        /// Name of the pipe
-        name: String,
-    },
-}
-
-#[derive(Subcommand, Debug)]
-pub enum AgentCommands {
-    /// Launch a harness (claude, omp, codex, ...) in a new window or split
-    New {
-        /// Harness name
-        harness: String,
-        /// Resume this session id
-        #[arg(long)]
-        resume: Option<String>,
-        /// Split the focused pane instead of opening a window
-        #[arg(long)]
-        split: bool,
-        /// Enable agent teams (tmux compatibility for teammates)
-        #[arg(long)]
-        teams: bool,
-        /// Working directory
-        #[arg(long)]
-        cwd: Option<String>,
-        /// Node name
-        #[arg(long)]
-        name: Option<String>,
-    },
-    /// Resume a stored session by id prefix in a new window
-    Resume {
-        /// Session id or unique prefix
-        prefix: String,
     },
 }

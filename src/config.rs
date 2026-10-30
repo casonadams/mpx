@@ -11,23 +11,20 @@ pub struct Config {
     pub remain_on_exit: bool,
     /// Number of exited, removed nodes whose logs stay readable.
     pub history_limit: usize,
-    /// Export TMUX/TMUX_PANE and the mpx `tmux` shim in every pane.
+    /// Export TMUX/TMUX_PANE and the mpx `tmux` shim in every pane (default: true).
     pub tmux_compat: bool,
     /// Allow terminal passthrough sequences (DCS tmux, OSC 4/10/11/12/52) from the active pane.
     pub allow_passthrough: bool,
-    /// After a crash or reboot, recreate the last session layout and resume its agents on start.
+    /// After a crash or reboot, recreate the last session layout and resume its processes on start.
     pub restore: bool,
-    /// Keep pipe messages and consumer cursors on disk across daemon restarts.
-    pub persist_pipes: bool,
     /// Milliseconds after the prefix key before the shortcut popup appears; 0 shows it at once.
     pub which_key_delay_ms: u64,
-    pub agent: AgentConfig,
     /// Extra or overriding key bindings: key (tmux notation) -> command line.
     pub bind: BTreeMap<String, String>,
     /// Extra or overriding bindings for keys pressed without the prefix (tmux `bind -n`).
     pub bind_root: BTreeMap<String, String>,
-    /// Extra or overriding agent harness definitions.
-    pub harness: Vec<HarnessConfig>,
+    /// Rules for resuming processes (AI CLI tools, editors, watchers) across restarts.
+    pub resume: Vec<ResumeRule>,
     pub style: StyleConfig,
 }
 
@@ -120,29 +117,72 @@ impl Default for StyleConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
-#[serde(default, deny_unknown_fields)]
-pub struct AgentConfig {
-    /// Quiet period after which an agent without hooks is considered idle.
-    pub idle_ms: u64,
-    /// Emit an OSC 9 desktop notification when an off-screen agent needs input.
-    pub notify: bool,
-    /// Give agents mpx launches the mpx MCP tools, so they can see and message other agents.
-    pub mcp: bool,
-}
-
 #[derive(Debug, Clone, Deserialize, PartialEq, Default)]
 #[serde(default, deny_unknown_fields)]
-pub struct HarnessConfig {
+pub struct ResumeRule {
     pub name: String,
-    /// Foreground process names that identify this harness.
+    /// Foreground or command process names that identify this tool.
     pub detect: Vec<String>,
-    /// argv for a fresh session.
-    pub command: Vec<String>,
-    /// argv to resume; `{id}` is replaced by the session id.
+    /// Command line to resume a session; `{id}` is replaced by the session id.
     pub resume: Vec<String>,
-    /// Extra argv appended to `command` to pre-assign a session id (`{id}` replaced).
-    pub session_id_args: Vec<String>,
+    /// Command line fallback when no session id is known (e.g. `["claude", "--continue"]`).
+    pub fallback: Vec<String>,
+    /// Optional environment variable that carries the session id.
+    pub env_id: Option<String>,
+}
+
+pub fn default_resume_rules() -> Vec<ResumeRule> {
+    vec![
+        ResumeRule {
+            name: "claude".into(),
+            detect: vec!["claude".into()],
+            resume: vec!["claude".into(), "--resume".into(), "{id}".into()],
+            fallback: vec!["claude".into(), "--continue".into()],
+            env_id: Some("CLAUDE_SESSION_ID".into()),
+        },
+        ResumeRule {
+            name: "omp".into(),
+            detect: vec!["omp".into()],
+            resume: vec!["omp".into(), "--resume".into(), "{id}".into()],
+            fallback: vec!["omp".into(), "--continue".into()],
+            env_id: Some("OMP_SESSION_ID".into()),
+        },
+        ResumeRule {
+            name: "codex".into(),
+            detect: vec!["codex".into()],
+            resume: vec!["codex".into(), "resume".into(), "{id}".into()],
+            fallback: vec!["codex".into(), "resume".into(), "--last".into()],
+            env_id: None,
+        },
+        ResumeRule {
+            name: "rho".into(),
+            detect: vec!["rho".into()],
+            resume: vec!["rho".into(), "--resume".into(), "{id}".into()],
+            fallback: vec!["rho".into(), "--resume".into()],
+            env_id: None,
+        },
+        ResumeRule {
+            name: "antigravity".into(),
+            detect: vec!["antigravity".into(), "agy".into()],
+            resume: vec!["agy".into(), "--conversation".into(), "{id}".into()],
+            fallback: vec!["agy".into(), "--continue".into()],
+            env_id: None,
+        },
+        ResumeRule {
+            name: "opencode".into(),
+            detect: vec!["opencode".into()],
+            resume: vec!["opencode".into(), "--session".into(), "{id}".into()],
+            fallback: vec!["opencode".into()],
+            env_id: None,
+        },
+        ResumeRule {
+            name: "nvim".into(),
+            detect: vec!["nvim".into()],
+            resume: Vec::new(),
+            fallback: vec!["nvim".into(), "-S".into(), "Session.vim".into()],
+            env_id: None,
+        },
+    ]
 }
 
 impl Default for Config {
@@ -151,26 +191,14 @@ impl Default for Config {
             prefix: "C-b".to_string(),
             remain_on_exit: false,
             history_limit: 64,
-            tmux_compat: false,
+            tmux_compat: true,
             allow_passthrough: true,
             restore: true,
-            persist_pipes: true,
             which_key_delay_ms: 300,
-            agent: AgentConfig::default(),
             bind: BTreeMap::new(),
             bind_root: BTreeMap::new(),
-            harness: Vec::new(),
+            resume: default_resume_rules(),
             style: StyleConfig::default(),
-        }
-    }
-}
-
-impl Default for AgentConfig {
-    fn default() -> Self {
-        Self {
-            idle_ms: 1500,
-            notify: true,
-            mcp: true,
         }
     }
 }

@@ -8,11 +8,11 @@ use crate::client::Client;
 use crate::config::home_dir;
 use crate::ipc::list_sessions;
 use crate::layout::{Rect, WindowTab};
-use crate::protocol::{AgentState, NodeInfo, PaneId};
+use crate::protocol::{NodeInfo, PaneId};
 use crate::tui::command::Command;
 use crate::tui::overlay::nav::{Filter, FilterEvent, ListState, has_ctrl};
 use crate::tui::overlay::widgets::{
-    self, Span, Tone, age_label, fit, join_meta, now_ms, short_path, state_mark, tail_lines,
+    self, Span, Tone, age_label, fit, join_meta, now_ms, short_path, tail_lines,
 };
 use crate::tui::overlay::{OverlayAction, OverlayCtx};
 
@@ -47,7 +47,6 @@ pub struct TreeWindow {
 pub struct TreePane {
     pub name: String,
     pub id: PaneId,
-    pub agent: Option<AgentState>,
     pub active: bool,
     /// Foreground program, else the program the pane was spawned with.
     pub program: String,
@@ -88,8 +87,6 @@ pub struct TreeView {
 #[derive(Debug, Default)]
 struct Tally {
     panes: usize,
-    need: usize,
-    working: usize,
     exited: usize,
     last_output_ms: u64,
 }
@@ -102,28 +99,17 @@ impl Tally {
             tally.last_output_ms = tally.last_output_ms.max(pane.last_output_ms);
             if !pane.running {
                 tally.exited += 1;
-            } else if pane.agent == Some(AgentState::NeedsInput) {
-                tally.need += 1;
-            } else if pane.agent == Some(AgentState::Working) {
-                tally.working += 1;
             }
         }
         tally
     }
 
     fn spans(&self) -> Vec<Span> {
-        [
-            (self.need, AgentState::NeedsInput),
-            (self.working, AgentState::Working),
-            (self.exited, AgentState::Exited),
-        ]
-        .into_iter()
-        .filter(|(n, _)| *n > 0)
-        .map(|(n, state)| {
-            let (glyph, tone) = state_mark(state);
-            Span::toned(format!("{glyph}{n} "), tone)
-        })
-        .collect()
+        if self.exited > 0 {
+            vec![Span::toned(format!("{} exited", self.exited), Tone::Failed)]
+        } else {
+            Vec::new()
+        }
     }
 }
 
@@ -155,7 +141,6 @@ fn pane_from_node(node: &NodeInfo, focused: Option<&str>) -> TreePane {
     TreePane {
         name: node.name.clone(),
         id: node.id,
-        agent: node.agent.as_ref().map(|a| a.state),
         active: focused == Some(node.name.as_str()),
         program: node
             .foreground
@@ -223,11 +208,6 @@ impl TreeView {
         view
     }
 
-    /// Shortens working directories under `home` to `~`.
-    pub fn with_home(mut self, home: Option<&str>) -> Self {
-        self.home = home.map(str::to_string);
-        self
-    }
 
     fn set_sessions(&mut self, mut sessions: Vec<TreeSession>) {
         sessions.sort_by_key(|s| s.name != self.current);
@@ -327,6 +307,9 @@ impl TreeView {
         self.rows().get(self.list.cursor).copied()
     }
 
+    pub fn selected_label(&self) -> Option<String> {
+        self.selected().map(|n| self.name(n).to_string())
+    }
     fn name(&self, node: Node) -> &str {
         match node {
             Node::Session(s) => &self.sessions[s].name,
@@ -541,13 +524,6 @@ impl TreeView {
         }
     }
 
-    fn need_count(&self) -> usize {
-        self.sessions
-            .iter()
-            .flat_map(|s| &s.windows)
-            .map(|w| Tally::of(w.panes.iter()).need)
-            .sum()
-    }
 
     fn cells(&self, node: Node, selected: bool) -> Cells {
         match node {
@@ -605,12 +581,11 @@ impl TreeView {
 
     fn pane_cells(&self, pane: &TreePane, selected: bool) -> Cells {
         let focus = if pane.active { '›' } else { ' ' };
-        let state = if pane.running {
-            pane.agent
+        let (glyph, tone) = if pane.running {
+            ('●', Tone::Accent)
         } else {
-            Some(AgentState::Exited)
+            ('×', Tone::Failed)
         };
-        let (glyph, tone) = state.map_or((' ', Tone::Plain), state_mark);
         let name = match (selected, pane.running) {
             (true, _) => Span::bold(pane.name.clone(), Tone::Plain),
             (false, true) => Span::plain(pane.name.clone()),
@@ -672,12 +647,7 @@ impl TreeView {
     }
 
     fn title(&self) -> String {
-        let need = self.need_count();
-        let mut title = format!("Sessions · {}", self.sessions.len());
-        if need > 0 {
-            title.push_str(&format!(" · {need} need you"));
-        }
-        title
+        format!("Sessions · {}", self.sessions.len())
     }
 
     /// Draws inside `area`: the tree, plus a preview of the selected pane when there is room.

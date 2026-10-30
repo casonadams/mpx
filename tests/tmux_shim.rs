@@ -92,7 +92,7 @@ fn unknown_and_incomplete_options_are_errors() {
 fn global_options_and_version() {
     assert_eq!(parse(&["-V"]).command, "-V");
     assert_eq!(parse(&["-L", "socket", "list-panes"]).command, "list-panes");
-    assert!(parse_invocation(&[]).is_err());
+    assert_eq!(parse_invocation(&[]).unwrap().command, "new-session");
 }
 
 #[test]
@@ -124,6 +124,8 @@ fn pane_format_expands_known_variables() {
     );
     assert_eq!(expand("#{pane_active}#{pane_dead}", &vars), "10");
     assert_eq!(expand("#{window_id}:#{window_name}", &vars), "@1:dev");
+    assert_eq!(expand("#S:#I.#P", &vars), "main:1.1");
+    assert_eq!(expand("#W (#D) ##", &vars), "dev (%3) #");
 }
 
 #[test]

@@ -2,11 +2,10 @@ use mpx::config::Config;
 
 #[test]
 fn partial_file_keeps_defaults_for_missing_keys() {
-    let cfg = Config::parse("prefix = \"C-a\"\n[agent]\nidle_ms = 900\n").unwrap();
+    let cfg = Config::parse("prefix = \"C-a\"\nhistory_limit = 128\n").unwrap();
     assert_eq!(cfg.prefix, "C-a");
-    assert_eq!(cfg.agent.idle_ms, 900);
-    assert!(cfg.agent.notify);
-    assert_eq!(cfg.history_limit, 64);
+    assert_eq!(cfg.history_limit, 128);
+    assert!(cfg.tmux_compat);
 }
 
 #[test]
@@ -15,23 +14,24 @@ fn unknown_keys_are_rejected() {
 }
 
 #[test]
-fn bindings_and_harnesses_parse() {
+fn bindings_and_resume_rules_parse() {
     let text = r#"
 [bind]
 "M-h" = "select-pane -L"
 
-[[harness]]
+[[resume]]
 name = "codex"
 detect = ["codex"]
-command = ["codex"]
 resume = ["codex", "resume", "{id}"]
+fallback = ["codex", "resume", "--last"]
 "#;
     let cfg = Config::parse(text).unwrap();
     assert_eq!(
         cfg.bind.get("M-h").map(String::as_str),
         Some("select-pane -L")
     );
-    assert_eq!(cfg.harness[0].resume, vec!["codex", "resume", "{id}"]);
+    assert_eq!(cfg.resume[0].resume, vec!["codex", "resume", "{id}"]);
+    assert_eq!(cfg.resume[0].fallback, vec!["codex", "resume", "--last"]);
 }
 
 #[test]
@@ -80,8 +80,8 @@ fn allow_passthrough_defaults_to_true_and_can_be_disabled() {
 }
 
 #[test]
-fn agents_get_mpx_tools_unless_turned_off() {
-    assert!(Config::default().agent.mcp);
-    let cfg = Config::parse("[agent]\nmcp = false\n").unwrap();
-    assert!(!cfg.agent.mcp);
+fn tmux_compat_defaults_to_true_and_can_be_disabled() {
+    assert!(Config::default().tmux_compat);
+    let cfg = Config::parse("tmux_compat = false\n").unwrap();
+    assert!(!cfg.tmux_compat);
 }

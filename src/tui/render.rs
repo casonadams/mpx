@@ -6,7 +6,6 @@ use crossterm::{
 use std::io::{self, Write};
 
 use super::canvas::Canvas;
-use super::status::agent_badge;
 use crate::config::{BorderStyle, InactiveColorMode};
 use crate::layout::{Divider, WindowTab, geometry::Rect};
 use crate::vt::grid::Grid;
@@ -114,7 +113,6 @@ pub struct StatusBar<'a> {
     pub tabs: &'a [WindowTab],
     pub panes: &'a [(String, Rect, bool)],
     pub prefix_active: bool,
-    pub waiting_agents: usize,
     pub width: u16,
     pub y: u16,
     pub bg: Option<VtColor>,
@@ -157,15 +155,15 @@ fn divider_color(
         let is_bottom = y == r.y + r.height && x + 1 >= r.x && x <= r.x + r.width;
         is_left || is_right || is_top || is_bottom
     };
-    if let Some(m) = marked {
-        if touches(m) {
-            return style.marked_color;
-        }
+    if let Some(m) = marked
+        && touches(m)
+    {
+        return style.marked_color;
     }
-    if let Some(a) = active {
-        if touches(a) {
-            return style.active_color;
-        }
+    if let Some(a) = active
+        && touches(a)
+    {
+        return style.active_color;
     }
     style.inactive_color
 }
@@ -470,8 +468,7 @@ pub fn format_tab(tab: &WindowTab, zoomed: bool) -> String {
     if tab.has_marked {
         flags.push('M');
     }
-    let badge = tab.agent_badge.as_deref().unwrap_or("");
-    format!("{}:{}{}{} ", tab.index, tab.name, badge, flags)
+    format!("{}:{}{} ", tab.index, tab.name, flags)
 }
 
 /// Left side of the status row: `[session] ` followed by window tabs, or pane names when there are none.
@@ -506,9 +503,6 @@ pub fn status_right(bar: &StatusBar<'_>, clock: &str) -> String {
     if bar.zoomed {
         right.push_str("Z ");
     }
-    if let Some(badge) = agent_badge(bar.waiting_agents) {
-        right.push_str(&format!(" {badge} "));
-    }
     right.push_str(clock);
     right
 }
@@ -539,11 +533,14 @@ const HUD_ITEMS: &[(&str, &str)] = &[
     ("m", "mark pane"),
     ("z", "toggle zoom"),
     ("[", "copy mode"),
+    ("]", "paste buffer"),
+    ("f", "find window/pane"),
     ("x", "kill pane"),
     ("d", "detach"),
-    ("s", "agents"),
-    (".", "sidebar"),
-    ("w", "sessions"),
+    ("s", "sessions"),
+    ("$", "rename session"),
+    (",", "rename window"),
+    ("w", "windows"),
     ("?", "help"),
 ];
 
@@ -1017,6 +1014,18 @@ pub fn copy_to_clipboard(text: &str) {
     let mut out = std::io::stdout();
     let _ = write!(out, "\x1b]52;c;{}\x07", b64);
     let _ = out.flush();
+}
+
+pub fn read_clipboard() -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(output) = std::process::Command::new("pbpaste").output()
+            && output.status.success()
+        {
+            return String::from_utf8(output.stdout).ok();
+        }
+    }
+    None
 }
 
 fn base64_encode(data: &[u8]) -> String {

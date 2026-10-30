@@ -40,10 +40,8 @@ fn clears_zoom(cmd: &Command) -> bool {
         cmd,
         Command::Zoom
             | Command::CopyMode
-            | Command::OpenAgents
             | Command::OpenTree
             | Command::OpenHelp
-            | Command::ToggleSidebar
             | Command::CommandPrompt { .. }
             | Command::Confirm { .. }
             | Command::SendKeys { .. }
@@ -137,13 +135,6 @@ impl App {
                 submit,
             } => self.paste(target, text, submit).await,
             Command::SendPrefix => self.send_prefix().await,
-            Command::NextAttention => self.next_attention().await,
-            Command::LaunchAgent {
-                harness,
-                resume,
-                cwd,
-                split,
-            } => self.launch(harness, resume, cwd, split).await,
             other => return Err(other),
         };
         Ok(flow)
@@ -159,12 +150,16 @@ impl App {
             Command::Zoom => self.toggle_zoom(),
             Command::CopyMode => self.enter_copy().await,
             Command::Detach => Flow::Quit,
-            Command::OpenAgents => self.open_overlay(Overlay::agents()).await,
+            Command::RenameSession { name } => {
+                let result = self.client.rename_session(&name).await;
+                if result.is_ok() {
+                    self.session = name;
+                }
+                self.settle(result)
+            }
             Command::OpenTree => self.open_overlay(Overlay::tree()).await,
             Command::OpenHelp => self.open_help().await,
             Command::OpenPalette { tab } => self.open_palette(tab).await,
-            Command::ToggleSidebar => self.toggle_sidebar().await,
-            Command::StepAgent { next } => self.step_agent(next).await,
             Command::CommandPrompt { initial } => self.open_prompt(&initial),
             Command::Confirm { prompt, then } => self.ask(prompt, *then),
             other => self.say(format!("unhandled command: {other:?}")),
@@ -251,20 +246,10 @@ impl App {
     }
 
     async fn select_dir(&mut self, side: Side) -> Flow {
-        // Moving right out of the focused rail lands on the agent it shows: the rail collapses
-        // and that pane keeps the focus.
-        if self.sidebar.resume && side == Side::Right {
-            self.leave_sidebar().await;
-            return Flow::Continue;
-        }
         match find_directional(&self.panes, &self.active_pane, side) {
             Some(pane) => {
                 let result = self.client.focus(&pane).await;
                 self.settle(result)
-            }
-            None if side == Side::Left && self.sidebar_width() > 0 => {
-                self.focus_sidebar();
-                Flow::Continue
             }
             None => Flow::Continue,
         }
@@ -338,6 +323,24 @@ impl App {
             Ok(found) => found,
             Err(e) => return self.say(e),
         };
+        let text = if text.is_empty() {
+            match &self.last_copy {
+                Some(s) => s.clone(),
+                None => match &self.clipboard {
+                    super::app::Clipboard::Captured(items) => {
+                        items.last().cloned().unwrap_or_default()
+                    }
+                    super::app::Clipboard::System => {
+                        super::render::read_clipboard().unwrap_or_default()
+                    }
+                },
+            }
+        } else {
+            text
+        };
+        if text.is_empty() {
+            return Flow::Continue;
+        }
         let result = pick(&mut temp, &mut self.client)
             .paste(&pane, &text, submit)
             .await;
@@ -431,7 +434,6 @@ impl App {
             client: &mut self.client,
             session: &self.session,
             config: &self.config,
-            registry: &self.registry,
             cwd: cwd.as_deref(),
             socket_dir: &self.socket_dir,
         };

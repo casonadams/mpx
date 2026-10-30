@@ -7,7 +7,6 @@ use crossterm::queue;
 use crossterm::style::{Attribute, Color, Print, SetAttribute, SetForegroundColor};
 
 use crate::layout::Rect;
-use crate::protocol::AgentState;
 use crate::tui::overlay::nav::ListState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,15 +69,6 @@ impl Span {
     }
 }
 
-/// Glyph and tone for an agent state.
-pub fn state_mark(state: AgentState) -> (char, Tone) {
-    match state {
-        AgentState::NeedsInput => ('◆', Tone::Attention),
-        AgentState::Working => ('●', Tone::Active),
-        AgentState::Idle => ('○', Tone::Plain),
-        AgentState::Exited => ('✕', Tone::Failed),
-    }
-}
 
 pub fn now_ms() -> u64 {
     SystemTime::now()

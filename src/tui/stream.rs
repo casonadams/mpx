@@ -3,8 +3,7 @@
 
 use super::app::{App, Mode};
 use super::panes::{has_scrollback, load_pane};
-use super::status::node_named;
-use crate::protocol::{AgentInfo, StreamEvent};
+use crate::protocol::StreamEvent;
 use crate::vt::VtScreen;
 
 /// Largest gap a pane coming into view catches up on by reading it; well inside the 2 MB a pane's
@@ -54,10 +53,6 @@ impl App {
                 self.pane_dims.remove(&name);
                 true
             }
-            StreamEvent::Agent { name, agent } => {
-                self.apply_agent(&name, agent).await;
-                false
-            }
             // Panes created or rearranged from outside (an agent's split, `mpx focus`) show at
             // once, not at the next tick.
             StreamEvent::Spawned { .. } | StreamEvent::Layout => true,
@@ -65,7 +60,6 @@ impl App {
                 self.resync_all().await;
                 true
             }
-            _ => false,
         }
     }
 
@@ -231,22 +225,4 @@ impl App {
         }
     }
 
-    async fn apply_agent(&mut self, name: &str, agent: Option<AgentInfo>) {
-        if !self.nodes.iter().any(|n| n.name == name) {
-            self.refresh_nodes().await;
-        }
-        let newest = node_named(&self.nodes, name).map(|n| n.id);
-        if let Some(listed) = self
-            .sidebar
-            .agents
-            .iter_mut()
-            .find(|a| a.session == self.session && Some(a.node.id) == newest)
-        {
-            listed.node.agent = agent.clone();
-        }
-        if let Some(node) = self.nodes.iter_mut().find(|n| Some(n.id) == newest) {
-            node.agent = agent;
-        }
-        self.update_waiting();
-    }
 }

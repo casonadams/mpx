@@ -1,36 +1,17 @@
-use std::path::Path;
-
-use crate::agents::{self, Harness, LaunchOptions, LaunchSpec, find_harness};
+use crate::config::ResumeRule;
 use crate::protocol::SpawnOpts;
 use crate::store::{PaneSnapshot, RestorePlan, SessionSnapshot, WindowPlan, WindowSnapshot};
 
-/// Restores PTY panes with their original command in their last cwd; agents with a known session id
-/// are resumed through their harness, other agents start fresh; non-PTY task panes are not restored.
-/// Windows left without panes are dropped. Harness runtime files are written under `runtime_dir`.
+/// Restores PTY panes with their original command or configured resume command in their last cwd;
+/// non-PTY task panes are not restored. Windows left without panes are dropped.
 pub fn plan_restore(
     snapshot: &SessionSnapshot,
-    harnesses: &[Harness],
-    runtime_dir: &Path,
-    mcp: bool,
+    rules: &[ResumeRule],
 ) -> RestorePlan {
-    plan_restore_with(snapshot, harnesses, |h, resume, opts| {
-        agents::launch(h, resume, LaunchOptions { mcp, ..opts }, runtime_dir)
-    })
-}
-
-/// `plan_restore` with the agent launcher injected, so the plan is computed without I/O.
-pub fn plan_restore_with<F>(
-    snapshot: &SessionSnapshot,
-    harnesses: &[Harness],
-    launcher: F,
-) -> RestorePlan
-where
-    F: Fn(&Harness, Option<&str>, LaunchOptions) -> LaunchSpec,
-{
     let planned: Vec<Option<WindowPlan>> = snapshot
         .windows
         .iter()
-        .map(|window| plan_window(window, harnesses, &launcher))
+        .map(|window| plan_window(window, rules))
         .collect();
     RestorePlan {
         active_window: remap_active(snapshot.active_window, &planned),
@@ -61,19 +42,15 @@ fn remap_active(active: usize, planned: &[Option<WindowPlan>]) -> usize {
     before.min(survivors.saturating_sub(1))
 }
 
-fn plan_window<F>(
+fn plan_window(
     window: &WindowSnapshot,
-    harnesses: &[Harness],
-    launcher: &F,
-) -> Option<WindowPlan>
-where
-    F: Fn(&Harness, Option<&str>, LaunchOptions) -> LaunchSpec,
-{
+    rules: &[ResumeRule],
+) -> Option<WindowPlan> {
     let panes: Vec<SpawnOpts> = window
         .panes
         .iter()
         .filter(|pane| pane.pty)
-        .map(|pane| plan_pane(pane, harnesses, launcher))
+        .map(|pane| plan_pane(pane, rules))
         .collect();
     if panes.is_empty() {
         return None;
@@ -98,10 +75,18 @@ where
     })
 }
 
-fn plan_pane<F>(pane: &PaneSnapshot, harnesses: &[Harness], launcher: &F) -> SpawnOpts
-where
-    F: Fn(&Harness, Option<&str>, LaunchOptions) -> LaunchSpec,
-{
+fn find_rule<'a>(rules: &'a [ResumeRule], name_or_cmd: &str) -> Option<&'a ResumeRule> {
+    rules.iter().find(|r| {
+        r.name.eq_ignore_ascii_case(name_or_cmd)
+            || r.detect.iter().any(|d| d.eq_ignore_ascii_case(name_or_cmd))
+    })
+}
+
+fn fill(template: &[String], id: &str) -> Vec<String> {
+    template.iter().map(|s| s.replace("{id}", id)).collect()
+}
+
+fn plan_pane(pane: &PaneSnapshot, rules: &[ResumeRule]) -> SpawnOpts {
     let original = SpawnOpts {
         name: pane.name.clone(),
         command: pane.command.clone(),
@@ -112,34 +97,29 @@ where
         remain_on_exit: pane.remain_on_exit,
         tmux_compat: pane.tmux_compat,
     };
-    let Some(agent) = &pane.agent else {
-        return original;
-    };
-    let Some(harness) = find_harness(harnesses, &agent.harness) else {
-        return original;
-    };
-    let resume = agent
-        .session_id
+
+    let rule = pane
+        .resume_rule
         .as_deref()
-        .filter(|_| !harness.resume.is_empty());
-    let spec = launcher(
-        harness,
-        resume,
-        LaunchOptions {
-            teams: pane.tmux_compat,
-            ..LaunchOptions::default()
-        },
-    );
-    match spec.argv.split_first() {
-        Some((command, args)) => SpawnOpts {
-            command: command.clone(),
+        .and_then(|name| find_rule(rules, name))
+        .or_else(|| find_rule(rules, &pane.command));
+
+    let Some(rule) = rule else {
+        return original;
+    };
+
+    let argv = if let Some(id) = pane.session_id.as_deref().filter(|_| !rule.resume.is_empty()) {
+        fill(&rule.resume, id)
+    } else if !rule.fallback.is_empty() {
+        rule.fallback.clone()
+    } else {
+        return original;
+    };
+
+    match argv.split_first() {
+        Some((cmd, args)) => SpawnOpts {
+            command: cmd.clone(),
             args: args.to_vec(),
-            env: spec
-                .env
-                .into_iter()
-                .chain(pane.env.iter().cloned())
-                .collect(),
-            tmux_compat: spec.tmux_compat,
             ..original
         },
         None => original,

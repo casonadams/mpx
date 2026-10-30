@@ -12,50 +12,6 @@ pub enum NodeState {
     Exited,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AgentState {
-    NeedsInput,
-    Working,
-    Idle,
-    Exited,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AgentInfo {
-    pub harness: String,
-    pub state: AgentState,
-    pub session_id: Option<String>,
-    pub detail: Option<String>,
-    /// Unix epoch milliseconds of the last state transition.
-    pub since_ms: u64,
-    /// Boxed: most responses carry nodes, and few agents report a focus.
-    #[serde(default)]
-    pub focus: Box<AgentFocus>,
-}
-
-/// How long an agent's file edits stay in its focus.
-pub const EDIT_WINDOW_MS: u64 = 30 * 60_000;
-/// Most file edits an agent's focus keeps.
-pub const MAX_EDITS: usize = 50;
-
-/// What an agent is working on, from its harness hooks; other agents read it to coordinate.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct AgentFocus {
-    /// The latest prompt the agent was given.
-    pub task: Option<String>,
-    /// The reply the agent ended its latest turn with.
-    pub reply: Option<String>,
-    /// Files the agent edited within `EDIT_WINDOW_MS`, oldest first.
-    pub edits: Vec<FileEdit>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct FileEdit {
-    pub path: String,
-    pub at_ms: u64,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeInfo {
     pub name: String,
@@ -74,7 +30,6 @@ pub struct NodeInfo {
     pub last_output_ms: u64,
     /// Index of the window containing this pane, if it is laid out.
     pub window: Option<usize>,
-    pub agent: Option<AgentInfo>,
     /// Input modes the program in a terminal pane has set (absent from daemons that predate it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub modes: Option<TermModes>,
@@ -103,7 +58,6 @@ impl NodeInfo {
             started_ms: 0,
             last_output_ms: 0,
             window: None,
-            agent: None,
             modes: None,
             size: None,
             marked: None,
@@ -224,8 +178,6 @@ pub enum WaitCondition {
     Idle { quiet_ms: u64 },
     /// Regex matched against plain text (current screen plus output produced after the request).
     Match { pattern: String },
-    /// Agent reached the given state.
-    State { state: AgentState },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -233,27 +185,13 @@ pub struct WaitOutcome {
     /// False when the timeout elapsed first.
     pub satisfied: bool,
     pub exit_code: Option<i32>,
-    pub state: Option<AgentState>,
     pub matched: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct PipeMessage {
-    pub seq: u64,
-    pub ts_ms: u64,
-    pub data: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct PipeInfo {
-    pub name: String,
-    pub messages: usize,
-    pub next_seq: u64,
-}
 
 /// Version of the client-daemon protocol. Bump it on any change an older peer cannot parse, so
 /// clients refuse an incompatible daemon instead of misreading it.
-pub const PROTOCOL: u32 = 1;
+pub const PROTOCOL: u32 = 2;
 
 fn first_protocol() -> u32 {
     1
@@ -281,7 +219,7 @@ pub enum Request {
     Ping,
     Info,
     Shutdown,
-    /// Recreate windows, panes and agents from the session's last snapshot. Errors when the
+    /// Recreate windows and panes from the session's last snapshot. Errors when the
     /// session already has panes or no snapshot exists.
     Restore,
     /// Run `request` at most once per `key`: a repeated key returns the first response (also while
@@ -414,55 +352,11 @@ pub enum Request {
     GetCwd {
         name: String,
     },
-    CreatePipe {
-        name: String,
-        capacity: Option<usize>,
-    },
-    /// Appends one message; creates the pipe if missing.
-    WritePipe {
-        name: String,
-        data: String,
-    },
-    /// `consumer` keeps a daemon-side cursor; otherwise `since` (exclusive seq) or from the start.
-    /// `wait_ms` blocks until at least one message is available or the timeout elapses.
-    ReadPipe {
-        name: String,
-        #[serde(default)]
-        since: Option<u64>,
-        #[serde(default)]
-        consumer: Option<String>,
-        #[serde(default)]
-        wait_ms: Option<u64>,
-        #[serde(default)]
-        limit: Option<usize>,
-    },
-    ListPipes,
-    SubscribePipe {
-        name: String,
-    },
     Status {
         name: String,
     },
-    /// Reported by harness hooks (`mpx hook`). `clear` drops agent tracking for the pane.
-    AgentReport {
+    RenameSession {
         name: String,
-        #[serde(default)]
-        harness: Option<String>,
-        #[serde(default)]
-        state: Option<AgentState>,
-        #[serde(default)]
-        session_id: Option<String>,
-        #[serde(default)]
-        detail: Option<String>,
-        #[serde(default)]
-        clear: bool,
-        #[serde(default)]
-        task: Option<String>,
-        #[serde(default)]
-        reply: Option<String>,
-        /// Path of a file the agent just edited.
-        #[serde(default)]
-        edited: Option<String>,
     },
 }
 
@@ -484,12 +378,6 @@ pub enum Response {
     Error(String),
     Screen(String),
     Layout(Vec<(String, Rect, bool)>, Vec<Divider>, Vec<WindowTab>),
-    PipeSeq(u64),
-    PipeMessages {
-        messages: Vec<PipeMessage>,
-        next: u64,
-    },
-    PipeList(Vec<PipeInfo>),
     Cwd(Option<String>),
 }
 
@@ -511,15 +399,6 @@ pub enum StreamEvent {
     Spawned {
         name: String,
         pid: Option<u32>,
-    },
-    Pipe {
-        name: String,
-        message: PipeMessage,
-    },
-    /// Agent state transition (`None`: agent tracking ended).
-    Agent {
-        name: String,
-        agent: Option<AgentInfo>,
     },
     /// This subscriber fell behind and events were dropped; re-read state before trusting the stream.
     Lagged,

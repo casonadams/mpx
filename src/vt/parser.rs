@@ -150,6 +150,28 @@ impl VtHandler {
                 25 => self.grid.cursor.visible = set,
                 1049 | 1047 | 47 => self.grid.clear_screen(2),
                 69 => self.grid.set_lr_margins_mode(set),
+                1000 => {
+                    self.modes.mouse_tracking = if set {
+                        crate::keys::MouseTracking::X10
+                    } else {
+                        crate::keys::MouseTracking::None
+                    };
+                }
+                1002 => {
+                    self.modes.mouse_tracking = if set {
+                        crate::keys::MouseTracking::ButtonEvent
+                    } else {
+                        crate::keys::MouseTracking::None
+                    };
+                }
+                1003 => {
+                    self.modes.mouse_tracking = if set {
+                        crate::keys::MouseTracking::AnyEvent
+                    } else {
+                        crate::keys::MouseTracking::None
+                    };
+                }
+                1006 => self.modes.mouse_sgr = set,
                 1004 => self.modes.focus_events = set,
                 2004 => self.modes.bracketed_paste = set,
                 _ => {}

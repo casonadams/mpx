@@ -1,5 +1,4 @@
 mod tui {
-    mod agent;
     mod app;
     mod canvas;
     mod command;
@@ -11,7 +10,6 @@ mod tui {
     mod panes;
     mod prompt;
     mod render;
-    mod sidebar;
     mod status;
     mod stream;
     mod terminal;

@@ -27,6 +27,7 @@ impl Invocation {
 /// Canonical tmux command name for a name or alias.
 pub fn canonical(name: &str) -> &str {
     match name {
+        "a" | "at" | "attach" => "attach-session",
         "ls" => "list-sessions",
         "lsw" => "list-windows",
         "lsp" | "list" => "list-panes",
@@ -44,8 +45,8 @@ pub fn canonical(name: &str) -> &str {
         "swapp" => "swap-pane",
         "breakp" => "break-pane",
         "renamew" => "rename-window",
+        "rename" => "rename-session",
         "has" => "has-session",
-        "new" => "new-session",
         "lastw" => "last-window",
         "lastp" => "last-pane",
         other => other,
@@ -55,6 +56,7 @@ pub fn canonical(name: &str) -> &str {
 /// Switch flags and value flags accepted by a canonical command; `None` when the command is not modelled.
 pub fn spec(command: &str) -> Option<(&'static str, &'static str)> {
     Some(match command {
+        "attach-session" => ("d", "t"),
         "split-window" => ("hvdPbf", "tcFl"),
         "new-window" => ("dPkab", "ncFt"),
         "new-session" => ("dPA", "sncxyFt"),
@@ -65,8 +67,8 @@ pub fn spec(command: &str) -> Option<(&'static str, &'static str)> {
         "list-windows" => ("a", "tF"),
         "list-sessions" => ("", "F"),
         "display-message" => ("pIv", "tF"),
-        "has-session" | "select-window" | "rename-window" | "last-window" => ("", "t"),
-        "select-pane" => ("LRUDmMZe", "tT"),
+        "has-session" | "select-window" | "rename-window" | "rename-session" | "last-window" => ("", "t"),
+        "select-pane" => ("LRUDmMZel", "tT"),
         "select-layout" => ("nopE", "t"),
         "resize-pane" => ("LRUDMZ", "txyt"),
         "swap-pane" => ("dDUZ", "st"),
@@ -121,9 +123,10 @@ pub fn parse(argv: &[String]) -> Result<Invocation, String> {
             ..Invocation::default()
         });
     }
-    let name = argv
-        .get(start)
-        .ok_or_else(|| "no command specified".to_string())?;
+    let name = match argv.get(start) {
+        Some(s) => s.as_str(),
+        None => "new-session",
+    };
     let command = canonical(name).to_string();
     let mut inv = Invocation {
         command: command.clone(),

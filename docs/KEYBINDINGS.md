@@ -6,22 +6,20 @@ Bindings follow tmux muscle memory. Where tmux is silent or ambiguous, they foll
 
 ## Prefix
 
-The prefix defaults to **`Ctrl-b`**. Change it with `prefix = "C-a"` in the [config file](CONFIG.md). Press the prefix, release, then an action key. Pressing the prefix twice sends it to the program in the pane (for example, `Ctrl-b Ctrl-b` reaches Claude Code's "run in background").
+The prefix defaults to **`Ctrl-b`**. Change it with `prefix = "C-a"` in the [config file](CONFIG.md). Press the prefix, release, then an action key. Pressing the prefix twice sends it to the program in the pane.
 
-If you pause after the prefix, a shortcut popup lists the common action keys. It appears after `which_key_delay_ms` (300 ms by default, `0` shows it at once), so fast sequences never flash it.
-
-Only the configured prefix is intercepted. `Ctrl-a` reaches your shell unless you make it the prefix.
+If you pause after the prefix, a shortcut popup lists common action keys after `which_key_delay_ms` (300 ms by default, `0` shows it at once).
 
 ### Windows
 
 | Key | Command | Description |
 | :--- | :--- | :--- |
-| `c` | `new-window` | New window in the current pane's directory |
+| `c` | `new-window` | New window in current pane's directory |
 | `n` / `p` | `next-window` / `previous-window` | Cycle windows |
-| `0`..`9` | `select-window` | Jump to a window |
-| `^` | `last-window` | Previous window (vim's alternate buffer) |
-| `,` | `rename-window` | Rename (opens the prompt prefilled) |
-| `&` | `kill-window` | Close the window (asks y/n) |
+| `0`..`9` | `select-window` | Jump to a window by index |
+| `^` | `last-window` | Previous window |
+| `,` | `rename-window` | Rename window (opens prompt prefilled) |
+| `&` | `kill-window` | Close window (asks y/n) |
 
 ### Panes
 
@@ -32,121 +30,67 @@ Only the configured prefix is intercepted. `Ctrl-a` reaches your shell unless yo
 | `h` `j` `k` `l` / arrows | `select-pane -L/-D/-U/-R` | Move focus |
 | `o` / `Tab` | `next-pane` | Cycle panes |
 | `;` | `last-pane` | Previously focused pane |
-| `H` `J` `K` `L` | `resize-pane -L/-D/-U/-R` | Resize by 5 cells; repeat without the prefix for 500 ms |
-| `z` | `resize-pane -Z` | Zoom toggle |
-| `x` | `kill-pane` | Kill the pane (asks y/n) |
-| `!` | `break-pane` | Move the pane to its own window |
-| `{` / `}` | `swap-pane -U/-D` | Swap with the previous/next pane |
-| `Space` | `next-layout` | Cycle even-horizontal, even-vertical, main-vertical, main-horizontal, tiled |
-| `=` | `select-layout -E` | Spread the panes evenly, keeping their arrangement |
+| `H` `J` `K` `L` | `resize-pane -L/-D/-U/-R` | Resize by 5 cells (repeatable without prefix for 500ms) |
+| `z` | `resize-pane -Z` | Toggle zoom |
+| `x` | `kill-pane` | Kill pane (asks y/n) |
+| `!` | `break-pane` | Move pane into its own window |
+| `{` / `}` | `swap-pane -U/-D` | Swap with previous / next pane |
+| `Space` | `next-layout` | Cycle layouts (even-horizontal, even-vertical, main-vertical, main-horizontal, tiled) |
+| `=` | `select-layout -E` | Spread panes evenly |
 
-### Sessions and agents
+### Sessions
 
 | Key | Command | Description |
 | :--- | :--- | :--- |
-| `s` | `palette agents` | [Agent manager](AGENT-MANAGER.md) (Agents tab in palette; `:agents` for classic view) |
-| `w` | `palette sessions` | Sessions & panes (Sessions tab in palette; `:choose-tree` for classic tree) |
-| `.` | `sidebar` | Open or close the vertical [agents drawer](#agents-drawer) |
+| `s` | `palette sessions` / `choose-tree` | Interactive session and pane picker |
+| `w` | `palette sessions` / `choose-tree` | Interactive window and pane picker |
+| `$` | `rename-session` | Rename current session |
 | `(` / `)` | `prev-session` / `next-session` | Switch sessions |
 | `d` / `q` | `detach-client` | Detach (daemon and panes keep running) |
 
-### Other
+### Command Palette & Navigation
 
 | Key | Command | Description |
 | :--- | :--- | :--- |
-| `Ctrl-Space` (no prefix) | `palette` | Open the unified command palette |
+| `Ctrl-Space` (no prefix) | `palette` | Open the unified fuzzy Command Palette |
 | `:` | `command-prompt` | Command line on the status row |
-| `?` | `palette help` | Searchable key list (Help tab in palette; `:list-keys` for classic cheat sheet) |
-| `[` | `copy-mode` | Vi copy mode |
+| `?` | `palette help` | Searchable key bindings list |
+| `[` | `copy-mode` | Vi copy mode with 100k scrollback |
 
 ---
 
-## Command prompt (`Prefix :`)
+## Command Prompt (`Prefix :`)
 
-A vim-style command line on the status row. Editing keys: `Left`/`Right`, `Backspace`, `Ctrl-u` (clear), `Ctrl-w` (delete word), `Up`/`Down` (history), `Tab` (complete the command name), `Enter`, `Esc`. Arguments support quotes and backslash escapes. Errors show on the status row.
+Vim-style command line on the status row. Supports tab-completion, history (`Up`/`Down`), quotes, and escapes.
 
-| Command | Aliases | Notes |
+| Command | Aliases | Description |
 | :--- | :--- | :--- |
-| `split-window [-h] [-d] [-c dir] [cmd...]` | `split`, `sp` (stacked), `vsplit`, `vs` (side by side) | |
-| `new-window [-n name] [-c dir] [cmd...]` | `new`, `tabnew` | |
-| `next-window` / `previous-window` | `tabnext`, `tabn` / `prev-window`, `tabprevious`, `tabp` | |
-| `select-window -t N`, `last-window`, `rename-window NAME`, `kill-window [-t N]` | | |
-| `select-pane [-t TARGET] [-m|-M] \| -L/-R/-U/-D`, `next-pane`, `last-pane`, `kill-pane [-t TARGET]` | | `TARGET` is `name`, `%id` or `session:pane` |
-| `resize-pane -L/-R/-U/-D [N]`, `resize-pane -Z` | | `N` defaults to 5 |
-| `swap-pane [-U|-D] [-s SRC] [-t DST]`, `break-pane`, `select-layout [preset]`, `select-layout -E`, `next-layout` | | |
-| `switch-client -t SESSION` | `session` | |
-| `next-session`, `prev-session` | | |
-| `send-keys [-t TARGET] KEYS...` | | tmux key names |
-| `paste [-t TARGET] [--submit] TEXT...` | | |
-| `launch-agent HARNESS [--resume ID] [--cwd DIR] [--split]` | | |
-| `agents`, `next-attention`, `choose-tree`, `sidebar`, `next-agent`, `prev-agent`, `list-keys` | `help` | |
-| `palette [commands\|agents\|sessions\|help]` | `command-palette` | |
-| `copy-mode`, `send-prefix`, `command-prompt` | | |
-| `detach-client` | `detach`, `q`, `quit` | |
-| `kill-server` | `qa` | Asks y/n |
-
-Custom bindings map a key to any of these command lines; see [CONFIG.md](CONFIG.md).
+| `split-window [-h] [-d] [-c dir] [cmd...]` | `split`, `sp`, `vsplit`, `vs` | Split active pane |
+| `new-window [-n name] [-c dir] [cmd...]` | `new`, `tabnew` | Create window |
+| `rename-session NAME` | `rename` | Rename current session |
+| `rename-window NAME` | `renamew` | Rename active window |
+| `kill-pane [-t TARGET]` | `killp` | Close pane |
+| `kill-window [-t INDEX]` | `killw` | Close window |
+| `kill-server` | `qa` | Terminate session daemon |
+| `select-pane [-t TARGET] [-m\|-M] \| -L/-R/-U/-D` | `selectp` | Move pane focus |
+| `resize-pane -L/-R/-U/-D [N]`, `resize-pane -Z` | `resizep` | Resize / zoom |
+| `choose-tree` | | Interactive session/window tree |
+| `palette [commands\|sessions\|help]` | `command-palette` | Fuzzy command palette |
 
 ---
 
-## Overlays
-
-All overlays use the same motions: `j`/`k` (or arrows), `gg`/`G`, `Ctrl-d`/`Ctrl-u`, `/` filter (fuzzy; `Enter` keeps the filter, `Esc` clears it), and `q`/`Esc` to close.
-
-- **Command Palette** (`Ctrl-Space` or `:palette`): unified tabbed modal with instant fuzzy search across **Commands**, **Agents**, **Sessions & Panes**, and **Help**. Navigate rows with `Ctrl-n`/`Ctrl-p` or `Up`/`Down`, switch tabs with `Tab`/`Shift-Tab` or `Left`/`Right`, type to filter, `Ctrl-w`/`Ctrl-u` to delete word/clear, `Enter` to execute or switch, and `Esc` to close.
-- **Agent manager** (`Prefix s`): see [AGENT-MANAGER.md](AGENT-MANAGER.md).
-- **Sessions** (`Prefix w`): every session, window and pane, with the current session first. Pane rows show the running program, working directory and time since last output; session and window rows count waiting (`◆`), working (`●`) and exited (`✕`) panes, even when collapsed. `l`/`Right`/`Enter` expands or selects, `h`/`Left` collapses, `/` filters by name, program or directory, `x` kills the selected pane, window or session (asks y/n), `p` toggles a preview of the selected pane. Selecting switches session and window as needed.
-- **Help** (`Prefix ?`): every active binding and its command.
-
----
-
-## Agents drawer
-
-`Prefix .` opens an on-demand vertical drawer over the left 34 columns showing each agent's title, latest status, and state glyph (`◆` waiting, `●` working, `○` idle, `✕` exited). Panes always retain 100% full width with zero stolen columns when the drawer is closed.
+## Vi Copy Mode (`Prefix [`)
 
 | Key | Action |
 | :--- | :--- |
-| `Prefix .` | Open or close the vertical agents drawer |
-| `j`/`k`, `gg`/`G`, `Ctrl-d`/`Ctrl-u` | Move the highlight (another session's agent shows after a 150 ms pause) |
-| `Enter` / `l` / `Right` / `Esc` / `q` | Hand keys to the shown pane and close the drawer |
-
----
-
-## Input passthrough
-
-- Keys are encoded like xterm, including modifiers: `Shift-Tab` (`CSI Z`), `Alt-<key>` (ESC prefix), `Ctrl`/`Alt`/`Shift` arrows and function keys, `F1`-`F12`. `Shift-Enter` and `Alt-Enter` send `ESC CR`, which Claude Code and readline treat as a newline.
-- Arrow keys follow the program's cursor-key mode (DECCKM).
-- Pastes use bracketed paste when the program enabled it, so multi-line prompts are not submitted line by line.
-- Focus in/out events reach programs that request them (`?1004`), both for terminal focus and for pane focus changes.
-
----
-
-## Status bar
-
-`[session] 0:claude* 1:cargo` lists windows, which are named after the agent or foreground process of their focused pane until you rename them. `◆N` counts agents in any session waiting for input. Exited panes kept by `remain_on_exit` show an `[exited N]` badge. When an agent in a pane you can't see starts waiting, mpx sends a desktop notification (OSC 9) unless `agent.notify = false`.
-
----
-
-## Mouse
-
-- **Click** focuses a pane and nothing else. **Drag** selects text (entering copy mode from where the press started), and releasing copies it (`pbcopy` on macOS, OSC 52 elsewhere).
-- **Drag a border** between panes to resize them; the pane on the side you drag toward grows.
-- **Wheel up** enters copy mode and scrolls history; **wheel down** scrolls back toward the prompt and, when the wheel entered copy mode, leaves it on reaching the prompt (tmux's `copy-mode -e`). Copy mode entered with `Prefix [` stays until `q` or `Esc`.
-
----
-
-## Copy mode (`Prefix [`)
-
-| Key | Action |
-| :--- | :--- |
-| `h` `j` `k` `l` / arrows | Move |
-| `w` / `b` | Word forward / backward |
-| `0` / `^` / `$` | Line start / end |
-| `Ctrl-u` / `Ctrl-d`, `PageUp` / `PageDown` | Half page |
-| `g` / `G` | Top / bottom of history |
-| `?` / `/` | Search backward (up) / forward (down) |
-| `n` / `N` | Repeat search next / previous |
-| `v` / `V` | Character / line selection |
-| `y` / `Enter` | Yank to clipboard and exit |
-| `Esc` | Clear selection, or exit |
-| `q` | Exit |
+| `h` `j` `k` `l` / arrows | Move cursor |
+| `Ctrl-u` / `Ctrl-d` | Half page up / down |
+| `g` / `G` | Top / bottom of scrollback |
+| `0` / `$` | Start / end of line |
+| `w` / `b` | Forward / backward word |
+| `v` | Start character selection |
+| `V` | Start line selection |
+| `y` | Yank selection (syncs to OS clipboard via OSC 52) |
+| `/` | Regex search forward |
+| `n` / `N` | Next / previous search match |
+| `q` / `Esc` | Exit copy mode |

@@ -1,4 +1,4 @@
-use mpx::protocol::{AgentInfo, AgentState, StreamEvent};
+use mpx::protocol::StreamEvent;
 use mpx::wire::{decode_event, encode_event};
 
 fn round_trip(event: &StreamEvent) -> StreamEvent {
@@ -49,17 +49,6 @@ fn other_events_travel_as_json_frames() {
         StreamEvent::Spawned {
             name: "p".to_string(),
             pid: Some(42),
-        },
-        StreamEvent::Agent {
-            name: "p".to_string(),
-            agent: Some(AgentInfo {
-                harness: "claude".to_string(),
-                state: AgentState::Working,
-                session_id: None,
-                detail: Some("detail".to_string()),
-                since_ms: 9,
-                focus: Box::default(),
-            }),
         },
         StreamEvent::Lagged,
     ];

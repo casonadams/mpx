@@ -5,38 +5,48 @@
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 [![Documentation](https://img.shields.io/badge/docs-casonadams.github.io%2Fmpx-blue)](https://casonadams.github.io/mpx/)
 
-A simple, ultra-performant process and stream multiplexer in Rust. Built from first principles for human developers collaborating side-by-side with autonomous AI coding agents (`oh-my-pi`, `claude code`).
+A modern, ultra-fast terminal multiplexer in Rust: 100% tmux-compatible, crash-resilient with automatic session recovery, zero-flicker rendering, and a sleek fuzzy-search command palette.
 
-> **100% Local & Zero Telemetry**: `mpx` is an offline-by-design terminal engine. It contains **zero network calls, zero analytics, zero telemetry, and zero model training**. Your commands, keystrokes, and source code never leave your machine. It operates purely over local Unix domain sockets or Windows Named Pipes, streaming structured JSON-RPC or stdio MCP to whichever agent harness or workflow engine *you* choose to run.
+> **100% Local & Zero Telemetry**: `mpx` is an offline-by-design terminal engine. It contains **zero network calls, zero analytics, zero telemetry, and zero model training**. Commands, keystrokes, and outputs never leave your machine. It operates purely over local Unix domain sockets or Windows Named Pipes.
 
 ---
 
 ## What Sets `mpx` Apart?
 
-Traditional terminal multiplexers were designed in the 1990s and 2000s under the assumption that every pane is an interactive login shell inside a PTY:
+Traditional multiplexers like `tmux` rely on 30-year-old C architectures (`libevent`) and external scripts (`tmux-resurrect`) that scrape process tables to save state. Heavyweight alternatives like `zellij` consume 60–120MB+ idle RAM with WebAssembly runtimes.
 
-- **`tmux`**: Ubiquitous and lightweight (~5MB), but constrained by 30-year-old PTY assumptions. AI agents are forced to scrape raw ANSI strings from `capture-pane`, sleep-poll heuristic loops, and inject fake keystrokes via `send-keys`.
-- **`zellij`**: Proven human ergonomics, but heavyweight (~60–120MB idle RAM, 30MB+ binary size), bounces bytes across multi-actor thread hops, and includes heavy WebAssembly runtimes with no native structured agent protocol.
-
-**`mpx` replaces the legacy PTY restriction with Unified Stream Nodes**:
+`mpx` provides a pure, modern terminal multiplexer in Tokio async Rust:
 
 ```mermaid
 graph TD
-    subgraph Daemon [mpx Daemon Engine]
-        direction TB
-        subgraph Interfaces [Interfaces]
-            direction LR
-            TUI["<b>Human TUI (60 FPS)</b><br/>• DEC 2026 Synchronized Updates<br/>• Active Green Outline + Connectors<br/>• 100k-Line Vi Copy Mode"]
-            IPC["<b>Agent IPC & Stdio MCP</b><br/>• JSON-RPC 2.0 / NDJSON<br/>• Token-by-Token Streams<br/>• Direct Exit Codes (OnExit)"]
-        end
-        subgraph Nodes [Unified Execution Nodes]
-            direction LR
-            PTY["<b>Interactive PTY</b><br/>(zsh / nvim / htop)"]
-            TASK["<b>Task Runner</b><br/>(cargo / vite / tests)"]
-            PIPE["<b>Virtual FIFO Pipe</b><br/>(cross-agent bus)"]
-        end
-        Interfaces --> Nodes
+    subgraph ClientInterfaces [Client & Invocation Interfaces]
+        direction LR
+        TMUX["<b>tmux Invocation Shim</b><br/>(split-window, send-keys, capture-pane)"]
+        CLI["<b>mpx CLI</b><br/>(run, attach, restore, list)"]
+        TUI["<b>Human TUI (60 FPS)</b><br/>• DEC 2026 Synchronized Updates<br/>• 3-Tab Command Palette (Ctrl-Space)<br/>• Vi Copy Mode (100k lines)"]
     end
+
+    subgraph DaemonEngine [mpx Daemon Engine (~5MB)]
+        direction TB
+        IPC["<b>Local Socket / Named Pipe IPC</b><br/>• Typed JSON-RPC Protocol"]
+        
+        subgraph SessionCore [Session & Layout Core]
+            direction LR
+            WORKSPACE["<b>Workspace & Split Tree</b><br/>(Even, Tiled, Main-Vertical)"]
+            RECOVERY["<b>Continuous Snapshot Store</b><br/>• Auto-save layout, cwd, env<br/>• Config-driven [[resume]] rules"]
+        end
+
+        subgraph ExecutionNodes [Execution Nodes]
+            direction LR
+            PTY["<b>Interactive PTY Panes</b><br/>(zsh / nvim / htop / claude / omp)"]
+            VT["<b>Dual-Buffer Engine</b><br/>• Raw Byte Stream + 2D VT Grid"]
+        end
+
+        IPC --> SessionCore
+        SessionCore --> ExecutionNodes
+    end
+
+    ClientInterfaces --> IPC
 ```
 
 | Dimension | `tmux` | `zellij` | `mpx` |
@@ -44,9 +54,10 @@ graph TD
 | **Language** | C (libevent) | Rust (multi-thread actor + async-std) | **Rust (Tokio async)** |
 | **Idle Memory** | ~5 MB | ~60–120 MB | **~5 MB** |
 | **WASM Runtime** | None | Yes (wasmer/WASI) | **None (Zero Bloat)** |
-| **Agent Automation** | `send-keys` / `capture-pane` scraping | WASM Plugin API / CLI | **Native Stdio MCP + Socket JSON-RPC** |
-| **Process Units** | Interactive PTY only | PTY + WASM Plugins | **PTY + Pipe Tasks + Virtual Channels** |
-| **Stream Storage** | VT screen grid only | VT screen grid only | **Dual Buffer (Raw Stream + 2D Grid)** |
+| **Crash & Reboot Recovery** | External cron scripts (`tmux-resurrect`) | Basic session save | **Built-in Continuous Atomic Snapshots (`mpx restore`)** |
+| **Tool Resumption** | Re-runs command name only | None | **Config-driven `[[resume]]` (Claude, omp, nvim, etc.)** |
+| **Flicker Protection** | None (tearing on redraw) | Terminal dependent | **DEC 2026 Synchronized Updates** |
+| **Quick Navigation** | Clunky `choose-tree` | Search tab | **Instant Fuzzy Command Palette (`Ctrl-Space`)** |
 | **Windows Support** | Cygwin / WSL required | WSL required | **Native (Windows Named Pipes + ConPTY)** |
 | **Telemetry** | None | None | **100% Offline (Zero Telemetry)** |
 
@@ -85,7 +96,7 @@ mpx
 # 2. Run a background watcher without nesting shells
 mpx run --name test-watcher -- cargo watch -x test
 
-# 3. List sessions (tmux `ls`) and panes with exit codes
+# 3. List sessions (tmux `ls`) and panes
 mpx ls
 mpx list-panes
 
@@ -96,51 +107,57 @@ mpx wait test-watcher --match 'test result: ok' --timeout 120
 # 5. Split a pane without stealing focus (tmux -h / -d)
 mpx split -h -d --pty -- htop
 
-# 6. Launch an agent beside you, then manage all agents (Prefix s)
-mpx agents new claude --split
+# 6. Rename session (Prefix $ or CLI)
+mpx rename-session -t main dev
 ```
 
 ---
 
-## Command Palette & Agent Manager
+## Command Palette & Navigation
 
-`Ctrl-Space` (no prefix needed) opens the unified **Command Palette**: instant fuzzy search across commands, agents, windows/panes, and key bindings with `Ctrl-n`/`Ctrl-p` and `Tab`/`Shift-Tab` navigation.
+`Ctrl-Space` (no prefix needed) opens the unified **Command Palette**: instant fuzzy search across:
+- **Sessions & Windows**: Jump instantly to any pane across any session.
+- **Commands**: Fuzzy search and execute all multiplexer commands (`split-window`, `kill-pane`, `resize`, `rename`).
+- **Keybindings**: Searchable cheat sheet of all keyboard shortcuts.
 
-`Prefix s` (or `mpx agents`) opens the unified agent manager with instant fuzzy search across every AI agent running in any session (Claude Code, oh-my-pi, Codex, rho, Antigravity, OpenCode, or your own harness). `Prefix .` opens an on-demand vertical agents drawer down the left with live preview on the right. Window tabs show live agent indicators (`◆` waiting, `●` working) alongside tmux flags (`*`, `-`, `#`, `!`, `Z`, `M`), and the status bar reports `◆N` when agents wait. Panes always retain 100% full width with zero stolen columns. State comes from harness hooks that mpx installs when it launches an agent, with terminal bells and output activity as fallbacks. See **[Agent Manager](docs/AGENT-MANAGER.md)**.
-
-**tmux compatibility**: invoked as `tmux`, the mpx binary translates `split-window`, `send-keys`, `capture-pane`, `list-panes` and friends. With `mpx agents new claude --teams`, Claude Code agent teams spawn their teammates as mpx panes.
-
-**Survives crashes and reboots**: the daemon snapshots the layout continuously. After a crash or reboot, the session comes back with its windows, splits and working directories, and each agent resumes its own conversation (`claude --resume`, `omp --resume`, `rho --resume`, `agy --conversation`, `opencode --session`). Pipe messages persist too. Run `mpx restore` to bring back a session you stopped on purpose. See **[Session restore](docs/CLI.md#session-restore)**.
+`Prefix s` and `Prefix w` open the interactive session and window tree chooser (`choose-tree`).
 
 ---
 
-## AI Agent Integration (Model Context Protocol)
+## Survives Crashes and Reboots (`mpx restore`)
 
-`mpx` ships with an embedded, zero-dependency stdio MCP server. Add `mpx` directly to your agent's `.mcp.json` (`oh-my-pi`, `claude code`, Cursor, Windsurf):
+The daemon continuously and atomically snapshots your workspace. After a crash or reboot, `mpx restore` brings back:
+- All windows, split layouts, and pane proportions.
+- Each pane's active working directory (`cwd`).
+- Config-driven process resumption for tools running in your panes:
+  - Claude Code: resumes with `claude --resume {id}` or `claude --continue`.
+  - oh-my-pi: resumes with `omp --resume {id}` or `omp --continue`.
+  - Codex / rho / Antigravity / OpenCode: resumes conversation state.
+  - Neovim: resumes with `nvim -S Session.vim`.
 
-```json
-{
-  "mcpServers": {
-    "mpx": {
-      "command": "mpx",
-      "args": ["mcp"]
-    }
-  }
-}
+Configure or add custom tool resumption rules in `~/.config/mpx/config.toml`:
+
+```toml
+[[resume]]
+name = "claude"
+detect = ["claude"]
+resume = ["claude", "--resume", "{id}"]
+fallback = ["claude", "--continue"]
+
+[[resume]]
+name = "nvim"
+detect = ["nvim"]
+fallback = ["nvim", "-S", "Session.vim"]
 ```
-
-Agents gain 23 tools: run and wait for processes (exit, quiet output, regex, agent state), read output incrementally, send tmux key names or bracketed pastes, exchange sequenced messages through durable pipes with per-consumer cursors, launch and prompt other agents (`mpx_agent_launch`, `mpx_agent_prompt`), see what other agents in the same repository are working on (`mpx_peers`), and restore sessions. Agents mpx launches get these tools automatically and are told when other agents share their repository; see [Agent awareness](docs/AGENT-MANAGER.md#agent-awareness). Mutating tools accept an `idempotency_key`, so retries never act twice. Every mpx pane exports `MPX_SESSION`/`MPX_ENDPOINT`, so an agent inside mpx manages its own session automatically. See **[MCP Guide](docs/MCP.md)** for full workflows.
 
 ---
 
 ## Documentation
 
-- **[Architecture & Design](docs/ARCHITECTURE.md)**: Stream nodes, agent tracking, workspace, pipes, and TUI.
-- **[CLI Reference & Automation](docs/CLI.md)**: tmux-style commands, waiting, pipes, and the tmux shim.
-- **[Keyboard Shortcuts](docs/KEYBINDINGS.md)**: Prefix bindings, `:` command prompt with vim aliases, overlays, and copy mode.
-- **[Agent Manager](docs/AGENT-MANAGER.md)**: Find, jump to, resume, launch, and message agent sessions.
-- **[Configuration](docs/CONFIG.md)**: Prefix, key bindings, `remain_on_exit`, and agent harnesses.
-- **[Model Context Protocol (MCP)](docs/MCP.md)**: Agent configuration, tools catalog, and agent-to-agent workflows.
+- **[Architecture & Design](docs/ARCHITECTURE.md)**: Tokio async daemon, split tree, dual-buffer engine, and TUI.
+- **[CLI Reference & Automation](docs/CLI.md)**: tmux-style commands, waiting, process runs, and the tmux shim.
+- **[Keyboard Shortcuts](docs/KEYBINDINGS.md)**: Prefix bindings, `:` command prompt with vim aliases, and Vi copy mode.
+- **[Configuration](docs/CONFIG.md)**: Prefix, key bindings, `remain_on_exit`, and `[[resume]]` rules.
 - **[Installation Guide](docs/INSTALL.md)**: Package managers, static archives, and cross-platform builds.
 - **[Interactive Website](https://casonadams.github.io/mpx/)**: Online visual demo and live documentation.
 

@@ -2,8 +2,8 @@ use mpx::layout::{Divider, Rect, WindowTab};
 use mpx::tui::canvas::Canvas;
 use mpx::config::{BorderStyle, InactiveColorMode};
 use mpx::tui::render::{
-    Compositor, DividerStyle, RenderPaneContext, SelectionRange, StatusBar, apply_active_style,
-    apply_inactive_bg, apply_inactive_fg, color_to_rgb, desaturate_color, dim_color, format_tab,
+    Compositor, DividerStyle, RenderPaneContext, SelectionRange, StatusBar,
+    apply_inactive_fg, color_to_rgb, desaturate_color, dim_color, format_tab,
     hud_rect, parse_color, status_left, status_right, tint_color, vt_to_crossterm,
 };
 use mpx::vt::{CellStyle, Color as VtColor};
@@ -80,7 +80,6 @@ fn status_bar_lists_session_and_pane_names() {
         tabs: &[],
         panes: &panes,
         prefix_active: false,
-        waiting_agents: 0,
         width: 80,
         y: 23,
         bg: None,
@@ -104,7 +103,6 @@ fn status_bar_paints_every_column_of_its_row() {
         tabs: &[],
         panes: &panes,
         prefix_active: false,
-        waiting_agents: 0,
         width: 40,
         y: 9,
         bg: None,
@@ -124,26 +122,6 @@ fn status_bar_paints_every_column_of_its_row() {
     assert!(!row.contains('X'), "unpainted columns remain: {row:?}");
 }
 
-#[test]
-fn status_bar_shows_waiting_agent_badge() {
-    let mut buf = Vec::new();
-    let bar = StatusBar {
-        session: "sess",
-        tabs: &[],
-        panes: &[],
-        prefix_active: false,
-        waiting_agents: 3,
-        width: 80,
-        y: 23,
-        bg: None,
-        fg: None,
-        zoomed: false,
-        copy_pane: None,
-        marked_pane: None,
-    };
-    Compositor::draw_status_bar(&mut buf, &bar).unwrap();
-    assert!(String::from_utf8_lossy(&buf).contains("◆3"));
-}
 
 #[test]
 fn status_text_prefers_window_tabs_and_agent_badge() {
@@ -168,7 +146,6 @@ fn status_text_prefers_window_tabs_and_agent_badge() {
         tabs: &tabs,
         panes: &panes,
         prefix_active: true,
-        waiting_agents: 2,
         width: 80,
         y: 23,
         bg: None,
@@ -178,11 +155,11 @@ fn status_text_prefers_window_tabs_and_agent_badge() {
         marked_pane: None,
     };
     assert_eq!(status_left(&bar), "[dev] 0:claude- 1:cargo* ");
-    assert_eq!(status_right(&bar, "12:00"), " \u{25c6}2 12:00");
+    assert_eq!(status_right(&bar, "12:00"), "12:00");
 }
 
 #[test]
-fn format_tab_renders_agent_badges_and_tmux_flags() {
+fn format_tab_renders_tmux_flags() {
     let active = WindowTab {
         index: 0,
         name: "dev".into(),
@@ -192,43 +169,32 @@ fn format_tab_renders_agent_badges_and_tmux_flags() {
     assert_eq!(format_tab(&active, false), "0:dev* ");
     assert_eq!(format_tab(&active, true), "0:dev*Z ");
 
-    let waiting_agent = WindowTab {
+    let last_window = WindowTab {
         index: 1,
         name: "backend".into(),
         is_active: false,
         is_last: true,
-        agent_badge: Some("◆".into()),
         ..Default::default()
     };
-    assert_eq!(format_tab(&waiting_agent, false), "1:backend◆- ");
+    assert_eq!(format_tab(&last_window, false), "1:backend- ");
 
-    let multi_waiting = WindowTab {
+    let activity_window = WindowTab {
         index: 2,
-        name: "agents".into(),
-        is_active: false,
-        agent_badge: Some("◆2".into()),
-        ..Default::default()
-    };
-    assert_eq!(format_tab(&multi_waiting, false), "2:agents◆2 ");
-
-    let working_with_activity = WindowTab {
-        index: 3,
         name: "build".into(),
         is_active: false,
         has_activity: true,
-        agent_badge: Some("●".into()),
         ..Default::default()
     };
-    assert_eq!(format_tab(&working_with_activity, false), "3:build●# ");
+    assert_eq!(format_tab(&activity_window, false), "2:build# ");
 
     let bell_window = WindowTab {
-        index: 4,
+        index: 3,
         name: "alerts".into(),
         is_active: false,
         has_bell: true,
         ..Default::default()
     };
-    assert_eq!(format_tab(&bell_window, false), "4:alerts! ");
+    assert_eq!(format_tab(&bell_window, false), "3:alerts! ");
 }
 
 #[test]
@@ -253,63 +219,6 @@ fn format_tab_renders_marked_flag() {
     assert_eq!(format_tab(&marked_inactive, false), "1:other-M ");
 }
 
-#[test]
-fn update_tab_agent_badges_aggregates_agent_states_per_window() {
-    use mpx::agents::LiveAgent;
-    use mpx::protocol::{AgentInfo, AgentState, NodeInfo};
-    use mpx::tui::status::update_tab_agent_badges;
-
-    let mut tabs = vec![
-        WindowTab {
-            index: 0,
-            name: "win0".into(),
-            is_active: true,
-            ..Default::default()
-        },
-        WindowTab {
-            index: 1,
-            name: "win1".into(),
-            is_active: false,
-            ..Default::default()
-        },
-        WindowTab {
-            index: 2,
-            name: "win2".into(),
-            is_active: false,
-            ..Default::default()
-        },
-    ];
-
-    let make_agent = |session: &str, window: usize, state: AgentState| {
-        let mut node = NodeInfo::new("agent".into(), true, "claude".into());
-        node.window = Some(window);
-        node.agent = Some(AgentInfo {
-            harness: "claude".into(),
-            state,
-            session_id: None,
-            detail: None,
-            since_ms: 0,
-            focus: Default::default(),
-        });
-        LiveAgent {
-            session: session.into(),
-            endpoint: String::new(),
-            node,
-        }
-    };
-
-    let agents = vec![
-        make_agent("main", 0, AgentState::Working),
-        make_agent("main", 1, AgentState::NeedsInput),
-        make_agent("main", 1, AgentState::NeedsInput),
-        make_agent("other", 2, AgentState::NeedsInput),
-    ];
-
-    update_tab_agent_badges(&mut tabs, &agents, "main");
-    assert_eq!(tabs[0].agent_badge.as_deref(), Some("●"));
-    assert_eq!(tabs[1].agent_badge.as_deref(), Some("◆2"));
-    assert_eq!(tabs[2].agent_badge, None);
-}
 
 #[test]
 fn status_bar_shows_zoom_flag_and_copy_pane_badge() {
@@ -319,7 +228,6 @@ fn status_bar_shows_zoom_flag_and_copy_pane_badge() {
         tabs: &[],
         panes: &panes,
         prefix_active: false,
-        waiting_agents: 0,
         width: 80,
         y: 23,
         bg: None,
@@ -537,7 +445,6 @@ fn status_bar_applies_custom_colors() {
         tabs: &[],
         panes: &panes,
         prefix_active: false,
-        waiting_agents: 0,
         width: 80,
         y: 23,
         bg: Some(VtColor::Rgb(18, 24, 32)),

@@ -22,13 +22,51 @@ impl App {
         ) {
             return Flow::Continue;
         }
-        let rail = self.expanded_width();
-        if rail > 0 && ev.column < rail && ev.row < self.viewport.1 {
-            if ev.kind == MouseEventKind::Down(MouseButton::Left) {
-                self.sidebar_click(ev.row).await;
-            }
+
+        if ev.row >= self.viewport.1 || self.border_drag.is_some() {
+            return self.on_multiplexer_mouse(ev).await;
+        }
+
+        if ev.kind == MouseEventKind::Down(MouseButton::Left) && self.grab_border(ev.column, ev.row) {
             return Flow::Continue;
         }
+
+        if !ev.modifiers.contains(crossterm::event::KeyModifiers::SHIFT)
+            && let Some((name, rect)) = self
+                .panes
+                .iter()
+                .find(|(_, rect, _)| rect.contains(ev.column, ev.row))
+                .map(|(name, rect, _)| (name.clone(), *rect))
+        {
+            let modes = self.modes_of(&name);
+            if modes.mouse_tracking != crate::keys::MouseTracking::None {
+                if name != self.active_pane && matches!(ev.kind, MouseEventKind::Down(_)) {
+                    self.park_copy();
+                    let _ = self.client.focus(&name).await;
+                    self.layout.dirty = true;
+                    self.active_pane = name.clone();
+                    self.active_rect = Some(rect);
+                }
+                let local_col = (ev.column.saturating_sub(rect.x) + 1).min(rect.width);
+                let local_row = (ev.row.saturating_sub(rect.y) + 1).min(rect.height);
+                if let Some(bytes) = crate::keys::encode_mouse_event(
+                    &modes,
+                    ev.kind,
+                    local_col,
+                    local_row,
+                    ev.modifiers,
+                ) {
+                    let text = String::from_utf8_lossy(&bytes);
+                    let _ = self.client.send_input(&name, &text).await;
+                    return Flow::Continue;
+                }
+            }
+        }
+
+        self.on_multiplexer_mouse(ev).await
+    }
+
+    async fn on_multiplexer_mouse(&mut self, ev: MouseEvent) -> Flow {
         match ev.kind {
             MouseEventKind::Down(MouseButton::Left) => self.mouse_press(ev.column, ev.row).await,
             MouseEventKind::Drag(MouseButton::Left) => self.mouse_drag(ev.column, ev.row).await,
@@ -83,9 +121,6 @@ impl App {
             return;
         };
         let (x, y) = local_point(rect, col, row);
-        if matches!(self.mode, Mode::Sidebar) {
-            self.mode = Mode::Normal;
-        }
         if name != self.active_pane {
             self.park_copy();
             let _ = self.client.focus(&name).await;
@@ -140,6 +175,7 @@ impl App {
         let text = cs.yank_text(grid);
         if !text.trim().is_empty() {
             self.clipboard.copy(&text);
+            self.last_copy = Some(text);
         }
     }
 

@@ -4,15 +4,12 @@ use std::io::{self, Write};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::agents::{LiveAgent, ResumableSession, list_live, scan_resumable};
 use crate::layout::Rect;
-use crate::protocol::AgentState;
 use crate::tui::command::{Command, PaletteTab};
-use crate::tui::overlay::agents_view::agent_key;
 use crate::tui::overlay::nav::{ListState, fuzzy_match, has_ctrl};
 use crate::tui::overlay::tree_view::{TreePane, TreeSession, TreeWindow, load_session};
 use crate::tui::overlay::widgets::{
-    self, Span, Tone, age_label, now_ms, put_row, state_mark,
+    self, Span, Tone, put_row,
 };
 use crate::tui::overlay::{HelpEntry, OverlayAction, OverlayCtx};
 use crate::tui::prompt::PromptState;
@@ -70,11 +67,10 @@ pub const BUILTIN_COMMANDS: &[(&str, &str, &str, &str)] = &[
     ("detach-client", "Detach Session", "d / q", "Detach the current client from the session"),
     ("next-session", "Next Session", ")", "Switch to the next active session"),
     ("prev-session", "Previous Session", "(", "Switch to the previous active session"),
-    ("palette agents", "Agent Manager", "s", "Open the agent sessions palette tab"),
-    ("palette sessions", "Window / Session Tree", "w", "Open the sessions and panes palette tab"),
+    ("rename-session", "Rename Session", "$", "Rename the current session"),
+    ("rename-window", "Rename Window", ",", "Rename the active window"),
+    ("palette sessions", "Window / Session Tree", "s / w", "Open the sessions and panes palette tab"),
     ("palette help", "Keymap Help", "?", "Open the key bindings help palette tab"),
-    ("sidebar", "Toggle Sidebar", ".", "Toggle the vertical agents drawer"),
-    ("agents", "Agent Manager (Deep)", "", "Open the classic agent manager overlay with preview"),
     ("choose-tree", "Window Tree (Deep)", "", "Open the classic sessions, windows, and panes tree"),
     ("list-keys", "Keymap Help (Deep)", "", "Open the classic key bindings cheat sheet"),
     ("command-prompt", "Command Prompt", ":", "Open the command prompt"),
@@ -95,8 +91,6 @@ pub struct PaletteView {
     pub list: ListState,
     pub help_entries: Vec<HelpEntry>,
     pub current_session: String,
-    pub live_agents: Vec<LiveAgent>,
-    pub resumable: Vec<ResumableSession>,
     pub sessions: Vec<TreeSession>,
     pub cached_items: Vec<PaletteItem>,
     pub initial_loaded: bool,
@@ -105,8 +99,7 @@ pub struct PaletteView {
 impl PaletteTab {
     pub fn next(self) -> Self {
         match self {
-            Self::Commands => Self::Agents,
-            Self::Agents => Self::Sessions,
+            Self::Commands => Self::Sessions,
             Self::Sessions => Self::Help,
             Self::Help => Self::Commands,
         }
@@ -115,8 +108,7 @@ impl PaletteTab {
     pub fn prev(self) -> Self {
         match self {
             Self::Commands => Self::Help,
-            Self::Agents => Self::Commands,
-            Self::Sessions => Self::Agents,
+            Self::Sessions => Self::Commands,
             Self::Help => Self::Sessions,
         }
     }
@@ -124,7 +116,6 @@ impl PaletteTab {
     pub fn label(self) -> &'static str {
         match self {
             Self::Commands => "Commands",
-            Self::Agents => "Agents",
             Self::Sessions => "Sessions & Panes",
             Self::Help => "Help",
         }
@@ -139,8 +130,6 @@ impl PaletteView {
             list: ListState::default(),
             help_entries,
             current_session: current_session.to_string(),
-            live_agents: Vec::new(),
-            resumable: Vec::new(),
             sessions: Vec::new(),
             cached_items: Vec::new(),
             initial_loaded: false,
@@ -154,49 +143,15 @@ impl PaletteView {
     }
 
     pub async fn refresh(&mut self, ctx: &mut OverlayCtx<'_>) {
-        if !self.initial_loaded {
-            self.initial_loaded = true;
-            self.live_agents = list_live(ctx.socket_dir).await;
-            self.resumable = scan_resumable(
-                ctx.registry,
-                ctx.cwd.map(std::path::PathBuf::from).as_deref(),
-                50,
-            );
-            let mut sessions = Vec::new();
-            for endpoint in crate::ipc::list_sessions(ctx.socket_dir) {
-                if let Some(session) = load_session(&endpoint.endpoint).await {
-                    sessions.push(session);
-                }
-            }
-            sessions.sort_by_key(|s| s.name != self.current_session);
-            self.sessions = sessions;
-            self.rebuild_items();
-            return;
-        }
-
-        match self.tab {
-            PaletteTab::Commands | PaletteTab::Help => {}
-            PaletteTab::Agents => {
-                self.live_agents = list_live(ctx.socket_dir).await;
-                self.resumable = scan_resumable(
-                    ctx.registry,
-                    ctx.cwd.map(std::path::PathBuf::from).as_deref(),
-                    50,
-                );
-                self.rebuild_items();
-            }
-            PaletteTab::Sessions => {
-                let mut sessions = Vec::new();
-                for endpoint in crate::ipc::list_sessions(ctx.socket_dir) {
-                    if let Some(session) = load_session(&endpoint.endpoint).await {
-                        sessions.push(session);
-                    }
-                }
-                sessions.sort_by_key(|s| s.name != self.current_session);
-                self.sessions = sessions;
-                self.rebuild_items();
+        let mut sessions = Vec::new();
+        for endpoint in crate::ipc::list_sessions(ctx.socket_dir) {
+            if let Some(session) = load_session(&endpoint.endpoint).await {
+                sessions.push(session);
             }
         }
+        sessions.sort_by_key(|s| s.name != self.current_session);
+        self.sessions = sessions;
+        self.rebuild_items();
     }
 
     pub async fn follow_selection(&mut self) {}
@@ -213,7 +168,6 @@ impl PaletteView {
         let query = self.prompt.text();
         match self.tab {
             PaletteTab::Commands => self.command_items(&query),
-            PaletteTab::Agents => self.agent_items(&query),
             PaletteTab::Sessions => self.session_items(&query),
             PaletteTab::Help => self.help_items(&query),
         }
@@ -257,88 +211,6 @@ impl PaletteView {
         items
     }
 
-    fn agent_items(&self, query: &str) -> Vec<PaletteItem> {
-        let mut items = Vec::new();
-        self.collect_live_agent_items(query, &mut items);
-        self.collect_resumable_items(query, &mut items);
-        items
-    }
-
-    fn collect_live_agent_items(&self, query: &str, items: &mut Vec<PaletteItem>) {
-        for agent in &self.live_agents {
-            let name = &agent.node.name;
-            let harness = agent
-                .node
-                .agent
-                .as_ref()
-                .map_or("agent", |a| a.harness.as_str());
-            let detail = agent
-                .node
-                .agent
-                .as_ref()
-                .and_then(|a| a.detail.as_deref())
-                .unwrap_or("");
-            let state = agent
-                .node
-                .agent
-                .as_ref()
-                .map_or(AgentState::Idle, |a| a.state);
-
-            if query.is_empty()
-                || fuzzy_match(query, name)
-                || fuzzy_match(query, harness)
-                || fuzzy_match(query, &agent.session)
-                || fuzzy_match(query, detail)
-            {
-                let (glyph, tone) = state_mark(state);
-                let target = agent_key(agent);
-                let badge_label = match state {
-                    AgentState::NeedsInput => "needs input",
-                    AgentState::Working => "working",
-                    AgentState::Idle => "idle",
-                    AgentState::Exited => "exited",
-                };
-                items.push(PaletteItem {
-                    title: name.clone(),
-                    subtitle: format!(
-                        "{harness} · {}:%{} · {}",
-                        agent.session, agent.node.id, detail
-                    ),
-                    shortcut: Some(format!("{}:%{}", agent.session, agent.node.id)),
-                    badge: Some(Span::toned(format!("{glyph} {badge_label}"), tone)),
-                    actions: vec![Command::SelectPane { target }],
-                });
-            }
-        }
-    }
-
-    fn collect_resumable_items(&self, query: &str, items: &mut Vec<PaletteItem>) {
-        for res in &self.resumable {
-            let title = &res.title;
-            let harness = &res.harness;
-            let id = &res.id;
-
-            if query.is_empty()
-                || fuzzy_match(query, title)
-                || fuzzy_match(query, harness)
-                || fuzzy_match(query, id)
-            {
-                let age = age_label(now_ms().saturating_sub(res.modified_ms));
-                items.push(PaletteItem {
-                    title: title.clone(),
-                    subtitle: format!("{harness} · {age} ago · id {id}"),
-                    shortcut: Some(id.chars().take(8).collect()),
-                    badge: Some(Span::toned("◌ resume", Tone::Accent)),
-                    actions: vec![Command::LaunchAgent {
-                        harness: harness.clone(),
-                        resume: Some(id.clone()),
-                        cwd: res.cwd.clone(),
-                        split: false,
-                    }],
-                });
-            }
-        }
-    }
 
     fn session_items(&self, query: &str) -> Vec<PaletteItem> {
         let mut items = Vec::new();
@@ -580,14 +452,10 @@ impl PaletteView {
         let mut tab_spans = Vec::new();
         for t in [
             PaletteTab::Commands,
-            PaletteTab::Agents,
             PaletteTab::Sessions,
             PaletteTab::Help,
         ] {
             let count_label = match t {
-                PaletteTab::Agents if !self.live_agents.is_empty() => {
-                    format!(" ({})", self.live_agents.len())
-                }
                 PaletteTab::Sessions if !self.sessions.is_empty() => {
                     format!(" ({})", self.sessions.len())
                 }

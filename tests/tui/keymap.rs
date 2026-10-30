@@ -48,7 +48,9 @@ fn default_table_binds_digits_and_core_keys() {
     assert_eq!(find("%"), Some("split-window -h"));
     assert_eq!(find("\""), Some("split-window"));
     assert_eq!(find("x"), Some("kill-pane"));
-    assert_eq!(find("."), Some("sidebar"));
+    assert_eq!(find("]"), Some("paste"));
+    assert_eq!(find("f"), Some("palette sessions"));
+    assert_eq!(find("."), Some("command-prompt -I 'select-window -t '"));
     assert_eq!(find("A"), None);
     assert_eq!(find("7"), Some("select-window -t 7"));
 }
@@ -105,7 +107,7 @@ fn default_bindings_resolve_to_commands() {
     assert_eq!(
         command_of(&keymap, &key('s')),
         Some(Command::OpenPalette {
-            tab: Some(mpx::tui::command::PaletteTab::Agents),
+            tab: Some(mpx::tui::command::PaletteTab::Sessions),
         })
     );
     assert_eq!(command_of(&keymap, &key('a')), None);
@@ -152,9 +154,9 @@ fn config_bind_replaces_a_default_key() {
 #[test]
 fn config_bind_adds_a_new_key() {
     let mut config = Config::default();
-    config.bind.insert("C-x".to_string(), "agents".to_string());
+    config.bind.insert("C-x".to_string(), "choose-tree".to_string());
     let keymap = resolve(&config).unwrap();
-    assert_eq!(command_of(&keymap, &ctrl('x')), Some(Command::OpenAgents));
+    assert_eq!(command_of(&keymap, &ctrl('x')), Some(Command::OpenTree));
 }
 
 #[test]
@@ -191,12 +193,12 @@ fn alt_j_and_alt_k_reach_pane_unintercepted() {
 #[test]
 fn config_bind_root_rebinds_and_an_empty_command_unbinds() {
     let mut config = Config::default();
-    config.bind_root.insert("M-n".to_string(), "next-agent".to_string());
+    config.bind_root.insert("M-n".to_string(), "next-window".to_string());
     config.bind.insert(".".to_string(), " ".to_string());
     let keymap = resolve(&config).unwrap();
     assert_eq!(
         command_in(&keymap, Table::Root, &alt('n')),
-        Some(Command::StepAgent { next: true })
+        Some(Command::NextWindow)
     );
     assert_eq!(command_of(&keymap, &key('.')), None, "unbound prefix key");
 }

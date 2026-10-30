@@ -1,6 +1,5 @@
 mod dispatch;
 pub mod idempotency;
-pub mod pipes;
 pub mod plan;
 mod session;
 pub mod snapshot;
@@ -21,7 +20,6 @@ use crate::node::sink::Sink;
 use crate::node::now_ms;
 use crate::node::pacing::{Backlog, CloseOnDrop, Pacing};
 use crate::protocol::{DaemonMessage, Request, Response, StreamEvent};
-use crate::store;
 use crate::wire;
 use idempotency::Claim;
 use session::{Filter, SessionMsg};
@@ -33,7 +31,6 @@ pub struct DaemonState {
     tx: mpsc::UnboundedSender<SessionMsg>,
     /// Shared with the session's pane readers: attached terminals' backlogs pace their output.
     pacing: Arc<Pacing>,
-    pipes: pipes::PipesHandle,
     shutdown: watch::Sender<bool>,
 }
 
@@ -46,10 +43,6 @@ impl DaemonState {
         config: Config,
         state_dir: PathBuf,
     ) -> Arc<Self> {
-        let pipe_store = config
-            .persist_pipes
-            .then(|| store::PipeStore::in_dir(&state_dir));
-        let pipes = pipes::spawn(pipe_store);
         let (tx, rx) = mpsc::unbounded_channel();
         let (ready, ready_rx) = oneshot::channel();
         let (shutdown, _) = watch::channel(false);
@@ -60,7 +53,6 @@ impl DaemonState {
             config,
             state_dir,
             tx: tx.clone(),
-            pipes: pipes.clone(),
             ready,
             pacing: Arc::clone(&pacing),
         };
@@ -69,13 +61,8 @@ impl DaemonState {
         Arc::new(Self {
             tx,
             pacing,
-            pipes,
             shutdown,
         })
-    }
-
-    fn pipes(&self) -> &pipes::PipesHandle {
-        &self.pipes
     }
 
     async fn ask<T>(
@@ -312,12 +299,6 @@ pub async fn handle_client<S: AsyncStream>(state: Arc<DaemonState>, stream: S) {
         match req {
             subscribe @ Request::Subscribe { .. } => {
                 subscribe_node(&state, &mut framed, subscribe).await;
-                break;
-            }
-            Request::SubscribePipe { name } => {
-                let (sink, rx) = Sink::channel(None);
-                let registered = state.subscribe(Filter::Pipe(name), sink).await;
-                stream_events(&mut framed, registered, rx, None, false).await;
                 break;
             }
             req => {

@@ -105,13 +105,16 @@ fn editing_leaves_history_browsing() {
 
 #[test]
 fn tab_completes_a_unique_command_with_trailing_space() {
-    let mut p = typed("rena");
+    let mut p = typed("rename-w");
     p.complete(COMMAND_NAMES);
     assert_eq!(p.text(), "rename-window ");
 }
 
 #[test]
 fn tab_extends_to_common_prefix_of_several_commands() {
+    let mut p = typed("rena");
+    p.complete(COMMAND_NAMES);
+    assert_eq!(p.text(), "rename");
     let mut p = typed("kill-");
     p.complete(COMMAND_NAMES);
     assert_eq!(

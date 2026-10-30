@@ -3,8 +3,6 @@ use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
-use mpx::agents::registry;
-use mpx::config::Config;
 use mpx::node::SpawnSpec;
 use mpx::node::pane::{self, PaneCtx, PaneHandle, PaneNotice, TermView};
 use mpx::protocol::{NodeState, WaitCondition};
@@ -23,8 +21,6 @@ fn spawn_task(name: &str, command: &str) -> (PaneHandle, mpsc::UnboundedReceiver
         notify: Arc::new(move |notice| {
             let _ = tx.send(notice);
         }),
-        harnesses: Arc::new(registry(&Config::default())),
-        idle_ms: 1_000,
         relay: Arc::new(AtomicBool::new(true)),
         pacing: Arc::default(),
     };

@@ -1,6 +1,6 @@
 use mpx::layout::tree::{Direction, LayoutNode};
 use mpx::store::{
-    AgentSnapshot, PaneSnapshot, SNAPSHOT_VERSION, SessionSnapshot, SnapshotStore, WindowSnapshot,
+    PaneSnapshot, SNAPSHOT_VERSION, SessionSnapshot, SnapshotStore, WindowSnapshot,
     decode_snapshot, encode_snapshot,
 };
 
@@ -32,7 +32,8 @@ fn sample() -> SessionSnapshot {
                     env: vec![("EDITOR".into(), "vim".into())],
                     remain_on_exit: None,
                     tmux_compat: false,
-                    agent: None,
+                    resume_rule: None,
+                    session_id: None,
                 },
                 PaneSnapshot {
                     name: "claude".into(),
@@ -43,10 +44,8 @@ fn sample() -> SessionSnapshot {
                     env: vec![],
                     remain_on_exit: Some(true),
                     tmux_compat: true,
-                    agent: Some(AgentSnapshot {
-                        harness: "claude".into(),
-                        session_id: Some("abc".into()),
-                    }),
+                    resume_rule: Some("claude".into()),
+                    session_id: Some("abc".into()),
                 },
             ],
         }],

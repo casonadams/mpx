@@ -1,4 +1,3 @@
-pub mod agent;
 pub mod app;
 pub mod canvas;
 pub mod command;
@@ -16,7 +15,6 @@ pub mod terminal;
 mod exec;
 mod mouse;
 mod session;
-pub mod sidebar;
 pub mod status;
 
 pub use app::{StartView, run_tui};

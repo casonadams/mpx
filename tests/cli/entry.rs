@@ -37,13 +37,10 @@ fn malformed_config_file_fails_before_the_command_runs() {
 }
 
 #[test]
-fn state_dir_flag_is_where_the_daemon_keeps_its_pipes() {
+fn state_dir_flag_is_where_the_daemon_keeps_its_snapshot() {
     let f = Fixture::start();
-    assert_eq!(run_command(&f, &["pipe", "create", "p"]), 0);
-    let pipes = std::fs::read_dir(f.state_dir().join("pipes"))
-        .expect("pipes under the state dir")
-        .count();
-    assert_eq!(pipes, 1);
+    assert_eq!(run_command(&f, &["kill-server"]), 0);
+    assert!(f.state_dir().exists());
 }
 
 #[test]

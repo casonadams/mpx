@@ -4,7 +4,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::idempotency::Claim;
-use super::pipes::ReadArgs;
 use super::session::{SessionMsg, reply};
 use super::{DaemonState, KILL_GRACE};
 use crate::node::pane::LogQuery;
@@ -20,7 +19,7 @@ pub(super) async fn dispatch(state: &Arc<DaemonState>, req: Request) -> Response
 async fn idempotent(state: &Arc<DaemonState>, key: String, req: Request) -> Response {
     if matches!(
         req,
-        Request::Idempotent { .. } | Request::Subscribe { .. } | Request::SubscribePipe { .. }
+        Request::Idempotent { .. } | Request::Subscribe { .. }
     ) {
         return Response::Error("Idempotent requests cannot nest or stream".to_string());
     }
@@ -83,24 +82,7 @@ pub(super) async fn execute(state: &Arc<DaemonState>, req: Request) -> Response 
             plain,
             since,
         } => logs(state, &name, LogQuery { tail, plain, since }).await,
-        Request::ReadPipe {
-            name,
-            since,
-            consumer,
-            wait_ms,
-            limit,
-        } => {
-            let args = ReadArgs {
-                since,
-                consumer,
-                wait_ms,
-                limit,
-            };
-            reply(state.pipes().read(&name, args).await, |(messages, next)| {
-                Response::PipeMessages { messages, next }
-            })
-        }
-        Request::Subscribe { .. } | Request::SubscribePipe { .. } => {
+        Request::Subscribe { .. } => {
             Response::Error("subscriptions require a streaming connection".to_string())
         }
         Request::Idempotent { .. } => {

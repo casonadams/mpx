@@ -2,14 +2,13 @@
 //! supplies the observation and the clock.
 use regex::Regex;
 
-use crate::protocol::{AgentState, WaitCondition, WaitOutcome};
+use crate::protocol::{WaitCondition, WaitOutcome};
 
 #[derive(Debug, Clone)]
 pub enum Cond {
     Exit,
     Idle { quiet_ms: u64 },
     Match(Regex),
-    State(AgentState),
 }
 
 impl Cond {
@@ -20,7 +19,6 @@ impl Cond {
             WaitCondition::Match { pattern } => {
                 Cond::Match(Regex::new(&pattern).map_err(|e| format!("Invalid pattern: {}", e))?)
             }
-            WaitCondition::State { state } => Cond::State(state),
         })
     }
 
@@ -31,10 +29,6 @@ impl Cond {
             _ => None,
         }
     }
-
-    pub fn watches_state(&self) -> bool {
-        matches!(self, Cond::State(_))
-    }
 }
 
 /// Pane facts a wait is checked against.
@@ -44,22 +38,20 @@ pub struct Observed {
     pub last_output_ms: u64,
     /// `None` while running, `Some(code)` once exited.
     pub exit: Option<Option<i32>>,
-    pub state: Option<AgentState>,
 }
 
 /// The outcome when the condition holds, or `None` while it does not. `text` yields the plain text
 /// a `Match` searches (screen at the request plus output since).
 pub fn satisfied(cond: &Cond, obs: &Observed, text: &dyn Fn() -> String) -> Option<WaitOutcome> {
     match cond {
-        Cond::Exit => obs.exit.map(|code| done(code, None, None)),
+        Cond::Exit => obs.exit.map(|code| done(code, None)),
         Cond::Idle { quiet_ms } => (obs.now_ms.saturating_sub(obs.last_output_ms) >= *quiet_ms)
-            .then(|| done(None, None, None)),
+            .then(|| done(None, None)),
         Cond::Match(re) => {
             let plain = text();
             re.find(&plain)
-                .map(|m| done(None, None, Some(m.as_str().to_string())))
+                .map(|m| done(None, Some(m.as_str().to_string())))
         }
-        Cond::State(want) => (obs.state == Some(*want)).then(|| done(None, Some(*want), None)),
     }
 }
 
@@ -68,16 +60,14 @@ pub fn timed_out(obs: &Observed) -> WaitOutcome {
     WaitOutcome {
         satisfied: false,
         exit_code: obs.exit.flatten(),
-        state: obs.state,
         matched: None,
     }
 }
 
-fn done(exit_code: Option<i32>, state: Option<AgentState>, matched: Option<String>) -> WaitOutcome {
+fn done(exit_code: Option<i32>, matched: Option<String>) -> WaitOutcome {
     WaitOutcome {
         satisfied: true,
         exit_code,
-        state,
         matched,
     }
 }

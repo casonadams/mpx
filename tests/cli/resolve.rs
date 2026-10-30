@@ -1,9 +1,9 @@
 use mpx::cli::{
-    nested_attach_refused, parse_agent_state, parse_env_pairs, resolve, resolve_idempotency_key,
+    nested_attach_refused, parse_env_pairs, resolve, resolve_idempotency_key,
     wait_condition, wait_exit_code,
 };
 use mpx::ipc::endpoint_in;
-use mpx::protocol::{AgentState, WaitCondition, WaitOutcome};
+use mpx::protocol::{WaitCondition, WaitOutcome};
 use std::path::Path;
 
 const DIR: &str = "/run/mpx-test";
@@ -12,7 +12,6 @@ fn outcome(satisfied: bool, exit_code: Option<i32>) -> WaitOutcome {
     WaitOutcome {
         satisfied,
         exit_code,
-        state: None,
         matched: None,
     }
 }
@@ -78,44 +77,28 @@ fn env_pair_without_equals_is_rejected() {
 }
 
 #[test]
-fn agent_state_names_parse() {
-    assert_eq!(parse_agent_state("needs_input"), Ok(AgentState::NeedsInput));
-    assert_eq!(parse_agent_state("working"), Ok(AgentState::Working));
-    assert_eq!(parse_agent_state("idle"), Ok(AgentState::Idle));
-    assert_eq!(parse_agent_state("exited"), Ok(AgentState::Exited));
-    assert!(parse_agent_state("busy").is_err());
-}
-
-#[test]
 fn wait_without_options_waits_for_exit() {
-    assert_eq!(wait_condition(None, None, None), Ok(WaitCondition::Exit));
+    assert_eq!(wait_condition(None, None), Ok(WaitCondition::Exit));
 }
 
 #[test]
 fn wait_options_select_one_condition() {
     assert_eq!(
-        wait_condition(Some(500), None, None),
+        wait_condition(Some(500), None),
         Ok(WaitCondition::Idle { quiet_ms: 500 })
     );
     assert_eq!(
-        wait_condition(None, Some("ready"), None),
+        wait_condition(None, Some("ready")),
         Ok(WaitCondition::Match {
             pattern: "ready".into()
-        })
-    );
-    assert_eq!(
-        wait_condition(None, None, Some("idle")),
-        Ok(WaitCondition::State {
-            state: AgentState::Idle
         })
     );
 }
 
 #[test]
 fn wait_rejects_combined_or_invalid_conditions() {
-    assert!(wait_condition(Some(1), Some("x"), None).is_err());
-    assert!(wait_condition(None, Some("(unclosed"), None).is_err());
-    assert!(wait_condition(None, None, Some("nope")).is_err());
+    assert!(wait_condition(Some(1), Some("x")).is_err());
+    assert!(wait_condition(None, Some("(unclosed")).is_err());
 }
 
 #[test]

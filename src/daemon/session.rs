@@ -12,16 +12,13 @@ use tokio::time::Instant;
 use tracing::warn;
 
 use super::idempotency::{Claim, IdemCache};
-use super::pipes::PipesHandle;
 use super::plan::{self, PaneIdentity};
 use super::snapshot::{PaneRecord, build_snapshot};
 use crate::node::sleep_until_opt;
-use crate::agents::{self, Harness};
 use crate::config::Config;
 use crate::keys::{TermModes, encode_key_names, wrap_paste};
 use crate::layout::{Direction, Workspace};
 use crate::node::pacing::Pacing;
-use crate::node::agent::Report;
 use crate::node::pane::{self, InputBuild, Notifier, PaneCtx, PaneHandle, PaneNotice, TermView};
 use crate::node::process::basename;
 use crate::node::sink::Sink;
@@ -30,7 +27,7 @@ use crate::protocol::{
     NewWindowOpts, NodeInfo, PaneId, Request, Response, SessionInfo, SpawnOpts, SplitOpts,
     StreamEvent,
 };
-use crate::store::{AgentSnapshot, SessionSnapshot, SnapshotStore, WindowPlan, plan_restore};
+use crate::store::{SessionSnapshot, SnapshotStore, WindowPlan, plan_restore};
 use crate::tmux_shim;
 
 pub(super) type Reply<T> = oneshot::Sender<T>;
@@ -91,7 +88,6 @@ pub(super) enum Filter {
     /// What a TUI shows: output of the active window's panes, every other pane event, and
     /// `Layout` events when `layout` is set.
     ActiveWindow { layout: bool },
-    Pipe(String),
 }
 
 impl Filter {
@@ -101,13 +97,9 @@ impl Filter {
             (_, StreamEvent::Layout) => matches!(self, Filter::ActiveWindow { layout: true }),
             (Filter::Everything, _) => true,
             (Filter::ActiveWindow { .. }, StreamEvent::Output { name, .. }) => shown(name),
-            (Filter::ActiveWindow { .. }, StreamEvent::Pipe { .. }) => false,
             (Filter::ActiveWindow { .. }, _) => true,
-            (Filter::Pipe(want), StreamEvent::Pipe { name, .. }) => want == name,
-            (Filter::Pipe(_), _) => false,
         }
     }
-
     /// What a subscription asked for: a terminal's view (`active_window`), with or without layout
     /// events, or everything.
     pub(super) fn subscriber(active_window: bool, layout: bool) -> Self {
@@ -131,7 +123,6 @@ pub(super) struct Boot {
     pub config: Config,
     pub state_dir: PathBuf,
     pub tx: mpsc::UnboundedSender<SessionMsg>,
-    pub pipes: PipesHandle,
     pub ready: oneshot::Sender<()>,
     pub pacing: Arc<Pacing>,
 }
@@ -176,7 +167,6 @@ struct Session {
     config: Config,
     created_ms: u64,
     restored_ms: Option<u64>,
-    harnesses: Arc<Vec<Harness>>,
     notifier: Notifier,
     workspace: Workspace,
     /// Live panes and exited panes kept on screen (`remain_on_exit`).
@@ -184,7 +174,6 @@ struct Session {
     /// Exited panes removed from the layout; oldest first, capped by `history_limit`.
     history: VecDeque<Entry>,
     next_pane_id: PaneId,
-    pipes: PipesHandle,
     filters: Vec<(Filter, Sink)>,
     /// Shared with every pane: whether output must be relayed here (session-wide subscribers exist).
     relay: Arc<AtomicBool>,
@@ -205,7 +194,6 @@ pub(super) async fn run(boot: Boot, mut rx: mpsc::UnboundedReceiver<SessionMsg>)
         config,
         state_dir,
         tx,
-        pipes,
         ready,
         pacing,
     } = boot;
@@ -218,13 +206,11 @@ pub(super) async fn run(boot: Boot, mut rx: mpsc::UnboundedReceiver<SessionMsg>)
         config,
         created_ms: now_ms(),
         restored_ms: None,
-        harnesses: Arc::new(Vec::new()),
         notifier,
         workspace: Workspace::new(session),
         nodes: HashMap::new(),
         history: VecDeque::new(),
         next_pane_id: 0,
-        pipes,
         filters: Vec::new(),
         relay: Arc::new(AtomicBool::new(false)),
         pacing,
@@ -234,7 +220,6 @@ pub(super) async fn run(boot: Boot, mut rx: mpsc::UnboundedReceiver<SessionMsg>)
         save_due: None,
         shutting_down: false,
     };
-    session.harnesses = Arc::new(agents::registry(&session.config));
     session.startup_restore();
     let _ = ready.send(());
 
@@ -360,12 +345,12 @@ impl Session {
             Request::NewWindow(opts) => self.new_window(opts).await,
             Request::Layout { width, height } => self.layout(width, height).await,
             Request::Status { name } => node_reply(self.status(&name).await),
-            Request::CreatePipe { name, capacity } => {
-                self.pipes.create(&name, capacity).await;
+            Request::RenameSession { name } => {
+                self.session = name.clone();
+                self.workspace.name = name;
+                self.schedule_save();
                 Response::Ok
             }
-            Request::WritePipe { name, data } => self.write_pipe(&name, &data).await,
-            Request::ListPipes => Response::PipeList(self.pipes.list().await),
             req => self.target_request(req).await,
         }
     }
@@ -398,32 +383,6 @@ impl Session {
             Request::Screen { name } => reply(self.screen(&name).await, Response::Screen),
             Request::ResizePane { name, cols, rows } => unit(self.resize(&name, cols, rows).await),
             Request::GetCwd { name } => reply(self.cwd(&name).await, Response::Cwd),
-            Request::AgentReport {
-                name,
-                harness,
-                state,
-                session_id,
-                detail,
-                clear,
-                task,
-                reply,
-                edited,
-            } => unit(
-                self.report(
-                    &name,
-                    Report {
-                        harness,
-                        state,
-                        session_id,
-                        detail,
-                        clear,
-                        task,
-                        reply,
-                        edited,
-                    },
-                )
-                .await,
-            ),
             req => self.workspace_request(req),
         }
     }
@@ -644,23 +603,6 @@ impl Session {
         self.handle_of(name)?.resize(cols, rows).await
     }
 
-    async fn report(&self, name: &str, report: Report) -> Result<(), String> {
-        self.handle_of(name)?.report(report).await
-    }
-
-    async fn write_pipe(&mut self, name: &str, data: &str) -> Response {
-        match self.pipes.write(name, data).await {
-            Ok(message) => {
-                let seq = message.seq;
-                self.fanout(&StreamEvent::Pipe {
-                    name: name.to_string(),
-                    message,
-                });
-                Response::PipeSeq(seq)
-            }
-            Err(e) => Response::Error(e),
-        }
-    }
 
     async fn split(&mut self, opts: SplitOpts) -> Response {
         let SplitOpts {
@@ -829,8 +771,6 @@ impl Session {
         };
         let ctx = PaneCtx {
             notify: Arc::clone(&self.notifier),
-            harnesses: Arc::clone(&self.harnesses),
-            idle_ms: self.config.agent.idle_ms,
             relay: Arc::clone(&self.relay),
             pacing: Arc::clone(&self.pacing),
         };
@@ -998,19 +938,7 @@ impl Session {
     }
 
     fn restore_snapshot(&mut self, snapshot: &SessionSnapshot) {
-        #[cfg(unix)]
-        let runtime_dir = std::path::Path::new(&self.endpoint)
-            .parent()
-            .map(std::path::Path::to_path_buf)
-            .unwrap_or_else(crate::ipc::socket_dir);
-        #[cfg(windows)]
-        let runtime_dir = crate::ipc::socket_dir();
-        let plan = plan_restore(
-            snapshot,
-            &self.harnesses,
-            &runtime_dir,
-            self.config.agent.mcp,
-        );
+        let plan = plan_restore(snapshot, &self.config.resume);
         for window in plan.windows {
             self.restore_window(window);
         }
@@ -1074,15 +1002,19 @@ impl Session {
                     continue;
                 };
                 let info = entry.handle.info(true).await.ok();
+                let cwd = info.as_ref().and_then(|i| i.cwd.clone());
+                let fg = info.as_ref().and_then(|i| i.foreground.clone());
+                let lookup_name = fg.as_deref().unwrap_or(&entry.opts.command);
+                let (resume_rule, session_id) =
+                    resolve_resume(lookup_name, &self.config.resume);
+
                 records.push(PaneRecord {
                     name: leaf.clone(),
                     opts: entry.opts.clone(),
                     running: !entry.exited,
-                    cwd: info.as_ref().and_then(|i| i.cwd.clone()),
-                    agent: info.and_then(|i| i.agent).map(|a| AgentSnapshot {
-                        harness: a.harness,
-                        session_id: a.session_id,
-                    }),
+                    cwd,
+                    resume_rule,
+                    session_id,
                 });
             }
         }
@@ -1090,7 +1022,21 @@ impl Session {
     }
 }
 
-/// Requests that change nothing a snapshot records.
+fn resolve_resume(
+    lookup_name: &str,
+    rules: &[crate::config::ResumeRule],
+) -> (Option<String>, Option<String>) {
+    for rule in rules {
+        let matches = rule.name.eq_ignore_ascii_case(lookup_name)
+            || rule.detect.iter().any(|d| d.eq_ignore_ascii_case(lookup_name));
+        if matches {
+            let session_id = rule.env_id.as_ref().and_then(|v| std::env::var(v).ok());
+            return (Some(rule.name.clone()), session_id);
+        }
+    }
+    (None, None)
+}
+
 fn is_read_only(req: &Request) -> bool {
     matches!(
         req,
@@ -1102,13 +1048,10 @@ fn is_read_only(req: &Request) -> bool {
             | Request::Layout { .. }
             | Request::Status { .. }
             | Request::GetCwd { .. }
-            | Request::ListPipes
             | Request::Send { .. }
             | Request::SendKeys { .. }
             | Request::Paste { .. }
             | Request::ResizePane { .. }
-            | Request::CreatePipe { .. }
-            | Request::WritePipe { .. }
     )
 }
 

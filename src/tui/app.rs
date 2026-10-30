@@ -6,7 +6,6 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{self, UnboundedReceiver, unbounded_channel};
 use tokio::task::JoinHandle;
 
-use super::agent::AgentWatch;
 use super::canvas::Canvas;
 use super::command::Command;
 use super::copy::CopyState;
@@ -17,10 +16,8 @@ use super::overlay::Overlay;
 use super::panes::{BorderGrab, LayoutCache, PaneRect, resized_elsewhere, sync_dims};
 use super::prompt::PromptState;
 use super::render::copy_to_clipboard;
-use super::sidebar::Sidebar;
 use super::status::{local_utc_offset, restored_notice};
 use super::terminal::TerminalGuard;
-use crate::agents::{self, Harness};
 use crate::client::Client;
 use crate::config::Config;
 use crate::node::sleep_until_opt;
@@ -33,7 +30,6 @@ use crate::vt::VtScreen;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StartView {
     Panes,
-    Agents,
 }
 
 /// What the event loop does after handling one input.
@@ -51,8 +47,6 @@ pub enum Mode {
     Overlay(Overlay),
     Prompt(PromptState),
     Confirm(String, Command),
-    /// Keys go to the agents sidebar.
-    Sidebar,
 }
 
 /// Event-stream subscription for the attached session. Events tagged with an older
@@ -94,7 +88,6 @@ pub struct App {
     pub client: Client,
     pub config: Config,
     pub keymap: Keymap,
-    pub registry: Vec<Harness>,
     pub mode: Mode,
     pub history: Vec<String>,
     pub message: Option<(String, Instant)>,
@@ -126,7 +119,6 @@ pub struct App {
     pub split_counter: usize,
     /// Nodes of the attached session, refreshed every tick.
     pub nodes: Vec<NodeInfo>,
-    pub watch: AgentWatch,
     pub sub: Subscription,
     /// When the latest frames that showed new pane output were drawn, oldest first, at most
     /// `FRAMES_PER_BUDGET` of them.
@@ -146,7 +138,7 @@ pub struct App {
     pub clipboard: Clipboard,
     /// What the terminal currently shows, so frames send only changed cells.
     pub canvas: Canvas,
-    pub sidebar: Sidebar,
+    pub last_copy: Option<String>,
 }
 
 /// Everything the app reads from its surroundings, so it can run against explicit inputs.
@@ -180,7 +172,7 @@ impl App {
     pub async fn open(
         endpoint: &str,
         session: &str,
-        start: StartView,
+        _start: StartView,
         opts: AppOptions,
     ) -> Result<(Self, StreamRx), String> {
         let AppOptions {
@@ -193,14 +185,12 @@ impl App {
         let sub_client = Client::connect(endpoint).await?;
         ensure_running_window(&mut client).await;
         let (tx, rx) = mpsc::channel(STREAM_QUEUE);
-        let registry = agents::registry(&config);
         let mut app = App {
             endpoint: endpoint.to_string(),
             session: session.to_string(),
             client,
             config,
             keymap,
-            registry,
             mode: Mode::Normal,
             history: Vec::new(),
             message: None,
@@ -223,7 +213,6 @@ impl App {
             zoomed: None,
             split_counter: 1,
             nodes: Vec::new(),
-            watch: AgentWatch::default(),
             sub: Subscription {
                 generation: 0,
                 tx,
@@ -238,18 +227,14 @@ impl App {
             fixed_size: size,
             clipboard: Clipboard::System,
             canvas: Canvas::default(),
-            sidebar: Sidebar::default(),
+            last_copy: None,
         };
         app.subscribe(sub_client);
         app.refresh_nodes().await;
-        app.refresh_agents().await;
         if let Ok(info) = app.client.info().await
             && let Some(restored_ms) = info.restored_ms
         {
             app.say(restored_notice(restored_ms, local_utc_offset(restored_ms)));
-        }
-        if start == StartView::Agents {
-            app.open_overlay(Overlay::agents()).await;
         }
         Ok((app, rx))
     }
@@ -276,11 +261,7 @@ impl App {
             .unwrap_or_else(|| crossterm::terminal::size().unwrap_or((80, 24)));
         let layout_h = h.saturating_sub(1);
         self.viewport = (w, layout_h);
-        let side = self.sidebar_width();
-        if w < crate::tui::sidebar::SIDEBAR_COLS && matches!(self.mode, Mode::Sidebar) {
-            self.mode = Mode::Normal;
-        }
-        if !self.layout.sync(&mut self.client, side, w - side, layout_h).await {
+        if !self.layout.sync(&mut self.client, 0, w, layout_h).await {
             return false;
         }
         let focused = self
@@ -293,7 +274,7 @@ impl App {
         self.follow_focus(focused);
         let shown_before: Vec<String> = self.panes.iter().map(|(name, ..)| name.clone()).collect();
         self.panes = match &self.zoomed {
-            Some(name) => vec![(name.clone(), Rect::new(side, 0, w - side, layout_h), true)],
+            Some(name) => vec![(name.clone(), Rect::new(0, 0, w, layout_h), true)],
             None => self.layout.raw.clone(),
         };
         self.active_rect = self.panes.iter().find(|(.., f)| *f).map(|(_, r, _)| *r);
@@ -361,8 +342,7 @@ impl App {
 
     /// Width and height of the area the panes are laid out in, right of the sidebar.
     pub fn pane_viewport(&self) -> (u16, u16) {
-        let (w, h) = self.viewport;
-        (w - self.sidebar_width(), h)
+        self.viewport
     }
 
     pub fn modes_of(&self, name: &str) -> TermModes {
@@ -479,7 +459,6 @@ impl App {
     pub async fn on_tick(&mut self) -> Flow {
         self.layout.dirty = true;
         self.refresh_nodes().await;
-        self.refresh_agents().await;
         if matches!(self.mode, Mode::Overlay(_)) {
             self.refresh_overlay().await;
         }
@@ -566,7 +545,6 @@ impl App {
             Mode::Overlay(ov) => self.overlay_key(ov, key).await,
             Mode::Prompt(p) => self.prompt_key(p, key).await,
             Mode::Confirm(prompt, cmd) => self.confirm_key(prompt, cmd, key).await,
-            Mode::Sidebar => self.sidebar_key(key).await,
         }
     }
 }
@@ -736,7 +714,7 @@ pub async fn run_tui(
             app.drew(Instant::now());
         }
         let popup = app.hud_deadline().filter(|_| !app.hud_visible());
-        let due = earliest([popup, app.sidebar.due(), app.frame_due]);
+        let due = earliest([popup, app.frame_due]);
         let wake = tokio::select! {
             Some(event) = keys.recv() => Wake::Input(event),
             item = stream.recv() => Wake::Stream(item),
@@ -752,7 +730,7 @@ pub async fn run_tui(
                 flow
             }
             Wake::Tick => app.on_tick().await,
-            Wake::Due => app.on_due().await,
+            Wake::Due => Flow::Continue,
         };
         let forwarded = std::mem::take(&mut app.forwarded);
         redraw = needs_redraw(output, forwarded, app.frame_due, Instant::now());

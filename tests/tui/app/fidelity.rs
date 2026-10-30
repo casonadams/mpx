@@ -145,28 +145,6 @@ async fn frames_keep_the_terminal_identical_to_the_panes() {
     .await;
     check(&mut h, "redraw after overlays").await;
 
-    let working = mpx::client::AgentReportArgs {
-        harness: Some("claude".to_string()),
-        state: Some(mpx::protocol::AgentState::Working),
-        ..Default::default()
-    };
-    h.probe.agent_report(MAIN, working).await.expect("report agent");
-    h.app.refresh_sidebar().await;
-    check(&mut h, "agents rail shown").await;
-    let busy = format!("{}BUSY-DONE", numbered_lines("busy", 30));
-    emit(&mut h, MAIN, &busy, "BUSY-DONE").await;
-    check(&mut h, "output beside the rail").await;
-    emit(&mut h, MAIN, VIM_LIKE, "VIM-DONE").await;
-    check(&mut h, "vim-style redraw beside the rail").await;
-
-    h.prefixed_char('.').await;
-    h.frame().await;
-    assert!(h.terminal.snapshot().starts_with(" Agents"), "drawer expanded");
-    let under = format!("{}UNDER-DONE", numbered_lines("under", 8));
-    emit(&mut h, MAIN, &under, "UNDER-DONE").await;
-    h.frame().await;
-    h.key(KeyCode::Esc).await;
-    check(&mut h, "output that arrived under the expanded drawer").await;
 
     h.prefixed_char('?').await;
     h.frame().await;
