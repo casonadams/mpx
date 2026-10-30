@@ -88,6 +88,8 @@ pub enum Command {
     KillServer,
     /// Send the prefix key itself to the active pane.
     SendPrefix,
+    /// Re-read the config file into the TUI and the session's daemon.
+    ReloadConfig,
     RenameSession {
         name: String,
     },
@@ -136,6 +138,7 @@ pub const COMMAND_NAMES: &[&str] = &[
     "q",
     "qa",
     "quit",
+    "reload-config",
     "rename",
     "rename-session",
     "rename-window",
@@ -272,6 +275,7 @@ fn misc_cmd(name: &str, args: &[String]) -> Option<Result<Command, String>> {
         "choose-tree" => bare(name, args, Command::OpenTree),
         "list-keys" | "help" => bare(name, args, Command::OpenHelp),
         "send-prefix" => bare(name, args, Command::SendPrefix),
+        "reload-config" | "source-file" => bare(name, args, Command::ReloadConfig),
         "next-session" => bare(name, args, Command::NextSession),
         "prev-session" => bare(name, args, Command::PrevSession),
         "switch-client" | "session" => switch_client(name, args),

@@ -54,6 +54,7 @@ If you pause after the prefix, a shortcut popup lists common action keys after `
 | :--- | :--- | :--- |
 | `Ctrl-Space` (no prefix) | `palette` | Open the unified fuzzy Command Palette |
 | `:` | `command-prompt` | Command line on the status row |
+| `r` | `reload-config` | Re-read `config.toml` without restarting (see [Reloading](CONFIG.md#reloading-the-config)) |
 | `?` | `palette help` | Searchable key bindings list |
 | `[` | `copy-mode` | Vi copy mode with 100k scrollback |
 
@@ -68,6 +69,7 @@ Vim-style command line on the status row. Supports tab-completion, history (`Up`
 | `split-window [-h] [-d] [-c dir] [cmd...]` | `split`, `sp`, `vsplit`, `vs` | Split active pane |
 | `new-window [-n name] [-c dir] [cmd...]` | `new`, `tabnew` | Create window |
 | `rename-session NAME` | `rename` | Rename current session |
+| `reload-config` | `source-file` | Re-read the config file into the TUI and the session's daemon |
 | `rename-window NAME` | `renamew` | Rename active window |
 | `kill-pane [-t TARGET]` | `killp` | Close pane |
 | `kill-window [-t INDEX]` | `killw` | Close window |

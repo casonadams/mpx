@@ -8,6 +8,7 @@ mod overlay_io;
 mod overlay_keys;
 mod passthrough;
 mod prompt_cmds;
+mod reload;
 mod sessions;
 pub mod support;
 mod windows;

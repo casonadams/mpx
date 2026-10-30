@@ -167,7 +167,7 @@ fallback = ["nvim", "-S", "Session.vim"]</code></pre>
 
     <section id="restore">
       <h2>Session Restore</h2>
-      <p>The daemon snapshots each session's layout as it changes. After a crash or reboot, the next start brings back the windows, splits, and working directories, and tools resume their sessions through configured <code>[[resume]]</code> rules. After a deliberate <code>mpx kill-server</code>, run <code>mpx restore</code> to bring the layout back.</p>
+      <p>The daemon snapshots each session's layout as it changes. Every time a session starts, it brings back the windows, splits, and working directories, and tools resume their sessions through configured <code>[[resume]]</code> rules, whether the last run ended in a crash, a reboot, or <code>mpx kill-server</code>. Start with <code>mpx --no-restore</code> for a brand new state.</p>
     </section>
 
     <hr>
@@ -177,7 +177,7 @@ fallback = ["nvim", "-S", "Session.vim"]</code></pre>
       <pre><code>mpx                              # Start or attach to default session
 mpx ls                           # List sessions (tmux ls)
 mpx list-panes                   # List panes with ids (%N) and status
-mpx rename-session -t main dev   # Rename session (tmux rename-session)
+mpx rename-session -t 0 dev      # Rename session (tmux rename-session)
 mpx run --pty -- htop            # Run interactive command in PTY
 mpx split -h -d -- htop          # Split side by side without focus (tmux flags)
 mpx logs --plain --tail 50 &lt;name&gt; # Rendered scrollback
@@ -185,6 +185,7 @@ mpx send-keys -t %1 C-c          # tmux key names
 mpx paste -t %1 --submit "text"  # Bracketed paste + Enter
 mpx wait &lt;name&gt; --match 'done' --timeout 60
 mpx restore                      # Restore workspace from last snapshot
+mpx import-tmux [FILE]           # Print a config.toml fragment converted from tmux.conf (writes nothing)
 mpx kill-server                  # Stop the session daemon</code></pre>
     </section>
   </main>

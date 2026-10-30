@@ -8,6 +8,12 @@ use crate::store;
 /// Exit code of `mpx wait` when the timeout elapses first (same as coreutils `timeout`).
 pub const WAIT_TIMEOUT_EXIT: i32 = 124;
 
+/// Session a bare `mpx` attaches to, named as tmux names its first session.
+pub const DEFAULT_SESSION: &str = "0";
+
+/// What the default session was called before it became `DEFAULT_SESSION`.
+pub const LEGACY_DEFAULT_SESSION: &str = "main";
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Resolved {
     pub session: String,
@@ -22,9 +28,11 @@ pub struct Resolved {
     pub config: Config,
     /// Durable state directory of the session's daemon (`--state-dir`).
     pub state_dir: PathBuf,
+    /// `--no-restore`: start the session empty instead of from its saved snapshot.
+    pub no_restore: bool,
 }
 
-/// Session: `-s` > `$MPX_SESSION` > `main`. Endpoint: `--endpoint` > `$MPX_ENDPOINT` (only when `-s` is absent) > the session's socket in `socket_dir`.
+/// Session: `-s` > `$MPX_SESSION` > `0`. Endpoint: `--endpoint` > `$MPX_ENDPOINT` (only when `-s` is absent) > the session's socket in `socket_dir`.
 /// The config is the default until the caller loads one with `load_config`.
 pub fn resolve(
     session_flag: Option<&str>,
@@ -33,7 +41,7 @@ pub fn resolve(
     env_endpoint: Option<&str>,
     socket_dir: &Path,
 ) -> Resolved {
-    let session = session_flag.or(env_session).unwrap_or("main").to_string();
+    let session = session_flag.or(env_session).unwrap_or(DEFAULT_SESSION).to_string();
     let env_ep = if session_flag.is_none() {
         env_endpoint
     } else {
@@ -52,6 +60,7 @@ pub fn resolve(
         config_path: None,
         config: Config::default(),
         state_dir,
+        no_restore: false,
     }
 }
 
@@ -116,4 +125,14 @@ pub fn wait_exit_code(condition: &WaitCondition, outcome: &WaitOutcome) -> i32 {
         WaitCondition::Exit => outcome.exit_code.unwrap_or(0),
         _ => 0,
     }
+}
+
+/// Lowest number that names none of `taken`: how tmux names a session created without `-s`.
+pub fn next_free_session<'a>(taken: impl IntoIterator<Item = &'a str>) -> String {
+    let taken: std::collections::HashSet<&str> = taken.into_iter().collect();
+    let mut n = 0u64;
+    while taken.contains(n.to_string().as_str()) {
+        n += 1;
+    }
+    n.to_string()
 }

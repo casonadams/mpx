@@ -9,10 +9,12 @@ mod sessions;
 mod windows;
 
 pub use resolve::{
-    Resolved, nested_attach_refused, parse_env_pairs, resolve,
-    resolve_idempotency_key, wait_condition, wait_exit_code,
+    DEFAULT_SESSION, LEGACY_DEFAULT_SESSION, Resolved, nested_attach_refused, next_free_session,
+    parse_env_pairs, resolve, resolve_idempotency_key, wait_condition, wait_exit_code,
 };
-pub use sessions::{RestoreOutcome, apply_key, daemon_args, restore_session, run_cli};
+pub use sessions::{
+    RestoreOutcome, apply_key, daemon_args, ensure_session, restore_session, run_cli,
+};
 
 /// Process entry point behind the `mpx` binary: tmux multicall, tracing, clap parsing and dispatch.
 /// Returns the process exit code.
@@ -69,7 +71,7 @@ async fn entry(argv: Vec<String>) -> i32 {
     version
 )]
 pub struct Cli {
-    /// Session name (default: $MPX_SESSION, then "main")
+    /// Session name (default: $MPX_SESSION, then "0")
     #[arg(short, long, global = true)]
     pub session: Option<String>,
 
@@ -84,6 +86,10 @@ pub struct Cli {
     /// Durable state directory of the daemon (default: the session's directory under the state dir)
     #[arg(long = "state-dir", global = true, value_name = "DIR")]
     pub state_dir: Option<PathBuf>,
+
+    /// Start the session empty instead of restoring its saved layout (only when its daemon is not already running)
+    #[arg(long = "no-restore", global = true)]
+    pub no_restore: bool,
 
     /// Run the mutating request of this command at most once per KEY (safe retries)
     #[arg(long = "idempotency-key", global = true, value_name = "KEY")]
@@ -101,6 +107,13 @@ pub enum Commands {
     /// Recreate the session's windows, panes and agents from its last snapshot
     Restore,
 
+    /// Print an mpx config.toml fragment converted from a tmux config (tmux.conf); writes no files
+    #[command(name = "import-tmux")]
+    ImportTmux {
+        /// tmux config to convert (default: ~/.tmux.conf, then ~/.config/tmux/tmux.conf)
+        file: Option<PathBuf>,
+    },
+
     /// Stop the session's daemon (tmux kill-server)
     #[command(name = "kill-server", aliases = ["stop", "kill-session"])]
     KillServer,
@@ -110,6 +123,18 @@ pub enum Commands {
         /// Session to attach (tmux -t)
         #[arg(short = 't', long = "target")]
         target: Option<String>,
+
+        /// Attach even when running inside an mpx pane
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Create a new session, named by the next free number unless -s gives a name (tmux new-session)
+    #[command(name = "new-session", alias = "new")]
+    NewSession {
+        /// Create the session without attaching to it
+        #[arg(short = 'd', long = "detach")]
+        detach: bool,
 
         /// Attach even when running inside an mpx pane
         #[arg(long)]

@@ -43,12 +43,10 @@ pub struct StyleConfig {
     pub status_bg: String,
     /// Status bar foreground color name or hex.
     pub status_fg: String,
-    /// Dim output of inactive panes when multiple are visible.
+    /// Desaturate the colors of inactive panes when multiple are visible.
     pub dim_inactive: bool,
-    /// Dimming factor for inactive panes (0.0 to 1.0; 0.20 = 20% reduction).
+    /// How far inactive panes are desaturated (0.0 = untouched, 1.0 = grey).
     pub dim_factor: f32,
-    /// Whether to also dim explicit application background colors in inactive panes.
-    pub dim_content_bg: bool,
     /// Template styling for the active (focused) pane.
     pub active: ActiveStyle,
     /// Template styling for inactive (unfocused) panes.
@@ -64,16 +62,6 @@ pub struct ActiveStyle {
     pub bg: String,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum InactiveColorMode {
-    #[default]
-    Dim,
-    Desaturate,
-    Tint,
-    None,
-}
-
 #[derive(Debug, Clone, Deserialize, PartialEq, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct InactiveStyle {
@@ -81,12 +69,6 @@ pub struct InactiveStyle {
     pub fg: String,
     /// Default background color for inactive panes (e.g. "#242933", "black").
     pub bg: String,
-    /// Transformation applied to colored text in inactive panes: "dim", "desaturate", "tint", or "none".
-    pub color_mode: InactiveColorMode,
-    /// Transformation intensity (0.0 to 1.0). If omitted, falls back to `style.dim_factor`.
-    pub factor: Option<f32>,
-    /// Whether to also transform explicit application background colors in inactive panes.
-    pub dim_content_bg: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Default)]
@@ -109,8 +91,7 @@ impl Default for StyleConfig {
             status_bg: "dark-green".to_string(),
             status_fg: "black".to_string(),
             dim_inactive: true,
-            dim_factor: 0.20,
-            dim_content_bg: true,
+            dim_factor: 0.5,
             active: ActiveStyle::default(),
             inactive: InactiveStyle::default(),
         }
@@ -127,8 +108,20 @@ pub struct ResumeRule {
     pub resume: Vec<String>,
     /// Command line fallback when no session id is known (e.g. `["claude", "--continue"]`).
     pub fallback: Vec<String>,
-    /// Optional environment variable that carries the session id.
+    /// Optional environment variable that carries the session id (read from the daemon's environment).
     pub env_id: Option<String>,
+    /// Where to find the session id of the tool running in the pane, tried before `env_id`.
+    pub id_source: Option<IdSource>,
+}
+
+/// State files that map a live process to its session.
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum IdSource {
+    /// Claude Code: `~/.claude/sessions/<pid>.json`.
+    Claude,
+    /// oh-my-pi: `~/.omp/agent/terminal-sessions/<tty>`.
+    Omp,
 }
 
 pub fn default_resume_rules() -> Vec<ResumeRule> {
@@ -139,6 +132,7 @@ pub fn default_resume_rules() -> Vec<ResumeRule> {
             resume: vec!["claude".into(), "--resume".into(), "{id}".into()],
             fallback: vec!["claude".into(), "--continue".into()],
             env_id: Some("CLAUDE_SESSION_ID".into()),
+            id_source: Some(IdSource::Claude),
         },
         ResumeRule {
             name: "omp".into(),
@@ -146,6 +140,7 @@ pub fn default_resume_rules() -> Vec<ResumeRule> {
             resume: vec!["omp".into(), "--resume".into(), "{id}".into()],
             fallback: vec!["omp".into(), "--continue".into()],
             env_id: Some("OMP_SESSION_ID".into()),
+            id_source: Some(IdSource::Omp),
         },
         ResumeRule {
             name: "codex".into(),
@@ -153,6 +148,7 @@ pub fn default_resume_rules() -> Vec<ResumeRule> {
             resume: vec!["codex".into(), "resume".into(), "{id}".into()],
             fallback: vec!["codex".into(), "resume".into(), "--last".into()],
             env_id: None,
+            id_source: None,
         },
         ResumeRule {
             name: "rho".into(),
@@ -160,6 +156,7 @@ pub fn default_resume_rules() -> Vec<ResumeRule> {
             resume: vec!["rho".into(), "--resume".into(), "{id}".into()],
             fallback: vec!["rho".into(), "--resume".into()],
             env_id: None,
+            id_source: None,
         },
         ResumeRule {
             name: "antigravity".into(),
@@ -167,6 +164,7 @@ pub fn default_resume_rules() -> Vec<ResumeRule> {
             resume: vec!["agy".into(), "--conversation".into(), "{id}".into()],
             fallback: vec!["agy".into(), "--continue".into()],
             env_id: None,
+            id_source: None,
         },
         ResumeRule {
             name: "opencode".into(),
@@ -174,6 +172,7 @@ pub fn default_resume_rules() -> Vec<ResumeRule> {
             resume: vec!["opencode".into(), "--session".into(), "{id}".into()],
             fallback: vec!["opencode".into()],
             env_id: None,
+            id_source: None,
         },
         ResumeRule {
             name: "nvim".into(),
@@ -181,6 +180,7 @@ pub fn default_resume_rules() -> Vec<ResumeRule> {
             resume: Vec::new(),
             fallback: vec!["nvim".into(), "-S".into(), "Session.vim".into()],
             env_id: None,
+            id_source: None,
         },
     ]
 }
@@ -245,6 +245,12 @@ impl Config {
             tracing::warn!("ignoring invalid mpx config: {}", e);
             Config::default()
         })
+    }
+
+    /// Config from `path`, or the defaults when there is none. A missing file yields defaults; a
+    /// malformed file is an error.
+    pub fn load_at(path: Option<&std::path::Path>) -> Result<Config, String> {
+        path.map_or_else(|| Ok(Config::default()), Self::load_file)
     }
 }
 

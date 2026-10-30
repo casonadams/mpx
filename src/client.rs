@@ -5,9 +5,9 @@ use tokio_util::codec::{Framed, FramedParts, LengthDelimitedCodec, LinesCodec};
 use crate::ipc::{IpcStream, connect_stream};
 use crate::layout::{Divider, Rect, WindowTab};
 use crate::protocol::{
-    DaemonMessage, LayoutPreset, NewWindowOpts, NodeInfo, PROTOCOL,
-    Request, Response, SessionInfo, Side, SpawnOpts, SplitOpts, StreamEvent,
-    WaitCondition, WaitOutcome,
+    Buffer, ChannelAction, DaemonMessage, LayoutPreset, NewWindowOpts, NodeInfo, PROTOCOL, Request,
+    Response, SessionInfo, Side, SpawnOpts, SplitOpts, StreamEvent, VarKind, WaitCondition,
+    WaitOutcome,
 };
 use crate::wire;
 
@@ -417,6 +417,125 @@ impl Client {
             },
         )
         .await
+    }
+
+    /// Makes the daemon re-read its config from `path` (the defaults when `None`).
+    pub async fn reload_config(&mut self, path: Option<&std::path::Path>) -> Result<(), String> {
+        let path = path.map(|p| p.to_string_lossy().into_owned());
+        self.call_ok("ReloadConfig", Request::ReloadConfig { path }).await
+    }
+
+    /// Sets (or with `None` removes) a variable of the session's option or environment store.
+    pub async fn set_var(
+        &mut self,
+        kind: VarKind,
+        name: &str,
+        value: Option<&str>,
+    ) -> Result<(), String> {
+        let req = Request::SetVar {
+            kind,
+            name: name.to_string(),
+            value: value.map(str::to_string),
+        };
+        self.call_ok("SetVar", req).await
+    }
+
+    pub async fn get_vars(&mut self, kind: VarKind) -> Result<Vec<(String, String)>, String> {
+        match self.call(Request::GetVars { kind }).await? {
+            Response::Vars(vars) => Ok(vars),
+            other => Err(unexpected("GetVars", other)),
+        }
+    }
+
+    /// Pushes a paste buffer; `name` replaces the buffer of that name.
+    pub async fn set_buffer(&mut self, name: Option<&str>, data: &str) -> Result<(), String> {
+        let req = Request::SetBuffer {
+            name: name.map(str::to_string),
+            data: data.to_string(),
+        };
+        self.call_ok("SetBuffer", req).await
+    }
+
+    /// The named paste buffer, or the most recent one.
+    pub async fn get_buffer(&mut self, name: Option<&str>) -> Result<Buffer, String> {
+        let req = Request::GetBuffer {
+            name: name.map(str::to_string),
+        };
+        match self.call(req).await? {
+            Response::Buffer(buffer) => Ok(buffer),
+            other => Err(unexpected("GetBuffer", other)),
+        }
+    }
+
+    /// Paste buffers, newest first.
+    pub async fn list_buffers(&mut self) -> Result<Vec<Buffer>, String> {
+        match self.call(Request::ListBuffers).await? {
+            Response::Buffers(buffers) => Ok(buffers),
+            other => Err(unexpected("ListBuffers", other)),
+        }
+    }
+
+    pub async fn delete_buffer(&mut self, name: Option<&str>) -> Result<(), String> {
+        let req = Request::DeleteBuffer {
+            name: name.map(str::to_string),
+        };
+        self.call_ok("DeleteBuffer", req).await
+    }
+
+    /// tmux `wait-for`: blocks until the action completes on the daemon.
+    pub async fn wait_for(&mut self, channel: &str, action: ChannelAction) -> Result<(), String> {
+        let req = Request::WaitFor {
+            channel: channel.to_string(),
+            action,
+        };
+        self.call_ok("WaitFor", req).await
+    }
+
+    /// Has every attached terminal run `line` as a command.
+    pub async fn client_command(&mut self, line: &str) -> Result<(), String> {
+        let req = Request::ClientCommand {
+            line: line.to_string(),
+        };
+        self.call_ok("ClientCommand", req).await
+    }
+
+    /// Moves pane `src` next to `dst`, splitting it side by side or stacked.
+    pub async fn join_pane(
+        &mut self,
+        src: &str,
+        dst: &str,
+        side_by_side: bool,
+    ) -> Result<(), String> {
+        let req = Request::JoinPane {
+            src: src.to_string(),
+            dst: dst.to_string(),
+            side_by_side,
+        };
+        self.call_ok("JoinPane", req).await
+    }
+
+    pub async fn swap_window(&mut self, a: usize, b: usize) -> Result<(), String> {
+        self.call_ok("SwapWindow", Request::SwapWindow { a, b }).await
+    }
+
+    pub async fn move_window(&mut self, from: usize, to: usize) -> Result<(), String> {
+        self.call_ok("MoveWindow", Request::MoveWindow { from, to }).await
+    }
+
+    /// Pipes a pane's output into `command`; `None` stops piping. `toggle` stops an existing pipe
+    /// instead of replacing it.
+    pub async fn pipe_pane(
+        &mut self,
+        name: &str,
+        command: Option<&str>,
+        toggle: bool,
+    ) -> Result<(), String> {
+        let req = Request::PipePane {
+            name: name.to_string(),
+            command: command.map(str::to_string),
+            toggle,
+        };
+        self.call_ok("PipePane", req).await
     }
     /// Recreates the session from its last snapshot.
     pub async fn restore(&mut self) -> Result<(), String> {

@@ -5,6 +5,35 @@ use serde::{Deserialize, Serialize};
 /// Stable numeric pane identifier, rendered as `%N` (tmux-compatible).
 pub type PaneId = u32;
 
+/// Which name/value store of the session a variable request addresses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VarKind {
+    /// tmux options (`set-option`), including user options starting with `@`.
+    Option,
+    /// Environment handed to panes created later (`set-environment`).
+    Environment,
+}
+
+/// What a `WaitFor` request does with a channel (tmux `wait-for`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChannelAction {
+    /// Block until the channel is signaled (returns at once when a signal is already pending).
+    Wait,
+    Signal,
+    /// Block until the channel's lock is free, then hold it.
+    Lock,
+    Unlock,
+}
+
+/// A paste buffer: tmux's stack of copied text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Buffer {
+    pub name: String,
+    pub data: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NodeState {
@@ -26,6 +55,12 @@ pub struct NodeInfo {
     pub title: Option<String>,
     /// Name of the PTY foreground process (e.g. `claude` running inside `zsh`).
     pub foreground: Option<String>,
+    /// Pid of the PTY foreground process group leader (absent from daemons that predate it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub foreground_pid: Option<u32>,
+    /// Device name of the pane's terminal without `/dev/`, e.g. `ttys004`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tty: Option<String>,
     pub started_ms: u64,
     pub last_output_ms: u64,
     /// Index of the window containing this pane, if it is laid out.
@@ -55,6 +90,8 @@ impl NodeInfo {
             cwd: None,
             title: None,
             foreground: None,
+            foreground_pid: None,
+            tty: None,
             started_ms: 0,
             last_output_ms: 0,
             window: None,
@@ -358,6 +395,62 @@ pub enum Request {
     RenameSession {
         name: String,
     },
+    /// Reload the daemon's config from `path`, or the defaults when there is none.
+    ReloadConfig {
+        path: Option<String>,
+    },
+    /// Set a variable of the session; `None` removes it.
+    SetVar {
+        kind: VarKind,
+        name: String,
+        value: Option<String>,
+    },
+    /// All variables of one store, sorted by name.
+    GetVars {
+        kind: VarKind,
+    },
+    /// Push a paste buffer; `name` replaces a buffer of that name, else a `bufferNNNN` name is made.
+    SetBuffer {
+        name: Option<String>,
+        data: String,
+    },
+    /// The named paste buffer, or the most recent one.
+    GetBuffer {
+        name: Option<String>,
+    },
+    ListBuffers,
+    DeleteBuffer {
+        name: Option<String>,
+    },
+    WaitFor {
+        channel: String,
+        action: ChannelAction,
+    },
+    /// Have attached terminal clients run this command line (`detach-client`, `switch-client`).
+    ClientCommand {
+        line: String,
+    },
+    /// Move pane `src` next to `dst` (tmux `join-pane`).
+    JoinPane {
+        src: String,
+        dst: String,
+        side_by_side: bool,
+    },
+    SwapWindow {
+        a: usize,
+        b: usize,
+    },
+    MoveWindow {
+        from: usize,
+        to: usize,
+    },
+    /// Feed a pane's output to a shell command (tmux `pipe-pane`), replacing an earlier pipe;
+    /// `None` stops piping. With `toggle`, an existing pipe is stopped instead of replaced.
+    PipePane {
+        name: String,
+        command: Option<String>,
+        toggle: bool,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -379,6 +472,9 @@ pub enum Response {
     Screen(String),
     Layout(Vec<(String, Rect, bool)>, Vec<Divider>, Vec<WindowTab>),
     Cwd(Option<String>),
+    Vars(Vec<(String, String)>),
+    Buffer(Buffer),
+    Buffers(Vec<Buffer>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -405,6 +501,11 @@ pub enum StreamEvent {
     /// Windows or panes were rearranged (focus, a window switch, a split, a swap...): refetch the
     /// layout. Sent only to subscribers that asked for it, so older clients never see it.
     Layout,
+    /// Run this command line, as if typed at the prompt. Sent only to subscribers that asked for
+    /// layout events (terminal clients).
+    ClientCommand {
+        line: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

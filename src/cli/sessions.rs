@@ -1,18 +1,22 @@
 use std::ffi::OsString;
 #[cfg(unix)]
 use std::io::ErrorKind;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use super::panes;
 use super::render;
 use super::resolve::{
-    Resolved, load_config, nested_attach_refused, resolve, resolve_idempotency_key,
+    DEFAULT_SESSION, LEGACY_DEFAULT_SESSION, Resolved, load_config, nested_attach_refused,
+    next_free_session, resolve, resolve_idempotency_key,
 };
 use super::{Cli, Commands};
 use crate::client::{Client, Handshake};
+use crate::config::home_dir;
 use crate::daemon::run_daemon;
 use crate::ipc;
 use crate::store;
+use crate::tmux_shim::convert;
 use crate::tui::app::AppOptions;
 use crate::tui::status::{clock_hms, local_utc_offset};
 use crate::tui::{StartView, run_tui};
@@ -31,18 +35,69 @@ pub async fn run_cli(cli: Cli) -> Result<i32, String> {
     target.idempotency_key = resolve_idempotency_key(cli.idempotency_key.as_deref());
     target.config = load_config(cli.config.as_deref())?;
     target.config_path = cli.config;
-    if let Some(dir) = cli.state_dir {
-        target.state_dir = dir;
+    if cli.no_restore {
+        target.no_restore = true;
+        target.config.restore = false;
+    }
+    match cli.state_dir {
+        Some(dir) => target.state_dir = dir,
+        None => adopt_legacy_state(&target),
     }
     let command = cli.command.unwrap_or(Commands::Attach {
         target: None,
         force: false,
     });
+    if cli.session.is_none() && matches!(command, Commands::NewSession { .. }) {
+        target = numbered_session(&target);
+    }
     dispatch(command, target).await
 }
 
 fn env_var(key: &str) -> Option<String> {
     std::env::var(key).ok().filter(|v| !v.is_empty())
+}
+
+/// The default session used to be called `main`: moves its saved state to the new name, unless a
+/// daemon of the old name is still running (the two would then restore the same panes twice).
+fn adopt_legacy_state(r: &Resolved) {
+    let legacy_socket = ipc::endpoint_in(&r.socket_dir, LEGACY_DEFAULT_SESSION);
+    if r.session == DEFAULT_SESSION && !std::path::Path::new(&legacy_socket).exists() {
+        store::adopt_legacy_dir(
+            &store::state_dir(),
+            LEGACY_DEFAULT_SESSION,
+            DEFAULT_SESSION,
+        );
+    }
+}
+
+/// `r` retargeted at the lowest-numbered session that is neither running nor saved.
+fn numbered_session(r: &Resolved) -> Resolved {
+    let running = ipc::list_sessions(&r.socket_dir);
+    let saved: Vec<String> = std::fs::read_dir(store::state_dir())
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    let taken = running
+        .iter()
+        .map(|s| s.name.as_str())
+        .chain(saved.iter().map(String::as_str));
+    target_resolved(r, &next_free_session(taken))
+}
+
+/// Starts a session that has no saved state to restore, then attaches to it unless `detach`.
+async fn new_session(mut r: Resolved, detach: bool, force: bool) -> Result<i32, String> {
+    if !matches!(probe(&r.endpoint).await, Probe::Down) {
+        return Err(format!("duplicate session: {}", r.session));
+    }
+    r.no_restore = true;
+    r.config.restore = false;
+    if detach {
+        ensure_client(&r).await?;
+        return Ok(0);
+    }
+    attach(&r, None, force).await
 }
 
 async fn dispatch(command: Commands, r: Resolved) -> Result<i32, String> {
@@ -55,6 +110,7 @@ async fn dispatch(command: Commands, r: Resolved) -> Result<i32, String> {
         }
         Commands::KillServer => kill_server(&r).await,
         Commands::Attach { target, force } => attach(&r, target, force).await,
+        Commands::NewSession { detach, force } => new_session(r, detach, force).await,
         Commands::ListSessions { json } => list_sessions(&r, json).await,
         Commands::ListPanes { json } => list_panes(&r, json).await,
         Commands::HasSession { target } => has_session(&r, target.as_deref()).await,
@@ -62,8 +118,29 @@ async fn dispatch(command: Commands, r: Resolved) -> Result<i32, String> {
             rename_session(&r, target.as_deref(), &name).await
         }
         Commands::Restore => restore(&r).await,
+        Commands::ImportTmux { file } => import_tmux(file.as_deref()),
         other => panes::run(other, &r).await,
     }
+}
+
+/// Connects to `session` in `socket_dir`, starting its daemon when it is not running. `state_dir`
+/// overrides where the daemon keeps its snapshot; `no_restore` starts it empty.
+pub async fn ensure_session(
+    session: &str,
+    socket_dir: &Path,
+    state_dir: Option<PathBuf>,
+    no_restore: bool,
+) -> Result<Client, String> {
+    let mut r = resolve(Some(session), None, None, None, socket_dir);
+    r.config = load_config(None)?;
+    if let Some(dir) = state_dir {
+        r.state_dir = dir;
+    }
+    if no_restore {
+        r.no_restore = true;
+        r.config.restore = false;
+    }
+    ensure_client(&r).await
 }
 
 /// Connects to the session, starting its daemon when it is not running.
@@ -145,6 +222,37 @@ async fn clear_stale_socket(endpoint: &str) {
 #[cfg(not(unix))]
 async fn clear_stale_socket(_endpoint: &str) {}
 
+/// `mpx import-tmux`: prints the mpx config fragment for a tmux config; notes go to stderr.
+fn import_tmux(file: Option<&Path>) -> Result<i32, String> {
+    let path = match file {
+        Some(path) => path.to_path_buf(),
+        None => default_tmux_conf().ok_or("no tmux config found: pass FILE")?,
+    };
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let converted = convert(&text);
+    for note in &converted.notes {
+        eprintln!("# {note}");
+    }
+    print!("{}", converted.toml);
+    Ok(0)
+}
+
+/// `~/.tmux.conf`, else `$XDG_CONFIG_HOME/tmux/tmux.conf` (or `~/.config/tmux/tmux.conf`), whichever exists.
+fn default_tmux_conf() -> Option<PathBuf> {
+    let home = home_dir();
+    let xdg = std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| home.as_ref().map(|h| h.join(".config")));
+    [
+        home.as_ref().map(|h| h.join(".tmux.conf")),
+        xdg.map(|x| x.join("tmux").join("tmux.conf")),
+    ]
+    .into_iter()
+    .flatten()
+    .find(|p| p.is_file())
+}
+
 /// Arguments that make an auto-spawned daemon serve this session with the same endpoint, config and
 /// state directory as this command.
 pub fn daemon_args(r: &Resolved) -> Vec<OsString> {
@@ -159,6 +267,9 @@ pub fn daemon_args(r: &Resolved) -> Vec<OsString> {
     if let Some(path) = &r.config_path {
         args.push("-f".into());
         args.push(path.as_os_str().to_owned());
+    }
+    if r.no_restore {
+        args.push("--no-restore".into());
     }
     args.push("daemon".into());
     args
@@ -186,6 +297,8 @@ fn spawn_daemon(r: &Resolved) -> Result<(), String> {
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
+        // Started through the `tmux` link, argv[0] would make the daemon run as the tmux shim.
+        cmd.arg0("mpx");
         // SAFETY: setsid is async-signal-safe and touches nothing shared with the parent.
         unsafe {
             cmd.pre_exec(|| {
@@ -309,6 +422,7 @@ fn target_resolved(current: &Resolved, target: &str) -> Resolved {
         config_path: current.config_path.clone(),
         config: current.config.clone(),
         state_dir,
+        no_restore: current.no_restore,
     }
 }
 
@@ -322,6 +436,13 @@ async fn attach(r: &Resolved, target: Option<String>, force: bool) -> Result<i32
         Some(t) => target_resolved(r, &t),
         None => r.clone(),
     };
+    if target.no_restore && matches!(probe(&target.endpoint).await, Probe::Ready(_)) {
+        return Err(format!(
+            "session '{}' is already running; --no-restore only applies when it starts \
+             (stop it first with `mpx kill-server -s {}`)",
+            target.session, target.session
+        ));
+    }
     ensure_client(&target).await?;
     run_tui(
         &target.endpoint,
@@ -387,6 +508,7 @@ async fn rename_session(r: &Resolved, target: Option<&str>, new_name: &str) -> R
 pub fn tui_options(r: &Resolved) -> AppOptions {
     AppOptions {
         config: r.config.clone(),
+        config_path: r.config_path.clone(),
         socket_dir: r.socket_dir.clone(),
         size: None,
     }

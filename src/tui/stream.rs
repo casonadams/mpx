@@ -56,6 +56,7 @@ impl App {
             // Panes created or rearranged from outside (an agent's split, `mpx focus`) show at
             // once, not at the next tick.
             StreamEvent::Spawned { .. } | StreamEvent::Layout => true,
+            StreamEvent::ClientCommand { .. } => false,
             StreamEvent::Lagged => {
                 self.resync_all().await;
                 true

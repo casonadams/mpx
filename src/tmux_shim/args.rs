@@ -7,6 +7,10 @@ pub struct Invocation {
     pub switches: BTreeSet<char>,
     pub values: BTreeMap<char, String>,
     pub operands: Vec<String>,
+    /// `-L name`: the tmux server (here: a directory of session sockets) to talk to.
+    pub socket_name: Option<String>,
+    /// `-S path`: a socket path naming the server.
+    pub socket_path: Option<String>,
 }
 
 impl Invocation {
@@ -46,9 +50,32 @@ pub fn canonical(name: &str) -> &str {
         "breakp" => "break-pane",
         "renamew" => "rename-window",
         "rename" => "rename-session",
+        "joinp" => "join-pane",
+        "swapw" => "swap-window",
+        "movew" => "move-window",
+        "pipep" => "pipe-pane",
         "has" => "has-session",
         "lastw" => "last-window",
         "lastp" => "last-pane",
+        "next" => "next-window",
+        "prev" => "previous-window",
+        "detach" => "detach-client",
+        "switchc" => "switch-client",
+        "set" | "set-window-option" | "setw" => "set-option",
+        "show" | "show-window-options" | "showw" => "show-options",
+        "setenv" => "set-environment",
+        "showenv" => "show-environment",
+        "setb" => "set-buffer",
+        "showb" => "show-buffer",
+        "lsb" => "list-buffers",
+        "deleteb" => "delete-buffer",
+        "loadb" => "load-buffer",
+        "saveb" => "save-buffer",
+        "pasteb" => "paste-buffer",
+        "run" => "run-shell",
+        "if" => "if-shell",
+        "wait" => "wait-for",
+        "source" => "source-file",
         other => other,
     }
 }
@@ -67,7 +94,30 @@ pub fn spec(command: &str) -> Option<(&'static str, &'static str)> {
         "list-windows" => ("a", "tF"),
         "list-sessions" => ("", "F"),
         "display-message" => ("pIv", "tF"),
-        "has-session" | "select-window" | "rename-window" | "rename-session" | "last-window" => ("", "t"),
+        "has-session" | "rename-window" | "rename-session" | "last-window" => ("", "t"),
+        "select-window" => ("lnpT", "t"),
+        "next-window" | "previous-window" => ("a", "t"),
+        "kill-server" => ("", ""),
+        "detach-client" => ("aP", "Est"),
+        "switch-client" => ("ElnprZ", "ctT"),
+        "set-option" => ("aFgopqsuUw", "t"),
+        "show-options" => ("AgHpqsvw", "t"),
+        "set-environment" => ("Fhgru", "t"),
+        "show-environment" => ("hgs", "t"),
+        "set-buffer" => ("aw", "bnt"),
+        "show-buffer" | "delete-buffer" => ("", "b"),
+        "list-buffers" => ("", "Ff"),
+        "load-buffer" => ("w", "bt"),
+        "save-buffer" => ("a", "b"),
+        "paste-buffer" => ("dpr", "sbt"),
+        "run-shell" => ("bC", "dt"),
+        "if-shell" => ("bF", "t"),
+        "wait-for" => ("LSU", ""),
+        "source-file" => ("nqFv", "t"),
+        "join-pane" => ("bdhvf", "lst"),
+        "swap-window" => ("d", "st"),
+        "move-window" => ("abdkr", "st"),
+        "pipe-pane" => ("IOo", "t"),
         "select-pane" => ("LRUDmMZel", "tT"),
         "select-layout" => ("nopE", "t"),
         "resize-pane" => ("LRUDMZ", "txyt"),
@@ -82,21 +132,12 @@ pub fn spec(command: &str) -> Option<(&'static str, &'static str)> {
 pub fn is_noop(command: &str) -> bool {
     matches!(
         command,
-        "set-option"
-            | "set"
-            | "set-window-option"
-            | "setw"
-            | "bind-key"
+        "bind-key"
             | "bind"
             | "unbind-key"
             | "unbind"
-            | "source-file"
-            | "set-environment"
-            | "setenv"
             | "set-hook"
             | "respawn-pane"
-            | "show-options"
-            | "show"
             | "refresh-client"
     )
 }
@@ -106,13 +147,22 @@ pub fn is_noop(command: &str) -> bool {
 pub fn parse(argv: &[String]) -> Result<Invocation, String> {
     let mut start = 0;
     let mut version = false;
+    let (mut socket_name, mut socket_path) = (None, None);
     while let Some(tok) = argv
         .get(start)
         .filter(|t| t.len() > 1 && t.starts_with('-'))
     {
         match tok.as_str() {
             "-V" => version = true,
-            "-L" | "-S" | "-f" => start += 1,
+            "-L" => {
+                socket_name = argv.get(start + 1).cloned();
+                start += 1;
+            }
+            "-S" => {
+                socket_path = argv.get(start + 1).cloned();
+                start += 1;
+            }
+            "-f" => start += 1,
             _ => {}
         }
         start += 1;
@@ -130,6 +180,8 @@ pub fn parse(argv: &[String]) -> Result<Invocation, String> {
     let command = canonical(name).to_string();
     let mut inv = Invocation {
         command: command.clone(),
+        socket_name,
+        socket_path,
         ..Invocation::default()
     };
     let Some(flags) = spec(&command) else {

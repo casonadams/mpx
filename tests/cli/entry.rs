@@ -73,4 +73,9 @@ fn auto_spawned_daemon_serves_the_same_session_endpoint_config_and_state() {
         with_config[6..],
         ["-f", "/cfg/mpx.toml", "daemon"].map(std::ffi::OsString::from)
     );
+    r.no_restore = true;
+    assert_eq!(
+        daemon_args(&r)[8..],
+        ["--no-restore", "daemon"].map(std::ffi::OsString::from)
+    );
 }

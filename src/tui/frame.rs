@@ -5,7 +5,8 @@ use super::app::{App, Mode};
 use super::copy::{CopyState, SelectionKind};
 use super::panes::PaneRect;
 use super::render::{
-    Compositor, DividerStyle, RenderPaneContext, SelectionRange, StatusBar, hud_rect, parse_color,
+    Compositor, DividerStyle, PaneColors, RenderPaneContext, SelectionRange, StatusBar, hud_rect,
+    parse_color,
 };
 use super::status::{exit_badge, node_named};
 use crate::layout::geometry::Rect;
@@ -152,6 +153,7 @@ fn draw_panes<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
         app.zoomed.is_some(),
         app.config.style.dim_inactive,
     );
+    let colors = PaneColors::new(&app.config.style, app.host_colors);
     for pane in &panes {
         let (_, rect, _) = pane;
         let vt = app
@@ -179,7 +181,7 @@ fn draw_panes<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
             &mut app.canvas,
             out,
             RenderPaneContext::from_config(
-                &app.config.style,
+                &colors,
                 *rect,
                 vt.grid(),
                 view.selection.as_ref(),

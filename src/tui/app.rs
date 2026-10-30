@@ -87,6 +87,8 @@ pub struct App {
     pub session: String,
     pub client: Client,
     pub config: Config,
+    /// Config file given with `-f`; `reload-config` re-reads it instead of the default location.
+    pub config_path: Option<PathBuf>,
     pub keymap: Keymap,
     pub mode: Mode,
     pub history: Vec<String>,
@@ -139,12 +141,18 @@ pub struct App {
     /// What the terminal currently shows, so frames send only changed cells.
     pub canvas: Canvas,
     pub last_copy: Option<String>,
+    /// Text yanked while handling the current event, pushed to the session's paste buffers after it.
+    pub yanks: Vec<String>,
+    /// Default foreground and background of the host terminal, read at attach.
+    pub host_colors: super::render::HostColors,
 }
 
 /// Everything the app reads from its surroundings, so it can run against explicit inputs.
 #[derive(Debug, Clone)]
 pub struct AppOptions {
     pub config: Config,
+    /// Config file the config was loaded from (`-f`), re-read by `reload-config`.
+    pub config_path: Option<PathBuf>,
     pub socket_dir: PathBuf,
     /// Screen size to lay out for; `None` follows the real terminal.
     pub size: Option<(u16, u16)>,
@@ -177,6 +185,7 @@ impl App {
     ) -> Result<(Self, StreamRx), String> {
         let AppOptions {
             config,
+            config_path,
             socket_dir,
             size,
         } = opts;
@@ -190,6 +199,7 @@ impl App {
             session: session.to_string(),
             client,
             config,
+            config_path,
             keymap,
             mode: Mode::Normal,
             history: Vec::new(),
@@ -228,6 +238,8 @@ impl App {
             clipboard: Clipboard::System,
             canvas: Canvas::default(),
             last_copy: None,
+            yanks: Vec::new(),
+            host_colors: super::render::HostColors::default(),
         };
         app.subscribe(sub_client);
         app.refresh_nodes().await;
@@ -414,10 +426,8 @@ impl App {
             StreamEvent::Output { name, .. } => self.keeps_screen(name),
             _ => true,
         });
-        for (generation, event) in batch {
-            if generation == self.sub.generation && self.apply_event(event).await {
-                self.layout.dirty = true;
-            }
+        if matches!(self.apply_batch(batch).await, Flow::Quit) {
+            return Flow::Quit;
         }
         if !shown {
             return Flow::Continue;
@@ -465,7 +475,32 @@ impl App {
         Flow::Continue
     }
 
+    /// Applies the events of the current subscription; a client command may end the session view.
+    async fn apply_batch(&mut self, batch: Vec<(u64, StreamEvent)>) -> Flow {
+        for (generation, event) in batch {
+            if generation != self.sub.generation {
+                continue;
+            }
+            if let StreamEvent::ClientCommand { line } = event {
+                if matches!(self.run_line(&line).await, Flow::Quit) {
+                    return Flow::Quit;
+                }
+            } else if self.apply_event(event).await {
+                self.layout.dirty = true;
+            }
+        }
+        Flow::Continue
+    }
+
     pub async fn on_event(&mut self, ev: Event) -> Flow {
+        let flow = self.handle_event(ev).await;
+        for text in std::mem::take(&mut self.yanks) {
+            let _ = self.client.set_buffer(None, &text).await;
+        }
+        flow
+    }
+
+    async fn handle_event(&mut self, ev: Event) -> Flow {
         match ev {
             Event::Key(key) if key.kind != KeyEventKind::Release => {
                 self.last_key = Some(Instant::now());
@@ -684,9 +719,10 @@ pub async fn run_tui(
     opts: AppOptions,
 ) -> Result<(), String> {
     let _guard = TerminalGuard::enter().map_err(|e| format!("Failed to enter raw mode: {e}"))?;
-    let margins = super::terminal::query_lr_margins();
+    let report = super::terminal::query_terminal();
     let (mut app, mut stream) = App::open(endpoint, session, start, opts).await?;
-    app.canvas.set_lr_margins(margins);
+    app.canvas.set_lr_margins(report.margins);
+    app.host_colors = super::render::HostColors::from_report(&report);
     let mut keys = Input {
         rx: terminal_input(),
         held: None,

@@ -215,6 +215,8 @@ fn tmux(s: &Session, args: &[&str]) -> Output {
         .args(args)
         .env("MPX_ENDPOINT", s.endpoint())
         .env("MPX_SESSION", &s.name)
+        .env("XDG_RUNTIME_DIR", &s.runtime)
+        .env("MPX_STATE_DIR", s.runtime.join("state"))
         .env_remove("TMUX")
         .output()
         .expect("run tmux")
@@ -442,4 +444,183 @@ fn an_auto_started_daemon_leads_its_own_session_so_terminal_hangups_spare_it() {
     // SAFETY: getsid only reads the session id of a process.
     let session = unsafe { libc::getsid(pid) };
     assert_eq!(session, pid, "the daemon must not share the spawning terminal's session");
+}
+
+#[cfg(unix)]
+#[test]
+fn tmux_multicall_keeps_options_buffers_and_runs_command_strings() {
+    let s = Session::new("tx");
+    let _ = s.run(&["run", "-n", "base", "--pty", "cat"]);
+    let t = |args: &[&str]| tmux(&s, args);
+    let out = |args: &[&str]| stdout(&t(args));
+
+    assert!(t(&["set", "-g", "@theme", "dark mode"]).status.success());
+    assert_eq!(out(&["show-options", "-gv", "@theme"]), "dark mode");
+    assert_eq!(out(&["show-options", "-g"]), "@theme \"dark mode\"");
+    assert!(!t(&["show-options", "-gv", "@nope"]).status.success());
+    assert!(t(&["show-options", "-gqv", "@nope"]).status.success());
+    assert!(t(&["set-option", "-gu", "@theme"]).status.success());
+    assert_eq!(out(&["show-options", "-g"]), "");
+
+    assert!(t(&["set-buffer", "-b", "one", "first"]).status.success());
+    assert!(t(&["set-buffer", "second"]).status.success());
+    assert_eq!(out(&["show-buffer", "-b", "one"]), "first");
+    assert_eq!(
+        out(&["list-buffers", "-F", "#{buffer_name}:#{buffer_size}"]),
+        "buffer0:6\none:5"
+    );
+
+    assert!(t(&["wait-for", "-S", "go"]).status.success());
+    assert!(t(&["wait-for", "go"]).status.success());
+
+    assert_eq!(out(&["run-shell", "echo from-shell"]), "from-shell");
+    let failing = t(&["run-shell", "exit 3"]);
+    assert!(!failing.status.success());
+    assert!(String::from_utf8_lossy(&failing.stderr).contains("returned 3"));
+
+    assert!(
+        t(&["if-shell", "false", "set -g @branch yes ; set -g @both 1", "set -g @branch no"])
+            .status
+            .success()
+    );
+    assert_eq!(out(&["show-options", "-gv", "@branch"]), "no");
+    assert!(t(&["if-shell", "-F", "#{==:a,a}", "set -g @branch yes"]).status.success());
+    assert_eq!(out(&["show-options", "-gv", "@branch"]), "yes");
+
+    let conf = s.runtime.join("c.conf");
+    std::fs::write(&conf, "set -g @a 1\n# note\nset -g @b \"x y\"\nnosuchcommand\n").unwrap();
+    let sourced = t(&["source-file", conf.to_str().unwrap()]);
+    assert!(!sourced.status.success());
+    assert!(String::from_utf8_lossy(&sourced.stderr).contains("c.conf:4: unknown command"));
+    assert_eq!(out(&["show-options", "-gv", "@b"]), "x y");
+}
+
+#[cfg(unix)]
+#[test]
+fn tmux_multicall_creates_sessions_and_servers_and_kills_them_all() {
+    let s = Session::new("tn");
+    let _ = s.run(&["run", "-n", "base", "--pty", "cat"]);
+    let t = |args: &[&str]| tmux(&s, args);
+    let out = |args: &[&str]| stdout(&t(args));
+    let extra = format!("{}x", s.name);
+
+    assert!(t(&["new-session", "-d", "-s", &extra, "-n", "w", "cat"]).status.success());
+    let sessions = out(&["list-sessions", "-F", "#{session_name}"]);
+    assert!(sessions.lines().any(|l| l == extra), "{sessions}");
+    let duplicate = t(&["new-session", "-d", "-s", &extra]);
+    assert!(String::from_utf8_lossy(&duplicate.stderr).contains("duplicate session"));
+    assert!(t(&["has-session", "-t", &extra]).status.success());
+
+    assert!(t(&["-L", "other", "new-session", "-d", "-s", "inner"]).status.success());
+    assert_eq!(out(&["-L", "other", "list-sessions", "-F", "#{session_name}"]), "inner");
+    let default_server = out(&["list-sessions", "-F", "#{session_name}"]);
+    assert!(!default_server.lines().any(|l| l == "inner"), "{default_server}");
+
+    assert!(t(&["-L", "other", "kill-server"]).status.success());
+    assert!(!t(&["-L", "other", "list-sessions"]).status.success());
+    assert!(t(&["kill-server"]).status.success());
+    assert!(!t(&["list-sessions"]).status.success());
+}
+
+#[cfg(unix)]
+#[test]
+fn tmux_multicall_pastes_buffers_files_environment_windows_and_pipes() {
+    let s = Session::new("tp");
+    let _ = s.run(&["run", "-n", "base", "--pty", "cat"]);
+    let t = |args: &[&str]| tmux(&s, args);
+    let out = |args: &[&str]| stdout(&t(args));
+    let ok = |args: &[&str]| {
+        let run = t(args);
+        assert!(run.status.success(), "{args:?}: {}", String::from_utf8_lossy(&run.stderr));
+    };
+
+    ok(&["set-environment", "MPX_E2E", "v1"]);
+    assert_eq!(out(&["show-environment"]), "MPX_E2E=v1");
+    assert_eq!(out(&["show-environment", "MPX_E2E"]), "MPX_E2E=v1");
+    ok(&["set-environment", "-u", "MPX_E2E"]);
+    assert!(!t(&["show-environment", "MPX_E2E"]).status.success());
+
+    let file = s.runtime.join("buf.txt");
+    let file = file.to_str().unwrap();
+    ok(&["set-buffer", "-b", "keep", "saved text"]);
+    ok(&["save-buffer", "-b", "keep", file]);
+    assert_eq!(std::fs::read_to_string(file).unwrap(), "saved text");
+    ok(&["save-buffer", "-a", "-b", "keep", file]);
+    assert_eq!(std::fs::read_to_string(file).unwrap(), "saved textsaved text");
+    ok(&["load-buffer", "-b", "loaded", file]);
+    assert_eq!(out(&["show-buffer", "-b", "loaded"]), "saved textsaved text");
+    ok(&["delete-buffer", "-b", "loaded"]);
+    assert!(!t(&["show-buffer", "-b", "loaded"]).status.success());
+
+    ok(&["set-buffer", "-b", "p", "pasted-marker"]);
+    ok(&["paste-buffer", "-d", "-b", "p", "-t", "base"]);
+    assert!(!t(&["show-buffer", "-b", "p"]).status.success(), "-d deletes it");
+    let seen = (0..40).any(|_| {
+        std::thread::sleep(Duration::from_millis(50));
+        out(&["capture-pane", "-p", "-t", "base"]).contains("pasted-marker")
+    });
+    assert!(seen, "the paste never reached the pane");
+
+    ok(&["detach-client"]);
+    ok(&["switch-client", "-n"]);
+    assert!(!t(&["switch-client"]).status.success(), "a target is required");
+
+    ok(&["new-window", "-d", "-n", "second", "cat"]);
+    let names = |_: ()| out(&["list-windows", "-F", "#{window_index}:#{window_name}"]);
+    assert_eq!(names(()).lines().count(), 2);
+    let first = names(()).lines().next().unwrap().to_string();
+    ok(&["swap-window", "-s", "0", "-t", "1"]);
+    assert_ne!(names(()).lines().next().unwrap(), first);
+    ok(&["move-window", "-s", "1", "-t", "0"]);
+    assert_eq!(names(()).lines().next().unwrap(), first, "moving window 1 back to 0");
+
+    ok(&["select-window", "-n"]);
+    ok(&["select-window", "-p"]);
+    ok(&["select-window", "-l"]);
+    ok(&["next-window"]);
+    ok(&["previous-window"]);
+    ok(&["select-window", "-t", "0"]);
+    ok(&["swap-window", "-t", "1"]);
+    ok(&["swap-window", "-t", "0"]);
+    ok(&["run-shell", "-b", "true"]);
+
+    let pane = out(&["split-window", "-d", "-P", "-F", "#{pane_id}", "cat"]);
+    ok(&["join-pane", "-s", &pane, "-t", "base", "-h"]);
+    assert!(!t(&["join-pane", "-s", "base", "-t", "base"]).status.success());
+
+    let piped = s.runtime.join("piped.txt");
+    let command = format!("cat > {}", piped.display());
+    ok(&["pipe-pane", "-t", "base", &command]);
+    ok(&["send-keys", "-t", "base", "-l", "to-the-pipe"]);
+    let got = (0..40).any(|_| {
+        std::thread::sleep(Duration::from_millis(50));
+        std::fs::read_to_string(&piped).is_ok_and(|text| text.contains("to-the-pipe"))
+    });
+    assert!(got, "pipe-pane never delivered output");
+    assert!(!t(&["pipe-pane", "-I", "-t", "base", "cat"]).status.success());
+}
+
+#[cfg(unix)]
+#[test]
+fn tmux_multicall_attach_needs_a_terminal_and_names_the_session_it_attaches_to() {
+    let s = Session::new("ta");
+    let _ = s.run(&["run", "-n", "base", "--pty", "cat"]);
+    tmux(&s, &["has-session"]);
+    let link = s.runtime.join("bin").join("tmux");
+    let attach = Command::new(&link)
+        .args(["attach-session", "-t", &s.name])
+        .env("XDG_RUNTIME_DIR", &s.runtime)
+        .env("MPX_STATE_DIR", s.runtime.join("state"))
+        .env_remove("MPX_ENDPOINT")
+        .env_remove("MPX_SESSION")
+        .env_remove("TMUX")
+        .stdin(Stdio::null())
+        .output()
+        .expect("run tmux");
+    assert!(!attach.status.success());
+    assert!(
+        String::from_utf8_lossy(&attach.stderr).contains("raw mode"),
+        "attach did not reach the terminal UI: {}",
+        String::from_utf8_lossy(&attach.stderr)
+    );
 }

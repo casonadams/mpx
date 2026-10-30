@@ -1,8 +1,11 @@
+mod channels;
 mod dispatch;
 pub mod idempotency;
 pub mod plan;
 mod session;
 pub mod snapshot;
+mod pipes;
+mod stores;
 
 use futures_util::{SinkExt, StreamExt};
 use std::path::{Path, PathBuf};
@@ -32,11 +35,12 @@ pub struct DaemonState {
     /// Shared with the session's pane readers: attached terminals' backlogs pace their output.
     pacing: Arc<Pacing>,
     shutdown: watch::Sender<bool>,
+    channels: std::sync::Mutex<channels::Channels>,
 }
 
 impl DaemonState {
     /// Starts a session whose durable state lives in `state_dir`. Pipes are loaded and, when
-    /// configured, the last unclean snapshot is restored before this returns.
+    /// configured, the last saved snapshot is restored before this returns.
     pub async fn new(
         session: String,
         endpoint: String,
@@ -62,6 +66,7 @@ impl DaemonState {
             tx,
             pacing,
             shutdown,
+            channels: std::sync::Mutex::default(),
         })
     }
 

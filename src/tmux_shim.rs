@@ -2,12 +2,20 @@
 use std::path::{Path, PathBuf};
 
 mod args;
+mod conf;
 mod exec;
+mod extra;
 mod format;
+mod server;
+mod shell;
 
 pub use args::{Invocation, canonical, is_noop, parse as parse_invocation, spec};
-pub use exec::{neighbor, pane_key, pane_view, run, side_of, spawn_opts, window_key};
+pub use conf::{Converted, convert};
+pub use exec::{neighbor, pane_key, pane_view, run, side_of, spawn_opts, split_direction, window_key};
+pub use extra::{buffer_sample, builtin_option, quote_option_value};
 pub use format::{PaneView, Vars, expand, pane_vars, session_vars};
+pub use server::{default_session, server_key};
+pub use shell::{config_lines, split_commands};
 
 /// Endpoint of the mpx server a tmux command should talk to: `$TMUX` (`endpoint,pid,idx`) first, then `$MPX_ENDPOINT`.
 pub fn endpoint_from_env(tmux: Option<&str>, mpx_endpoint: Option<&str>) -> Option<String> {

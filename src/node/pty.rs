@@ -47,12 +47,29 @@ impl PtyTerminal {
         }
     }
 
+    /// Runs `f` on the master while it is open; `None` once the PTY is closed.
+    #[cfg(unix)]
+    fn with_master<T>(&self, f: impl FnOnce(&(dyn MasterPty + Send)) -> Option<T>) -> Option<T> {
+        let master = self.master.lock().unwrap_or_else(|e| e.into_inner());
+        f(&**master.as_ref()?)
+    }
+
     /// Process group leader of the terminal, i.e. the program the user is running in it.
     #[cfg(unix)]
     pub fn foreground_pid(&self) -> Option<u32> {
-        let master = self.master.lock().unwrap_or_else(|e| e.into_inner());
-        let leader = master.as_ref()?.process_group_leader()?;
+        let leader = self.with_master(|m| m.process_group_leader())?;
         u32::try_from(leader).ok().filter(|p| *p > 0)
+    }
+
+    /// Device name of the terminal without `/dev/` (e.g. `ttys004`).
+    #[cfg(unix)]
+    pub fn tty_name(&self) -> Option<String> {
+        self.with_master(|m| m.tty_name()?.file_name()?.to_str().map(str::to_string))
+    }
+
+    #[cfg(not(unix))]
+    pub fn tty_name(&self) -> Option<String> {
+        None
     }
 
     #[cfg(not(unix))]

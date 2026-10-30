@@ -175,6 +175,7 @@ impl App {
         let text = cs.yank_text(grid);
         if !text.trim().is_empty() {
             self.clipboard.copy(&text);
+            self.yanks.push(text.clone());
             self.last_copy = Some(text);
         }
     }

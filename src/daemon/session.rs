@@ -14,6 +14,8 @@ use tracing::warn;
 use super::idempotency::{Claim, IdemCache};
 use super::plan::{self, PaneIdentity};
 use super::snapshot::{PaneRecord, build_snapshot};
+use super::pipes::Pipes;
+use super::stores::Stores;
 use crate::node::sleep_until_opt;
 use crate::config::Config;
 use crate::keys::{TermModes, encode_key_names, wrap_paste};
@@ -94,7 +96,9 @@ impl Filter {
     /// Whether `event` goes to this subscriber; `shown` says if a pane is in the active window.
     fn accepts(&self, event: &StreamEvent, shown: impl Fn(&str) -> bool) -> bool {
         match (self, event) {
-            (_, StreamEvent::Layout) => matches!(self, Filter::ActiveWindow { layout: true }),
+            (_, StreamEvent::Layout | StreamEvent::ClientCommand { .. }) => {
+                matches!(self, Filter::ActiveWindow { layout: true })
+            }
             (Filter::Everything, _) => true,
             (Filter::ActiveWindow { .. }, StreamEvent::Output { name, .. }) => shown(name),
             (Filter::ActiveWindow { .. }, _) => true,
@@ -182,6 +186,8 @@ struct Session {
     pending: Vec<(String, Option<u64>, Sink)>,
     idem: IdemCache<Response>,
     snapshots: SnapshotStore,
+    stores: Stores,
+    pipes: Pipes,
     save_due: Option<Instant>,
     shutting_down: bool,
 }
@@ -217,6 +223,8 @@ pub(super) async fn run(boot: Boot, mut rx: mpsc::UnboundedReceiver<SessionMsg>)
         pending: Vec::new(),
         idem: IdemCache::default(),
         snapshots: SnapshotStore::in_dir(&state_dir),
+        stores: Stores::default(),
+        pipes: Pipes::default(),
         save_due: None,
         shutting_down: false,
     };
@@ -351,7 +359,76 @@ impl Session {
                 self.schedule_save();
                 Response::Ok
             }
+            Request::ReloadConfig { path } => {
+                match Config::load_at(path.as_deref().map(std::path::Path::new)) {
+                    Ok(config) => {
+                        self.config = config;
+                        Response::Ok
+                    }
+                    Err(e) => Response::Error(e),
+                }
+            }
+            req @ (Request::SetVar { .. }
+            | Request::GetVars { .. }
+            | Request::SetBuffer { .. }
+            | Request::GetBuffer { .. }
+            | Request::ListBuffers
+            | Request::DeleteBuffer { .. }
+            | Request::ClientCommand { .. }
+            | Request::JoinPane { .. }
+            | Request::SwapWindow { .. }
+            | Request::MoveWindow { .. }
+            | Request::PipePane { .. }) => self.tmux_request(req),
             req => self.target_request(req).await,
+        }
+    }
+
+    /// Requests behind the tmux surface: variables, paste buffers, client commands, window and pane
+    /// moves and pipes.
+    fn tmux_request(&mut self, req: Request) -> Response {
+        match req {
+            Request::SetVar { kind, name, value } => {
+                self.stores.set_var(kind, name, value);
+                Response::Ok
+            }
+            Request::GetVars { kind } => Response::Vars(self.stores.vars(kind)),
+            Request::SetBuffer { name, data } => {
+                self.stores.push_buffer(name, data);
+                Response::Ok
+            }
+            Request::GetBuffer { name } => match self.stores.buffer(name.as_deref()) {
+                Some(buffer) => Response::Buffer(buffer.clone()),
+                None => Response::Error(no_buffer(name.as_deref())),
+            },
+            Request::ListBuffers => Response::Buffers(self.stores.buffers()),
+            Request::DeleteBuffer { name } => {
+                if self.stores.delete_buffer(name.as_deref()) {
+                    Response::Ok
+                } else {
+                    Response::Error(no_buffer(name.as_deref()))
+                }
+            }
+            Request::ClientCommand { line } => {
+                self.fanout(&StreamEvent::ClientCommand { line });
+                Response::Ok
+            }
+            Request::JoinPane {
+                src,
+                dst,
+                side_by_side,
+            } => self.join_pane(&src, &dst, side_by_side),
+            Request::SwapWindow { a, b } => {
+                check(self.workspace.swap_windows(a, b), "No such window")
+            }
+            Request::MoveWindow { from, to } => {
+                check(self.workspace.move_window(from, to), "No such window")
+            }
+            Request::PipePane {
+                name,
+                command,
+                toggle,
+            } => self.pipe_pane(&name, command, toggle),
+            other => Response::Error(format!("not a tmux request: {other:?}")),
         }
     }
 
@@ -535,6 +612,40 @@ impl Session {
 
     fn target_name(&self, target: &str) -> Result<String, String> {
         self.resolve(target).ok_or_else(|| not_found(target))
+    }
+
+    fn pipe_pane(&mut self, name: &str, command: Option<String>, toggle: bool) -> Response {
+        let pane = match self.target_name(name) {
+            Ok(pane) => pane,
+            Err(e) => return Response::Error(e),
+        };
+        let Some(command) = command.filter(|c| !c.trim().is_empty()) else {
+            self.pipes.close(&pane);
+            return Response::Ok;
+        };
+        let opened = self
+            .handle_of(&pane)
+            .and_then(|handle| self.pipes.open(&pane, &handle, &command, toggle));
+        match opened {
+            Ok(()) => Response::Ok,
+            Err(e) => Response::Error(e),
+        }
+    }
+
+    fn join_pane(&mut self, src: &str, dst: &str, side_by_side: bool) -> Response {
+        let (src, dst) = match (self.target_name(src), self.target_name(dst)) {
+            (Ok(src), Ok(dst)) => (src, dst),
+            (Err(e), _) | (_, Err(e)) => return Response::Error(e),
+        };
+        let dir = if side_by_side {
+            Direction::Horizontal
+        } else {
+            Direction::Vertical
+        };
+        match self.workspace.join_pane(&src, &dst, dir) {
+            Ok(()) => Response::Ok,
+            Err(e) => Response::Error(e),
+        }
     }
 
     /// Handle of a live or exited pane.
@@ -783,6 +894,13 @@ impl Session {
         extra: &[(String, String)],
         tmux: bool,
     ) -> Vec<(String, String)> {
+        let merged: Vec<(String, String)> = self
+            .stores
+            .environment()
+            .into_iter()
+            .chain(extra.iter().cloned())
+            .collect();
+        let extra = merged.as_slice();
         if !tmux {
             return plan::pane_env(identity, extra, None);
         }
@@ -931,8 +1049,8 @@ impl Session {
             return;
         }
         match self.snapshots.load() {
-            Ok(Some(snapshot)) if !snapshot.clean_shutdown => self.restore_snapshot(&snapshot),
-            Ok(_) => {}
+            Ok(Some(snapshot)) => self.restore_snapshot(&snapshot),
+            Ok(None) => {}
             Err(e) => warn!("could not load session snapshot: {}", e),
         }
     }
@@ -1005,8 +1123,12 @@ impl Session {
                 let cwd = info.as_ref().and_then(|i| i.cwd.clone());
                 let fg = info.as_ref().and_then(|i| i.foreground.clone());
                 let lookup_name = fg.as_deref().unwrap_or(&entry.opts.command);
-                let (resume_rule, session_id) =
-                    resolve_resume(lookup_name, &self.config.resume);
+                let (resume_rule, session_id) = resolve_resume(
+                    lookup_name,
+                    &self.config.resume,
+                    info.as_ref(),
+                    crate::config::home_dir().as_deref(),
+                );
 
                 records.push(PaneRecord {
                     name: leaf.clone(),
@@ -1025,12 +1147,20 @@ impl Session {
 fn resolve_resume(
     lookup_name: &str,
     rules: &[crate::config::ResumeRule],
+    info: Option<&NodeInfo>,
+    home: Option<&std::path::Path>,
 ) -> (Option<String>, Option<String>) {
     for rule in rules {
         let matches = rule.name.eq_ignore_ascii_case(lookup_name)
             || rule.detect.iter().any(|d| d.eq_ignore_ascii_case(lookup_name));
         if matches {
-            let session_id = rule.env_id.as_ref().and_then(|v| std::env::var(v).ok());
+            let from_files = rule.id_source.zip(home).and_then(|(source, home)| {
+                let pid = info.and_then(|i| i.foreground_pid);
+                let tty = info.and_then(|i| i.tty.as_deref());
+                crate::store::lookup_session_id(source, home, pid, tty)
+            });
+            let session_id = from_files
+                .or_else(|| rule.env_id.as_ref().and_then(|v| std::env::var(v).ok()));
             return (Some(rule.name.clone()), session_id);
         }
     }
@@ -1052,11 +1182,25 @@ fn is_read_only(req: &Request) -> bool {
             | Request::SendKeys { .. }
             | Request::Paste { .. }
             | Request::ResizePane { .. }
+            | Request::SetVar { .. }
+            | Request::GetVars { .. }
+            | Request::SetBuffer { .. }
+            | Request::GetBuffer { .. }
+            | Request::ListBuffers
+            | Request::DeleteBuffer { .. }
+            | Request::ClientCommand { .. }
     )
 }
 
 pub(super) fn not_found(name: &str) -> String {
     format!("Node '{}' not found", name)
+}
+
+fn no_buffer(name: Option<&str>) -> String {
+    match name {
+        Some(name) => format!("no buffer {name}"),
+        None => "no buffers".to_string(),
+    }
 }
 
 fn current_dir() -> Option<String> {

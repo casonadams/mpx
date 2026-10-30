@@ -74,6 +74,7 @@ pub const BUILTIN_COMMANDS: &[(&str, &str, &str, &str)] = &[
     ("choose-tree", "Window Tree (Deep)", "", "Open the classic sessions, windows, and panes tree"),
     ("list-keys", "Keymap Help (Deep)", "", "Open the classic key bindings cheat sheet"),
     ("command-prompt", "Command Prompt", ":", "Open the command prompt"),
+    ("reload-config", "Reload Config", "r", "Re-read the config file without restarting"),
 ];
 
 #[derive(Debug, Clone, PartialEq)]

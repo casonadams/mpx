@@ -6,7 +6,7 @@ use crossterm::{
 use std::io::{self, Write};
 
 use super::canvas::Canvas;
-use crate::config::{BorderStyle, InactiveColorMode};
+use crate::config::BorderStyle;
 use crate::layout::{Divider, WindowTab, geometry::Rect};
 use crate::vt::grid::Grid;
 use crate::vt::{Cell, CellStyle, Color as VtColor};
@@ -63,6 +63,51 @@ impl SelectionRange {
         }
     }
 }
+/// Colors that style the panes of one frame: the config's templates and the host terminal's own
+/// default colors, which stand in for cells that set none.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct PaneColors {
+    pub dim_factor: f32,
+    pub active_fg: Option<VtColor>,
+    pub active_bg: Option<VtColor>,
+    pub inactive_fg: Option<VtColor>,
+    pub inactive_bg: Option<VtColor>,
+    /// Default foreground and background the terminal reported at attach, when it did.
+    pub host_fg: Option<VtColor>,
+    pub host_bg: Option<VtColor>,
+}
+
+impl PaneColors {
+    pub fn new(style: &crate::config::StyleConfig, host: HostColors) -> Self {
+        Self {
+            dim_factor: style.dim_factor,
+            active_fg: parse_color(&style.active.fg),
+            active_bg: parse_color(&style.active.bg),
+            inactive_fg: parse_color(&style.inactive.fg),
+            inactive_bg: parse_color(&style.inactive.bg),
+            host_fg: host.fg,
+            host_bg: host.bg,
+        }
+    }
+}
+
+/// The host terminal's default foreground and background, when it reported them.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct HostColors {
+    pub fg: Option<VtColor>,
+    pub bg: Option<VtColor>,
+}
+
+impl HostColors {
+    pub fn from_report(report: &super::terminal::TerminalReport) -> Self {
+        let color = |rgb: Option<(u8, u8, u8)>| rgb.map(|(r, g, b)| VtColor::Rgb(r, g, b));
+        Self {
+            fg: color(report.fg),
+            bg: color(report.bg),
+        }
+    }
+}
+
 pub struct RenderPaneContext<'a> {
     pub rect: Rect,
     pub grid: &'a Grid,
@@ -71,17 +116,18 @@ pub struct RenderPaneContext<'a> {
     pub badge: Option<&'a str>,
     pub dimmed: bool,
     pub dim_factor: f32,
-    pub dim_content_bg: bool,
     pub active_fg: Option<VtColor>,
     pub active_bg: Option<VtColor>,
     pub inactive_fg: Option<VtColor>,
     pub inactive_bg: Option<VtColor>,
-    pub color_mode: InactiveColorMode,
+    /// What a default-colored cell is: the configured active color, else the host terminal's.
+    pub default_fg: Option<VtColor>,
+    pub default_bg: Option<VtColor>,
 }
 
 impl<'a> RenderPaneContext<'a> {
     pub fn from_config(
-        style: &crate::config::StyleConfig,
+        colors: &PaneColors,
         rect: Rect,
         grid: &'a Grid,
         selection: Option<&'a SelectionRange>,
@@ -96,13 +142,13 @@ impl<'a> RenderPaneContext<'a> {
             scroll_offset,
             badge,
             dimmed,
-            dim_factor: style.inactive.factor.unwrap_or(style.dim_factor),
-            dim_content_bg: style.inactive.dim_content_bg.unwrap_or(style.dim_content_bg),
-            active_fg: parse_color(&style.active.fg),
-            active_bg: parse_color(&style.active.bg),
-            inactive_fg: parse_color(&style.inactive.fg),
-            inactive_bg: parse_color(&style.inactive.bg),
-            color_mode: style.inactive.color_mode,
+            dim_factor: colors.dim_factor,
+            active_fg: colors.active_fg,
+            active_bg: colors.active_bg,
+            inactive_fg: colors.inactive_fg,
+            inactive_bg: colors.inactive_bg,
+            default_fg: colors.active_fg.or(colors.host_fg),
+            default_bg: colors.active_bg.or(colors.host_bg),
         }
     }
 }
@@ -628,28 +674,12 @@ fn cell_content(
     if ctx.selection.is_some_and(|s| s.contains_abs(col, abs_row)) {
         highlighted(cell.c)
     } else if ctx.dimmed {
-        let (fg, faint) = apply_inactive_fg(
-            cell.style.fg,
-            ctx.color_mode,
-            ctx.inactive_fg,
-            ctx.inactive_bg,
-            ctx.dim_factor,
-            cell.style.faint,
-        );
-        let bg = apply_inactive_bg(
-            cell.style.bg,
-            ctx.color_mode,
-            ctx.inactive_bg,
-            ctx.dim_factor,
-            ctx.dim_content_bg,
-        );
         Cell {
             c: cell.c,
             style: CellStyle {
-                fg,
-                bg,
+                fg: inactive_color(cell.style.fg, ctx.inactive_fg, ctx.default_fg, ctx.dim_factor),
+                bg: inactive_color(cell.style.bg, ctx.inactive_bg, ctx.default_bg, ctx.dim_factor),
                 bold: false,
-                faint,
                 ..cell.style
             },
         }
@@ -679,55 +709,17 @@ pub fn apply_active_style(
     }
 }
 
-pub fn apply_inactive_fg(
+/// A cell color in an unfocused pane: desaturated by `factor`. A cell in the default color takes
+/// the configured inactive color, else the terminal's own default desaturated, else stays default.
+pub fn inactive_color(
     orig: Option<VtColor>,
-    mode: InactiveColorMode,
-    inactive_fg: Option<VtColor>,
-    inactive_bg: Option<VtColor>,
+    configured: Option<VtColor>,
+    terminal_default: Option<VtColor>,
     factor: f32,
-    orig_faint: bool,
-) -> (Option<VtColor>, bool) {
-    match orig {
-        None => {
-            let fg = inactive_fg.unwrap_or_else(|| dim_color(None, factor));
-            (Some(fg), orig_faint)
-        }
-        Some(c) => match mode {
-            InactiveColorMode::None => (Some(c), orig_faint),
-            InactiveColorMode::Dim => (
-                Some(dim_color(Some(c), factor)),
-                orig_faint || palette_normal(Some(c)),
-            ),
-            InactiveColorMode::Desaturate => (Some(desaturate_color(c, factor)), orig_faint),
-            InactiveColorMode::Tint => (
-                Some(tint_color(c, inactive_fg.or(inactive_bg), factor)),
-                orig_faint,
-            ),
-        },
-    }
-}
-
-pub fn apply_inactive_bg(
-    orig: Option<VtColor>,
-    mode: InactiveColorMode,
-    inactive_bg: Option<VtColor>,
-    factor: f32,
-    dim_content_bg: bool,
 ) -> Option<VtColor> {
     match orig {
-        None => inactive_bg,
-        Some(c) => {
-            if dim_content_bg {
-                match mode {
-                    InactiveColorMode::None => Some(c),
-                    InactiveColorMode::Dim => Some(dim_color(Some(c), factor)),
-                    InactiveColorMode::Desaturate => Some(desaturate_color(c, factor)),
-                    InactiveColorMode::Tint => Some(tint_color(c, inactive_bg, factor)),
-                }
-            } else {
-                Some(c)
-            }
-        }
+        Some(c) => Some(desaturate_color(c, factor)),
+        None => configured.or_else(|| terminal_default.map(|c| desaturate_color(c, factor))),
     }
 }
 
@@ -740,70 +732,6 @@ fn highlighted(c: char) -> Cell {
             bg: Some(VtColor::Rgb(255, 140, 0)),
             ..CellStyle::default()
         },
-    }
-}
-
-/// Whether `fg` is one of the eight normal palette colors other than white. Its shade is the
-/// terminal theme's, so an unfocused pane dims it with the faint attribute, which the terminal
-/// applies to whatever that shade is.
-fn palette_normal(fg: Option<VtColor>) -> bool {
-    matches!(
-        fg,
-        Some(
-            VtColor::Black
-                | VtColor::Red
-                | VtColor::Green
-                | VtColor::Yellow
-                | VtColor::Blue
-                | VtColor::Magenta
-                | VtColor::Cyan
-        )
-    )
-}
-
-/// Foreground of an unfocused pane: default and white scale by factor, bright colors their normal shade.
-pub fn dim_color(fg: Option<VtColor>, factor: f32) -> VtColor {
-    let scale = (1.0 - factor).clamp(0.0, 1.0);
-    match fg {
-        None | Some(VtColor::BrightWhite) => {
-            let val = (255.0 * scale).round() as u8;
-            VtColor::Rgb(val, val, val)
-        }
-        Some(VtColor::White) => {
-            let val = (230.0 * scale).round() as u8;
-            VtColor::Rgb(val, val, val)
-        }
-        Some(VtColor::Rgb(r, g, b)) => VtColor::Rgb(
-            (r as f32 * scale).round() as u8,
-            (g as f32 * scale).round() as u8,
-            (b as f32 * scale).round() as u8,
-        ),
-        Some(VtColor::BrightRed) => VtColor::Red,
-        Some(VtColor::BrightGreen) => VtColor::Green,
-        Some(VtColor::BrightYellow) => VtColor::Yellow,
-        Some(VtColor::BrightBlue) => VtColor::Blue,
-        Some(VtColor::BrightMagenta) => VtColor::Magenta,
-        Some(VtColor::BrightCyan) => VtColor::Cyan,
-        Some(VtColor::Indexed(i)) => {
-            if (16..=231).contains(&i) {
-                let idx = i - 16;
-                let b = (idx % 6) as f32 * 51.0;
-                let g = ((idx / 6) % 6) as f32 * 51.0;
-                let r = (idx / 36) as f32 * 51.0;
-                VtColor::Rgb(
-                    (r * scale).round() as u8,
-                    (g * scale).round() as u8,
-                    (b * scale).round() as u8,
-                )
-            } else if (232..=255).contains(&i) {
-                let gray = 8.0 + (i - 232) as f32 * 10.0;
-                let scaled = (gray * scale).round() as u8;
-                VtColor::Rgb(scaled, scaled, scaled)
-            } else {
-                VtColor::Indexed(i)
-            }
-        }
-        Some(other) => other,
     }
 }
 
@@ -875,12 +803,6 @@ pub fn desaturate_color(color: VtColor, factor: f32) -> VtColor {
     let rgb = color_to_rgb(color);
     let lum = 0.299 * (rgb.0 as f32) + 0.587 * (rgb.1 as f32) + 0.114 * (rgb.2 as f32);
     lerp_rgb(rgb, (lum, lum, lum), factor)
-}
-
-pub fn tint_color(color: VtColor, target: Option<VtColor>, factor: f32) -> VtColor {
-    let rgb = color_to_rgb(color);
-    let (tr, tg, tb) = target.map(color_to_rgb).unwrap_or((0, 0, 0));
-    lerp_rgb(rgb, (tr as f32, tg as f32, tb as f32), factor)
 }
 
 pub fn parse_color(s: &str) -> Option<VtColor> {

@@ -1,5 +1,5 @@
 use mpx::cli::{
-    nested_attach_refused, parse_env_pairs, resolve, resolve_idempotency_key,
+    nested_attach_refused, next_free_session, parse_env_pairs, resolve, resolve_idempotency_key,
     wait_condition, wait_exit_code,
 };
 use mpx::ipc::endpoint_in;
@@ -17,11 +17,19 @@ fn outcome(satisfied: bool, exit_code: Option<i32>) -> WaitOutcome {
 }
 
 #[test]
-fn session_defaults_to_main_in_the_socket_dir() {
+fn session_defaults_to_zero_in_the_socket_dir() {
     let r = resolve(None, None, None, None, Path::new(DIR));
-    assert_eq!(r.session, "main");
-    assert_eq!(r.endpoint, endpoint_in(Path::new(DIR), "main"));
+    assert_eq!(r.session, "0");
+    assert_eq!(r.endpoint, endpoint_in(Path::new(DIR), "0"));
     assert_eq!(r.socket_dir, Path::new(DIR));
+}
+
+#[test]
+fn unnamed_sessions_take_the_lowest_free_number() {
+    assert_eq!(next_free_session([]), "0");
+    assert_eq!(next_free_session(["0", "1", "3"]), "2");
+    assert_eq!(next_free_session(["main", "work"]), "0");
+    assert_eq!(next_free_session(["1", "0"]), "2");
 }
 
 #[test]

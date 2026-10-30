@@ -1,11 +1,16 @@
+use std::future::Future;
+use std::pin::Pin;
+
 use uuid::Uuid;
 
 use super::args::{Invocation, is_noop, parse};
-use super::format::{PaneView, Vars, expand, pane_vars, session_vars};
+use super::format::{PaneView, expand, pane_vars, session_vars};
+use super::shell;
 use crate::client::Client;
 use crate::ipc;
 use crate::layout::{Rect, WindowTab};
 use crate::protocol::{LayoutPreset, NewWindowOpts, NodeInfo, Side, SpawnOpts, SplitOpts};
+use crate::store;
 
 const VERSION: &str = "tmux 3.4\n";
 const DEFAULT_VIEW: (u16, u16) = (80, 24);
@@ -23,7 +28,8 @@ impl EnvTarget {
             std::env::var("MPX_ENDPOINT").ok().as_deref(),
         )
         .unwrap_or_else(|| {
-            let session = std::env::var("MPX_SESSION").unwrap_or_else(|_| "main".to_string());
+            let session = std::env::var("MPX_SESSION")
+                .unwrap_or_else(|_| crate::cli::DEFAULT_SESSION.to_string());
             ipc::default_endpoint(&session)
         });
         Self {
@@ -57,45 +63,72 @@ pub async fn run(argv: Vec<String>) -> i32 {
     }
 }
 
-async fn execute(argv: &[String]) -> Result<String, String> {
-    let inv = parse(argv)?;
-    let cmd = inv.command.as_str();
-    if cmd == "-V" {
-        return Ok(VERSION.to_string());
-    }
-    if is_noop(cmd) {
-        return Ok(String::new());
-    }
-    let env = EnvTarget::from_env();
-    match cmd {
-        "list-sessions" => Ok(list_sessions(&inv, &env.socket_dir())),
-        "has-session" => has_session(&inv, &env).await,
-        "attach-session" => attach_session(&inv).await,
-        "new-session" if !inv.has('d') && inv.operands.is_empty() => {
-            attach_session(&inv).await
+type Run<'a> = Pin<Box<dyn Future<Output = Result<String, String>> + 'a>>;
+
+/// Runs one tmux command line. Boxed because `if-shell`, `run-shell -C` and `source-file` run more
+/// commands through it.
+fn execute(argv: &[String]) -> Run<'_> {
+    Box::pin(async move {
+        let inv = parse(argv)?;
+        let cmd = inv.command.as_str();
+        if cmd == "-V" {
+            return Ok(VERSION.to_string());
         }
-        _ => {
-            let client = Client::connect(&env.endpoint)
-                .await
-                .map_err(|_| format!("no server running on {}", env.endpoint))?;
-            let mut shim = Shim {
-                client,
-                session: env.session,
-            };
-            shim.pane_command(&inv).await
+        if is_noop(cmd) {
+            return Ok(String::new());
         }
-    }
+        match cmd {
+            "run-shell" => return run_shell_command(&inv).await,
+            "source-file" => return source_file(&inv).await,
+            _ => {}
+        }
+        let env = EnvTarget::for_invocation(&inv);
+        match cmd {
+            "list-sessions" => list_sessions(&inv, &env.socket_dir()),
+            "has-session" => has_session(&inv, &env).await,
+            "attach-session" => attach_session(&inv, &env, None).await,
+            "new-session" => new_session(&inv, &env).await,
+            "if-shell" => if_shell(&inv, &env).await,
+            "kill-server" => kill_server(&env).await,
+            _ => {
+                let client = Client::connect(&env.endpoint)
+                    .await
+                    .map_err(|_| format!("no server running on {}", env.endpoint))?;
+                let mut shim = Shim {
+                    client,
+                    session: env.session,
+                };
+                shim.pane_command(&inv).await
+            }
+        }
+    })
 }
-async fn attach_session(inv: &Invocation) -> Result<String, String> {
-    let target = inv.value('t').or_else(|| inv.value('s')).map(str::to_string);
+
+/// Attaches the terminal UI to `session`, else the session `-t` names, else the current one.
+async fn attach_session(
+    inv: &Invocation,
+    env: &EnvTarget,
+    session: Option<&str>,
+) -> Result<String, String> {
+    let name = session
+        .or_else(|| inv.value('t').map(|t| t.split(':').next().unwrap_or(t)))
+        .unwrap_or(&env.session)
+        .to_string();
+    let endpoint = if name == env.session {
+        env.endpoint.clone()
+    } else {
+        ipc::endpoint_in(&env.socket_dir(), &name)
+    };
+    let state_dir = EnvTarget::state_root(inv).map(|root| root.join(store::component(&name)));
     let code = crate::cli::run_cli(crate::cli::Cli {
-        session: target.clone(),
-        endpoint: None,
+        session: Some(name),
+        endpoint: Some(endpoint),
         config: None,
-        state_dir: None,
+        state_dir,
+        no_restore: false,
         idempotency_key: None,
         command: Some(crate::cli::Commands::Attach {
-            target,
+            target: None,
             force: inv.has('d'),
         }),
     })
@@ -107,18 +140,76 @@ async fn attach_session(inv: &Invocation) -> Result<String, String> {
     }
 }
 
-fn list_sessions(inv: &Invocation, socket_dir: &std::path::Path) -> String {
+/// `new-session`: a fresh session named by `-s`, else the next free number, with one window
+/// running the command. `-A` attaches to an existing session of that name instead of failing.
+async fn new_session(inv: &Invocation, env: &EnvTarget) -> Result<String, String> {
+    let dir = env.socket_dir();
+    let name = match inv.value('s') {
+        Some(name) => name.to_string(),
+        None => crate::cli::next_free_session(
+            ipc::list_sessions(&dir).iter().map(|s| s.name.as_str()),
+        ),
+    };
+    let endpoint = ipc::endpoint_in(&dir, &name);
+    let running = match Client::connect(&endpoint).await {
+        Ok(mut client) => client.ping().await.is_ok(),
+        Err(_) => false,
+    };
+    if running && !inv.has('A') {
+        return Err(format!("duplicate session: {name}"));
+    }
+    let mut out = String::new();
+    if !running {
+        let state_dir = EnvTarget::state_root(inv).map(|root| root.join(store::component(&name)));
+        let mut client = crate::cli::ensure_session(&name, &dir, state_dir, true).await?;
+        client
+            .new_window(NewWindowOpts {
+                name: inv.value('n').map(str::to_string),
+                spawn: spawn_opts(inv),
+                focus: true,
+            })
+            .await?;
+        if inv.has('P') {
+            let fmt = inv.value('F').unwrap_or("#{session_name}:");
+            out = format!("{}\n", expand(fmt, &session_vars(&name, 1, 1)));
+        }
+    }
+    if inv.has('d') {
+        return Ok(out);
+    }
+    attach_session(inv, env, Some(&name)).await
+}
+
+fn list_sessions(inv: &Invocation, socket_dir: &std::path::Path) -> Result<String, String> {
+    let sessions = ipc::list_sessions(socket_dir);
+    if sessions.is_empty() {
+        return Err(format!("no server running on {}", socket_dir.display()));
+    }
     let fmt = inv.value('F').unwrap_or("#{session_name}");
-    ipc::list_sessions(socket_dir)
+    Ok(sessions
         .iter()
         .map(|s| format!("{}\n", expand(fmt, &session_vars(&s.name, 0, 0))))
-        .collect()
+        .collect())
+}
+
+/// `kill-server`: stops every session of the server, as tmux does.
+async fn kill_server(env: &EnvTarget) -> Result<String, String> {
+    let sessions = ipc::list_sessions(&env.socket_dir());
+    if sessions.is_empty() {
+        return Err(format!("no server running on {}", env.endpoint));
+    }
+    for session in sessions {
+        if let Ok(mut client) = Client::connect(&session.endpoint).await {
+            let _ = client.shutdown().await;
+        }
+    }
+    Ok(String::new())
 }
 
 async fn has_session(inv: &Invocation, env: &EnvTarget) -> Result<String, String> {
     let name = inv
         .value('t')
-        .map(|t| t.rsplit(':').next().unwrap_or(t))
+        .map(|t| t.split(':').next().unwrap_or(t))
         .unwrap_or(&env.session);
     let endpoint = if name == env.session {
         env.endpoint.clone()
@@ -130,12 +221,104 @@ async fn has_session(inv: &Invocation, env: &EnvTarget) -> Result<String, String
     Ok(String::new())
 }
 
+/// `run-shell`: the command's output is the output of this one; `-C` runs it as a tmux command.
+async fn run_shell_command(inv: &Invocation) -> Result<String, String> {
+    let cmd = inv.operand_text();
+    if inv.has('C') {
+        return run_command_string(&cmd).await;
+    }
+    if let Some(delay) = inv.value('d').and_then(|d| d.parse::<f64>().ok()) {
+        tokio::time::sleep(std::time::Duration::from_secs_f64(delay.max(0.0))).await;
+    }
+    if inv.has('b') {
+        shell::spawn_shell(&cmd)?;
+        return Ok(String::new());
+    }
+    let done = shell::run_shell(&cmd).await?;
+    if done.code == 0 {
+        return Ok(done.stdout);
+    }
+    print!("{}", done.stdout);
+    Err(format!("'{cmd}' returned {}", done.code))
+}
+
+/// `if-shell`: runs the second operand when the first holds, else the optional third. The first is a
+/// shell command that must exit 0, or with `-F` a format that must expand to something but `0`.
+async fn if_shell(inv: &Invocation, env: &EnvTarget) -> Result<String, String> {
+    let cond = inv
+        .operands
+        .first()
+        .ok_or_else(|| "too few arguments: condition required".to_string())?;
+    let holds = if inv.has('F') {
+        let expanded = match Client::connect(&env.endpoint).await {
+            Ok(client) => {
+                Shim {
+                    client,
+                    session: env.session.clone(),
+                }
+                .expand_for(inv.value('t'), cond)
+                .await?
+            }
+            Err(_) => expand(cond, &super::format::Vars::new()),
+        };
+        shell::format_is_true(&expanded)
+    } else {
+        shell::run_shell(cond).await?.code == 0
+    };
+    match inv.operands.get(if holds { 1 } else { 2 }) {
+        Some(line) => run_command_string(line).await,
+        None => Ok(String::new()),
+    }
+}
+
+/// Runs each command of a tmux command string in turn, stopping at the first error.
+async fn run_command_string(line: &str) -> Result<String, String> {
+    let mut out = String::new();
+    for words in shell::split_commands(line)? {
+        out.push_str(&execute(&words).await?);
+    }
+    Ok(out)
+}
+
+/// `source-file`: runs each line of the files as a tmux command. Errors carry `path:line`.
+async fn source_file(inv: &Invocation) -> Result<String, String> {
+    let mut out = String::new();
+    let mut errors = Vec::new();
+    for path in &inv.operands {
+        let text = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(_) if inv.has('q') => continue,
+            Err(e) => return Err(format!("{path}: {e}")),
+        };
+        for (number, line) in shell::config_lines(&text) {
+            match run_command_string(&line).await {
+                Ok(text) => out.push_str(&text),
+                Err(e) => errors.push(format!("{path}:{number}: {e}")),
+            }
+        }
+    }
+    if errors.is_empty() {
+        Ok(out)
+    } else {
+        Err(errors.join("\n"))
+    }
+}
+
 /// Target key for a tmux target: strips `session:` and `window.` prefixes, keeping `%id` or a node name.
 pub fn pane_key(target: &str) -> &str {
     let last = target.rsplit(':').next().unwrap_or(target);
     match last.rsplit_once('.') {
         Some((_, pane)) if pane.starts_with('%') => pane,
         _ => last,
+    }
+}
+
+/// `split-window` stacks the panes (top / bottom) unless `-h` puts them side by side, as in tmux.
+pub fn split_direction(inv: &Invocation) -> crate::layout::Direction {
+    if inv.has('h') {
+        crate::layout::Direction::Horizontal
+    } else {
+        crate::layout::Direction::Vertical
     }
 }
 
@@ -235,9 +418,9 @@ fn terminal_view() -> (u16, u16) {
     crossterm::terminal::size().unwrap_or(DEFAULT_VIEW)
 }
 
-struct Shim {
-    client: Client,
-    session: String,
+pub(super) struct Shim {
+    pub(super) client: Client,
+    pub(super) session: String,
 }
 
 impl Shim {
@@ -250,14 +433,22 @@ impl Shim {
         let nodes = self.client.list().await?;
         let (w, h) = terminal_view();
         let (rects, _, tabs) = self.client.layout(w, h).await?;
-        Ok(nodes
+        let mut views: Vec<PaneView> = nodes
             .iter()
             .enumerate()
             .map(|(i, n)| pane_view(&self.session, i, n, &rects, &tabs))
-            .collect())
+            .collect();
+        let counts: Vec<usize> = views
+            .iter()
+            .map(|v| views.iter().filter(|o| o.window == v.window).count())
+            .collect();
+        for (view, count) in views.iter_mut().zip(counts) {
+            view.window_panes = count;
+        }
+        Ok(views)
     }
 
-    async fn resolve(&mut self, target: Option<&str>) -> Result<NodeInfo, String> {
+    pub(super) async fn resolve(&mut self, target: Option<&str>) -> Result<NodeInfo, String> {
         let nodes = self.client.list().await?;
         let key = match target {
             Some(t) => pane_key(t).to_string(),
@@ -275,6 +466,16 @@ impl Shim {
             .into_iter()
             .find(|n| matches_target(n, &key))
             .ok_or_else(|| format!("can't find pane: {key}"))
+    }
+
+    pub(super) async fn expand_for(
+        &mut self,
+        target: Option<&str>,
+        fmt: &str,
+    ) -> Result<String, String> {
+        let node = self.resolve(target).await?;
+        let view = self.pane_view_of(&node).await?;
+        Ok(expand(fmt, &pane_vars(&view)))
     }
 
     async fn pane_view_of(&mut self, node: &NodeInfo) -> Result<PaneView, String> {
@@ -308,6 +509,26 @@ impl Shim {
             "last-window" => self.client.last_window().await.map(|_| String::new()),
             "rename-window" => self.rename_window(inv).await,
             "rename-session" => self.rename_session(inv).await,
+            "next-window" => self.client.next_window().await.map(|_| String::new()),
+            "previous-window" => self.client.prev_window().await.map(|_| String::new()),
+            "detach-client" => self.detach_client().await,
+            "switch-client" => self.switch_client(inv).await,
+            "set-option" => self.set_option(inv).await,
+            "show-options" => self.show_options(inv).await,
+            "set-environment" => self.set_environment(inv).await,
+            "show-environment" => self.show_environment(inv).await,
+            "set-buffer" => self.set_buffer(inv).await,
+            "show-buffer" => self.show_buffer(inv).await,
+            "list-buffers" => self.list_buffers(inv).await,
+            "delete-buffer" => self.delete_buffer(inv).await,
+            "load-buffer" => self.load_buffer(inv).await,
+            "save-buffer" => self.save_buffer(inv).await,
+            "paste-buffer" => self.paste_buffer(inv).await,
+            "wait-for" => self.wait_for(inv).await,
+            "join-pane" => self.join_pane(inv).await,
+            "swap-window" => self.swap_window(inv).await,
+            "move-window" => self.move_window(inv).await,
+            "pipe-pane" => self.pipe_pane(inv).await,
             other => Err(format!("unknown command: {other}")),
         }
     }
@@ -331,11 +552,7 @@ impl Shim {
             Some(_) => Some(self.resolve(inv.value('t')).await?.name),
             None => None,
         };
-        let direction = if inv.has('v') {
-            crate::layout::Direction::Vertical
-        } else {
-            crate::layout::Direction::Horizontal
-        };
+        let direction = split_direction(inv);
         let opts = SplitOpts {
             target,
             spawn: spawn_opts(inv),
@@ -388,6 +605,7 @@ impl Shim {
             _ => self.client.screen(&node.name).await?,
         };
         if !inv.has('p') {
+            self.client.set_buffer(inv.value('b'), &text).await?;
             return Ok(String::new());
         }
         Ok(if text.ends_with('\n') {
@@ -420,15 +638,12 @@ impl Shim {
         Ok(windows
             .into_iter()
             .map(|w| {
-                let count = panes.iter().filter(|p| p.window == w).count();
                 let first = panes
                     .iter()
                     .find(|p| p.window == w)
                     .cloned()
                     .unwrap_or_default();
-                let mut vars: Vars = pane_vars(&first);
-                vars.insert("window_panes", count.to_string());
-                format!("{}\n", expand(fmt, &vars))
+                format!("{}\n", expand(fmt, &pane_vars(&first)))
             })
             .collect())
     }
@@ -490,6 +705,15 @@ impl Shim {
     }
 
     async fn select_window(&mut self, inv: &Invocation) -> Result<String, String> {
+        if inv.has('n') {
+            return self.client.next_window().await.map(|_| String::new());
+        }
+        if inv.has('p') {
+            return self.client.prev_window().await.map(|_| String::new());
+        }
+        if inv.has('l') {
+            return self.client.last_window().await.map(|_| String::new());
+        }
         let index = inv
             .value('t')
             .and_then(window_key)
@@ -628,13 +852,14 @@ pub fn pane_view(
     tabs: &[WindowTab],
 ) -> PaneView {
         let window = node.window.unwrap_or(0);
-        let (width, height, active) = rects
+        let (width, height, active, rect) = rects
             .iter()
             .find(|(n, _, _)| n == &node.name)
-            .map(|(_, r, f)| (r.width, r.height, *f))
-            .unwrap_or((0, 0, false));
+            .map(|(_, r, f)| (r.width, r.height, *f, Some(*r)))
+            .unwrap_or((0, 0, false, None));
         let marked = node.marked.unwrap_or(false);
         let marked_set = tabs.iter().any(|t| t.has_marked) || marked;
+        let tab = tabs.iter().find(|t| t.index == window);
         PaneView {
             session: session.to_string(),
             id: node.id,
@@ -653,10 +878,20 @@ pub fn pane_view(
             marked,
             marked_set,
             window,
-            window_name: tabs
-                .iter()
-                .find(|t| t.index == window)
-                .map(|t| t.name.clone())
+            window_name: tab.map(|t| t.name.clone()).unwrap_or_default(),
+            start_command: node.command.clone(),
+            tty: node
+                .tty
+                .as_ref()
+                .map(|t| format!("/dev/{t}"))
                 .unwrap_or_default(),
+            rect,
+            window_active: tab.is_some_and(|t| t.is_active),
+            window_last: tab.is_some_and(|t| t.is_last),
+            window_activity: tab.is_some_and(|t| t.has_activity),
+            window_bell: tab.is_some_and(|t| t.has_bell),
+            window_marked: tab.is_some_and(|t| t.has_marked),
+            session_windows: tabs.len(),
+            ..Default::default()
         }
 }

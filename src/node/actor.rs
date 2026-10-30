@@ -293,10 +293,15 @@ impl PaneActor {
             Some(code) => (NodeState::Exited, code),
             None => (NodeState::Running, None),
         };
-        let (foreground, cwd) = if full {
-            (self.foreground(), self.cwd())
+        let (foreground, cwd, foreground_pid, tty) = if full {
+            (
+                self.foreground(),
+                self.cwd(),
+                self.fg_pid(),
+                self.terminal.as_ref().and_then(|t| t.tty_name()),
+            )
         } else {
-            (None, None)
+            (None, None, None, None)
         };
         let modes = self.pty.then(|| self.screen.modes());
         let size = self
@@ -313,6 +318,8 @@ impl PaneActor {
             cwd,
             title: self.screen.title().map(str::to_string),
             foreground,
+            foreground_pid,
+            tty,
             started_ms: self.started_ms,
             last_output_ms: self.last_output_ms,
             window: None,

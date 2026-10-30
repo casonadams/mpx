@@ -2,11 +2,13 @@
 use super::app::{App, Flow, Mode};
 use super::command::Command;
 use super::copy::CopyState;
+use super::keymap;
 use super::overlay::{Overlay, OverlayCtx};
 use super::panes::{find_directional, neighbor_pane};
 use super::prompt::PromptState;
 use super::session::neighbor_session;
 use super::session::{pick, split_target};
+use crate::config::Config;
 use crate::ipc;
 use crate::layout::Direction;
 use crate::protocol::{LayoutPreset, NewWindowOpts, Side, SpawnOpts, SplitOpts};
@@ -50,6 +52,7 @@ fn clears_zoom(cmd: &Command) -> bool {
             | Command::Detach
             | Command::KillServer
             | Command::SendPrefix
+            | Command::ReloadConfig
     )
 }
 
@@ -74,6 +77,15 @@ impl App {
             return Flow::Continue;
         }
         self.run(cmd).await
+    }
+
+    /// Runs a command line sent by another client (tmux `detach-client`, `switch-client`); scripted,
+    /// so it never asks for confirmation.
+    pub async fn run_line(&mut self, line: &str) -> Flow {
+        match super::command::parse(line) {
+            Ok(cmd) => self.run(cmd).await,
+            Err(e) => self.say(e),
+        }
     }
 
     /// Runs a command without the interactive confirmation step (used once confirmed).
@@ -147,6 +159,7 @@ impl App {
             Command::NextSession => self.step_session(true).await,
             Command::PrevSession => self.step_session(false).await,
             Command::KillServer => self.kill_server().await,
+            Command::ReloadConfig => self.reload_config().await,
             Command::Zoom => self.toggle_zoom(),
             Command::CopyMode => self.enter_copy().await,
             Command::Detach => Flow::Quit,
@@ -163,6 +176,29 @@ impl App {
             Command::CommandPrompt { initial } => self.open_prompt(&initial),
             Command::Confirm { prompt, then } => self.ask(prompt, *then),
             other => self.say(format!("unhandled command: {other:?}")),
+        }
+    }
+
+    /// Re-reads the config file. A file that fails to parse, or a keymap that fails to resolve,
+    /// leaves everything unchanged. The daemon reloads the settings it owns (resume rules,
+    /// restore, history limit and spawn defaults) from the same file.
+    async fn reload_config(&mut self) -> Flow {
+        let path = self.config_path.clone().or_else(Config::path);
+        let config = match Config::load_at(path.as_deref()) {
+            Ok(config) => config,
+            Err(e) => return self.say(format!("reload-config: {e}")),
+        };
+        let keymap = match keymap::resolve(&config) {
+            Ok(keymap) => keymap,
+            Err(e) => return self.say(format!("reload-config: {e}")),
+        };
+        let daemon = self.client.reload_config(path.as_deref()).await;
+        self.config = config;
+        self.keymap = keymap;
+        self.layout.dirty = true;
+        match daemon {
+            Ok(()) => self.say("config reloaded"),
+            Err(e) => self.say(format!("config reloaded in the UI only: {e}")),
         }
     }
 

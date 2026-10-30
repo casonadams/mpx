@@ -7,7 +7,7 @@ use super::idempotency::Claim;
 use super::session::{SessionMsg, reply};
 use super::{DaemonState, KILL_GRACE};
 use crate::node::pane::LogQuery;
-use crate::protocol::{Request, Response};
+use crate::protocol::{ChannelAction, Request, Response};
 
 pub(super) async fn dispatch(state: &Arc<DaemonState>, req: Request) -> Response {
     match req {
@@ -76,6 +76,7 @@ pub(super) async fn execute(state: &Arc<DaemonState>, req: Request) -> Response 
             condition,
             timeout_ms,
         } => wait(state, &name, condition, timeout_ms).await,
+        Request::WaitFor { channel, action } => wait_for(state, &channel, action).await,
         Request::Logs {
             name,
             tail,
@@ -154,4 +155,29 @@ async fn wait(
     let timeout = timeout_ms.map(Duration::from_millis);
     let waited = async { state.lookup(name).await?.wait(condition, timeout).await };
     reply(waited.await, Response::WaitResult)
+}
+
+/// tmux `wait-for`: blocks this connection, never the session.
+async fn wait_for(state: &Arc<DaemonState>, channel: &str, action: ChannelAction) -> Response {
+    let blocked = {
+        let mut channels = state.channels.lock().unwrap_or_else(|e| e.into_inner());
+        match action {
+            ChannelAction::Wait => channels.wait(channel),
+            ChannelAction::Lock => channels.lock(channel),
+            ChannelAction::Signal => {
+                channels.signal(channel);
+                None
+            }
+            ChannelAction::Unlock => {
+                if let Err(e) = channels.unlock(channel) {
+                    return Response::Error(e);
+                }
+                None
+            }
+        }
+    };
+    if let Some(released) = blocked {
+        let _ = released.await;
+    }
+    Response::Ok
 }

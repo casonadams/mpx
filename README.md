@@ -5,7 +5,7 @@
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 [![Documentation](https://img.shields.io/badge/docs-casonadams.github.io%2Fmpx-blue)](https://casonadams.github.io/mpx/)
 
-A modern, ultra-fast terminal multiplexer in Rust: 100% tmux-compatible, crash-resilient with automatic session recovery, zero-flicker rendering, and a sleek fuzzy-search command palette.
+A modern, ultra-fast terminal multiplexer in Rust: tmux key bindings and a tmux command shim, crash-resilient with automatic session recovery, zero-flicker rendering, and a sleek fuzzy-search command palette.
 
 > **100% Local & Zero Telemetry**: `mpx` is an offline-by-design terminal engine. It contains **zero network calls, zero analytics, zero telemetry, and zero model training**. Commands, keystrokes, and outputs never leave your machine. It operates purely over local Unix domain sockets or Windows Named Pipes.
 
@@ -90,7 +90,7 @@ See **[Installation Guide](docs/INSTALL.md)** for prebuilt `.deb`, `.rpm`, `.tar
 ### 30-Second Tour
 
 ```bash
-# 1. Start or attach to the default session "main" (Ctrl-b prefix, tmux keys)
+# 1. Start or attach to the default session "0" (Ctrl-b prefix, tmux keys)
 mpx
 
 # 2. Run a background watcher without nesting shells
@@ -108,7 +108,7 @@ mpx wait test-watcher --match 'test result: ok' --timeout 120
 mpx split -h -d --pty -- htop
 
 # 6. Rename session (Prefix $ or CLI)
-mpx rename-session -t main dev
+mpx rename-session -t 0 dev
 ```
 
 ---
@@ -126,7 +126,7 @@ mpx rename-session -t main dev
 
 ## Survives Crashes and Reboots (`mpx restore`)
 
-The daemon continuously and atomically snapshots your workspace. After a crash or reboot, `mpx restore` brings back:
+The daemon continuously and atomically snapshots your workspace. Every time a session starts (a plain `mpx` after a crash, a reboot or `mpx kill-server`), it brings back:
 - All windows, split layouts, and pane proportions.
 - Each pane's active working directory (`cwd`).
 - Config-driven process resumption for tools running in your panes:
@@ -134,6 +134,8 @@ The daemon continuously and atomically snapshots your workspace. After a crash o
   - oh-my-pi: resumes with `omp --resume {id}` or `omp --continue`.
   - Codex / rho / Antigravity / OpenCode: resumes conversation state.
   - Neovim: resumes with `nvim -S Session.vim`.
+
+Run `mpx --no-restore` to start a session with a brand new state instead.
 
 Configure or add custom tool resumption rules in `~/.config/mpx/config.toml`:
 
@@ -155,7 +157,7 @@ fallback = ["nvim", "-S", "Session.vim"]
 ## Documentation
 
 - **[Architecture & Design](docs/ARCHITECTURE.md)**: Tokio async daemon, split tree, dual-buffer engine, and TUI.
-- **[CLI Reference & Automation](docs/CLI.md)**: tmux-style commands, waiting, process runs, and the tmux shim.
+- **[CLI Reference & Automation](docs/CLI.md)**: tmux-style commands, waiting, process runs, the tmux shim (what it supports and what it does not), and `mpx import-tmux` to convert a `.tmux.conf`.
 - **[Keyboard Shortcuts](docs/KEYBINDINGS.md)**: Prefix bindings, `:` command prompt with vim aliases, and Vi copy mode.
 - **[Configuration](docs/CONFIG.md)**: Prefix, key bindings, `remain_on_exit`, and `[[resume]]` rules.
 - **[Installation Guide](docs/INSTALL.md)**: Package managers, static archives, and cross-platform builds.

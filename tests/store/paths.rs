@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-use mpx::store::{component, state_dir_with};
+use mpx::store::{adopt_legacy_dir, component, state_dir_with};
 
 fn env_of(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> {
     let map: HashMap<String, OsString> = pairs
@@ -85,4 +85,24 @@ fn very_long_names_are_bounded() {
     let long = "x/".repeat(300);
     assert!(component(&long).len() <= 128);
     assert_ne!(component(&long), component(&"x/".repeat(301)));
+}
+
+#[test]
+fn legacy_state_moves_only_when_the_new_name_has_none() {
+    let root = tempfile::tempdir().unwrap();
+    let legacy = root.path().join("main");
+    std::fs::create_dir(&legacy).unwrap();
+    std::fs::write(legacy.join("snapshot.json"), "old").unwrap();
+
+    assert!(adopt_legacy_dir(root.path(), "main", "0"));
+    assert!(!legacy.exists());
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("0/snapshot.json")).unwrap(),
+        "old"
+    );
+
+    std::fs::create_dir(&legacy).unwrap();
+    assert!(!adopt_legacy_dir(root.path(), "main", "0"), "0 already has state");
+    assert!(legacy.exists());
+    assert!(!adopt_legacy_dir(root.path(), "gone", "1"));
 }

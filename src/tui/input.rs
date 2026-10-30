@@ -81,6 +81,7 @@ impl App {
             CopyOutcome::Exit => self.release_scrollback(&self.active_pane.clone()),
             CopyOutcome::Yank(text) => {
                 self.clipboard.copy(&text);
+                self.yanks.push(text.clone());
                 self.last_copy = Some(text);
                 self.release_scrollback(&self.active_pane.clone());
             }

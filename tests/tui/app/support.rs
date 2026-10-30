@@ -173,6 +173,7 @@ impl Harness {
         let endpoint = sandbox.endpoint(session);
         let opts = AppOptions {
             config,
+            config_path: None,
             socket_dir: sandbox.socket_dir.clone(),
             size: Some(SIZE),
         };

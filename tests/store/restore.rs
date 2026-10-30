@@ -83,6 +83,7 @@ fn claude() -> ResumeRule {
         resume: vec!["claude".into(), "--resume".into(), "{id}".into()],
         fallback: vec!["claude".into(), "--continue".into()],
         env_id: None,
+        id_source: None,
     }
 }
 

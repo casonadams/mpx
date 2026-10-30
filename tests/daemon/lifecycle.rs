@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use super::support::{connect, exit_code, start, start_with, task};
+use super::support::{connect, exit_code, pty, start, start_on, start_with, task};
 use mpx::config::Config;
 use mpx::protocol::{NodeState, SpawnOpts};
 
@@ -93,6 +93,62 @@ async fn config_default_keeps_panes_after_exit() {
         NodeState::Exited
     );
     client.kill("config-kept").await.unwrap();
+}
+
+async fn names_after_restart(state: &std::path::Path, config: Config) -> Vec<String> {
+    let daemon = start_on(state, config).await;
+    let mut client = connect(&daemon.endpoint).await;
+    let mut names: Vec<_> = client
+        .list()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|n| n.name)
+        .collect();
+    names.sort();
+    names
+}
+
+#[tokio::test]
+async fn a_cleanly_stopped_session_comes_back_on_the_next_start_unless_restore_is_off() {
+    let state = tempfile::tempdir().unwrap();
+    let first = start_on(state.path(), Config::default()).await;
+    let mut client = connect(&first.endpoint).await;
+    client.spawn(pty("keeper", "cat", &[])).await.unwrap();
+    client.shutdown().await.unwrap();
+
+    let off = Config {
+        restore: false,
+        ..Config::default()
+    };
+    assert!(names_after_restart(state.path(), off).await.is_empty());
+    assert_eq!(
+        names_after_restart(state.path(), Config::default()).await,
+        ["keeper"]
+    );
+}
+
+#[tokio::test]
+async fn reload_config_changes_defaults_for_later_panes_and_rejects_bad_files() {
+    let daemon = start().await;
+    let mut client = connect(&daemon.endpoint).await;
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("config.toml");
+
+    std::fs::write(&file, "remain_on_exit = true\n").unwrap();
+    client.reload_config(Some(&file)).await.unwrap();
+    client.spawn(task("kept", "true", &[])).await.unwrap();
+    exit_code(&mut client, "kept").await;
+    assert_eq!(client.status("kept").await.unwrap().state, NodeState::Exited);
+
+    std::fs::write(&file, "remain_on_exit = [").unwrap();
+    assert!(client.reload_config(Some(&file)).await.is_err());
+    client.spawn(task("still-kept", "true", &[])).await.unwrap();
+    exit_code(&mut client, "still-kept").await;
+    assert_eq!(
+        client.status("still-kept").await.unwrap().state,
+        NodeState::Exited
+    );
 }
 
 #[tokio::test]

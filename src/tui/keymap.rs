@@ -50,6 +50,7 @@ const DEFAULT_BINDINGS: &[(&str, &str)] = &[
     ("d", "detach-client"),
     ("q", "detach-client"),
     (":", "command-prompt"),
+    ("r", "reload-config"),
     ("?", "palette help"),
     ("s", "palette sessions"),
     ("w", "palette sessions"),

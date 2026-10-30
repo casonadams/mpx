@@ -24,6 +24,14 @@ pub fn state_dir_with(env: impl Fn(&str) -> Option<OsString>, home: Option<PathB
         .join("mpx")
 }
 
+/// Renames the state directory of session `legacy` to that of `current` under `root`, when only the
+/// former exists. Returns whether it moved.
+pub fn adopt_legacy_dir(root: &Path, legacy: &str, current: &str) -> bool {
+    let from = root.join(component(legacy));
+    let to = root.join(component(current));
+    from.is_dir() && !to.exists() && fs::rename(from, to).is_ok()
+}
+
 /// One safe path component for `name`: bytes outside `[A-Za-z0-9_-]` are percent-encoded, so the
 /// result never holds separators or dot segments. Very long names keep a prefix and an FNV-1a hash.
 pub fn component(name: &str) -> String {

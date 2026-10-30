@@ -78,13 +78,60 @@ pub fn margins_reply(reply: &[u8]) -> Option<bool> {
     Some(supported)
 }
 
-/// Asks the terminal whether it supports left/right margins. Run in raw mode before anything
-/// else reads input; a terminal that does not answer the mode query still answers DA1.
+/// An `rgb:r/g/b` (one to four hex digits per channel) or `#rrggbb` color, as a terminal reports it.
+pub fn parse_color_spec(spec: &str) -> Option<(u8, u8, u8)> {
+    if let Some(hex) = spec.strip_prefix('#') {
+        let value = u32::from_str_radix(hex, 16).ok().filter(|_| hex.len() == 6)?;
+        return Some(((value >> 16) as u8, (value >> 8) as u8, value as u8));
+    }
+    let mut channels = spec.strip_prefix("rgb:")?.split('/').map(|digits| {
+        let max = 16u32.checked_pow(digits.len() as u32)? - 1;
+        let value = u32::from_str_radix(digits, 16).ok().filter(|_| (1..=4).contains(&digits.len()))?;
+        Some(((value * 255 + max / 2) / max) as u8)
+    });
+    let color = (channels.next()??, channels.next()??, channels.next()??);
+    channels.next().is_none().then_some(color)
+}
+
+/// The color a terminal answered to `OSC code ; ?` in `reply` (10 is the foreground, 11 the
+/// background); the answer ends with ST or BEL.
+pub fn osc_color_reply(reply: &[u8], code: u8) -> Option<(u8, u8, u8)> {
+    let text = String::from_utf8_lossy(reply);
+    let head = format!("\x1b]{code};");
+    let start = text.find(&head)? + head.len();
+    let rest = &text[start..];
+    let end = rest.find(['\x1b', '\x07'])?;
+    parse_color_spec(&rest[..end])
+}
+
+/// What the terminal told us at attach.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TerminalReport {
+    /// Supports left/right margins (DECLRMM).
+    pub margins: bool,
+    /// Default foreground and background colors, when it reported them.
+    pub fg: Option<(u8, u8, u8)>,
+    pub bg: Option<(u8, u8, u8)>,
+}
+
+/// Interprets a complete reply to the attach query.
+pub fn report_from(reply: &[u8]) -> TerminalReport {
+    TerminalReport {
+        margins: margins_reply(reply).unwrap_or(false),
+        fg: osc_color_reply(reply, 10),
+        bg: osc_color_reply(reply, 11),
+    }
+}
+
+/// Asks the terminal for its default colors and whether it supports left/right margins. Run in raw
+/// mode before anything else reads input. The DA1 that ends the query is answered by every
+/// terminal, after the answers it does give, so one round trip covers all of it.
 #[cfg(unix)]
-pub fn query_lr_margins() -> bool {
+pub fn query_terminal() -> TerminalReport {
     let mut out = stdout();
-    if out.write_all(b"\x1b[?69$p\x1b[c").and_then(|()| out.flush()).is_err() {
-        return false;
+    let query = b"\x1b]10;?\x1b\\\x1b]11;?\x1b\\\x1b[?69$p\x1b[c";
+    if out.write_all(query).and_then(|()| out.flush()).is_err() {
+        return TerminalReport::default();
     }
     let deadline = std::time::Instant::now() + QUERY_TIMEOUT;
     let mut reply = Vec::new();
@@ -94,12 +141,12 @@ pub fn query_lr_margins() -> bool {
             break;
         }
     }
-    margins_reply(&reply).unwrap_or(false)
+    report_from(&reply)
 }
 
 #[cfg(not(unix))]
-pub fn query_lr_margins() -> bool {
-    false
+pub fn query_terminal() -> TerminalReport {
+    TerminalReport::default()
 }
 
 /// Reads what stdin has within `wait` into `reply`; false when nothing came.
