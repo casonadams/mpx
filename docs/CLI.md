@@ -47,7 +47,7 @@ Commands that take a pane accept its name or its stable id `%N` (tmux style). TU
 mpx import-tmux ~/.tmux.conf > /tmp/mpx-fragment.toml
 ```
 
-- Converted: `prefix` (`set -g prefix`), `history-limit`, `remain-on-exit`, `allow-passthrough`, `status-style` and `pane-border-style`/`pane-active-border-style` colours (`fg`/`bg` as mpx colour names or hex), `pane-border-lines` (single, double, rounded, simple as ascii), and `bind`/`bind -n`/`bind -T root`/`unbind` for commands mpx accepts.
+- Converted: `prefix` (`set -g prefix`), `history-limit` (to `scrollback_lines`), `remain-on-exit`, `allow-passthrough`, `automatic-rename`, `monitor-activity`, `monitor-bell`, `default-terminal`, `default-shell`, `default-command`, `display-panes-time`, `status-style` and `pane-border-style`/`pane-active-border-style` colours (`fg`/`bg` as mpx colour names or hex), `pane-border-lines` (single, double, rounded, simple as ascii), and `bind`/`bind -n`/`bind -T root`/`unbind` for commands mpx accepts.
 - Skipped or approximated lines are listed on stderr as `# line N: ...` and again in the output as `# unsupported (line N): ...` comments. Examples: `run`/`run-shell` and TPM plugins (never executed), `source-file` (only the given file is converted), `%if` blocks (skipped; use `source-file` for a live, evaluated config), `mouse` and `escape-time` (no mpx setting), `bind` of commands mpx does not have, and `split-window -c '#{pane_current_path}'` (dropped, since mpx already starts new panes in the active pane's directory).
 - `unbind KEY` is written as an empty binding, which removes mpx's default for that key.
 - `~` and `$HOME` are copied as written.
@@ -205,7 +205,7 @@ A tmux server holds many sessions; `mpx` runs one daemon per session. A *server*
 Options and environment:
 
 - `set-option`, `show-options`, `set-environment`, `show-environment` (and `set-window-option`, `setenv`, ...) keep a name/value store per session, so values read back (`show-options -gv @plugin-var`). `-g`, `-s`, `-w`, `-t` select no scope: there is one store per session.
-- Options are only stored. They change nothing, with a few read-only answers that match mpx: `prefix`, `allow-passthrough` and `remain-on-exit` come from the config file, `base-index` and `pane-base-index` are `0`, `default-terminal` is `xterm-256color`. Change behavior with the config file and `reload-config`.
+- Options mpx has an equivalent for act on the session (see the [tmux options table](CONFIG.md#tmux-options-set-option)): `remain-on-exit`, `history-limit`, `allow-passthrough`, `automatic-rename`, `monitor-activity`, `monitor-bell`, `synchronize-panes` (per window), `default-terminal`, `default-shell`, `default-command` and `display-panes-time`. Others are only stored, with a few read-only answers that match mpx: `base-index` and `pane-base-index` are `0`. Invalid values are refused with an error.
 - `set-environment` does apply: later panes of the session start with the variable.
 - Reading an option that was never set fails with `invalid option` unless `-q` is given.
 

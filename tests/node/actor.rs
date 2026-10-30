@@ -60,6 +60,8 @@ fn pane_with(pid: Option<u32>) -> Pane {
         args: Vec::new(),
         cwd: None,
         env: Vec::new(),
+        term: "xterm-256color".to_string(),
+        scrollback: 100_000,
     };
     Pane {
         actor: PaneActor::new(&spec, Box::new(process), None, ctx),

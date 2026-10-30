@@ -386,15 +386,15 @@ impl Compositor {
     /// Renders the bottom status row across its full width: window tabs (or pane names), agent
     /// badge, prefix badge, clock. Autowrap is off, so the last column can be painted safely.
     pub fn draw_status_bar<W: Write>(w: &mut W, bar: &StatusBar<'_>) -> io::Result<()> {
-        let left = status_left(bar);
-        let right = status_right(bar, &get_current_time());
-        let total_chars = left.chars().count() + right.chars().count();
-        let pad_len = (bar.width as usize).saturating_sub(total_chars);
-        let bg = bar.bg.unwrap_or(VtColor::Green);
-        let fg = bar.fg.unwrap_or(VtColor::Black);
-        queue!(w, MoveTo(0, bar.y))?;
-        write_status_color(w, fg, bg)?;
-        write!(w, "{left}{pad}{right}\x1b[0m", pad = " ".repeat(pad_len))
+        let line = super::statusline::compose(
+            bar.width as usize,
+            vec![super::statusline::Seg::plain(status_left(bar))],
+            Vec::new(),
+            "",
+            vec![super::statusline::Seg::plain(status_right(bar, &get_current_time()))],
+            crate::config::Justify::Left,
+        );
+        draw_status_segments(w, &line.segs, bar.y, bar.bg, bar.fg)
     }
     /// Renders a one-line command row (`:` prompt, confirmation question or message) across the status row.
     pub fn draw_command_line<W: Write>(
@@ -492,8 +492,8 @@ impl Compositor {
     }
 }
 
-/// Formats a single window tab with agent badges and tmux flags.
-pub fn format_tab(tab: &WindowTab, zoomed: bool) -> String {
+/// A window tab of the built-in look: `index:name` and tmux's flags, the index counted from `base`.
+pub fn tab_text(tab: &WindowTab, zoomed: bool, base: usize) -> String {
     let mut flags = String::new();
     if tab.is_active {
         flags.push('*');
@@ -514,7 +514,12 @@ pub fn format_tab(tab: &WindowTab, zoomed: bool) -> String {
     if tab.has_marked {
         flags.push('M');
     }
-    format!("{}:{}{} ", tab.index, tab.name, flags)
+    format!("{}:{}{} ", tab.index + base, tab.name, flags)
+}
+
+/// Formats a single window tab with agent badges and tmux flags.
+pub fn format_tab(tab: &WindowTab, zoomed: bool) -> String {
+    tab_text(tab, zoomed, 0)
 }
 
 /// Left side of the status row: `[session] ` followed by window tabs, or pane names when there are none.
@@ -885,6 +890,54 @@ fn write_status_color<W: Write>(w: &mut W, fg: VtColor, bg: VtColor) -> io::Resu
     write!(w, "m")
 }
 
+/// Writes one status row of styled segments at `y`; colours a segment does not set are `bg`/`fg`.
+/// Neighbouring segments in the same style share one colour sequence.
+pub fn draw_status_segments<W: Write>(
+    w: &mut W,
+    segs: &[super::statusline::Seg],
+    y: u16,
+    bg: Option<VtColor>,
+    fg: Option<VtColor>,
+) -> io::Result<()> {
+    let (bg, fg) = (bg.unwrap_or(VtColor::Green), fg.unwrap_or(VtColor::Black));
+    queue!(w, MoveTo(0, y))?;
+    let mut i = 0;
+    while i < segs.len() {
+        let style = &segs[i].style;
+        let mut end = i;
+        let mut text = String::new();
+        while end < segs.len() && segs[end].style == *style {
+            text.push_str(&segs[end].text);
+            end += 1;
+        }
+        write_status_run(w, style, fg, bg, &text)?;
+        i = end;
+    }
+    write!(w, "\x1b[0m")
+}
+
+fn write_status_run<W: Write>(
+    w: &mut W,
+    style: &super::statusline::Style,
+    fg: VtColor,
+    bg: VtColor,
+    text: &str,
+) -> io::Result<()> {
+    let (fg, bg) = (style.fg.unwrap_or(fg), style.bg.unwrap_or(bg));
+    let (fg, bg) = if style.reverse { (bg, fg) } else { (fg, bg) };
+    write_status_color(w, fg, bg)?;
+    if style.bold {
+        write!(w, "\x1b[1m")?;
+    }
+    if style.dim {
+        write!(w, "\x1b[2m")?;
+    }
+    if style.underscore {
+        write!(w, "\x1b[4m")?;
+    }
+    write!(w, "{text}")
+}
+
 fn write_vt_color<W: Write>(out: &mut W, color: VtColor, base: u8) -> io::Result<()> {
     match color {
         VtColor::Indexed(i) => write!(out, ";{};5;{i}", base + 8),
@@ -908,7 +961,7 @@ fn write_vt_color<W: Write>(out: &mut W, color: VtColor, base: u8) -> io::Result
     }
 }
 
-fn get_current_time() -> String {
+pub fn get_current_time() -> String {
     let now = crate::node::now_ms();
     format!(
         " {}",

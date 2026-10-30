@@ -9,9 +9,16 @@ use super::render::{
     Compositor, DividerStyle, PaneColors, RenderPaneContext, SelectionRange, StatusBar, hud_rect,
     parse_color,
 };
+use super::render::{draw_status_segments, get_current_time, status_right};
 use super::status::{exit_badge, node_named};
+use super::status::{local_utc_offset, pane_items, tab_items};
+use super::statusline::{
+    DEFAULT_WINDOW_FORMAT, Item, Line, Seg, Target, compose, parse_styled, status_vars, strftime,
+    truncate,
+};
 use crate::layout::geometry::Rect;
 use crate::protocol::NodeInfo;
+use crate::tmux_shim::expand;
 use crate::vt::Color as VtColor;
 use crate::vt::VtScreen;
 use crate::vt::grid::Grid;
@@ -49,10 +56,10 @@ pub fn send<W: Write>(out: &mut W, body: &[u8], cursor: &[u8]) -> io::Result<()>
 /// Everything a frame changes on screen but the cursor: nothing at all when no cell, chrome or
 /// overlay changed.
 pub fn draw_body<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
-    let (screen_w, layout_h) = app.viewport;
-    let screen_h = layout_h + 1;
+    let screen_w = app.viewport.0;
+    let screen_h = app.rows.screen_h;
     let hud = shortcut_popup(app, screen_w, screen_h);
-    let covered: Vec<Rect> = match &app.mode {
+    let mut covered: Vec<Rect> = match &app.mode {
         Mode::Overlay(_) => vec![overlay_area(screen_w, screen_h)],
         Mode::Clock { pane } => app
             .panes
@@ -63,7 +70,10 @@ pub fn draw_body<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
         Mode::Panes { .. } => number_boxes(app).into_iter().map(|(at, ..)| at).collect(),
         _ => hud.into_iter().collect(),
     };
-    app.canvas.begin(screen_w, layout_h, covered);
+    if app.rows.status.is_none() && chrome_text(app).is_some() {
+        covered.push(Rect::new(0, app.rows.prompt, screen_w, 1));
+    }
+    app.canvas.begin(screen_w, screen_h, covered);
     draw_panes(app, out)?;
     if app.zoomed.is_none() && !app.layout.dividers.is_empty() {
         let style = DividerStyle {
@@ -159,7 +169,6 @@ fn pane_view_with(
     }
 }
 
-
 /// Panes are drawn left to right so a row that spills past its pane is repainted over by its neighbor.
 /// A pane whose content scrolled is scrolled on the terminal first, so only the rows that changed
 /// are sent (beside the sidebar or a split too, where the terminal has left/right margins).
@@ -223,56 +232,165 @@ fn draw_status_row<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
     Ok(())
 }
 
-fn status_row(app: &App, out: &mut Vec<u8>) -> io::Result<()> {
-    let (width, y) = app.viewport;
+/// Message row or status line: the message row when a prompt, confirmation, copy-mode search or
+/// live message is up, else the status line (nothing when the status line is hidden).
+fn status_row(app: &mut App, out: &mut Vec<u8>) -> io::Result<()> {
+    let width = app.viewport.0;
+    if let Some(text) = chrome_text(app) {
+        return Compositor::draw_command_line(out, &text, app.rows.prompt, width);
+    }
+    let Some(y) = app.rows.status else {
+        return Ok(());
+    };
     let bg = parse_color(&app.config.style.status_bg);
     let fg = parse_color(&app.config.style.status_fg);
-    match &app.mode {
-        Mode::Prompt(prompt) => {
-            Compositor::draw_command_line(out, &format!(":{}", prompt.text()), y, width)
-        }
-        Mode::Confirm(question, _) => Compositor::draw_command_line(out, question, y, width),
-        Mode::Copy(cs) if cs.search_prompt.is_some() => {
-            let search = cs.search_prompt.as_ref().unwrap();
-            let prefix = search.direction.prompt_char();
-            Compositor::draw_command_line(
-                out,
-                &format!("{prefix}{}", search.prompt.text()),
-                y,
-                width,
-            )
-        }
-        _ => match app.live_message() {
-            Some(text) => Compositor::draw_command_line(out, text, y, width),
-            None => Compositor::draw_status_bar(
-                out,
-                &StatusBar {
-                    session: &app.session,
-                    tabs: &app.layout.tabs,
-                    panes: &app.panes,
-                    prefix_active: matches!(app.mode, Mode::Prefix),
-                    width,
-                    y,
-                    bg,
-                    fg,
-                    zoomed: app.zoomed.is_some(),
-                    copy_pane: match &app.mode {
-                        Mode::Copy(_) => Some(app.active_pane.as_str()),
-                        _ if app.parked_copy.contains_key(&app.active_pane) => {
-                            Some(app.active_pane.as_str())
-                        }
-                        _ => None,
-                    },
-                    marked_pane: app.layout.marked_pane_global().map(str::to_string),
-                },
-            ),
-        },
+    let line = status_line(app, width as usize);
+    draw_status_segments(out, &line.segs, y, bg, fg)?;
+    app.status_targets = line.targets;
+    Ok(())
+}
+
+/// The text of the message row when it replaces the status line.
+fn chrome_text(app: &App) -> Option<String> {
+    let search = match &app.mode {
+        Mode::Copy(cs) => cs
+            .search_prompt
+            .as_ref()
+            .map(|s| format!("{}{}", s.direction.prompt_char(), s.prompt.text())),
+        _ => None,
+    };
+    search.or_else(|| match &app.mode {
+        Mode::Prompt(prompt) => Some(format!(":{}", prompt.text())),
+        Mode::Confirm(question, _) => Some(question.clone()),
+        _ => app.live_message().map(str::to_string),
+    })
+}
+
+/// The status line for a row `width` cells wide, laid out from the configuration and the state.
+fn status_line(app: &App, width: usize) -> Line {
+    let config = &app.config;
+    let zoomed = app.zoomed.is_some();
+    let base = config.base_index;
+    let tab = app.layout.tabs.iter().find(|t| t.is_active);
+    let focused = app
+        .nodes
+        .iter()
+        .find(|n| n.name == app.active_pane)
+        .map(|n| shim_view(app, n));
+    let vars = status_vars(&app.session, focused.as_ref(), tab, zoomed, base);
+    let now = crate::node::now_ms();
+    let left = match &config.status_left {
+        None => vec![Seg::plain(format!("[{}] ", app.session))],
+        Some(fmt) => truncate(format_status(fmt, &vars, now), config.status_left_length),
+    };
+    let right = match &config.status_right {
+        None => vec![Seg::plain(built_in_right(app))],
+        Some(fmt) => truncate(format_status(fmt, &vars, now), config.status_right_length),
+    };
+    let (items, separator) = window_items(app, zoomed);
+    compose(width, left, items, &separator, right, config.status_justify)
+}
+
+/// A status format expanded, styled by its `#[...]` directives, with strftime applied to its text.
+fn format_status(fmt: &str, vars: &crate::tmux_shim::Vars, now: u64) -> Vec<Seg> {
+    let offset = local_utc_offset(now);
+    parse_styled(&expand(fmt, vars))
+        .into_iter()
+        .map(|seg| Seg {
+            text: strftime(&seg.text, now, offset),
+            ..seg
+        })
+        .collect()
+}
+
+/// The window list: clickable tabs (mpx's own, or built from `window-status-format`), or pane names
+/// when the session has no windows. Returns the items and the separator between them.
+fn window_items(app: &App, zoomed: bool) -> (Vec<Item>, String) {
+    let config = &app.config;
+    let base = config.base_index;
+    if app.layout.tabs.is_empty() {
+        let marked = app.layout.marked_pane_global();
+        return (pane_items(&app.panes, zoomed, marked), String::new());
     }
+    let custom = config.window_status_format.is_some()
+        || config.window_status_current_format.is_some()
+        || config.window_status_separator.is_some();
+    if !custom {
+        return (tab_items(&app.layout.tabs, zoomed, base), String::new());
+    }
+    let items = app
+        .layout
+        .tabs
+        .iter()
+        .map(|tab| {
+            let fmt = match (tab.is_active, &config.window_status_current_format) {
+                (true, Some(current)) => current.as_str(),
+                _ => config
+                    .window_status_format
+                    .as_deref()
+                    .unwrap_or(DEFAULT_WINDOW_FORMAT),
+            };
+            let focused = app
+                .nodes
+                .iter()
+                .find(|n| n.window == Some(tab.index))
+                .map(|n| shim_view(app, n));
+            let vars = status_vars(&app.session, focused.as_ref(), Some(tab), zoomed, base);
+            Item {
+                segs: parse_styled(&expand(fmt, &vars)),
+                target: Some(Target::Window(tab.index)),
+            }
+        })
+        .collect();
+    let separator = config
+        .window_status_separator
+        .clone()
+        .unwrap_or_else(|| " ".to_string());
+    (items, separator)
+}
+
+/// The shim's view of `node`, numbered the way `#{window_index}` and `#{pane_index}` show it.
+fn shim_view(app: &App, node: &crate::protocol::NodeInfo) -> crate::tmux_shim::PaneView {
+    let slot = app
+        .nodes
+        .iter()
+        .filter(|n| n.window == node.window)
+        .position(|n| n.id == node.id)
+        .unwrap_or(0);
+    let mut view =
+        crate::tmux_shim::pane_view(&app.session, slot, node, &app.panes, &app.layout.tabs);
+    view.window_base = app.config.base_index;
+    view.pane_base = app.config.pane_base_index;
+    view
+}
+
+/// mpx's built-in right side: the copy-mode badge, the zoom flag and the clock.
+fn built_in_right(app: &App) -> String {
+    let copy_pane = match &app.mode {
+        Mode::Copy(_) => Some(app.active_pane.as_str()),
+        _ if app.parked_copy.contains_key(&app.active_pane) => Some(app.active_pane.as_str()),
+        _ => None,
+    };
+    let bar = StatusBar {
+        session: &app.session,
+        tabs: &app.layout.tabs,
+        panes: &app.panes,
+        prefix_active: false,
+        width: 0,
+        y: 0,
+        bg: None,
+        fg: None,
+        zoomed: app.zoomed.is_some(),
+        copy_pane,
+        marked_pane: None,
+    };
+    status_right(&bar, &get_current_time())
 }
 
 /// Places and shows (or hides) the terminal cursor where the frame wants it.
 pub fn place_cursor<W: Write>(app: &App, out: &mut W) -> io::Result<()> {
-    let (width, y) = app.viewport;
+    let width = app.viewport.0;
+    let y = app.rows.prompt;
     match &app.mode {
         Mode::Prompt(prompt) => Compositor::position_cursor(
             out,

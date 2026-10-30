@@ -119,13 +119,14 @@ fn option_values_print_bare_or_quoted_like_show_options() {
 fn builtin_options_come_from_the_config_and_unknown_ones_are_absent() {
     let config = Config {
         prefix: "C-a".into(),
-        remain_on_exit: true,
+        remain_on_exit: true.into(),
         ..Config::default()
     };
     assert_eq!(builtin_option("prefix", &config).as_deref(), Some("C-a"));
     assert_eq!(builtin_option("remain-on-exit", &config).as_deref(), Some("on"));
     assert_eq!(builtin_option("base-index", &config).as_deref(), Some("0"));
-    assert_eq!(builtin_option("mouse", &config), None);
+    assert_eq!(builtin_option("mouse", &config).as_deref(), Some("on"));
+    assert_eq!(builtin_option("no-such-option", &config), None);
 }
 
 #[test]

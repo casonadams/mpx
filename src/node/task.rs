@@ -27,7 +27,7 @@ impl TaskNode {
         if let Some(dir) = &spec.cwd {
             command.current_dir(dir);
         }
-        command.env("TERM", "xterm-256color");
+        command.env("TERM", &spec.term);
         command.env("COLORTERM", "truecolor");
         command.env_remove("TERM_SESSION_ID");
         command.env("SHELL_SESSIONS_DISABLE", "1");

@@ -39,9 +39,23 @@ pub fn validate_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// The request wins over the daemon config default.
-pub fn remain_on_exit(requested: Option<bool>, config_default: bool) -> bool {
-    requested.unwrap_or(config_default)
+/// Program and arguments for a pane started without a command: `default-command` run through the
+/// default shell with `-c`, or the default shell alone. The shell is the configured `default-shell`,
+/// else `$SHELL`, else `sh`.
+pub fn default_argv(
+    shell: Option<&str>,
+    env_shell: Option<&str>,
+    command: Option<&str>,
+) -> (String, Vec<String>) {
+    let shell = shell
+        .or(env_shell)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(if cfg!(windows) { "powershell.exe" } else { "/bin/sh" })
+        .to_string();
+    match command {
+        Some(command) => (shell, vec!["-c".to_string(), command.to_string()]),
+        None => (shell, Vec::new()),
+    }
 }
 
 /// tmux compatibility is on when either the spawn or the daemon config asks for it.

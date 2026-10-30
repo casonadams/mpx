@@ -239,7 +239,7 @@ pub struct WaitOutcome {
 
 /// Version of the client-daemon protocol. Bump it on any change an older peer cannot parse, so
 /// clients refuse an incompatible daemon instead of misreading it.
-pub const PROTOCOL: u32 = 3;
+pub const PROTOCOL: u32 = 4;
 
 fn first_protocol() -> u32 {
     1
@@ -415,6 +415,12 @@ pub enum Request {
         kind: VarKind,
         name: String,
         value: Option<String>,
+    },
+    /// Turn synchronized input (tmux `synchronize-panes`) on or off for a window; `None` is the
+    /// active window.
+    SetSynchronized {
+        window: Option<usize>,
+        on: bool,
     },
     /// All variables of one store, sorted by name.
     GetVars {

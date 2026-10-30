@@ -752,18 +752,83 @@ fn tmux_multicall_rotates_respawns_and_finds_windows() {
 
 #[cfg(unix)]
 #[test]
-fn tmux_multicall_numbers_panes_per_window_and_has_no_alert_window_by_default() {
+fn tmux_multicall_numbers_panes_per_window_and_steps_to_windows_with_alerts() {
     let s = Session::new("tw");
     let _ = s.run(&["run", "-n", "base", "--pty", "cat"]);
     let t = |args: &[&str]| tmux(&s, args);
     let out = |args: &[&str]| stdout(&t(args));
 
+    assert!(t(&["set", "-g", "monitor-activity", "on"]).status.success());
     assert!(!t(&["next-window", "-a"]).status.success(), "no other window to alert");
+    assert!(t(&["new-window", "-d", "-n", "noisy", "sh", "-c", "sleep 0.3; echo hi; sleep 30"]).status.success());
     assert!(t(&["new-window", "-d", "-n", "quiet", "cat"]).status.success());
-    assert!(t(&["new-window", "-d", "-n", "noisy", "cat"]).status.success());
+    let flagged = (0..60).any(|_| {
+        std::thread::sleep(Duration::from_millis(50));
+        out(&["list-windows", "-F", "#{window_name}:#{window_flags}"]).contains("noisy:#")
+    });
+    assert!(flagged, "output in a background window sets the activity flag");
+    assert!(t(&["next-window", "-a"]).status.success());
+    assert_eq!(out(&["display-message", "-p", "#{window_name}"]), "noisy");
+    assert!(!t(&["next-window", "-a"]).status.success(), "the alert was cleared by visiting");
+
     assert!(t(&["split-window", "-d", "cat"]).status.success());
     let indexes = out(&["list-panes", "-a", "-F", "#{window_name}:#{pane_index}"]);
     let lines: Vec<&str> = indexes.lines().collect();
     assert!(lines.contains(&"quiet:0") && lines.contains(&"noisy:0"), "{indexes}");
     assert!(lines.iter().any(|l| l.ends_with(":1")), "second pane of a window is 1: {indexes}");
+}
+
+#[cfg(unix)]
+#[test]
+fn tmux_multicall_validates_options_and_reports_synchronized_panes() {
+    let s = Session::new("to");
+    let _ = s.run(&["run", "-n", "base", "--pty", "cat"]);
+    let t = |args: &[&str]| tmux(&s, args);
+    let out = |args: &[&str]| stdout(&t(args));
+
+    let refused = t(&["set", "-g", "remain-on-exit", "maybe"]);
+    assert!(!refused.status.success());
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(stderr.contains("invalid value: maybe"), "{stderr}");
+    assert!(!t(&["set", "-g", "monitor-silence", "5"]).status.success());
+    assert!(t(&["set", "-g", "remain-on-exit", "failed"]).status.success());
+    assert_eq!(out(&["show-options", "-gv", "remain-on-exit"]), "failed");
+    assert_eq!(out(&["show-options", "-gv", "history-limit"]), "100000");
+
+    assert!(t(&["setw", "-t", "0", "synchronize-panes", "on"]).status.success());
+    let flags = &["list-windows", "-F", "#{pane_synchronized}"];
+    assert_eq!(out(flags), "1");
+    assert!(t(&["setw", "synchronize-panes", "off"]).status.success());
+    assert_eq!(out(flags), "0");
+}
+
+#[test]
+fn tmux_multicall_numbers_windows_from_base_index_and_reports_ui_options() {
+    let s = Session::new("bidx");
+    let _ = s.run(&["run", "-n", "base", "--pty", "cat"]);
+    let t = |args: &[&str]| tmux(&s, args);
+    let out = |args: &[&str]| stdout(&t(args)).trim().to_string();
+    assert_eq!(out(&["show-options", "-gv", "base-index"]), "0");
+    assert!(t(&["set", "-g", "base-index", "1"]).status.success());
+    assert_eq!(out(&["show-options", "-gv", "base-index"]), "1");
+    assert_eq!(out(&["display-message", "-p", "#{window_index}"]), "1");
+    assert!(t(&["select-window", "-t", "1"]).status.success());
+    assert!(
+        !t(&["select-window", "-t", "0"]).status.success(),
+        "window 0 does not exist with base-index 1"
+    );
+    let refused = t(&["set", "-g", "renumber-windows", "off"]);
+    assert!(!refused.status.success());
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&refused.stdout),
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    assert!(said.contains("windows are always renumbered"), "{said}");
+    assert_eq!(out(&["show-options", "-gv", "renumber-windows"]), "on");
+    assert_eq!(out(&["show-options", "-gv", "mouse"]), "on");
+    assert!(t(&["set", "-g", "mouse", "off"]).status.success());
+    assert_eq!(out(&["show-options", "-gv", "mouse"]), "off");
+    assert!(t(&["set", "-g", "escape-time", "0"]).status.success());
+    assert_eq!(out(&["show-options", "-gv", "escape-time"]), "0");
 }

@@ -102,7 +102,7 @@ impl PtyNode {
         if let Some(dir) = &spec.cwd {
             cmd.cwd(dir);
         }
-        cmd.env("TERM", "xterm-256color");
+        cmd.env("TERM", &spec.term);
         cmd.env("COLORTERM", "truecolor");
         cmd.env_remove("TERM_SESSION_ID");
         cmd.env("SHELL_SESSIONS_DISABLE", "1");

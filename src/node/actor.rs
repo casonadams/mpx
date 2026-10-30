@@ -55,6 +55,8 @@ pub struct PaneActor {
     /// Terminal control while a PTY process runs; `None` for task panes and after exit.
     terminal: Option<PtyTerminal>,
     ring: RingBuffer,
+    /// Scrollback lines a plain capture keeps (tmux `history-limit`).
+    scrollback: usize,
     screen: VtScreen,
     utf8: Utf8Stream,
     /// Absolute offset up to which output has been decoded and emitted.
@@ -97,6 +99,7 @@ impl PaneActor {
             process: Some(process),
             terminal,
             ring: RingBuffer::default(),
+            scrollback: spec.scrollback,
             screen: VtScreen::live(80, 24),
             utf8: Utf8Stream::default(),
             emitted: 0,
@@ -285,7 +288,7 @@ impl PaneActor {
 
     fn logs(&self, query: LogQuery, reply: Reply<(String, u64)>) {
         let screen = self.pty.then_some(&self.screen);
-        let _ = reply.send(render_logs(&self.ring, screen, &query));
+        let _ = reply.send(render_logs(&self.ring, screen, &query, self.scrollback));
     }
 
     fn info(&self, full: bool) -> NodeInfo {

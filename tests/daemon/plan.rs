@@ -92,11 +92,18 @@ fn names_must_be_nonempty_and_not_pane_refs() {
 }
 
 #[test]
-fn remain_on_exit_request_overrides_config() {
-    assert!(plan::remain_on_exit(None, true));
-    assert!(!plan::remain_on_exit(None, false));
-    assert!(!plan::remain_on_exit(Some(false), true));
-    assert!(plan::remain_on_exit(Some(true), false));
+fn default_program_is_the_default_command_through_the_shell() {
+    assert_eq!(
+        plan::default_argv(Some("/bin/zsh"), Some("/bin/bash"), None),
+        ("/bin/zsh".to_string(), Vec::new())
+    );
+    assert_eq!(
+        plan::default_argv(None, Some("/bin/bash"), Some("echo hi")),
+        ("/bin/bash".to_string(), vec!["-c".to_string(), "echo hi".to_string()])
+    );
+    let (program, args) = plan::default_argv(None, None, None);
+    let fallback = if cfg!(windows) { "powershell.exe" } else { "/bin/sh" };
+    assert_eq!((program.as_str(), args.is_empty()), (fallback, true));
 }
 
 #[test]

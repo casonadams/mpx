@@ -21,6 +21,9 @@ pub struct WindowTab {
     pub marked_pane: Option<String>,
     #[serde(default)]
     pub agent_badge: Option<String>,
+    /// Typed input and paste go to every pane of the window (tmux `synchronize-panes`).
+    #[serde(default)]
+    pub synchronized: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -44,6 +47,9 @@ pub struct Window {
     pub has_activity: bool,
     #[serde(default)]
     pub has_bell: bool,
+    /// Typed input and paste go to every pane of the window (tmux `synchronize-panes`).
+    #[serde(default)]
+    pub synchronized: bool,
 }
 
 impl Window {
@@ -59,6 +65,7 @@ impl Window {
             preset: None,
             has_activity: false,
             has_bell: false,
+            synchronized: false,
         }
     }
 
@@ -292,6 +299,7 @@ impl Workspace {
             preset: None,
             has_activity: false,
             has_bell: false,
+            synchronized: false,
         });
         self.windows.len() - 1
     }
@@ -360,6 +368,7 @@ impl Workspace {
                     is_last: Some(i) == self.last_window,
                     has_activity: w.has_activity,
                     has_bell: w.has_bell,
+                    synchronized: w.synchronized,
                     has_marked,
                     marked_pane,
                     agent_badge: None,
@@ -511,6 +520,17 @@ impl Workspace {
             Some(win) => {
                 win.name = name;
                 win.renamed = true;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Turns synchronized input on or off for the window at `idx`; false when there is no such window.
+    pub fn set_synchronized(&mut self, idx: usize, on: bool) -> bool {
+        match self.windows.get_mut(idx) {
+            Some(win) => {
+                win.synchronized = on;
                 true
             }
             None => false,

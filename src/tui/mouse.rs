@@ -16,6 +16,9 @@ fn local_point(rect: Rect, col: u16, row: u16) -> (usize, usize) {
 
 impl App {
     pub async fn on_mouse(&mut self, ev: MouseEvent) -> Flow {
+        if !self.config.mouse {
+            return Flow::Continue;
+        }
         if matches!(
             self.mode,
             Mode::Overlay(_) | Mode::Prompt(_) | Mode::Confirm(..) | Mode::Clock { .. }
@@ -23,7 +26,7 @@ impl App {
             return Flow::Continue;
         }
 
-        if ev.row >= self.viewport.1 || self.border_drag.is_some() {
+        if Some(ev.row) == self.rows.status || self.border_drag.is_some() {
             return self.on_multiplexer_mouse(ev).await;
         }
 
@@ -82,29 +85,25 @@ impl App {
     /// and drops the selection without touching the scroll position; anywhere else it only
     /// remembers the point, so a later drag can select from it.
     async fn mouse_press(&mut self, col: u16, row: u16) {
-        if row >= self.viewport.1 {
-            let zoomed = self.zoomed.is_some();
-            if let Some(target) = super::status::status_hit(
-                &self.session,
-                &self.layout.tabs,
-                &self.panes,
-                zoomed,
-                col as usize,
-            ) {
-                match target {
-                    super::status::StatusTarget::Window(idx) => {
-                        self.zoomed = None;
-                        let _ = self.client.select_window(idx).await;
-                        self.layout.dirty = true;
-                    }
-                    super::status::StatusTarget::Pane(name) => {
-                        if name != self.active_pane {
-                            self.zoomed = None;
-                            let _ = self.client.focus(name).await;
-                            self.layout.dirty = true;
-                        }
-                    }
+        if Some(row) == self.rows.status {
+            let at = col as usize;
+            let target = self
+                .status_targets
+                .iter()
+                .find(|(start, end, _)| (*start..*end).contains(&at))
+                .map(|(_, _, target)| target.clone());
+            match target {
+                Some(super::statusline::Target::Window(idx)) => {
+                    self.zoomed = None;
+                    let _ = self.client.select_window(idx).await;
+                    self.layout.dirty = true;
                 }
+                Some(super::statusline::Target::Pane(name)) if name != self.active_pane => {
+                    self.zoomed = None;
+                    let _ = self.client.focus(&name).await;
+                    self.layout.dirty = true;
+                }
+                _ => {}
             }
             return;
         }
@@ -174,7 +173,9 @@ impl App {
         }
         let text = cs.yank_text(grid);
         if !text.trim().is_empty() {
-            self.clipboard.copy(&text);
+            if self.config.set_clipboard {
+                self.clipboard.copy(&text);
+            }
             self.yanks.push(text.clone());
             self.last_copy = Some(text);
         }

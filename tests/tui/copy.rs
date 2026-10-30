@@ -1,6 +1,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use mpx::config::ModeKeys;
 use mpx::tui::copy::{
-    CopyOutcome, CopyState, SearchDirection, SelectionKind, WHEEL_STEP, apply_key,
+    CopyOutcome, CopyState, SearchDirection, SelectionKind, WHEEL_STEP, apply_key as apply_key_in,
     char_selection_text, find_next_match, line_matches,
 };
 use mpx::vt::grid::Grid;
@@ -15,6 +16,11 @@ fn key(c: char) -> KeyEvent {
 
 fn code(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
+}
+
+/// The vi table, which the tests here drive unless they say otherwise.
+fn apply_key(cs: &mut CopyState, key: &KeyEvent, grid: Option<&Grid>, pane: (u16, u16)) -> CopyOutcome {
+    apply_key_in(cs, key, grid, pane, ModeKeys::Vi)
 }
 
 fn fresh_at_origin() -> CopyState {

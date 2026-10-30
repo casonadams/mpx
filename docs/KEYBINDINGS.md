@@ -121,3 +121,25 @@ Vim-style command line on the status row. Supports tab-completion, history (`Up`
 | `/` | Regex search forward |
 | `n` / `N` | Next / previous search match |
 | `q` / `Esc` | Exit copy mode |
+
+## Emacs Copy Mode (`mode-keys emacs`)
+
+Set `mode_keys = "emacs"` in `config.toml`, or `set -g mode-keys emacs` at runtime, to use this table in copy mode (`Prefix [`) instead of the vi table above. Vi keys are unbound in it.
+
+| Key | Action |
+| :--- | :--- |
+| `C-b` / `C-f`, Left / Right | Move cursor left / right |
+| `C-p` / `C-n`, Up / Down | Move cursor up / down |
+| `M-b` / `M-f` | Word backward / forward |
+| `C-a` / `C-e`, Home / End | Start / end of line |
+| `C-v` / PageDown | Scroll down a page, toward the bottom |
+| `M-v` / PageUp | Scroll up a page, into history |
+| `M-<` / `M->` | Top / bottom of scrollback |
+| `C-Space` | Start or stop character selection |
+| `C-w` / `M-w` | Copy the selection and leave (with no selection, just leave) |
+| `Enter` | Copy the selection (no effect without a selection) |
+| `C-g` / `Esc` / `q` | Leave copy mode |
+| `C-s` / `C-r` | Open a search prompt forward / backward; `Enter` runs it |
+
+`C-s` and `C-r` are not incremental: the search runs on `Enter`, not on each keystroke as in emacs.
+

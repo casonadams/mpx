@@ -68,9 +68,9 @@ fn sample_output_parses_and_maps_settings() {
     let c = convert(SAMPLE);
     let config = parsed(&c);
     assert_eq!(config.prefix, "C-a");
-    assert_eq!(config.history_limit, 10000);
-    assert!(config.remain_on_exit);
-    assert!(!config.allow_passthrough);
+    assert_eq!(config.scrollback_lines, 10000);
+    assert_eq!(config.remain_on_exit.as_str(), "on");
+    assert_eq!(config.allow_passthrough.as_str(), "off");
     assert_eq!(config.style.status_bg, "colour235");
     assert_eq!(config.style.status_fg, "colour250");
     assert_eq!(config.style.border_inactive, "colour240");
@@ -149,7 +149,7 @@ fn sample_output_resolves_to_a_keymap() {
 #[test]
 fn sample_notes_carry_original_line_numbers() {
     let c = convert(SAMPLE);
-    for line in [2, 12, 13, 14, 15, 17, 18, 23, 26, 28, 31, 32, 33] {
+    for line in [2, 13, 14, 15, 17, 18, 23, 26, 28, 31, 32, 33] {
         assert!(
             has_note(&c, line),
             "expected a note for line {line}: {:?}",
@@ -157,7 +157,7 @@ fn sample_notes_carry_original_line_numbers() {
         );
     }
     for line in [
-        3, 4, 5, 6, 7, 8, 9, 10, 11, 19, 20, 21, 22, 24, 25, 27, 34, 35,
+        3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 19, 20, 21, 22, 24, 25, 27, 34, 35,
     ] {
         assert!(
             !has_note(&c, line),
@@ -185,7 +185,7 @@ fn sample_notes_name_the_skipped_command() {
     );
     assert!(note(33).contains("%if"), "{}", note(33));
     assert!(note(31).contains("'select-layout'"), "{}", note(31));
-    assert!(note(12).contains("mouse"), "{}", note(12));
+    assert!(convert(SAMPLE).toml.contains("mouse = true"), "mouse is a file key now");
 }
 
 #[test]
@@ -223,7 +223,8 @@ fn semicolon_separates_top_level_commands_and_escaped_semicolon_chains_binds() {
     );
     let config = parsed(&c);
     assert_eq!(config.prefix, "C-a");
-    assert_eq!(config.history_limit, 5);
+    assert_eq!(config.scrollback_lines, 5);
+    assert_eq!(config.history_limit, Config::default().history_limit);
     assert_eq!(
         config.bind.get("x").map(String::as_str),
         Some("split-window ; select-layout tiled")
@@ -289,5 +290,19 @@ fn invalid_prefix_and_colours_keep_defaults_and_are_noted() {
 fn crlf_line_endings_are_accepted() {
     let config = parsed(&convert("set -g prefix C-a\r\nset -g history-limit 7\r\n"));
     assert_eq!(config.prefix, "C-a");
-    assert_eq!(config.history_limit, 7);
+    assert_eq!(config.scrollback_lines, 7);
+}
+
+#[test]
+fn new_options_map_to_their_config_keys() {
+    let c = convert(
+        "set -g remain-on-exit failed\nset -g allow-passthrough all\nset -g monitor-bell off\nset -g automatic-rename off\nset -g default-shell /bin/zsh\nset -g history-limit 2000\n",
+    );
+    let config = parsed(&c);
+    assert_eq!(config.remain_on_exit.as_str(), "failed");
+    assert_eq!(config.allow_passthrough.as_str(), "all");
+    assert!(!config.monitor_bell && !config.automatic_rename);
+    assert_eq!(config.default_shell.as_deref(), Some("/bin/zsh"));
+    assert_eq!(config.scrollback_lines, 2000);
+    assert!(c.notes.is_empty(), "{:?}", c.notes);
 }

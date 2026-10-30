@@ -167,7 +167,7 @@ impl App {
             .or_insert_with(|| VtScreen::live(DEFAULT_SIZE.0 as usize, DEFAULT_SIZE.1 as usize));
         vt.feed(data.as_bytes());
         let pass = vt.take_passthroughs();
-        if self.config.allow_passthrough && name == self.active_pane {
+        if self.config.allow_passthrough.allows(name == self.active_pane) {
             self.passthroughs.extend(pass);
         }
         self.expected.insert(name.to_string(), next);

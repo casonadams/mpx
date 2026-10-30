@@ -13,6 +13,10 @@ pub struct LayoutCache {
     pub dirty: bool,
     /// Columns left of the pane area; every rectangle and divider is shifted right by it.
     pub offset: u16,
+    /// Rows above the pane area (a top status row); every rectangle and divider is shifted down by it.
+    pub top: u16,
+    /// `(width, height)` of the area last laid out.
+    pub size: (u16, u16),
     pub raw: Vec<PaneRect>,
     pub dividers: Vec<Divider>,
     pub tabs: Vec<WindowTab>,
@@ -23,16 +27,24 @@ impl LayoutCache {
         Self {
             dirty: true,
             offset: 0,
+            top: 0,
+            size: (0, 0),
             raw: Vec::new(),
             dividers: Vec::new(),
             tabs: Vec::new(),
         }
     }
 
-    /// Refetches the layout for a `width` x `layout_h` area starting `offset` columns in, when
-    /// dirty or moved. Returns false when the window has no panes at all.
-    pub async fn sync(&mut self, client: &mut Client, offset: u16, width: u16, layout_h: u16) -> bool {
-        if !(self.dirty || self.raw.is_empty() || offset != self.offset) {
+    /// Refetches the layout for a `width` x `layout_h` area that starts `offset` columns in and `top`
+    /// rows down, when dirty or moved. Returns false when the window has no panes at all.
+    pub async fn sync(
+        &mut self,
+        client: &mut Client,
+        (offset, top): (u16, u16),
+        (width, layout_h): (u16, u16),
+    ) -> bool {
+        let moved = offset != self.offset || top != self.top || (width, layout_h) != self.size;
+        if !(self.dirty || self.raw.is_empty() || moved) {
             return !self.raw.is_empty();
         }
         // No answer means the daemon is gone (killed, or it ended with its last pane): nothing is
@@ -43,14 +55,20 @@ impl LayoutCache {
         };
         self.raw = panes
             .into_iter()
-            .map(|(name, rect, focused)| (name, shift(rect, offset), focused))
+            .map(|(name, rect, focused)| (name, shift(rect, offset, top), focused))
             .collect();
         self.dividers = dividers
             .into_iter()
-            .map(|d| Divider { x: d.x + offset, ..d })
+            .map(|d| Divider {
+                x: d.x + offset,
+                y: d.y + top,
+                ..d
+            })
             .collect();
         self.tabs = tabs;
         self.offset = offset;
+        self.top = top;
+        self.size = (width, layout_h);
         self.dirty = false;
         !self.raw.is_empty()
     }
@@ -75,8 +93,8 @@ impl Default for LayoutCache {
     }
 }
 
-fn shift(r: Rect, dx: u16) -> Rect {
-    Rect::new(r.x + dx, r.y, r.width, r.height)
+fn shift(r: Rect, dx: u16, dy: u16) -> Rect {
+    Rect::new(r.x + dx, r.y + dy, r.width, r.height)
 }
 
 fn center(r: Rect) -> (i32, i32) {

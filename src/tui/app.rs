@@ -9,17 +9,17 @@ use tokio::task::JoinHandle;
 use super::canvas::Canvas;
 use super::command::Command;
 use super::copy::CopyState;
-use super::exec::default_shell;
 use super::frame;
 use super::keymap::{self, Keymap};
 use super::overlay::Overlay;
 use super::panes::{BorderGrab, LayoutCache, PaneRect, resized_elsewhere, sync_dims};
 use super::prompt::PromptState;
 use super::render::copy_to_clipboard;
+use super::statusline::{self, Rows, Target};
 use super::status::{local_utc_offset, restored_notice, time_of_day};
 use super::terminal::TerminalGuard;
 use crate::client::Client;
-use crate::config::Config;
+use crate::config::{Config, StatusPosition};
 use crate::node::sleep_until_opt;
 use crate::keys::TermModes;
 use crate::layout::geometry::Rect;
@@ -87,7 +87,6 @@ pub const TYPING_FRAMES: u8 = 16;
 /// Times output handling yields to let the rest of a burst arrive before its frame.
 const BURST_YIELDS: usize = 4;
 const REPEAT_WINDOW: Duration = Duration::from_millis(500);
-const MESSAGE_TTL: Duration = Duration::from_secs(3);
 const HISTORY_CAP: usize = 100;
 /// Status-row messages kept for `show-messages`.
 const MESSAGE_LOG_CAP: usize = 100;
@@ -124,6 +123,12 @@ pub struct App {
     pub layout: LayoutCache,
     /// Terminal width and height available to panes (status row excluded).
     pub viewport: (u16, u16),
+    /// Rows on screen: the pane area, the status line and the message row.
+    pub rows: Rows,
+    /// Clickable items of the status line as last drawn: `[start, end)` columns and their target.
+    pub status_targets: Vec<(usize, usize, Target)>,
+    /// When the last frame was drawn; paces `status-interval`.
+    pub drawn_at: Option<Instant>,
     /// Panes drawn this frame (the zoomed pane alone when zoomed).
     pub panes: Vec<PaneRect>,
     pub active_pane: String,
@@ -257,6 +262,9 @@ impl App {
             expected: HashMap::new(),
             layout: LayoutCache::new(),
             viewport: (80, 23),
+            rows: statusline::rows(24, true, false),
+            status_targets: Vec::new(),
+            drawn_at: None,
             panes: Vec::new(),
             active_pane: String::new(),
             active_rect: None,
@@ -317,9 +325,17 @@ impl App {
         let (w, h) = self
             .fixed_size
             .unwrap_or_else(|| crossterm::terminal::size().unwrap_or((80, 24)));
-        let layout_h = h.saturating_sub(1);
-        self.viewport = (w, layout_h);
-        if !self.layout.sync(&mut self.client, 0, w, layout_h).await {
+        let rows = statusline::rows(
+            h,
+            self.config.status,
+            self.config.status_position == StatusPosition::Top,
+        );
+        if rows != self.rows {
+            self.rows = rows;
+            self.canvas.invalidate();
+        }
+        self.viewport = (w, rows.pane_h);
+        if !self.layout.sync(&mut self.client, (0, rows.pane_top), (w, rows.pane_h)).await {
             return false;
         }
         let focused = self
@@ -332,7 +348,7 @@ impl App {
         self.follow_focus(focused);
         let shown_before: Vec<String> = self.panes.iter().map(|(name, ..)| name.clone()).collect();
         self.panes = match &self.zoomed {
-            Some(name) => vec![(name.clone(), Rect::new(0, 0, w, layout_h), true)],
+            Some(name) => vec![(name.clone(), Rect::new(0, rows.pane_top, w, rows.pane_h), true)],
             None => self.layout.raw.clone(),
         };
         self.active_rect = self.panes.iter().find(|(.., f)| *f).map(|(_, r, _)| *r);
@@ -504,6 +520,7 @@ impl App {
     /// output counts against the frame budget; a redraw for a keypress must not delay the output
     /// that keypress provokes.
     pub fn drew(&mut self, at: Instant) {
+        self.drawn_at = Some(at);
         if self.frame_due.take().is_some() {
             self.output_frames.push_back(at);
             if self.output_frames.len() > FRAMES_PER_BUDGET {
@@ -581,7 +598,7 @@ impl App {
     pub fn live_message(&self) -> Option<&str> {
         self.message
             .as_ref()
-            .filter(|(_, at)| at.elapsed() < MESSAGE_TTL)
+            .filter(|(_, at)| at.elapsed() < Duration::from_millis(self.config.display_time_ms))
             .map(|(text, _)| text.as_str())
     }
 
@@ -670,7 +687,7 @@ async fn ensure_running_window(client: &mut Client) {
         .ok()
         .map(|p| p.to_string_lossy().into_owned());
     let spawn = SpawnOpts {
-        command: default_shell(),
+        command: String::new(),
         pty: true,
         cwd,
         ..SpawnOpts::default()
@@ -803,6 +820,7 @@ pub async fn run_tui(
     let mut body = Vec::with_capacity(64 * 1024);
     let (mut cursor, mut last_cursor) = (Vec::new(), Vec::new());
     let mut tick = tokio::time::interval(Duration::from_secs(1));
+    let mut mouse_captured = true;
     let mut redraw = true;
     loop {
         if redraw {
@@ -830,6 +848,7 @@ pub async fn run_tui(
             _ = sleep_until_opt(due.map(tokio::time::Instant::from_std)) => Wake::Due,
         };
         let output = matches!(wake, Wake::Stream(_));
+        let ticked = matches!(wake, Wake::Tick);
         let flow = match wake {
             Wake::Input(event) => app.on_event(event).await,
             Wake::Stream(item) => {
@@ -852,13 +871,36 @@ pub async fn run_tui(
             app.canvas.invalidate();
             app.layout.dirty = true;
             last_cursor.clear();
+            mouse_captured = true;
         }
+        sync_mouse_capture(&mut out, app.config.mouse, &mut mouse_captured);
         let forwarded = std::mem::take(&mut app.forwarded);
         redraw = needs_redraw(output, forwarded, app.frame_due, Instant::now()) || suspended;
+        if ticked
+            && app.live_message().is_none()
+            && app.frame_due.is_none()
+            && !statusline::status_due(app.config.status_interval, app.drawn_at, Instant::now())
+        {
+            redraw = false;
+        }
         if flow == Flow::Quit {
             return Ok(());
         }
     }
+}
+
+/// Turns the terminal's mouse reporting on or off to match `mouse`; `captured` is what it is set to.
+pub fn sync_mouse_capture<W: Write>(out: &mut W, want: bool, captured: &mut bool) {
+    if want == *captured {
+        return;
+    }
+    if want {
+        let _ = crossterm::queue!(out, crossterm::event::EnableMouseCapture);
+    } else {
+        let _ = crossterm::queue!(out, crossterm::event::DisableMouseCapture);
+    }
+    let _ = out.flush();
+    *captured = want;
 }
 
 fn flush_passthroughs<W: Write>(out: &mut W, passthroughs: &mut Vec<Vec<u8>>) {

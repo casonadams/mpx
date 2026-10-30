@@ -8,6 +8,7 @@ mod daemon {
     mod layout;
     mod lifecycle;
     mod logs;
+    mod options;
     mod pacing;
     mod panes;
     mod plan;

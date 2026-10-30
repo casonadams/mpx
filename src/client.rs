@@ -464,6 +464,11 @@ impl Client {
         self.call_ok("SetVar", req).await
     }
 
+    /// Turns synchronized input on or off for a window; `None` is the active window.
+    pub async fn set_synchronized(&mut self, window: Option<usize>, on: bool) -> Result<(), String> {
+        self.call_ok("SetSynchronized", Request::SetSynchronized { window, on }).await
+    }
+
     pub async fn get_vars(&mut self, kind: VarKind) -> Result<Vec<(String, String)>, String> {
         match self.call(Request::GetVars { kind }).await? {
             Response::Vars(vars) => Ok(vars),

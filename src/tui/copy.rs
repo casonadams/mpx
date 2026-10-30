@@ -351,18 +351,34 @@ fn row_text(cells: &[char], from: usize, to: usize) -> Option<String> {
     Some(cells[from..end].iter().collect())
 }
 
-/// Applies one key in copy mode. `grid` is the active pane's screen; `pane` its size in cells.
+/// Applies one key in copy mode. `grid` is the active pane's screen; `pane` its size in cells; `keys`
+/// the key table (`mode-keys`).
 pub fn apply_key(
     cs: &mut CopyState,
     key: &KeyEvent,
     grid: Option<&Grid>,
     pane: PaneSize,
+    keys: crate::config::ModeKeys,
 ) -> CopyOutcome {
     if let Some(search) = cs.search_prompt.take() {
         return handle_search_key(cs, search, key, grid, pane);
     }
     let hist_len = grid.map_or(0, |g| g.history_len());
-    if move_cursor(cs, key, hist_len, pane) {
+    match keys {
+        crate::config::ModeKeys::Vi => vi_key(cs, key, grid, pane, hist_len),
+        crate::config::ModeKeys::Emacs => emacs_key(cs, key, grid, pane, hist_len),
+    }
+}
+
+fn vi_key(
+    cs: &mut CopyState,
+    key: &KeyEvent,
+    grid: Option<&Grid>,
+    pane: PaneSize,
+    hist_len: usize,
+) -> CopyOutcome {
+    if let Some(motion) = vi_motion(key) {
+        apply_motion(cs, motion, hist_len, pane);
         return CopyOutcome::Stay;
     }
     match key.code {
@@ -387,6 +403,53 @@ pub fn apply_key(
             CopyOutcome::Stay
         }
         _ => select_or_exit(cs, key, grid),
+    }
+}
+
+/// The emacs table (`mode-keys emacs`): C-b/f/p/n, M-b/f, C-a/e, C-v/M-v, M-</M->, C-Space selects,
+/// C-w/M-w copy the selection and leave, C-g/Esc/q leave, C-s/C-r search, Enter copies a selection.
+fn emacs_key(
+    cs: &mut CopyState,
+    key: &KeyEvent,
+    grid: Option<&Grid>,
+    pane: PaneSize,
+    hist_len: usize,
+) -> CopyOutcome {
+    if let Some(motion) = emacs_motion(key) {
+        apply_motion(cs, motion, hist_len, pane);
+        return CopyOutcome::Stay;
+    }
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
+    match (key.code, ctrl, alt) {
+        (KeyCode::Char(' '), true, _) => cs.toggle_char(grid),
+        (KeyCode::Char('w'), true, false) | (KeyCode::Char('w'), false, true) => {
+            return copy_selection(cs, grid);
+        }
+        (KeyCode::Enter, _, _) if cs.mode != SelectionKind::None => {
+            return copy_selection(cs, grid);
+        }
+        (KeyCode::Char('g'), true, false)
+        | (KeyCode::Esc, _, _)
+        | (KeyCode::Char('q'), false, false) => {
+            return CopyOutcome::Exit;
+        }
+        (KeyCode::Char('s'), true, false) => {
+            cs.search_prompt = Some(SearchPrompt::new(SearchDirection::Down));
+        }
+        (KeyCode::Char('r'), true, false) => {
+            cs.search_prompt = Some(SearchPrompt::new(SearchDirection::Up));
+        }
+        _ => {}
+    }
+    CopyOutcome::Stay
+}
+
+/// Copies the selection and leaves copy mode; with no selection, only leaves.
+fn copy_selection(cs: &CopyState, grid: Option<&Grid>) -> CopyOutcome {
+    match grid {
+        Some(g) if cs.mode != SelectionKind::None => CopyOutcome::Yank(cs.yank_text(g)),
+        _ => CopyOutcome::Exit,
     }
 }
 
@@ -672,47 +735,102 @@ fn find_backward(
     None
 }
 
-fn move_cursor(cs: &mut CopyState, key: &KeyEvent, hist_len: usize, pane: PaneSize) -> bool {
-    let (pane_w, pane_h) = (pane.0 as usize, pane.1 as usize);
+/// A cursor or scroll move, shared by the vi and emacs tables.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Motion {
+    Left,
+    Right,
+    Up,
+    Down,
+    LineStart,
+    LineEnd,
+    WordForward,
+    WordBack,
+    PageUp,
+    PageDown,
+    Top,
+    Bottom,
+}
+
+/// The vi motion a key stands for.
+fn vi_motion(key: &KeyEvent) -> Option<Motion> {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    Some(match key.code {
+        KeyCode::Char('h') | KeyCode::Left => Motion::Left,
+        KeyCode::Char('l') | KeyCode::Right => Motion::Right,
+        KeyCode::Char('k') | KeyCode::Up => Motion::Up,
+        KeyCode::Char('j') | KeyCode::Down => Motion::Down,
+        KeyCode::Char('0') | KeyCode::Char('^') => Motion::LineStart,
+        KeyCode::Char('$') => Motion::LineEnd,
+        KeyCode::Char('w') => Motion::WordForward,
+        KeyCode::Char('b') => Motion::WordBack,
+        KeyCode::Char('u') if ctrl => Motion::PageUp,
+        KeyCode::Char('d') if ctrl => Motion::PageDown,
+        KeyCode::PageUp => Motion::PageUp,
+        KeyCode::PageDown => Motion::PageDown,
+        KeyCode::Char('g') => Motion::Top,
+        KeyCode::Char('G') => Motion::Bottom,
+        _ => return None,
+    })
+}
+
+/// The emacs motion a key stands for.
+fn emacs_motion(key: &KeyEvent) -> Option<Motion> {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
+    Some(match (key.code, ctrl, alt) {
+        (KeyCode::Char('b'), true, false) | (KeyCode::Left, _, _) => Motion::Left,
+        (KeyCode::Char('f'), true, false) | (KeyCode::Right, _, _) => Motion::Right,
+        (KeyCode::Char('p'), true, false) | (KeyCode::Up, _, _) => Motion::Up,
+        (KeyCode::Char('n'), true, false) | (KeyCode::Down, _, _) => Motion::Down,
+        (KeyCode::Char('b'), false, true) => Motion::WordBack,
+        (KeyCode::Char('f'), false, true) => Motion::WordForward,
+        (KeyCode::Char('a'), true, false) | (KeyCode::Home, _, _) => Motion::LineStart,
+        (KeyCode::Char('e'), true, false) | (KeyCode::End, _, _) => Motion::LineEnd,
+        (KeyCode::Char('v'), true, false) | (KeyCode::PageDown, _, _) => Motion::PageDown,
+        (KeyCode::Char('v'), false, true) | (KeyCode::PageUp, _, _) => Motion::PageUp,
+        (KeyCode::Char('<'), _, true) => Motion::Top,
+        (KeyCode::Char('>'), _, true) => Motion::Bottom,
+        _ => return None,
+    })
+}
+
+fn apply_motion(cs: &mut CopyState, motion: Motion, hist_len: usize, pane: PaneSize) {
+    let (pane_w, pane_h) = (pane.0 as usize, pane.1 as usize);
     let last_col = pane_w.saturating_sub(1);
-    match key.code {
-        KeyCode::Char('h') | KeyCode::Left => cs.cursor_x = cs.cursor_x.saturating_sub(1),
-        KeyCode::Char('l') | KeyCode::Right => cs.cursor_x = (cs.cursor_x + 1).min(last_col),
-        KeyCode::Char('k') | KeyCode::Up => {
+    match motion {
+        Motion::Left => cs.cursor_x = cs.cursor_x.saturating_sub(1),
+        Motion::Right => cs.cursor_x = (cs.cursor_x + 1).min(last_col),
+        Motion::Up => {
             if cs.cursor_y > 0 {
                 cs.cursor_y -= 1;
             } else if cs.scroll_offset < hist_len {
                 cs.scroll_offset += 1;
             }
         }
-        KeyCode::Char('j') | KeyCode::Down => {
+        Motion::Down => {
             if cs.cursor_y + 1 < pane_h {
                 cs.cursor_y += 1;
             } else if cs.scroll_offset > 0 {
                 cs.scroll_offset -= 1;
             }
         }
-        KeyCode::Char('0') | KeyCode::Char('^') => cs.cursor_x = 0,
-        KeyCode::Char('$') => cs.cursor_x = last_col,
-        KeyCode::Char('w') => cs.cursor_x = (cs.cursor_x + WORD).min(last_col),
-        KeyCode::Char('b') => cs.cursor_x = cs.cursor_x.saturating_sub(WORD),
-        KeyCode::Char('u') if ctrl => cs.scroll_offset = (cs.scroll_offset + PAGE).min(hist_len),
-        KeyCode::Char('d') if ctrl => cs.scroll_offset = cs.scroll_offset.saturating_sub(PAGE),
-        KeyCode::PageUp => cs.scroll_offset = (cs.scroll_offset + PAGE).min(hist_len),
-        KeyCode::PageDown => cs.scroll_offset = cs.scroll_offset.saturating_sub(PAGE),
-        KeyCode::Char('g') => {
+        Motion::LineStart => cs.cursor_x = 0,
+        Motion::LineEnd => cs.cursor_x = last_col,
+        Motion::WordForward => cs.cursor_x = (cs.cursor_x + WORD).min(last_col),
+        Motion::WordBack => cs.cursor_x = cs.cursor_x.saturating_sub(WORD),
+        Motion::PageUp => cs.scroll_offset = (cs.scroll_offset + PAGE).min(hist_len),
+        Motion::PageDown => cs.scroll_offset = cs.scroll_offset.saturating_sub(PAGE),
+        Motion::Top => {
             cs.scroll_offset = hist_len;
             cs.cursor_y = 0;
             cs.cursor_x = 0;
         }
-        KeyCode::Char('G') => {
+        Motion::Bottom => {
             cs.scroll_offset = 0;
             cs.cursor_y = pane_h.saturating_sub(1);
         }
-        _ => return false,
     }
-    true
 }
 
 fn select_or_exit(cs: &mut CopyState, key: &KeyEvent, grid: Option<&Grid>) -> CopyOutcome {

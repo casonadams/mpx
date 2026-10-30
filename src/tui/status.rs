@@ -1,13 +1,13 @@
 //! Pure status-line helpers: exit badges and clock formatting.
+use super::render::tab_text;
+use super::statusline::{Item, Seg, Target, compose};
+use crate::config::Justify;
 use crate::layout::{Rect, WindowTab};
 use crate::protocol::NodeInfo;
 /// The node a pane name stands for: the newest with that name, since an exited process can leave
 /// an older node of the same name in the session's history.
 pub fn node_named<'a>(nodes: &'a [NodeInfo], name: &str) -> Option<&'a NodeInfo> {
-    nodes
-        .iter()
-        .filter(|n| n.name == name)
-        .max_by_key(|n| n.id)
+    nodes.iter().filter(|n| n.name == name).max_by_key(|n| n.id)
 }
 
 /// `[exited N]` for a pane whose process ended and which is kept on screen.
@@ -20,7 +20,6 @@ pub fn exit_badge(node: &NodeInfo) -> Option<String> {
         None => "[exited]".to_string(),
     })
 }
-
 
 /// Seconds east of UTC of the local time zone at `unix_ms` (0 when it cannot be determined).
 pub fn local_utc_offset(unix_ms: u64) -> i64 {
@@ -77,38 +76,68 @@ pub enum StatusTarget<'a> {
     Pane(&'a str),
 }
 
-/// Identifies which window tab or pane name on the status line was clicked at `col`.
+/// Clickable window tabs of the built-in look, numbered from `window_base`.
+pub fn tab_items(tabs: &[WindowTab], zoomed: bool, window_base: usize) -> Vec<Item> {
+    tabs.iter()
+        .map(|tab| Item {
+            segs: vec![Seg::plain(tab_text(tab, zoomed, window_base))],
+            target: Some(Target::Window(tab.index)),
+        })
+        .collect()
+}
+
+/// Clickable pane names of the built-in look, shown when the session has no windows.
+pub fn pane_items(panes: &[(String, Rect, bool)], zoomed: bool, marked: Option<&str>) -> Vec<Item> {
+    panes
+        .iter()
+        .enumerate()
+        .map(|(i, (name, _, is_focused))| {
+            let mut flag = match (*is_focused, zoomed) {
+                (true, true) => "*Z".to_string(),
+                (true, false) => "*".to_string(),
+                (false, _) => "-".to_string(),
+            };
+            if marked == Some(name.as_str()) {
+                flag.push('M');
+            }
+            Item {
+                segs: vec![Seg::plain(format!("{i}:{name}{flag} "))],
+                target: Some(Target::Pane(name.clone())),
+            }
+        })
+        .collect()
+}
+
+/// Identifies which window tab or pane name on the status line was clicked at `col`, in the
+/// built-in layout: `[session]` label, then the tabs (or pane names).
 pub fn status_hit<'a>(
     session: &str,
-    tabs: &'a [WindowTab],
+    tabs: &[WindowTab],
     panes: &'a [(String, Rect, bool)],
     zoomed: bool,
     col: usize,
 ) -> Option<StatusTarget<'a>> {
-    let mut offset = format!("[{session}] ").chars().count();
-    if tabs.is_empty() {
-        for (i, (name, _, is_focused)) in panes.iter().enumerate() {
-            let flag = match (*is_focused, zoomed) {
-                (true, true) => "*Z",
-                (true, false) => "*",
-                (false, _) => "-",
-            };
-            let text = format!("{}:{}{} ", i, name, flag);
-            let len = text.chars().count();
-            if col >= offset && col < offset + len {
-                return Some(StatusTarget::Pane(name.as_str()));
-            }
-            offset += len;
-        }
+    let items = if tabs.is_empty() {
+        pane_items(panes, zoomed, None)
     } else {
-        for tab in tabs {
-            let text = crate::tui::render::format_tab(tab, zoomed);
-            let len = text.chars().count();
-            if col >= offset && col < offset + len {
-                return Some(StatusTarget::Window(tab.index));
-            }
-            offset += len;
-        }
-    }
-    None
+        tab_items(tabs, zoomed, 0)
+    };
+    let line = compose(
+        0,
+        vec![Seg::plain(format!("[{session}] "))],
+        items,
+        "",
+        Vec::new(),
+        Justify::Left,
+    );
+    line.targets
+        .into_iter()
+        .find(|(start, end, _)| (*start..*end).contains(&col))
+        .and_then(|(_, _, target)| match target {
+            Target::Window(index) => Some(StatusTarget::Window(index)),
+            Target::Pane(name) => panes
+                .iter()
+                .find(|(n, ..)| *n == name)
+                .map(|(n, ..)| StatusTarget::Pane(n.as_str())),
+        })
 }

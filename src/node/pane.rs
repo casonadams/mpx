@@ -38,10 +38,12 @@ pub struct LogQuery {
 
 /// Text for `query` from a pane's retained output, plus the offset to pass as `since` next time.
 /// `screen` is the pane's terminal, when it has one.
+/// `scrollback` caps the history a plain render replays, in lines.
 pub fn render_logs(
     ring: &RingBuffer,
     screen: Option<&VtScreen>,
     query: &LogQuery,
+    scrollback: usize,
 ) -> (String, u64) {
     match query.since {
         Some(offset) => {
@@ -55,18 +57,23 @@ pub fn render_logs(
         None => {
             let rendered = screen.filter(|_| query.plain);
             (
-                history_text(ring, rendered, query.tail),
+                history_text(ring, rendered, query.tail, scrollback),
                 ring.total_written(),
             )
         }
     }
 }
 
-fn history_text(ring: &RingBuffer, rendered: Option<&VtScreen>, tail: Option<usize>) -> String {
+fn history_text(
+    ring: &RingBuffer,
+    rendered: Option<&VtScreen>,
+    tail: Option<usize>,
+    scrollback: usize,
+) -> String {
     match (rendered, tail) {
         (Some(vt), _) => {
             let grid = vt.grid();
-            replay_text(&ring.snapshot(), (grid.cols, grid.rows), tail)
+            replay_text(&ring.snapshot(), (grid.cols, grid.rows), tail, scrollback)
         }
         (None, Some(n)) => ring.tail_lines(n),
         (None, None) => ring.snapshot_str(),
@@ -74,10 +81,11 @@ fn history_text(ring: &RingBuffer, rendered: Option<&VtScreen>, tail: Option<usi
 }
 
 /// Retained output replayed into a fresh screen of `size` (cols, rows), as plain text with
-/// scrollback. The live screen keeps none, so scrolled-off rows cost nothing at output rates;
-/// rendering them is paid only when a plain read asks for them.
-pub fn replay_text(output: &[u8], size: (usize, usize), tail: Option<usize>) -> String {
+/// scrollback of at most `scrollback` lines. The live screen keeps none, so scrolled-off rows cost
+/// nothing at output rates; rendering them is paid only when a plain read asks for them.
+pub fn replay_text(output: &[u8], size: (usize, usize), tail: Option<usize>, scrollback: usize) -> String {
     let mut screen = VtScreen::new(size.0, size.1);
+    screen.grid_mut().set_history_limit(scrollback);
     screen.feed(output);
     screen.scrollback_text(tail)
 }

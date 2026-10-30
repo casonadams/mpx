@@ -3,6 +3,7 @@ mod tui {
     mod canvas;
     mod command;
     mod copy;
+    mod copy_emacs;
     mod frame;
     mod input;
     mod keymap;
@@ -13,5 +14,7 @@ mod tui {
     mod render;
     mod status;
     mod stream;
+    mod statusline;
+    mod status_bytes;
     mod terminal;
 }

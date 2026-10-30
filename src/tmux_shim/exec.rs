@@ -430,6 +430,21 @@ pub fn window_key(target: &str) -> Option<usize> {
     last.strip_prefix('@').unwrap_or(last).parse().ok()
 }
 
+impl Shim {
+    /// Daemon index of the window a `-t` target names. A plain number is a tmux window number, counted
+    /// from `base-index`; `@N` is the daemon's own index (what `#{window_id}` shows).
+    pub(super) async fn window_of(&mut self, target: &str) -> Result<usize, String> {
+        let not_found = || format!("can't find window: {target}");
+        let number = window_key(target).ok_or_else(not_found)?;
+        let last = target.rsplit(':').next().unwrap_or(target);
+        if last.starts_with('@') {
+            return Ok(number);
+        }
+        let base = self.number_option("base-index").await?;
+        number.checked_sub(base).ok_or_else(not_found)
+    }
+}
+
 fn matches_target(node: &NodeInfo, key: &str) -> bool {
     match key.strip_prefix('%') {
         Some(id) => id.parse::<u32>().is_ok_and(|id| id == node.id),
@@ -488,20 +503,16 @@ fn parse_percent(text: &str) -> Option<u8> {
     text.trim_end_matches('%').parse().ok()
 }
 
-fn default_shell() -> String {
-    std::env::var("SHELL").unwrap_or_else(|_| "sh".to_string())
-}
-
 fn fresh_name() -> String {
     let id = Uuid::new_v4().simple().to_string();
     format!("pane-{}", &id[..8])
 }
 
-/// The program and arguments a trailing command runs: its operands through `sh -c`, as tmux does,
-/// or the default shell when there are none.
+/// The program and arguments a trailing command runs: its operands through `sh -c`, as tmux does.
+/// With none the list is empty, and the daemon starts the session's default command.
 fn command_argv(inv: &Invocation) -> Vec<String> {
     if inv.operands.is_empty() {
-        vec![default_shell()]
+        Vec::new()
     } else {
         vec!["sh".to_string(), "-c".to_string(), inv.operand_text()]
     }
@@ -556,6 +567,12 @@ impl Shim {
             let slot = next_in_window.entry(view.window).or_default();
             view.index = *slot;
             *slot += 1;
+        }
+        let window_base = self.number_option("base-index").await?;
+        let pane_base = self.number_option("pane-base-index").await?;
+        for view in &mut views {
+            view.window_base = window_base;
+            view.pane_base = pane_base;
         }
         Ok(views)
     }
@@ -807,7 +824,10 @@ impl Shim {
     }
 
     async fn kill_window(&mut self, inv: &Invocation) -> Result<String, String> {
-        let index = inv.value('t').and_then(window_key);
+        let index = match inv.value('t') {
+            Some(t) => Some(self.window_of(t).await?),
+            None => None,
+        };
         self.client.kill_window(index).await.map(|_| String::new())
     }
 
@@ -853,10 +873,10 @@ impl Shim {
         if inv.has('l') {
             return self.client.last_window().await.map(|_| String::new());
         }
-        let index = inv
+        let target = inv
             .value('t')
-            .and_then(window_key)
             .ok_or_else(|| "window index required".to_string())?;
+        let index = self.window_of(target).await?;
         self.client
             .select_window(index)
             .await
@@ -965,7 +985,7 @@ impl Shim {
         let Some(target) = target else {
             return Ok(());
         };
-        let index = window_key(target).ok_or_else(|| format!("can't find window: {target}"))?;
+        let index = self.window_of(target).await?;
         let (w, h) = terminal_view();
         let (_, _, tabs) = self.client.layout(w, h).await?;
         if tabs.iter().any(|t| t.is_active && t.index == index) {
@@ -1079,7 +1099,10 @@ impl Shim {
 
     async fn rename_window(&mut self, inv: &Invocation) -> Result<String, String> {
         let name = inv.operand_text();
-        let index = inv.value('t').and_then(window_key);
+        let index = match inv.value('t') {
+            Some(t) => Some(self.window_of(t).await?),
+            None => None,
+        };
         self.client
             .rename_window(index, &name)
             .await
@@ -1143,6 +1166,7 @@ pub fn pane_view(
             window_activity: tab.is_some_and(|t| t.has_activity),
             window_bell: tab.is_some_and(|t| t.has_bell),
             window_marked: tab.is_some_and(|t| t.has_marked),
+            window_synchronized: tab.is_some_and(|t| t.synchronized),
             session_windows: tabs.len(),
             ..Default::default()
         }

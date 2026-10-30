@@ -78,7 +78,7 @@ async fn remain_on_exit_keeps_pane_and_logs() {
 #[tokio::test]
 async fn config_default_keeps_panes_after_exit() {
     let daemon = start_with(Config {
-        remain_on_exit: true,
+        remain_on_exit: true.into(),
         ..Config::default()
     })
     .await;

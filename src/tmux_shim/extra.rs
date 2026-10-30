@@ -3,14 +3,17 @@
 use std::io::{Read, Write};
 
 use super::args::Invocation;
-use super::exec::{Shim, window_key};
+use super::exec::Shim;
 use super::format::{Vars, expand};
 use super::shell::command_line;
-use crate::config::Config;
+use crate::config::{Config, Justify, ModeKeys, StatusPosition, parse_switch};
 use crate::protocol::{Buffer, ChannelAction, VarKind};
 
 /// Longest buffer prefix `list-buffers` shows.
 const SAMPLE_CHARS: usize = 50;
+
+/// tmux's default window tab format, which mpx's built-in tabs match when no format is set.
+const WINDOW_STATUS_FORMAT: &str = "#I:#W#{window_flags}";
 
 /// Value of a tmux option that mpx has a real equivalent for, or the same fixed answer as tmux.
 /// Anything else is only known once it has been set.
@@ -18,11 +21,95 @@ pub fn builtin_option(name: &str, config: &Config) -> Option<String> {
     let on = |b: bool| if b { "on" } else { "off" }.to_string();
     match name {
         "prefix" => Some(config.prefix.clone()),
-        "base-index" | "pane-base-index" => Some("0".to_string()),
-        "default-terminal" => Some("xterm-256color".to_string()),
-        "default-shell" => std::env::var("SHELL").ok().filter(|s| !s.is_empty()),
-        "allow-passthrough" => Some(on(config.allow_passthrough)),
-        "remain-on-exit" => Some(on(config.remain_on_exit)),
+        "base-index" => Some(config.base_index.to_string()),
+        "pane-base-index" => Some(config.pane_base_index.to_string()),
+        "default-terminal" => Some(config.default_terminal.clone()),
+        "default-shell" => config
+            .default_shell
+            .clone()
+            .or_else(|| std::env::var("SHELL").ok().filter(|s| !s.is_empty())),
+        "default-command" => Some(config.default_command.clone().unwrap_or_default()),
+        "allow-passthrough" => Some(config.allow_passthrough.as_str().to_string()),
+        "remain-on-exit" => Some(config.remain_on_exit.as_str().to_string()),
+        "history-limit" => Some(config.scrollback_lines.to_string()),
+        "display-panes-time" => Some(config.display_panes_time_ms.to_string()),
+        "automatic-rename" => Some(on(config.automatic_rename)),
+        "monitor-activity" => Some(on(config.monitor_activity)),
+        "monitor-bell" => Some(on(config.monitor_bell)),
+        "monitor-silence" => Some("0".to_string()),
+        "renumber-windows" => Some("on".to_string()),
+        "mouse" => Some(on(config.mouse)),
+        "status" => Some(on(config.status)),
+        "status-position" => Some(
+            match config.status_position {
+                StatusPosition::Top => "top",
+                StatusPosition::Bottom => "bottom",
+            }
+            .to_string(),
+        ),
+        "status-interval" => Some(config.status_interval.to_string()),
+        "status-left" => Some(
+            config
+                .status_left
+                .clone()
+                .unwrap_or_else(|| "[#{session_name}] ".to_string()),
+        ),
+        "status-right" => Some(
+            config
+                .status_right
+                .clone()
+                .unwrap_or_else(|| "\"#{=21:pane_title}\" %H:%M %d-%b-%y".to_string()),
+        ),
+        "status-left-length" => Some(config.status_left_length.to_string()),
+        "status-right-length" => Some(config.status_right_length.to_string()),
+        "window-status-format" => Some(
+            config
+                .window_status_format
+                .clone()
+                .unwrap_or_else(|| WINDOW_STATUS_FORMAT.to_string()),
+        ),
+        "window-status-current-format" => Some(
+            config
+                .window_status_current_format
+                .clone()
+                .or_else(|| config.window_status_format.clone())
+                .unwrap_or_else(|| WINDOW_STATUS_FORMAT.to_string()),
+        ),
+        "window-status-separator" => Some(
+            config
+                .window_status_separator
+                .clone()
+                .unwrap_or_else(|| " ".to_string()),
+        ),
+        "status-justify" => Some(
+            match config.status_justify {
+                Justify::Left => "left",
+                Justify::Centre => "centre",
+                Justify::Right => "right",
+            }
+            .to_string(),
+        ),
+        "status-style" => Some(format!(
+            "bg={},fg={}",
+            config.style.status_bg, config.style.status_fg
+        )),
+        "status-bg" => Some(config.style.status_bg.clone()),
+        "status-fg" => Some(config.style.status_fg.clone()),
+        "pane-border-style" => Some(format!("fg={}", config.style.border_inactive)),
+        "pane-active-border-style" => Some(format!("fg={}", config.style.border_active)),
+        "mode-keys" => Some(
+            match config.mode_keys {
+                ModeKeys::Vi => "vi",
+                ModeKeys::Emacs => "emacs",
+            }
+            .to_string(),
+        ),
+        "display-time" => Some(config.display_time_ms.to_string()),
+        "set-clipboard" => Some(if config.set_clipboard { "external" } else { "off" }.to_string()),
+        "escape-time" => Some("500".to_string()),
+        "focus-events" | "aggressive-resize" | "extended-keys" => Some("off".to_string()),
+        "xterm-keys" => Some("on".to_string()),
+        "status-keys" => Some("emacs".to_string()),
         _ => None,
     }
 }
@@ -95,8 +182,28 @@ fn read_input(path: &str) -> Result<String, String> {
 }
 
 impl Shim {
+    /// `synchronize-panes` is a window option: it applies to the window `-t` names, else the
+    /// active window.
+    async fn set_synchronized(&mut self, inv: &Invocation) -> Result<String, String> {
+        let window = match inv.value('t') {
+            Some(target) => Some(self.window_of(target).await?),
+            None => None,
+        };
+        let on = if inv.has('u') || inv.has('U') {
+            false
+        } else {
+            let value = operand(inv, 1, "value")?;
+            parse_switch(&value).map_err(|_| format!("invalid value: {value}"))?
+        };
+        self.client.set_synchronized(window, on).await?;
+        Ok(String::new())
+    }
+
     pub(super) async fn set_option(&mut self, inv: &Invocation) -> Result<String, String> {
         let name = operand(inv, 0, "option")?;
+        if name == "synchronize-panes" {
+            return self.set_synchronized(inv).await;
+        }
         if inv.has('u') || inv.has('U') {
             self.client
                 .set_var(VarKind::Option, &name, None)
@@ -117,6 +224,7 @@ impl Shim {
         if inv.has('a') {
             value = format!("{}{value}", current.unwrap_or_default());
         }
+        Config::default().apply_option(&name, &value)?;
         self.client
             .set_var(VarKind::Option, &name, Some(&value))
             .await?;
@@ -130,6 +238,11 @@ impl Shim {
             .find(|(k, _)| k == name)
             .map(|(_, v)| v)
             .or_else(|| builtin_option(name, &Config::load_or_default())))
+    }
+
+    /// A numeric option's value: the session's, else the file's default, else 0.
+    pub(super) async fn number_option(&mut self, name: &str) -> Result<usize, String> {
+        Ok(self.option_value(name).await?.and_then(|v| v.trim().parse().ok()).unwrap_or(0))
     }
 
     pub(super) async fn show_options(&mut self, inv: &Invocation) -> Result<String, String> {
@@ -303,7 +416,7 @@ impl Shim {
 
     async fn window_arg(&mut self, target: Option<&str>) -> Result<usize, String> {
         match target {
-            Some(t) => window_key(t).ok_or_else(|| format!("can't find window: {t}")),
+            Some(t) => self.window_of(t).await,
             None => self.current_window().await,
         }
     }
@@ -330,10 +443,10 @@ impl Shim {
             return Ok(String::new());
         }
         let from = self.window_arg(inv.value('s')).await?;
-        let to = inv
-            .value('t')
-            .and_then(window_key)
-            .ok_or_else(|| "no target window".to_string())?;
+        let to = match inv.value('t') {
+            Some(t) => self.window_of(t).await?,
+            None => return Err("no target window".to_string()),
+        };
         self.client.move_window(from, to).await?;
         Ok(String::new())
     }

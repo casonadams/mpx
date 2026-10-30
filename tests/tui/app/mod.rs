@@ -11,6 +11,8 @@ mod passthrough;
 mod prompt_cmds;
 mod reload;
 mod sessions;
+mod synchronize;
+mod statusline;
 pub mod support;
 mod views;
 mod windows;

@@ -37,6 +37,10 @@ pub struct SpawnSpec {
     pub cwd: Option<String>,
     /// Extra environment, applied after the terminal defaults.
     pub env: Vec<(String, String)>,
+    /// TERM exported to the child (tmux `default-terminal`).
+    pub term: String,
+    /// Scrollback lines a pane keeps for captures (tmux `history-limit`).
+    pub scrollback: usize,
 }
 
 /// Resolves at `at`, or never without a deadline: a `select!` arm for an optional timer.

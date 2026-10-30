@@ -11,6 +11,7 @@ pub mod panes;
 pub mod prompt;
 pub mod render;
 pub mod stream;
+pub mod statusline;
 pub mod terminal;
 
 mod exec;

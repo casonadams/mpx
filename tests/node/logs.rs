@@ -2,6 +2,9 @@ use mpx::buffer::RingBuffer;
 use mpx::node::pane::{LogQuery, render_logs};
 use mpx::vt::VtScreen;
 
+/// The scrollback limit panes get by default.
+const SCROLLBACK: usize = 100_000;
+
 const COLORED: &[u8] = b"one\r\n\x1b[31mtwo\x1b[0m\r\nthree\r\n";
 
 fn ring() -> RingBuffer {
@@ -22,35 +25,35 @@ fn query(tail: Option<usize>, plain: bool, since: Option<u64>) -> LogQuery {
 
 #[test]
 fn raw_history_keeps_escapes_and_points_past_the_end() {
-    let (text, next) = render_logs(&ring(), Some(&screen()), &query(None, false, None));
+    let (text, next) = render_logs(&ring(), Some(&screen()), &query(None, false, None), SCROLLBACK);
     assert_eq!(text.as_bytes(), COLORED);
     assert_eq!(next, COLORED.len() as u64);
 }
 
 #[test]
 fn raw_tail_keeps_only_the_last_lines() {
-    let (text, _) = render_logs(&ring(), None, &query(Some(1), false, None));
+    let (text, _) = render_logs(&ring(), None, &query(Some(1), false, None), SCROLLBACK);
     assert_eq!(text, "three\r\n");
 }
 
 #[test]
 fn plain_history_of_a_terminal_is_the_rendered_scrollback() {
     let vt = screen();
-    let (text, next) = render_logs(&ring(), Some(&vt), &query(Some(2), true, None));
+    let (text, next) = render_logs(&ring(), Some(&vt), &query(Some(2), true, None), SCROLLBACK);
     assert_eq!(text, "two\nthree");
     assert_eq!(next, COLORED.len() as u64);
 }
 
 #[test]
 fn plain_history_without_a_terminal_is_the_raw_output() {
-    let (text, _) = render_logs(&ring(), None, &query(None, true, None));
+    let (text, _) = render_logs(&ring(), None, &query(None, true, None), SCROLLBACK);
     assert_eq!(text.as_bytes(), COLORED);
 }
 
 #[test]
 fn since_returns_only_the_delta_and_its_end_offset() {
     let start = "one\r\n".len() as u64;
-    let (text, next) = render_logs(&ring(), None, &query(None, false, Some(start)));
+    let (text, next) = render_logs(&ring(), None, &query(None, false, Some(start)), SCROLLBACK);
     assert_eq!(text.as_bytes(), &COLORED[start as usize..]);
     assert_eq!(next, COLORED.len() as u64);
 }
@@ -59,7 +62,7 @@ fn since_returns_only_the_delta_and_its_end_offset() {
 fn plain_delta_of_a_terminal_strips_escapes() {
     let start = "one\r\n".len() as u64;
     let vt = screen();
-    let (text, _) = render_logs(&ring(), Some(&vt), &query(None, true, Some(start)));
+    let (text, _) = render_logs(&ring(), Some(&vt), &query(None, true, Some(start)), SCROLLBACK);
     assert!(!text.contains('\x1b'), "escapes stripped: {text:?}");
     assert!(text.contains("two") && text.contains("three"), "{text:?}");
 }
@@ -74,9 +77,23 @@ fn plain_history_reaches_rows_the_live_screen_no_longer_keeps() {
         live.feed(line.as_bytes());
     }
     assert_eq!(live.grid().history_len(), 0);
-    let (text, _) = render_logs(&ring, Some(&live), &query(None, true, None));
+    let (text, _) = render_logs(&ring, Some(&live), &query(None, true, None), SCROLLBACK);
     assert!(text.starts_with("row 00\nrow 01"), "{text:?}");
     assert!(text.ends_with("row 11"), "{text:?}");
+}
+
+#[test]
+fn plain_history_is_capped_at_the_scrollback_lines() {
+    let mut ring = RingBuffer::new(4096);
+    for i in 0..12 {
+        ring.write(format!("row {i:02}\r\n").as_bytes());
+    }
+    let size = VtScreen::new(10, 3);
+    // Three rows stay on screen (the last is blank); two rows of history precede them.
+    let (text, _) = render_logs(&ring, Some(&size), &query(None, true, None), 2);
+    assert_eq!(text, "row 08\nrow 09\nrow 10\nrow 11");
+    let (text, _) = render_logs(&ring, Some(&size), &query(None, true, None), 0);
+    assert_eq!(text, "row 10\nrow 11");
 }
 
 #[test]
@@ -84,6 +101,6 @@ fn plain_history_wraps_at_the_live_screen_width() {
     let mut ring = RingBuffer::new(1024);
     ring.write(b"abcdefghij\r\n");
     let live = VtScreen::new(5, 3);
-    let (text, _) = render_logs(&ring, Some(&live), &query(None, true, None));
+    let (text, _) = render_logs(&ring, Some(&live), &query(None, true, None), SCROLLBACK);
     assert_eq!(text, "abcde\nfghij");
 }

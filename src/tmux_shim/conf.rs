@@ -196,18 +196,44 @@ impl Conv {
             "prefix2" => self.note(line, "prefix2 is not supported: mpx has one prefix key"),
             "history-limit" => match value.parse::<usize>() {
                 Ok(n) => {
-                    self.top.insert("history_limit", n.to_string());
+                    self.top.insert("scrollback_lines", n.to_string());
                 }
                 Err(_) => self.note(line, format!("history-limit '{value}' is not a number")),
             },
-            "remain-on-exit" => self.flag(line, name, "remain_on_exit", value),
-            "allow-passthrough" => {
-                if value == "all" {
-                    self.note(line, "allow-passthrough all: treated as on");
-                    self.flag(line, name, "allow_passthrough", "on");
-                } else {
-                    self.flag(line, name, "allow_passthrough", value);
+            "remain-on-exit" => match value.parse::<crate::config::RemainOnExit>() {
+                Ok(mode) => {
+                    self.top.insert("remain_on_exit", toml_str(mode.as_str()));
                 }
+                Err(e) => self.note(line, format!("remain-on-exit: {e}")),
+            },
+            "allow-passthrough" => match value.parse::<crate::config::Passthrough>() {
+                Ok(mode) => {
+                    self.top.insert("allow_passthrough", toml_str(mode.as_str()));
+                }
+                Err(e) => self.note(line, format!("allow-passthrough: {e}")),
+            },
+            "automatic-rename" => self.flag(line, name, "automatic_rename", value),
+            "monitor-activity" => self.flag(line, name, "monitor_activity", value),
+            "monitor-bell" => self.flag(line, name, "monitor_bell", value),
+            "monitor-silence" => match value.parse::<usize>() {
+                Ok(0) => {}
+                _ => self.note(line, "monitor-silence: not supported by mpx; ignored"),
+            },
+            "display-panes-time" => match value.parse::<u64>() {
+                Ok(ms) => {
+                    self.top.insert("display_panes_time_ms", ms.to_string());
+                }
+                Err(_) => self.note(line, format!("display-panes-time '{value}' is not a number")),
+            },
+            "default-terminal" => {
+                self.top.insert("default_terminal", toml_str(value));
+            }
+            "default-shell" if value.starts_with('/') => {
+                self.top.insert("default_shell", toml_str(value));
+            }
+            "default-shell" => self.note(line, "default-shell must be an absolute path; ignored"),
+            "default-command" => {
+                self.top.insert("default_command", toml_str(value));
             }
             "status-style" => self.colors(
                 line,
@@ -237,14 +263,13 @@ impl Conv {
                 };
                 self.style.insert("border_style", toml_str(style));
             }
-            "mouse" => self.note(
-                line,
-                "mouse: mpx always handles mouse input; setting ignored",
-            ),
-            "mode-keys" => self.note(
-                line,
-                "mode-keys: copy mode always uses mpx's own keys; setting ignored",
-            ),
+            "mouse" => self.flag(line, name, "mouse", value),
+            "mode-keys" => match value {
+                "vi" | "emacs" => {
+                    self.top.insert("mode_keys", toml_str(value));
+                }
+                _ => self.note(line, format!("mode-keys '{value}' is not vi or emacs")),
+            },
             _ => self.note(
                 line,
                 format!("option '{name}' has no mpx equivalent; ignored"),

@@ -29,14 +29,6 @@ enum Simple {
     SpreadLayout,
 }
 
-pub fn default_shell() -> String {
-    match std::env::var("SHELL") {
-        Ok(sh) if !sh.is_empty() => sh,
-        _ if cfg!(windows) => "powershell.exe".to_string(),
-        _ => "/bin/sh".to_string(),
-    }
-}
-
 /// Commands that change which pane or window is shown; they drop zoom.
 fn clears_zoom(cmd: &Command) -> bool {
     !matches!(
@@ -121,9 +113,16 @@ impl App {
             } => self.split_window(side_by_side, argv, cwd, detach).await,
             Command::NewWindow { name, argv, cwd } => self.new_window(name, argv, cwd).await,
             Command::KillPane { target } => self.kill_pane(target).await,
-            Command::KillWindow { index } => self.simple(Simple::KillWindow(index)).await,
+            Command::KillWindow { index } => match index.map(|i| i.checked_sub(self.config.base_index)) {
+                None => self.simple(Simple::KillWindow(None)).await,
+                Some(Some(daemon)) => self.simple(Simple::KillWindow(Some(daemon))).await,
+                Some(None) => self.say(format!("can't find window: {}", index.unwrap_or_default())),
+            },
             Command::RenameWindow { name } => self.simple(Simple::RenameWindow(name)).await,
-            Command::SelectWindow { index } => self.simple(Simple::SelectWindow(index)).await,
+            Command::SelectWindow { index } => match index.checked_sub(self.config.base_index) {
+                Some(daemon) => self.simple(Simple::SelectWindow(daemon)).await,
+                None => self.say(format!("can't find window: {index}")),
+            },
             Command::NextWindow => self.simple(Simple::NextWindow).await,
             Command::PrevWindow => self.simple(Simple::PrevWindow).await,
             Command::LastWindow => self.simple(Simple::LastWindow).await,
@@ -654,7 +653,8 @@ impl App {
         })
     }
 
-    /// Spawn options for a new pane: the given argv (or the default shell) in the given or active cwd.
+    /// Spawn options for a new pane: the given argv in the given or active cwd. With no argv the
+    /// daemon starts the session's default command (`default-command`, else `default-shell`).
     pub async fn spawn_opts(
         &mut self,
         name: String,
@@ -667,7 +667,7 @@ impl App {
         };
         let (command, args) = match argv.split_first() {
             Some((command, rest)) => (command.clone(), rest.to_vec()),
-            None => (default_shell(), Vec::new()),
+            None => (String::new(), Vec::new()),
         };
         SpawnOpts {
             name,

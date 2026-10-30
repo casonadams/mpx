@@ -79,12 +79,15 @@ impl App {
             return Flow::Continue;
         }
         let pane = self.active_rect.map_or((80, 24), |r| (r.width, r.height));
-        let outcome = apply_key(&mut cs, &key, self.active_vt().map(|vt| vt.grid()), pane);
+        let grid = self.active_vt().map(|vt| vt.grid());
+        let outcome = apply_key(&mut cs, &key, grid, pane, self.config.mode_keys);
         match outcome {
             CopyOutcome::Stay => self.mode = Mode::Copy(cs),
             CopyOutcome::Exit => self.release_scrollback(&self.active_pane.clone()),
             CopyOutcome::Yank(text) => {
-                self.clipboard.copy(&text);
+                if self.config.set_clipboard {
+                    self.clipboard.copy(&text);
+                }
                 self.yanks.push(text.clone());
                 self.last_copy = Some(text);
                 self.release_scrollback(&self.active_pane.clone());
@@ -201,10 +204,21 @@ impl App {
         let modes = self.modes_of(&self.active_pane.clone());
         let bytes = encode_key(key, &modes);
         if !bytes.is_empty() {
-            let _ = self.write_active(&bytes).await;
+            let _ = self.write_typed(&bytes).await;
         }
     }
 
+    /// Panes that receive typed input: the active pane, or every pane of the active window when
+    /// that window has synchronized input on (tmux `synchronize-panes`).
+    fn input_targets(&self) -> Vec<String> {
+        let synchronized = self.layout.tabs.iter().any(|t| t.is_active && t.synchronized);
+        if synchronized && !self.layout.raw.is_empty() {
+            return self.layout.raw.iter().map(|(name, ..)| name.clone()).collect();
+        }
+        vec![self.active_pane.clone()]
+    }
+
+    /// Writes bytes to the active pane (focus reports, the prefix key).
     pub async fn write_active(&mut self, bytes: &[u8]) -> Result<(), String> {
         if self.active_pane.is_empty() {
             return Ok(());
@@ -212,6 +226,20 @@ impl App {
         let text = String::from_utf8_lossy(bytes).into_owned();
         let pane = self.active_pane.clone();
         self.client.send_input(&pane, &text).await
+    }
+
+    /// Writes typed bytes to every input target: the active pane, or all panes of a window with
+    /// synchronized input on.
+    async fn write_typed(&mut self, bytes: &[u8]) -> Result<(), String> {
+        if self.active_pane.is_empty() {
+            return Ok(());
+        }
+        let text = String::from_utf8_lossy(bytes).into_owned();
+        let mut result = Ok(());
+        for pane in self.input_targets() {
+            result = result.and(self.client.send_input(&pane, &text).await);
+        }
+        result
     }
 
     pub async fn on_paste(&mut self, text: &str) -> Flow {
@@ -224,8 +252,10 @@ impl App {
         if self.active_pane.is_empty() {
             return Flow::Continue;
         }
-        let pane = self.active_pane.clone();
-        let result = self.client.paste(&pane, text, false).await;
+        let mut result = Ok(());
+        for pane in self.input_targets() {
+            result = result.and(self.client.paste(&pane, text, false).await);
+        }
         self.settle(result)
     }
 

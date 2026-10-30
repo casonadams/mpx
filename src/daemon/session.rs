@@ -135,7 +135,6 @@ pub(super) struct Entry {
     pub handle: PaneHandle,
     /// Spawn options the pane was started with.
     pub opts: SpawnOpts,
-    pub remain: bool,
     /// The process has ended and the exit was processed.
     pub exited: bool,
 }
@@ -294,11 +293,9 @@ impl Session {
                 sink,
                 reply,
             } => {
-                if filter.session_wide() {
-                    self.relay.store(true, Ordering::Relaxed);
-                }
                 let terminal = matches!(filter, Filter::ActiveWindow { layout: true });
                 self.filters.push((filter, sink));
+                self.sync_relay();
                 let _ = reply.send(());
                 if terminal {
                     self.fire_hook("client-attached");
@@ -326,15 +323,17 @@ impl Session {
         match notice {
             PaneNotice::Event(event) => {
                 if let StreamEvent::Output { name, data, .. } = &event {
-                    if data.contains('\x07') {
+                    if self.config.monitor_bell && data.contains('\x07') {
                         self.workspace.mark_bell(name);
                     }
-                    self.workspace.mark_activity(name);
+                    if self.config.monitor_activity {
+                        self.workspace.mark_activity(name);
+                    }
                 }
                 self.fanout(&event);
             }
             PaneNotice::Exited { name, id, code } => {
-                if self.finish(&name, id) {
+                if self.finish(&name, id, code) {
                     self.fanout(&StreamEvent::Exit { name, code });
                 }
             }
@@ -360,6 +359,23 @@ impl Session {
             }
         }
         self.config = config;
+        self.sync_relay();
+    }
+
+    /// Panes relay output to the session while session-wide subscribers exist, or while activity
+    /// or bell monitoring was turned on explicitly (flags then work with no terminal attached).
+    /// The defaults alone do not: relaying every chunk of every pane costs a flood about half its
+    /// speed, and a terminal that is attached subscribes anyway.
+    fn sync_relay(&self) {
+        let options = self.stores.vars(VarKind::Option);
+        let on = |name: &str| {
+            options
+                .iter()
+                .any(|(k, v)| k == name && crate::config::parse_switch(v) == Ok(true))
+        };
+        let monitored = on("monitor-activity") || on("monitor-bell");
+        let subscribed = self.filters.iter().any(|(filter, _)| filter.session_wide());
+        self.relay.store(monitored || subscribed, Ordering::Relaxed);
     }
 
     /// Terminal subscribers still on the list: those that follow the active window and its layout.
@@ -382,10 +398,7 @@ impl Session {
         for _ in self.terminal_count()..before {
             self.fire_hook("client-detached");
         }
-        self.relay.store(
-            self.filters.iter().any(|(filter, _)| filter.session_wide()),
-            Ordering::Relaxed,
-        );
+        self.sync_relay();
     }
 
     async fn request(&mut self, req: Request) -> Response {
@@ -427,6 +440,7 @@ impl Session {
             | Request::MoveWindow { .. }
             | Request::PipePane { .. }
             | Request::RotateWindow { .. }
+            | Request::SetSynchronized { .. }
             | Request::Respawn { .. }) => self.tmux_request(req),
             req => self.target_request(req).await,
         }
@@ -439,6 +453,12 @@ impl Session {
             Request::SetVar { kind, name, value } => {
                 if kind == VarKind::Hook && !super::hooks::HOOK_NAMES.contains(&name.as_str()) {
                     return Response::Error(format!("unknown hook: {name}"));
+                }
+                if let (VarKind::Option, Some(value)) = (kind, &value) {
+                    // Checked on a copy first, so an invalid value is refused and never stored.
+                    if let Err(e) = self.base_config.clone().apply_option(&name, value) {
+                        return Response::Error(e);
+                    }
                 }
                 self.stores.set_var(kind, name, value);
                 if kind == VarKind::Option {
@@ -490,6 +510,10 @@ impl Session {
             } => self.pipe_pane(&name, command, toggle),
             Request::RotateWindow { down } => {
                 check(self.workspace.rotate_active(down), "No window")
+            }
+            Request::SetSynchronized { window, on } => {
+                let idx = window.unwrap_or(self.workspace.active_idx);
+                check(self.workspace.set_synchronized(idx, on), "Window index out of bounds")
             }
             Request::Respawn {
                 name,
@@ -805,7 +829,8 @@ impl Session {
         node_reply(self.add_node(spawn, place).await)
     }
 
-    async fn new_window(&mut self, opts: NewWindowOpts) -> Response {
+    async fn new_window(&mut self, mut opts: NewWindowOpts) -> Response {
+        self.resolve_command(&mut opts.spawn);
         let named = opts.name.is_some();
         let label = opts.name.unwrap_or_else(|| basename(&opts.spawn.command));
         let place = Placement::Window {
@@ -823,6 +848,9 @@ impl Session {
     }
 
     async fn refresh_window_names(&mut self) {
+        if !self.config.automatic_rename {
+            return;
+        }
         for idx in 0..self.workspace.windows.len() {
             let focused = self.workspace.windows[idx].focused.clone();
             let handle = focused
@@ -903,7 +931,8 @@ impl Session {
     }
 
     /// Starts a pane and places it in the layout.
-    async fn add_node(&mut self, opts: SpawnOpts, place: Placement) -> Result<NodeInfo, String> {
+    async fn add_node(&mut self, mut opts: SpawnOpts, place: Placement) -> Result<NodeInfo, String> {
+        self.resolve_command(&mut opts);
         let id = self.next_pane_id;
         let name = plan::spawn_name(&opts.name, &opts.command, id);
         plan::validate_name(&name)?;
@@ -921,9 +950,24 @@ impl Session {
         }
 
         self.next_pane_id += 1;
-        let remain = plan::remain_on_exit(opts.remain_on_exit, self.config.remain_on_exit);
-        self.register(name.clone(), handle, opts, remain);
+        self.register(name.clone(), handle, opts);
         self.info_of(&name, true).await
+    }
+
+    /// Fills in the program of a pane started without a command: the session's `default-command`
+    /// through the default shell, or the default shell itself.
+    fn resolve_command(&self, opts: &mut SpawnOpts) {
+        if !opts.command.is_empty() {
+            return;
+        }
+        let env_shell = std::env::var("SHELL").ok();
+        let (command, args) = plan::default_argv(
+            self.config.default_shell.as_deref(),
+            env_shell.as_deref(),
+            self.config.default_command.as_deref(),
+        );
+        opts.command = command;
+        opts.args = args;
     }
 
     fn spawn_pane(
@@ -948,6 +992,8 @@ impl Session {
             args: opts.args.clone(),
             cwd,
             env,
+            term: self.config.default_terminal.clone(),
+            scrollback: self.config.scrollback_lines,
         };
         let ctx = PaneCtx {
             notify: Arc::clone(&self.notifier),
@@ -1019,7 +1065,7 @@ impl Session {
         }
     }
 
-    fn register(&mut self, name: String, handle: PaneHandle, opts: SpawnOpts, remain: bool) {
+    fn register(&mut self, name: String, handle: PaneHandle, opts: SpawnOpts) {
         self.fanout(&StreamEvent::Spawned {
             name: name.clone(),
             pid: handle.pid(),
@@ -1030,7 +1076,6 @@ impl Session {
             Entry {
                 handle,
                 opts,
-                remain,
                 exited: false,
             },
         );
@@ -1038,7 +1083,7 @@ impl Session {
 
     /// Records an exit: keeps or removes the pane. Ignores stale or repeated notices; returns
     /// whether the exit belonged to the pane's current process.
-    fn finish(&mut self, name: &str, id: PaneId) -> bool {
+    fn finish(&mut self, name: &str, id: PaneId, code: Option<i32>) -> bool {
         let Some(entry) = self.nodes.get_mut(name) else {
             return false;
         };
@@ -1047,10 +1092,14 @@ impl Session {
         }
         entry.exited = true;
         self.fire_hook("pane-exited");
-        let Some(entry) = self.nodes.get_mut(name) else {
+        let Some(entry) = self.nodes.get(name) else {
             return true;
         };
-        if !entry.remain {
+        let keep = entry
+            .opts
+            .remain_on_exit
+            .unwrap_or_else(|| self.config.remain_on_exit.keeps(code));
+        if !keep {
             if let Some(entry) = self.nodes.remove(name) {
                 self.history.push_back(entry);
             }
@@ -1080,7 +1129,7 @@ impl Session {
         let Some(entry) = self.nodes.get(&name) else {
             return Response::Error(format!("can't respawn pane: {name}"));
         };
-        let (exited, remain, old_id) = (entry.exited, entry.remain, entry.handle.id());
+        let (exited, old_id) = (entry.exited, entry.handle.id());
         if !exited && !kill {
             return Response::Error(format!("pane %{old_id} still active"));
         }
@@ -1103,7 +1152,7 @@ impl Session {
             drop(self.nodes[&name].handle.request_kill());
             self.next_pane_id += 1;
         }
-        self.register(name, handle, opts, remain);
+        self.register(name, handle, opts);
         Response::Ok
     }
 
@@ -1214,8 +1263,7 @@ impl Session {
         let id = self.next_pane_id;
         let handle = self.spawn_pane(&opts.name, id, opts, opts.cwd.clone())?;
         self.next_pane_id += 1;
-        let remain = plan::remain_on_exit(opts.remain_on_exit, self.config.remain_on_exit);
-        self.register(opts.name.clone(), handle, opts.clone(), remain);
+        self.register(opts.name.clone(), handle, opts.clone());
         Ok(())
     }
 

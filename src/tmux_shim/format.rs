@@ -43,10 +43,16 @@ pub struct PaneView {
     pub window_bell: bool,
     /// The window holds the marked pane.
     pub window_marked: bool,
+    /// The window's panes share typed input (tmux `synchronize-panes`).
+    pub window_synchronized: bool,
     /// Number of panes in this pane's window.
     pub window_panes: usize,
     /// Number of windows in the session.
     pub session_windows: usize,
+    /// `base-index`: the number of the first window, added to `window` for `#{window_index}`.
+    pub window_base: usize,
+    /// `pane-base-index`: the number of the first pane, added to `index` for `#{pane_index}`.
+    pub pane_base: usize,
 }
 
 /// Expands `#{...}` formats, the aliases `#S #I #P #W #T #D`, and the escapes `##`, `#,`, `#}`.
@@ -374,7 +380,7 @@ fn shared_vars(vars: &mut Vars, session: &str) {
 pub fn pane_vars(p: &PaneView) -> Vars {
     let mut vars = Vars::new();
     vars.insert("pane_id", format!("%{}", p.id));
-    vars.insert("pane_index", p.index.to_string());
+    vars.insert("pane_index", (p.index + p.pane_base).to_string());
     vars.insert("pane_pid", p.pid.map(|x| x.to_string()).unwrap_or_default());
     vars.insert("pane_title", p.title.clone());
     vars.insert("pane_current_command", p.command.clone());
@@ -402,12 +408,13 @@ pub fn pane_vars(p: &PaneView) -> Vars {
     }
     vars.insert("session_name", p.session.clone());
     vars.insert("session_windows", p.session_windows.to_string());
-    vars.insert("window_index", p.window.to_string());
+    vars.insert("window_index", (p.window + p.window_base).to_string());
     vars.insert("window_id", format!("@{}", p.window));
     vars.insert("window_name", p.window_name.clone());
     vars.insert("window_active", flag(p.window_active));
     vars.insert("window_panes", p.window_panes.to_string());
     vars.insert("window_flags", window_flags(p));
+    vars.insert("pane_synchronized", flag(p.window_synchronized));
     shared_vars(&mut vars, &p.session);
     vars
 }

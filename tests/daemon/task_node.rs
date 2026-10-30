@@ -15,6 +15,8 @@ fn spawn_task(name: &str, command: &str) -> (PaneHandle, mpsc::UnboundedReceiver
         args: Vec::new(),
         cwd: None,
         env: Vec::new(),
+        term: "xterm-256color".to_string(),
+        scrollback: 100_000,
     };
     let (tx, rx) = mpsc::unbounded_channel();
     let ctx = PaneCtx {
