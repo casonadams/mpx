@@ -20,10 +20,6 @@ pub fn socket_dir() -> PathBuf {
     }
 }
 
-pub fn default_endpoint(session: &str) -> String {
-    endpoint_in(&socket_dir(), session)
-}
-
 /// Endpoint of `session` whose sockets live in `dir`.
 pub fn endpoint_in(dir: &Path, session: &str) -> String {
     #[cfg(unix)]

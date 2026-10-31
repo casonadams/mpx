@@ -1,87 +1,37 @@
-//! Session-owned name/value state of the tmux surface: options, environment, paste buffers and the
-//! panes in a mode.
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+//! Session-owned state outside the layout: runtime key bindings and paste buffers.
+use std::collections::{BTreeMap, VecDeque};
 
-use crate::protocol::{Buffer, VarKind};
+use crate::protocol::Buffer;
 
 /// tmux's default `buffer-limit`.
 const BUFFER_LIMIT: usize = 50;
 
 #[derive(Default)]
 pub(super) struct Stores {
-    /// Indexed by `VarKind`: options, environment, bindings, hooks.
-    vars: [BTreeMap<String, String>; 4],
+    /// Runtime key bindings by name (`prefix:KEY`), value the command line.
+    bindings: BTreeMap<String, String>,
     /// Newest first.
     buffers: VecDeque<Buffer>,
     next_buffer: u64,
-    /// Panes (by name) and the terminals that have each in a mode (copy mode). A pane is in a mode
-    /// while any terminal has it; an entry is removed once no terminal does.
-    modes: BTreeMap<String, BTreeSet<u64>>,
 }
 
 impl Stores {
-    pub(super) fn set_pane_mode(&mut self, name: &str, terminal: u64, on: bool) {
-        if on {
-            self.modes
-                .entry(name.to_string())
-                .or_default()
-                .insert(terminal);
-        } else {
-            self.unset_pane_mode(name, terminal);
-        }
-    }
-
-    fn unset_pane_mode(&mut self, name: &str, terminal: u64) {
-        if let Some(terminals) = self.modes.get_mut(name) {
-            terminals.remove(&terminal);
-            if terminals.is_empty() {
-                self.modes.remove(name);
-            }
-        }
-    }
-
-    /// Forgets a pane that left the session, so a later pane of the same name starts out of mode.
-    pub(super) fn forget_pane_mode(&mut self, name: &str) {
-        self.modes.remove(name);
-    }
-
-    /// Forgets every mode `terminal` reported, when its connection closes.
-    pub(super) fn forget_terminal(&mut self, terminal: u64) {
-        let names: Vec<String> = self.modes.keys().cloned().collect();
-        for name in names {
-            self.unset_pane_mode(&name, terminal);
-        }
-    }
-
-    pub(super) fn pane_modes(&self) -> Vec<String> {
-        self.modes.keys().cloned().collect()
-    }
-
-    pub(super) fn set_var(&mut self, kind: VarKind, name: String, value: Option<String>) {
-        let vars = &mut self.vars[kind as usize];
-        match value {
-            Some(value) => {
-                vars.insert(name, value);
+    pub(super) fn set_binding(&mut self, name: String, line: Option<String>) {
+        match line {
+            Some(line) => {
+                self.bindings.insert(name, line);
             }
             None => {
-                vars.remove(&name);
+                self.bindings.remove(&name);
             }
         }
     }
 
-    /// The command line set for `hook`, if any.
-    pub(super) fn hook(&self, hook: &str) -> Option<&String> {
-        self.vars[VarKind::Hook as usize].get(hook)
-    }
-
-    pub(super) fn vars(&self, kind: VarKind) -> Vec<(String, String)> {
-        let vars = &self.vars[kind as usize];
-        vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
-    }
-
-    /// Variables handed to panes created from now on.
-    pub(super) fn environment(&self) -> Vec<(String, String)> {
-        self.vars(VarKind::Environment)
+    pub(super) fn bindings(&self) -> Vec<(String, String)> {
+        self.bindings
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
     }
 
     /// Pushes `data` as the newest buffer and returns its name; a named buffer replaces the one of

@@ -95,7 +95,6 @@ fn plan_pane(pane: &PaneSnapshot, rules: &[ResumeRule]) -> SpawnOpts {
         cwd: pane.cwd.clone(),
         env: pane.env.clone(),
         remain_on_exit: pane.remain_on_exit,
-        tmux_compat: pane.tmux_compat,
     };
 
     let rule = pane

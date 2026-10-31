@@ -1,57 +1,19 @@
 //! Overlay refresh and preview loading against in-process daemons sharing one socket dir.
-use std::path::Path;
-use std::sync::Arc;
 use std::time::Duration;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use tempfile::TempDir;
 
 use mpx::client::Client;
 use mpx::config::Config;
-use mpx::daemon::{DaemonState, handle_client};
-use mpx::ipc::{IpcListener, endpoint_in};
 use mpx::layout::Rect;
-use mpx::protocol::SpawnOpts;
-use mpx::tui::overlay::tree_view::TreeView;
 use mpx::tui::overlay::OverlayCtx;
+use mpx::tui::overlay::tree_view::TreeView;
 
-fn code(code: KeyCode) -> KeyEvent {
-    KeyEvent::new(code, KeyModifiers::NONE)
-}
+use super::support::{Sandbox, pane};
+use crate::tui::overlay::draw_tree;
 
 fn key(c: char) -> KeyEvent {
-    code(KeyCode::Char(c))
-}
-
-async fn start_daemon(dir: &Path, session: &str) -> String {
-    let endpoint = endpoint_in(dir, session);
-    #[allow(unused_mut)]
-    let mut listener = IpcListener::bind(&endpoint).expect("bind");
-    let state = DaemonState::new(
-        session.to_string(),
-        endpoint.clone(),
-        Config::default(),
-        dir.join(format!("{session}-state")),
-    )
-    .await;
-    tokio::spawn(async move {
-        loop {
-            if let Ok(stream) = listener.accept().await {
-                tokio::spawn(handle_client(Arc::clone(&state), stream));
-            }
-        }
-    });
-    endpoint
-}
-
-fn pty(name: &str, command: &str) -> SpawnOpts {
-    SpawnOpts {
-        name: name.to_string(),
-        command: "sh".to_string(),
-        args: vec!["-c".to_string(), command.to_string()],
-        pty: true,
-        ..SpawnOpts::default()
-    }
+    KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)
 }
 
 async fn screen_until(client: &mut Client, name: &str, needle: &str) {
@@ -70,45 +32,34 @@ async fn screen_until(client: &mut Client, name: &str, needle: &str) {
 }
 
 struct Fleet {
-    dir: TempDir,
+    sandbox: Sandbox,
     alpha: String,
 }
 
 async fn start_fleet() -> Fleet {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let alpha = start_daemon(dir.path(), "alpha").await;
-    let beta = start_daemon(dir.path(), "beta").await;
-    std::fs::write(dir.path().join("ghost.sock"), "").expect("ghost socket file");
+    let sandbox = Sandbox::new();
+    let config = Config::default();
+    sandbox.serve("alpha", &config).await;
+    sandbox.serve("beta", &config).await;
+    let alpha = sandbox.endpoint("alpha");
+    std::fs::write(sandbox.socket_dir.join("ghost.sock"), "").expect("ghost socket file");
 
     let mut a = Client::connect(&alpha).await.expect("connect alpha");
-    a.spawn(pty("worker", "echo ready-marker; sleep 30"))
+    a.spawn(pane("worker", "echo ready-marker; sleep 30"))
         .await
         .expect("spawn worker");
     screen_until(&mut a, "worker", "ready-marker").await;
 
-    let mut b = Client::connect(&beta).await.expect("connect beta");
-    b.spawn(pty("shell", "sleep 30"))
+    let mut b = Client::connect(&sandbox.endpoint("beta"))
         .await
-        .expect("spawn shell");
+        .expect("connect beta");
+    b.spawn(pane("shell", "sleep 30")).await.expect("spawn shell");
 
-    Fleet { dir, alpha }
+    Fleet { sandbox, alpha }
 }
 
-/// Screen text after drawing the tree, so assertions ignore styling escapes.
-fn draw_tree(view: &TreeView, area: Rect) -> String {
-    let mut buf: Vec<u8> = Vec::new();
-    view.render(&mut buf, area).expect("render");
-    let mut screen = mpx::vt::VtScreen::new(
-        usize::from(area.x + area.width),
-        usize::from(area.y + area.height),
-    );
-    screen.feed(&buf);
-    screen.snapshot()
-}
-
-#[tokio::test]
-async fn tree_refresh_loads_every_reachable_session_with_its_windows_and_panes() {
-    let fleet = start_fleet().await;
+/// The fleet's tree as the alpha session sees it, after one refresh.
+async fn refreshed_tree(fleet: &Fleet) -> TreeView {
     let config = Config::default();
     let mut client = Client::connect(&fleet.alpha).await.expect("connect");
     let mut ctx = OverlayCtx {
@@ -116,10 +67,17 @@ async fn tree_refresh_loads_every_reachable_session_with_its_windows_and_panes()
         session: "alpha",
         config: &config,
         cwd: None,
-        socket_dir: fleet.dir.path(),
+        socket_dir: fleet.sandbox.socket_dir.as_path(),
     };
     let mut tree = TreeView::default();
     tree.refresh(&mut ctx).await;
+    tree
+}
+
+#[tokio::test]
+async fn tree_refresh_loads_every_reachable_session_with_its_windows_and_panes() {
+    let fleet = start_fleet().await;
+    let tree = refreshed_tree(&fleet).await;
 
     let labels = tree.labels();
     assert!(labels.contains(&"alpha".to_string()), "{labels:?}");
@@ -137,17 +95,7 @@ async fn tree_refresh_loads_every_reachable_session_with_its_windows_and_panes()
 #[tokio::test]
 async fn tree_refresh_then_collapsing_a_session_hides_its_panes() {
     let fleet = start_fleet().await;
-    let config = Config::default();
-    let mut client = Client::connect(&fleet.alpha).await.expect("connect");
-    let mut ctx = OverlayCtx {
-        client: &mut client,
-        session: "alpha",
-        config: &config,
-        cwd: None,
-        socket_dir: fleet.dir.path(),
-    };
-    let mut tree = TreeView::default();
-    tree.refresh(&mut ctx).await;
+    let mut tree = refreshed_tree(&fleet).await;
 
     let beta = tree
         .labels()
@@ -174,7 +122,7 @@ async fn tree_preview_shows_the_selected_sessions_focused_pane_and_toggles_off()
         session: "alpha",
         config: &config,
         cwd: None,
-        socket_dir: fleet.dir.path(),
+        socket_dir: fleet.sandbox.socket_dir.as_path(),
     };
     let mut tree = TreeView::default();
     tree.refresh(&mut ctx).await;

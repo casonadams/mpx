@@ -7,12 +7,9 @@ use crossterm::event::KeyCode;
 use mpx::config::Config;
 use mpx::layout::Direction;
 use mpx::layout::Rect;
-use mpx::protocol::PopupExit;
-use mpx::tui::app::{ClockSource, Mode};
+use mpx::tui::app::ClockSource;
 use mpx::tui::labels::{label, label_rect, pane_numbers};
-use mpx::tui::popup::{area, inner_rect};
 
-use super::popup::{open, popup_name, popup_screen};
 use super::support::{ECHO, Harness, MAIN, split};
 
 /// Whether the cell at (`x`, `y`) lies inside `area`.
@@ -62,27 +59,14 @@ async fn check(h: &mut Harness, step: &str) {
 
 /// The cells the display-panes numbers cover in the last frame.
 fn number_areas(h: &Harness) -> Vec<Rect> {
-    pane_numbers(&h.app.panes, &h.app.nodes)
-        .into_iter()
-        .filter_map(|(number, name)| {
-            let (_, area, _) = h.app.panes.iter().find(|(n, ..)| *n == name)?;
-            let rows = label(&number.to_string(), area.width as usize, area.height as usize);
-            Some(label_rect(*area, &rows))
-        })
-        .collect()
-}
-
-/// Sends `bytes` to `pane` (an `ECHO` pane prints them back) and waits until its screen shows `marker`.
-async fn emit(h: &mut Harness, pane: &str, bytes: &str, marker: &str) {
-    h.probe.send_input(pane, bytes).await.expect("send");
-    let pane = pane.to_string();
-    let wanted = marker.to_string();
-    h.until(marker, move |app| {
-        app.vt
-            .get(&pane)
-            .is_some_and(|vt| vt.snapshot().contains(&wanted))
-    })
-    .await;
+    let mut areas = Vec::new();
+    for (number, name) in pane_numbers(&h.app.panes, &h.app.nodes) {
+        let found = h.app.panes.iter().find(|(pane, ..)| *pane == name);
+        let Some(&(_, area, _)) = found else { continue };
+        let block = label(&number.to_string(), area.width as usize, area.height as usize);
+        areas.push(label_rect(area, &block));
+    }
+    areas
 }
 
 fn numbered_lines(prefix: &str, n: usize) -> String {
@@ -123,28 +107,22 @@ async fn frames_keep_the_terminal_identical_to_the_panes() {
     check(&mut h, "attach").await;
 
     let fill = format!("{}FILL-DONE", numbered_lines("main", 40));
-    emit(&mut h, MAIN, &fill, "FILL-DONE").await;
+    h.emit(MAIN, &fill, "FILL-DONE").await;
     check(&mut h, "scrolling fill").await;
 
-    emit(&mut h, MAIN, VIM_LIKE, "VIM-DONE").await;
+    h.emit(MAIN, VIM_LIKE, "VIM-DONE").await;
     check(&mut h, "vim-style redraw on the alternate screen").await;
 
-    emit(
-        &mut h,
-        MAIN,
-        "\x1b[2J\x1b[Hcleared\x1b[5;5HCLEAR-DONE",
-        "CLEAR-DONE",
-    )
-    .await;
+    h.emit(MAIN, "\x1b[2J\x1b[Hcleared\x1b[5;5HCLEAR-DONE", "CLEAR-DONE").await;
     check(&mut h, "full clear").await;
 
-    emit(&mut h, MAIN, "\x1b[?1049lALT-OFF", "ALT-OFF").await;
+    h.emit(MAIN, "\x1b[?1049lALT-OFF", "ALT-OFF").await;
     check(&mut h, "alternate screen left").await;
 
     split(&mut h.probe, MAIN, "side", Direction::Horizontal).await;
     check(&mut h, "after split").await;
     let side = format!("{}SIDE-DONE", numbered_lines("side", 35));
-    emit(&mut h, "side", &side, "SIDE-DONE").await;
+    h.emit("side", &side, "SIDE-DONE").await;
     check(&mut h, "unfocused pane scrolls").await;
 
     h.prefixed_char('z').await;
@@ -167,13 +145,7 @@ async fn frames_keep_the_terminal_identical_to_the_panes() {
     h.key(KeyCode::Esc).await;
     check(&mut h, "command prompt cancelled").await;
 
-    emit(
-        &mut h,
-        MAIN,
-        "\x1b[H\x1b[2Jfinal\r\nFINAL-DONE",
-        "FINAL-DONE",
-    )
-    .await;
+    h.emit(MAIN, "\x1b[H\x1b[2Jfinal\r\nFINAL-DONE", "FINAL-DONE").await;
     check(&mut h, "redraw after overlays").await;
 
 
@@ -188,7 +160,7 @@ async fn frames_keep_the_terminal_identical_to_the_panes() {
 
     h.prefixed_char('z').await;
     let zoomed = format!("{}ZOOM-DONE", numbered_lines("zoom", 12));
-    emit(&mut h, MAIN, &zoomed, "ZOOM-DONE").await;
+    h.emit(MAIN, &zoomed, "ZOOM-DONE").await;
     check(&mut h, "zoomed pane scrolls on the terminal").await;
     h.prefixed_char('z').await;
     check(&mut h, "unzoomed after scrolling").await;
@@ -197,7 +169,7 @@ async fn frames_keep_the_terminal_identical_to_the_panes() {
     h.probe.zoom(None, None).await.expect("zoom from another client");
     check(&mut h, "zoomed by another client").await;
     let scrolled = format!("{}DAEMON-ZOOM-DONE", numbered_lines("daemon", 12));
-    emit(&mut h, MAIN, &scrolled, "DAEMON-ZOOM-DONE").await;
+    h.emit(MAIN, &scrolled, "DAEMON-ZOOM-DONE").await;
     check(&mut h, "zoomed by another client scrolls").await;
     h.probe
         .zoom(None, Some(false))
@@ -209,12 +181,12 @@ async fn frames_keep_the_terminal_identical_to_the_panes() {
     split(&mut h.probe, MAIN, "below", Direction::Vertical).await;
     check(&mut h, "stacked panes").await;
     let below = format!("{}BELOW-DONE", numbered_lines("below", 9));
-    emit(&mut h, "below", &below, "BELOW-DONE").await;
+    h.emit("below", &below, "BELOW-DONE").await;
     check(&mut h, "lower pane scrolls inside its own rows").await;
     let above = format!("{}ABOVE-DONE", numbered_lines("above", 9));
-    emit(&mut h, MAIN, &above, "ABOVE-DONE").await;
+    h.emit(MAIN, &above, "ABOVE-DONE").await;
     check(&mut h, "upper pane scrolls inside its own rows").await;
-    emit(&mut h, MAIN, VIM_LIKE, "VIM-DONE").await;
+    h.emit(MAIN, VIM_LIKE, "VIM-DONE").await;
     check(&mut h, "scroll regions inside a stacked pane").await;
 }
 
@@ -228,12 +200,10 @@ async fn pane_overlays_cover_only_their_own_cells() {
     h.app.canvas.set_lr_margins(true);
     split(&mut h.probe, MAIN, "side", Direction::Horizontal).await;
     check(&mut h, "after split").await;
-    emit(&mut h, "side", "side text", "side text").await;
+    h.emit("side", "side text", "side text").await;
     check(&mut h, "two panes").await;
 
-    h.prefixed_char(':').await;
-    h.type_str("display-panes -d 0").await;
-    h.key(KeyCode::Enter).await;
+    h.command("display-panes -d 0").await;
     h.frame().await;
     let numbers = number_areas(&h);
     assert_eq!(numbers.len(), 2, "one number per pane");
@@ -241,65 +211,11 @@ async fn pane_overlays_cover_only_their_own_cells() {
     h.key(KeyCode::Esc).await;
     check(&mut h, "pane numbers dismissed").await;
 
-    h.prefixed_char(':').await;
-    h.type_str("clock-mode").await;
-    h.key(KeyCode::Enter).await;
+    h.command("clock-mode").await;
     h.app.clock = ClockSource::Fixed(9, 41);
     h.frame().await;
     let clock = h.rect_of(MAIN);
     check_masked(&mut h, "clock fills the active pane", &[clock]).await;
     h.key(KeyCode::Char('x')).await;
     check(&mut h, "clock dismissed").await;
-}
-
-/// The popup's program screen matches the terminal inside the popup's border, cell for cell.
-async fn check_popup(h: &mut Harness, step: &str) {
-    h.frame().await;
-    let outer = area(&h.app).expect("a popup is open");
-    let name = popup_name(&h.app);
-    let inner = inner_rect(outer, true);
-    let screen = h.app.vt.get(&name).expect("popup screen");
-    for y in 0..inner.height {
-        for x in 0..inner.width {
-            let want = screen
-                .grid()
-                .get_cell(x as usize, y as usize)
-                .copied()
-                .unwrap_or_default();
-            let got = h
-                .terminal
-                .grid()
-                .get_cell((inner.x + x) as usize, (inner.y + y) as usize)
-                .copied()
-                .unwrap_or_default();
-            assert_eq!(
-                got.c,
-                want.c,
-                "{step}: popup char at ({x},{y})\nterminal:\n{}",
-                h.terminal.snapshot()
-            );
-        }
-    }
-}
-
-#[tokio::test]
-async fn a_popup_shows_its_program_and_the_panes_beneath_repaint_when_it_closes() {
-    let mut h = Harness::start(Config::default(), ECHO).await;
-    h.app.canvas.set_lr_margins(true);
-    split(&mut h.probe, MAIN, "side", Direction::Horizontal).await;
-    check(&mut h, "two panes").await;
-    emit(&mut h, "side", "side text", "side text").await;
-    check(&mut h, "two panes with text").await;
-
-    open(&mut h, "printf popup-text; exec cat", PopupExit::Stay).await;
-    h.until("popup text", |app| popup_screen(app).contains("popup-text"))
-        .await;
-    let outer = area(&h.app).expect("popup area");
-    check_masked(&mut h, "popup open", &[outer]).await;
-    check_popup(&mut h, "popup open").await;
-
-    h.probe.close_popup().await.expect("close");
-    h.until("popup closed", |app| matches!(app.mode, Mode::Normal))
-        .await;
-    check(&mut h, "popup closed").await;
 }

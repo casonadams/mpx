@@ -5,7 +5,6 @@ use super::app::{App, Mode};
 use super::copy::{CopyState, SelectionKind};
 use super::labels::{clock_lines, label, label_rect, pane_numbers};
 use super::panes::PaneRect;
-use super::popup;
 use super::render::{
     Compositor, DividerStyle, PaneColors, RenderPaneContext, SelectionRange, StatusBar, hud_rect,
     parse_color,
@@ -19,7 +18,7 @@ use super::statusline::{
 };
 use crate::layout::geometry::Rect;
 use crate::protocol::NodeInfo;
-use crate::tmux_shim::expand;
+use crate::format::expand;
 use crate::vt::Color as VtColor;
 use crate::vt::VtScreen;
 use crate::vt::grid::Grid;
@@ -69,7 +68,6 @@ pub fn draw_body<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
             .map(|(_, rect, _)| *rect)
             .collect(),
         Mode::Panes { .. } => number_boxes(app).into_iter().map(|(at, ..)| at).collect(),
-        Mode::Popup(_) => popup::area(app).into_iter().collect(),
         _ => hud.into_iter().collect(),
     };
     if app.rows.status.is_none() && chrome_text(app).is_some() {
@@ -104,7 +102,6 @@ pub fn draw_body<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
     }
     app.canvas.finish(out)?;
     draw_status_row(app, out)?;
-    popup::draw(app, out)?;
     match &app.mode {
         Mode::Panes { .. } => draw_pane_numbers(app, out)?,
         Mode::Clock { pane } => draw_clock(app, pane, out)?,
@@ -281,7 +278,7 @@ fn status_line(app: &App, width: usize) -> Line {
         .nodes
         .iter()
         .find(|n| n.name == app.active_pane)
-        .map(|n| shim_view(app, n));
+        .map(|n| format_view(app, n));
     let vars = status_vars(&app.session, focused.as_ref(), tab, zoomed, base);
     let now = crate::node::now_ms();
     let left = match &config.status_left {
@@ -297,7 +294,7 @@ fn status_line(app: &App, width: usize) -> Line {
 }
 
 /// A status format expanded, styled by its `#[...]` directives, with strftime applied to its text.
-fn format_status(fmt: &str, vars: &crate::tmux_shim::Vars, now: u64) -> Vec<Seg> {
+fn format_status(fmt: &str, vars: &crate::format::Vars, now: u64) -> Vec<Seg> {
     let offset = local_utc_offset(now);
     parse_styled(&expand(fmt, vars))
         .into_iter()
@@ -339,7 +336,7 @@ fn window_items(app: &App, zoomed: bool) -> (Vec<Item>, String) {
                 .nodes
                 .iter()
                 .find(|n| n.window == Some(tab.index))
-                .map(|n| shim_view(app, n));
+                .map(|n| format_view(app, n));
             let vars = status_vars(&app.session, focused.as_ref(), Some(tab), zoomed, base);
             Item {
                 segs: parse_styled(&expand(fmt, &vars)),
@@ -354,8 +351,8 @@ fn window_items(app: &App, zoomed: bool) -> (Vec<Item>, String) {
     (items, separator)
 }
 
-/// The shim's view of `node`, numbered the way `#{window_index}` and `#{pane_index}` show it.
-fn shim_view(app: &App, node: &crate::protocol::NodeInfo) -> crate::tmux_shim::PaneView {
+/// The format view of `node`, numbered the way `#{window_index}` and `#{pane_index}` show it.
+fn format_view(app: &App, node: &crate::protocol::NodeInfo) -> crate::format::PaneView {
     let slot = app
         .nodes
         .iter()
@@ -363,7 +360,9 @@ fn shim_view(app: &App, node: &crate::protocol::NodeInfo) -> crate::tmux_shim::P
         .position(|n| n.id == node.id)
         .unwrap_or(0);
     let mut view =
-        crate::tmux_shim::pane_view(&app.session, slot, node, &app.panes, &app.layout.tabs);
+        crate::format::pane_view(&app.session, slot, node, &app.panes, &app.layout.tabs);
+    view.in_mode = app.parked_copy.contains_key(&node.name)
+        || (matches!(app.mode, Mode::Copy(_)) && node.name == app.active_pane);
     view.window_base = app.config.base_index;
     view.pane_base = app.config.pane_base_index;
     view
@@ -375,7 +374,7 @@ pub fn expand_active(app: &App, fmt: &str) -> String {
         .nodes
         .iter()
         .find(|n| n.name == app.active_pane)
-        .map(|n| shim_view(app, n));
+        .map(|n| format_view(app, n));
     let tab = app.layout.tabs.iter().find(|t| t.is_active);
     let vars = status_vars(
         &app.session,
@@ -435,7 +434,6 @@ pub fn place_cursor<W: Write>(app: &App, out: &mut W) -> io::Result<()> {
         Mode::Overlay(_) | Mode::Confirm(..) => {
             Compositor::position_cursor(out, Rect::new(0, 0, 1, 1), 0, 0, false)
         }
-        Mode::Popup(_) => popup::place_cursor(app, out),
         Mode::Copy(cs) => place_pane_cursor(app, out, Some(cs)),
         _ => place_pane_cursor(app, out, app.parked_copy.get(&app.active_pane)),
     }

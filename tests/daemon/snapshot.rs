@@ -2,18 +2,17 @@ use mpx::daemon::snapshot::{PaneRecord, build_snapshot};
 use mpx::layout::{Direction, Workspace};
 use mpx::protocol::SpawnOpts;
 
+use super::support::task;
+
 fn record(name: &str, running: bool, cwd: Option<&str>) -> PaneRecord {
     PaneRecord {
         name: name.to_string(),
         opts: SpawnOpts {
-            name: name.to_string(),
-            command: "claude".to_string(),
-            args: vec!["--resume".to_string()],
             pty: true,
             cwd: Some("/start".to_string()),
             env: vec![("API_KEY".to_string(), "v".to_string())],
             remain_on_exit: Some(true),
-            tmux_compat: true,
+            ..task(name, "claude", &["--resume"])
         },
         running,
         cwd: cwd.map(str::to_string),
@@ -57,7 +56,7 @@ fn snapshot_keeps_running_panes_with_their_live_cwd_and_user_settings() {
     assert_eq!(a.env, [("API_KEY".to_string(), "v".to_string())]);
     assert_eq!(a.command, "claude");
     assert_eq!(a.args, ["--resume"]);
-    assert!(a.pty && a.tmux_compat);
+    assert!(a.pty);
     assert_eq!(a.remain_on_exit, Some(true));
     assert_eq!(a.session_id.as_deref(), Some("s-1"));
     assert_eq!(win.panes[1].cwd.as_deref(), Some("/live"));

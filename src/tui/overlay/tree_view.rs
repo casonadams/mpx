@@ -10,7 +10,7 @@ use crate::ipc::list_sessions;
 use crate::layout::{Rect, WindowTab};
 use crate::protocol::{NodeInfo, PaneId};
 use crate::tui::command::Command;
-use crate::tui::overlay::nav::{Filter, FilterEvent, ListState, has_ctrl};
+use crate::tui::overlay::nav::{Filter, ListState, route_list_key};
 use crate::tui::overlay::widgets::{
     self, Span, Tone, age_label, fit, join_meta, now_ms, short_path, tail_lines,
 };
@@ -266,16 +266,8 @@ impl TreeView {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> OverlayAction {
-        match self.filter.handle(key) {
-            FilterEvent::Edited => {
-                self.list.cursor = 0;
-                return OverlayAction::None;
-            }
-            FilterEvent::Consumed => return OverlayAction::None,
-            FilterEvent::Ignored => {}
-        }
         let len = self.rows().len();
-        if self.list.motion(key, len) || has_ctrl(key) {
+        if route_list_key(&mut self.filter, &mut self.list, key, len) {
             return OverlayAction::None;
         }
         self.command_for(key.code)

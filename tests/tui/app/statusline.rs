@@ -5,13 +5,20 @@ use std::time::Duration;
 use crossterm::event::{KeyCode, MouseButton, MouseEventKind};
 
 use mpx::config::{Config, ModeKeys, StatusPosition};
-use mpx::protocol::VarKind;
 use mpx::tui::app::{Mode, sync_mouse_capture};
 
 use super::support::{ECHO, Harness, SESSION, SIZE, connect, window};
 
 async fn start(config: Config) -> Harness {
     Harness::start(config, ECHO).await
+}
+
+async fn start_hidden() -> Harness {
+    start(Config {
+        status: false,
+        ..Config::default()
+    })
+    .await
 }
 
 /// Row `index` of a frame, empty when the frame has fewer rows.
@@ -43,11 +50,7 @@ async fn with_work_window(h: &mut Harness) {
 
 #[tokio::test]
 async fn hidden_status_line_gives_the_bottom_row_to_the_panes() {
-    let mut h = start(Config {
-        status: false,
-        ..Config::default()
-    })
-    .await;
+    let mut h = start_hidden().await;
     let drawn = h.frame().await;
     assert!(h.app.rows.status.is_none());
     assert_eq!(h.app.panes[0].1.height, SIZE.1, "the panes fill every row");
@@ -60,11 +63,7 @@ async fn hidden_status_line_gives_the_bottom_row_to_the_panes() {
 
 #[tokio::test]
 async fn messages_still_show_on_the_bottom_row_when_the_status_line_is_hidden() {
-    let mut h = start(Config {
-        status: false,
-        ..Config::default()
-    })
-    .await;
+    let mut h = start_hidden().await;
     h.frame().await;
     h.app.say("hello there");
     let drawn = h.frame().await;
@@ -187,20 +186,6 @@ async fn mouse_off_ignores_clicks() {
         ..Config::default()
     };
     assert_eq!(after_clicking_main_tab(config).await, "work");
-}
-
-#[tokio::test]
-async fn set_option_status_off_takes_effect_on_the_next_frame() {
-    let mut h = start(Config::default()).await;
-    h.frame().await;
-    h.probe
-        .set_var(VarKind::Option, "status", Some("off"))
-        .await
-        .expect("set status");
-    h.app.apply_runtime().await;
-    let drawn = h.frame().await;
-    assert!(!bottom(&drawn).contains("[test]"), "{:?}", bottom(&drawn));
-    assert!(h.app.rows.status.is_none());
 }
 
 #[tokio::test]

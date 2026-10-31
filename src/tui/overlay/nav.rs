@@ -10,6 +10,26 @@ pub fn has_ctrl(key: KeyEvent) -> bool {
     key.modifiers.contains(KeyModifiers::CONTROL)
 }
 
+/// Key routing shared by the filterable overlay lists: the `/` filter line first, then list
+/// motion over `len` visible rows. Returns true when the key was consumed; false leaves it to
+/// the view's own commands.
+pub fn route_list_key(
+    filter: &mut Filter,
+    list: &mut ListState,
+    key: KeyEvent,
+    len: usize,
+) -> bool {
+    match filter.handle(key) {
+        FilterEvent::Edited => {
+            list.cursor = 0;
+            return true;
+        }
+        FilterEvent::Consumed => return true,
+        FilterEvent::Ignored => {}
+    }
+    list.motion(key, len) || has_ctrl(key)
+}
+
 /// Case-insensitive subsequence match; an empty query matches everything.
 pub fn fuzzy_match(query: &str, text: &str) -> bool {
     let text = text.to_lowercase();
@@ -96,6 +116,15 @@ impl Filter {
 
     pub fn matches(&self, fields: &[&str]) -> bool {
         self.text.is_empty() || fields.iter().any(|f| fuzzy_match(&self.text, f))
+    }
+
+    /// The `items` whose `fields` pass the filter, in their original order.
+    pub fn visible<'a, T>(
+        &self,
+        items: &'a [T],
+        fields: impl Fn(&T) -> [&str; 2],
+    ) -> Vec<&'a T> {
+        items.iter().filter(|&item| self.matches(&fields(item))).collect()
     }
 
     pub fn prompt(&self) -> Option<String> {

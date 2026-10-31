@@ -3,8 +3,8 @@ use std::time::{Duration, Instant};
 use mpx::config::Justify;
 use mpx::layout::WindowTab;
 use mpx::tui::statusline::{
-    Item, Seg, Style, Target, compose, parse_styled, rows, segs_width, status_due, status_vars,
-    strftime, tab_flags, truncate,
+    Item, Line, Seg, Style, Target, compose, parse_styled, rows, segs_width, status_due,
+    status_vars, strftime, tab_flags, truncate,
 };
 use mpx::vt::Color;
 
@@ -22,7 +22,6 @@ fn tab(index: usize, name: &str, active: bool) -> WindowTab {
         has_marked: false,
         marked_pane: None,
         agent_badge: None,
-        synchronized: false,
         focused: None,
         zoomed: false,
     }
@@ -39,33 +38,54 @@ fn text(segs: &[Seg]) -> String {
     segs.iter().map(|s| s.text.as_str()).collect()
 }
 
+/// `compose` with plain `left` and `right` text; an empty `right` adds no cells.
+fn compose_plain(
+    width: usize,
+    left: &str,
+    items: Vec<Item>,
+    separator: &str,
+    right: &str,
+    justify: Justify,
+) -> Line {
+    compose(width, vec![Seg::plain(left)], items, separator, vec![Seg::plain(right)], justify)
+}
+
+/// Asserts `strftime(format, unix_ms, utc_offset_secs)` for each `(format, unix_ms, offset, want)`.
+fn assert_strftime(cases: &[(&str, u64, i64, &str)]) {
+    for &(format, unix_ms, offset, want) in cases {
+        assert_eq!(strftime(format, unix_ms, offset), want, "format {format:?}");
+    }
+}
+
 #[test]
 fn strftime_expands_the_tmux_status_subset() {
-    assert_eq!(strftime("%H:%M %d-%b-%y", MARCH_5, 0), "14:07 05-Mar-24");
-    assert_eq!(strftime("%I %p", MARCH_5, 0), "02 PM");
-    assert_eq!(strftime("%e %a %Y %m %S", MARCH_5, 0), " 5 Tue 2024 03 09");
+    assert_strftime(&[
+        ("%H:%M %d-%b-%y", MARCH_5, 0, "14:07 05-Mar-24"),
+        ("%I %p", MARCH_5, 0, "02 PM"),
+        ("%e %a %Y %m %S", MARCH_5, 0, " 5 Tue 2024 03 09"),
+    ]);
 }
 
 #[test]
 fn strftime_applies_the_offset_and_prints_it_for_zone() {
-    assert_eq!(strftime("%H %Z", MARCH_5, 3600), "15 +0100");
-    assert_eq!(strftime("%H:%M %Z", MARCH_5, -5 * 3600), "09:07 -0500");
+    assert_strftime(&[
+        ("%H %Z", MARCH_5, 3600, "15 +0100"),
+        ("%H:%M %Z", MARCH_5, -5 * 3600, "09:07 -0500"),
+    ]);
 }
 
 #[test]
 fn strftime_maps_midnight_and_noon_to_twelve() {
-    let just_after_midnight = 1_709_596_800_000 + 30 * 60 * 1000;
-    assert_eq!(strftime("%I:%M %p", just_after_midnight, 0), "12:30 AM");
-    assert_eq!(
-        strftime("%I %p", 1_709_596_800_000 + 12 * 3600 * 1000, 0),
-        "12 PM"
-    );
+    const MIDNIGHT: u64 = 1_709_596_800_000;
+    assert_strftime(&[
+        ("%I:%M %p", MIDNIGHT + 30 * 60 * 1000, 0, "12:30 AM"),
+        ("%I %p", MIDNIGHT + 12 * 3600 * 1000, 0, "12 PM"),
+    ]);
 }
 
 #[test]
 fn strftime_keeps_unknown_and_trailing_specifiers() {
-    assert_eq!(strftime("100%% %Q", MARCH_5, 0), "100% %Q");
-    assert_eq!(strftime("end%", MARCH_5, 0), "end%");
+    assert_strftime(&[("100%% %Q", MARCH_5, 0, "100% %Q"), ("end%", MARCH_5, 0, "end%")]);
 }
 
 #[test]
@@ -98,65 +118,56 @@ fn unknown_directives_are_ignored_and_unclosed_ones_stay_text() {
 }
 
 #[test]
-fn compose_lays_left_tabs_and_right_out_left_justified() {
-    let line = compose(
-        20,
-        vec![Seg::plain("[dev] ")],
-        vec![
-            item("0:a* ", Target::Window(0)),
-            item("1:b ", Target::Window(1)),
-        ],
-        "",
-        vec![Seg::plain("12:00")],
-        Justify::Left,
-    );
-    assert_eq!(text(&line.segs), "[dev] 0:a* 1:b 12:00");
-    assert_eq!(segs_width(&line.segs), 20);
-    assert_eq!(line.targets[0], (6, 11, Target::Window(0)));
-    assert_eq!(line.targets[1], (11, 15, Target::Window(1)));
+fn compose_lays_items_out_with_separators_and_justification() {
+    let cases: [(
+        usize,
+        &str,
+        Vec<Item>,
+        &str,
+        &str,
+        Justify,
+        &str,
+        Vec<(usize, usize, Target)>,
+    ); 2] = [
+        (
+            20,
+            "[dev] ",
+            vec![item("0:a* ", Target::Window(0)), item("1:b ", Target::Window(1))],
+            "",
+            "12:00",
+            Justify::Left,
+            "[dev] 0:a* 1:b 12:00",
+            vec![(6, 11, Target::Window(0)), (11, 15, Target::Window(1))],
+        ),
+        (
+            12,
+            "[s] ",
+            vec![item("A", Target::Window(0)), item("B", Target::Window(1))],
+            " | ",
+            "",
+            Justify::Left,
+            "[s] A | B   ",
+            vec![(4, 5, Target::Window(0)), (8, 9, Target::Window(1))],
+        ),
+    ];
+    for (width, left, items, separator, right, justify, want, targets) in cases {
+        let line = compose_plain(width, left, items, separator, right, justify);
+        assert_eq!(text(&line.segs), want);
+        assert_eq!(segs_width(&line.segs), width);
+        assert_eq!(line.targets, targets);
+    }
 }
 
 #[test]
 fn compose_centres_and_right_justifies_the_window_list() {
     let items = || vec![item("AB", Target::Window(0))];
-    let centred = compose(
-        10,
-        vec![Seg::plain("L")],
-        items(),
-        "",
-        vec![Seg::plain("R")],
-        Justify::Centre,
-    );
+    let centred = compose_plain(10, "L", items(), "", "R", Justify::Centre);
     // 10 cells: L and R take 2, the tab 2, so 6 are free: 3 before and 3 after.
     assert_eq!(text(&centred.segs), "L   AB   R");
     assert_eq!(centred.targets, vec![(4, 6, Target::Window(0))]);
-    let right = compose(
-        10,
-        vec![Seg::plain("L")],
-        items(),
-        "",
-        vec![Seg::plain("R")],
-        Justify::Right,
-    );
+    let right = compose_plain(10, "L", items(), "", "R", Justify::Right);
     assert_eq!(text(&right.segs), "L      ABR");
     assert_eq!(right.targets, vec![(7, 9, Target::Window(0))]);
-}
-
-#[test]
-fn compose_puts_the_separator_between_items_only() {
-    let line = compose(
-        12,
-        vec![Seg::plain("[s] ")],
-        vec![item("A", Target::Window(0)), item("B", Target::Window(1))],
-        " | ",
-        Vec::new(),
-        Justify::Left,
-    );
-    assert_eq!(text(&line.segs), "[s] A | B   ");
-    assert_eq!(
-        line.targets,
-        vec![(4, 5, Target::Window(0)), (8, 9, Target::Window(1))]
-    );
 }
 
 #[test]

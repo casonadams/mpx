@@ -81,7 +81,6 @@ fn pane_snapshot(pane: &PaneRecord) -> PaneSnapshot {
         cwd: pane.cwd.clone().or_else(|| pane.opts.cwd.clone()),
         env: pane.opts.env.clone(),
         remain_on_exit: pane.opts.remain_on_exit,
-        tmux_compat: pane.opts.tmux_compat,
         resume_rule: pane.resume_rule.clone(),
         session_id: pane.session_id.clone(),
     }

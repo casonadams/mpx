@@ -8,13 +8,13 @@ use std::time::{Duration, Instant};
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use tempfile::TempDir;
 
-use mpx::client::Client;
+use mpx::client::{Client, LayoutTuple};
 use mpx::config::Config;
 use mpx::daemon::{DaemonState, handle_client};
 use mpx::ipc::{self, IpcListener};
 use mpx::layout::Direction;
 use mpx::layout::geometry::Rect;
-use mpx::protocol::{NewWindowOpts, SpawnOpts, SplitOpts, WaitCondition};
+use mpx::protocol::{NewWindowOpts, SpawnOpts, SplitOpts, WaitCondition, WaitOutcome};
 use mpx::tui::app::{App, AppOptions, Clipboard, Flow, Mode, StartView, StreamRx};
 use mpx::tui::frame;
 use mpx::vt::{Cursor, VtScreen};
@@ -32,9 +32,9 @@ const WAIT: Duration = Duration::from_secs(10);
 /// A pty pane running `sh -c script`.
 pub fn pane(name: &str, script: &str) -> SpawnOpts {
     SpawnOpts {
-        name: name.to_string(),
-        command: "sh".to_string(),
-        args: vec!["-c".to_string(), script.to_string()],
+        name: name.into(),
+        command: "sh".into(),
+        args: ["-c", script].map(String::from).into(),
         pty: true,
         ..SpawnOpts::default()
     }
@@ -111,40 +111,51 @@ pub async fn wait_for(client: &mut Client, pane: &str, needle: &str) -> String {
 
 /// Opens a focused window named `name` whose pane runs `script`, and waits until it prints READY.
 pub async fn window(client: &mut Client, name: &str, script: &str) {
-    let opts = NewWindowOpts {
+    client.new_window(window_opts(name, script)).await.expect("new window");
+    client.rename_window(None, name).await.expect("rename window");
+    wait_for(client, name, "READY").await;
+}
+
+fn window_opts(name: &str, script: &str) -> NewWindowOpts {
+    NewWindowOpts {
         name: Some(name.to_string()),
         spawn: pane(name, script),
         focus: true,
-    };
-    client.new_window(opts).await.expect("new window");
-    client
-        .rename_window(None, name)
-        .await
-        .expect("rename window");
-    wait_for(client, name, "READY").await;
+    }
 }
 
 /// Splits `target` with an unfocused pane `name` running `ECHO`, and waits until it prints READY.
 pub async fn split(client: &mut Client, target: &str, name: &str, direction: Direction) {
-    let opts = SplitOpts {
+    client.split(split_opts(target, name, direction)).await.expect("split");
+    wait_for(client, name, "READY").await;
+}
+
+fn split_opts(target: &str, name: &str, direction: Direction) -> SplitOpts {
+    SplitOpts {
         target: Some(target.to_string()),
         spawn: pane(name, ECHO),
         direction,
         percent: None,
         focus: false,
-    };
-    client.split(opts).await.expect("split");
-    wait_for(client, name, "READY").await;
+    }
 }
 
 /// Waits (bounded) for `name` to exit and returns its exit code.
 pub async fn exited(client: &mut Client, name: &str) -> Option<i32> {
-    let outcome = client
-        .wait(name, WaitCondition::Exit, Some(2_000))
-        .await
-        .expect("wait");
-    assert!(outcome.satisfied, "{name} did not exit in time");
-    outcome.exit_code
+    match client.wait(name, WaitCondition::Exit, Some(2_000)).await.expect("wait") {
+        WaitOutcome { satisfied: true, exit_code, .. } => exit_code,
+        WaitOutcome { .. } => panic!("{name} did not exit in time"),
+    }
+}
+
+/// Prints `hello world`, then `READY` on the second row.
+pub fn two_lines() -> String {
+    format!(r"printf 'hello world\r\n'; {ECHO}")
+}
+
+/// Prints 40 numbered lines, so the pane has scrollback.
+pub fn long_output() -> String {
+    format!(r"for i in $(seq 1 40); do printf 'line %s\r\n' $i; done; {ECHO}")
 }
 
 /// An attached app plus the daemon state around it.
@@ -166,6 +177,25 @@ impl Harness {
         let mut seed = connect(&sandbox.endpoint(SESSION)).await;
         window(&mut seed, MAIN, script).await;
         Self::attach(sandbox, SESSION, config).await
+    }
+
+    /// Starts the main session running `script`, draws one frame and waits until it prints READY.
+    pub async fn started(script: &str) -> Self {
+        let mut h = Self::start(Config::default(), script).await;
+        h.frame().await;
+        h.until("pane text drawn", |app| {
+            app.active_vt()
+                .is_some_and(|vt| vt.snapshot().contains("READY"))
+        })
+        .await;
+        h
+    }
+
+    /// Attaches with the main pane running `ECHO` and draws one frame.
+    pub async fn idle() -> Self {
+        let mut h = Self::start(Config::default(), ECHO).await;
+        h.frame().await;
+        h
     }
 
     /// Attaches a fresh app to `session`, which must already be serving.
@@ -217,6 +247,80 @@ impl Harness {
         }
     }
 
+    /// Runs `line` as typed at the `:` prompt: opens the prompt, types it and submits it.
+    pub async fn command(&mut self, line: &str) {
+        self.prefixed_char(':').await;
+        self.type_str(line).await;
+        self.key(KeyCode::Enter).await;
+    }
+
+    /// Runs `line` at the `:` prompt, then returns the window names in tab order.
+    pub async fn command_windows(&mut self, line: &str) -> Vec<String> {
+        self.command(line).await;
+        self.windows().await
+    }
+
+    /// Runs `line` at the `:` prompt, then waits (bounded) until `pane` prints `needle`.
+    pub async fn command_then_output(&mut self, line: &str, pane: &str, needle: &str) -> String {
+        self.command(line).await;
+        wait_for(&mut self.probe, pane, needle).await
+    }
+
+    /// Asserts the app is in a mode that `shows` accepts, then that `close` returns it to normal.
+    pub async fn closes_with(&mut self, shows: impl Fn(&Mode) -> bool, close: KeyCode) {
+        assert!(shows(&self.app.mode), "no overlay open before {close:?}");
+        self.key(close).await;
+        assert!(self.mode_is_normal(), "{close:?} did not return to normal mode");
+    }
+
+    /// Runs `line` at the `:` prompt, draws a frame and returns the text it shows.
+    pub async fn command_frame(&mut self, line: &str) -> String {
+        self.command(line).await;
+        self.frame().await
+    }
+
+    /// Runs `line` at the `:` prompt and returns the live status-row message it leaves, if any.
+    pub async fn command_message(&mut self, line: &str) -> Option<String> {
+        self.command(line).await;
+        self.app.live_message().map(str::to_owned)
+    }
+
+    /// Presses the prefix, then `c`, and returns the live status-row message it leaves, if any.
+    pub async fn prefixed_message(&mut self, c: char) -> Option<String> {
+        self.prefixed_char(c).await;
+        self.app.live_message().map(str::to_owned)
+    }
+
+    /// Presses the prefix, then `c`, draws a frame and returns the text it shows.
+    pub async fn prefixed_frame(&mut self, c: char) -> String {
+        self.prefixed_char(c).await;
+        self.frame().await
+    }
+
+    /// Opens a focused window `name` running `ECHO` in the main session, as another client would.
+    pub async fn open_window(&mut self, name: &str) {
+        let mut seed = connect(&self.sandbox.endpoint(SESSION)).await;
+        window(&mut seed, name, ECHO).await;
+    }
+
+    /// Splits the main pane with a side-by-side pane `name`, then draws and refreshes the app.
+    pub async fn split_side(&mut self, name: &str) {
+        split(&mut self.probe, MAIN, name, Direction::Horizontal).await;
+        self.frame().await;
+        self.app.refresh_nodes().await;
+    }
+
+    /// Sends `bytes` to `pane` and waits until its screen shows `marker`.
+    pub async fn emit(&mut self, pane: &str, bytes: &str, marker: &str) {
+        self.probe.send_input(pane, bytes).await.expect("send");
+        let pane = pane.to_string();
+        let wanted = marker.to_string();
+        self.until(marker, move |app| {
+            app.vt.get(&pane).is_some_and(|vt| vt.snapshot().contains(&wanted))
+        })
+        .await;
+    }
+
     /// Presses the prefix (C-b), then `code`.
     pub async fn prefixed(&mut self, code: KeyCode) -> Flow {
         self.ctrl('b').await;
@@ -240,12 +344,19 @@ impl Harness {
     /// Refreshes layout (as the event loop does on each wake-up), draws one frame onto the terminal
     /// and returns the text the terminal then shows.
     pub async fn frame(&mut self) -> String {
+        self.draw_frame().await;
+        self.terminal.snapshot()
+    }
+
+    /// Draws one frame onto the terminal, as the event loop does after a wake-up, and returns the
+    /// bytes it sent.
+    pub async fn draw_frame(&mut self) -> Vec<u8> {
         self.app.layout.dirty = true;
         assert!(self.app.prepare_frame().await, "nothing to draw");
         let mut out = Vec::new();
         frame::draw(&mut self.app, &mut out).expect("draw");
         self.terminal.feed(&out);
-        self.terminal.snapshot()
+        out
     }
 
     /// The terminal's cursor after the last frame.
@@ -277,15 +388,20 @@ impl Harness {
         }
     }
 
+    /// The daemon's layout of the active window: pane rectangles, dividers and window tabs.
+    async fn layout(&mut self) -> LayoutTuple {
+        self.probe.layout(SIZE.0, SIZE.1 - 1).await.expect("layout")
+    }
+
     /// Pane names of the daemon's active window, in layout order.
     pub async fn layout_panes(&mut self) -> Vec<String> {
-        let (rects, _, _) = self.probe.layout(SIZE.0, SIZE.1 - 1).await.expect("layout");
+        let (rects, ..) = self.layout().await;
         rects.into_iter().map(|(name, ..)| name).collect()
     }
 
     /// Window names in tab order.
     pub async fn windows(&mut self) -> Vec<String> {
-        let (_, _, tabs) = self.probe.layout(SIZE.0, SIZE.1 - 1).await.expect("layout");
+        let (.., tabs) = self.layout().await;
         tabs.into_iter().map(|tab| tab.name).collect()
     }
 

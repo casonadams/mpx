@@ -64,7 +64,6 @@ pub struct PaneSnapshot {
     /// User-supplied environment only (never the MPX_* / TMUX* variables mpx injects).
     pub env: Vec<(String, String)>,
     pub remain_on_exit: Option<bool>,
-    pub tmux_compat: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume_rule: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

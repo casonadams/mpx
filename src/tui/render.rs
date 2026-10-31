@@ -7,6 +7,7 @@ use std::io::{self, Write};
 
 use super::canvas::Canvas;
 use crate::config::BorderStyle;
+use crate::format::WindowFlags;
 use crate::layout::{Divider, WindowTab, geometry::Rect};
 use crate::vt::grid::Grid;
 use crate::vt::{Cell, CellStyle, Color as VtColor};
@@ -524,13 +525,16 @@ impl Compositor {
 
 /// A window tab of the built-in look: `index:name` and tmux's flags, the index counted from `base`.
 pub fn tab_text(tab: &WindowTab, zoomed: bool, base: usize) -> String {
-    let mut flags = String::new();
-    if tab.is_active {
-        flags.push('*');
-        if zoomed {
-            flags.push('Z');
+    let flags = if tab.is_active {
+        WindowFlags {
+            current: true,
+            zoomed,
+            marked: tab.has_marked,
+            ..Default::default()
         }
+        .render()
     } else {
+        let mut flags = String::new();
         if tab.is_last {
             flags.push('-');
         }
@@ -540,10 +544,11 @@ pub fn tab_text(tab: &WindowTab, zoomed: bool, base: usize) -> String {
         if tab.has_activity {
             flags.push('#');
         }
-    }
-    if tab.has_marked {
-        flags.push('M');
-    }
+        if tab.has_marked {
+            flags.push('M');
+        }
+        flags
+    };
     format!("{}:{}{} ", tab.index + base, tab.name, flags)
 }
 

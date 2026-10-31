@@ -1,8 +1,8 @@
 //! Status line composition: tmux formats and `#[style]` directives become styled segments laid out
 //! across one row. Pure: callers supply the variables, the time and the width.
 use crate::config::Justify;
+use crate::format::{PaneView, Vars, WindowFlags, pane_vars};
 use crate::layout::WindowTab;
-use crate::tmux_shim::{PaneView, Vars, pane_vars};
 use crate::vt::Color as VtColor;
 use std::time::{Duration, Instant};
 
@@ -179,26 +179,7 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 /// The tmux window flags of a tab, in tmux's order: `#` activity, `!` bell, `*` current, `Z`
 /// zoomed (current window only), `-` last, `M` marked pane.
 pub fn tab_flags(tab: &WindowTab, zoomed: bool) -> String {
-    let mut flags = String::new();
-    if tab.has_activity {
-        flags.push('#');
-    }
-    if tab.has_bell {
-        flags.push('!');
-    }
-    if tab.is_active {
-        flags.push('*');
-        if zoomed {
-            flags.push('Z');
-        }
-    }
-    if tab.is_last {
-        flags.push('-');
-    }
-    if tab.has_marked {
-        flags.push('M');
-    }
-    flags
+    WindowFlags::of_tab(tab, zoomed).render()
 }
 
 /// Variables for a status format: the focused pane's (when known) with the window's own index,

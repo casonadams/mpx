@@ -121,9 +121,7 @@ async fn mark_pane_and_swap_with_prefix_bindings() {
     assert_eq!(h.app.active_pane, MAIN);
 
     // Run swap-pane from prompt to swap active (MAIN) with marked (pane-2)
-    h.prefixed_char(':').await;
-    h.type_str("swap-pane").await;
-    h.key(KeyCode::Enter).await;
+    h.command("swap-pane").await;
     h.frame().await;
     assert_eq!(h.layout_panes().await, ["pane-2", MAIN]);
 
@@ -190,30 +188,6 @@ async fn zoom_set_on_the_daemon_by_another_client_is_drawn() {
     h.frame().await;
     assert!(!h.app.zoomed());
     assert_eq!(h.app.panes.len(), 2);
-}
-
-#[tokio::test]
-async fn resize_pane_z_through_the_shim_toggles_the_zoom() {
-    let mut h = start().await;
-    h.frame().await;
-    h.prefixed_char('%').await;
-    h.frame().await;
-    let target = mpx::tmux_shim::EnvTarget {
-        endpoint: h.sandbox.endpoint(SESSION),
-        session: SESSION.to_string(),
-    };
-    mpx::tmux_shim::run_in(&target, "resize-pane -Z")
-        .await
-        .expect("resize-pane -Z");
-    h.frame().await;
-    assert!(h.app.zoomed());
-    assert_eq!(h.app.panes.len(), 1);
-
-    mpx::tmux_shim::run_in(&target, "resize-pane -Z")
-        .await
-        .expect("resize-pane -Z again");
-    h.frame().await;
-    assert!(!h.app.zoomed());
 }
 
 #[tokio::test]
@@ -421,4 +395,92 @@ async fn prefix_space_cycles_layouts_and_prefix_e_spreads_panes() {
     h.prefixed_char('E').await;
     h.frame().await;
     assert!(h.rect_of(MAIN).height.abs_diff(h.rect_of("side").height) <= 1);
+}
+
+fn active_tab(h: &Harness) -> String {
+    h.app
+        .layout
+        .tabs
+        .iter()
+        .find(|t| t.is_active)
+        .map(|t| t.name.clone())
+        .expect("an active window")
+}
+
+#[tokio::test]
+async fn select_window_finds_a_window_by_name() {
+    let mut h = start().await;
+    let first = h.windows().await.remove(0);
+    window(&mut h.probe, "logs", ECHO).await;
+    h.frame().await;
+    assert_eq!(active_tab(&h), "logs");
+
+    h.command(&format!("select-window -t ':{first}'")).await;
+    h.frame().await;
+    assert_eq!(active_tab(&h), first);
+
+    h.command("select-window -t ':nosuch'").await;
+    assert!(h.app.message.as_ref().is_some_and(|(m, _)| m.contains("can't find window: nosuch")));
+    assert_eq!(active_tab(&h), first);
+}
+
+#[tokio::test]
+async fn rotate_window_moves_each_pane_to_the_slot_before_its_own() {
+    let mut h = start().await;
+    split(&mut h.probe, MAIN, "side", Direction::Horizontal).await;
+    h.frame().await;
+    assert_eq!(h.layout_panes().await, [MAIN, "side"]);
+
+    h.command("rotate-window").await;
+    assert_eq!(h.layout_panes().await, ["side", MAIN]);
+    h.command("rotate-window -D").await;
+    assert_eq!(h.layout_panes().await, [MAIN, "side"]);
+}
+
+#[tokio::test]
+async fn move_window_puts_the_active_window_at_the_index() {
+    let mut h = start().await;
+    let first = h.windows().await.remove(0);
+    window(&mut h.probe, "logs", ECHO).await;
+    h.frame().await;
+    assert_eq!(h.windows().await, [first.clone(), "logs".to_string()]);
+
+    h.command("move-window -t 0").await;
+    assert_eq!(h.windows().await, ["logs".to_string(), first]);
+}
+
+#[tokio::test]
+async fn next_window_with_a_steps_to_the_window_that_has_activity() {
+    let mut h = start().await;
+    window(&mut h.probe, "bg", ECHO).await;
+    h.probe.select_window(0).await.expect("back to the first window");
+    h.frame().await;
+    let first = active_tab(&h);
+
+    h.command("next-window -a").await;
+    assert!(
+        h.app.message.as_ref().is_some_and(|(m, _)| m.contains("no next window with an alert")),
+        "no window has an alert yet"
+    );
+    assert_eq!(active_tab(&h), first);
+
+    h.probe.send_input("bg", "x\n").await.expect("input");
+    for _ in 0..100 {
+        let (_, _, tabs) = h.probe.layout(SIZE.0, SIZE.1 - 1).await.expect("layout");
+        if tabs.iter().any(|t| t.name == "bg" && t.has_activity) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    h.frame().await;
+    assert!(h.app.layout.tabs.iter().any(|t| t.name == "bg" && t.has_activity));
+    h.command("next-window -a").await;
+    h.frame().await;
+    assert_eq!(active_tab(&h), "bg");
+
+    h.command("previous-window -a").await;
+    assert!(
+        h.app.message.as_ref().is_some_and(|(m, _)| m.contains("no previous window with an alert")),
+        "visiting the window cleared its alert"
+    );
 }

@@ -11,7 +11,7 @@ use super::session::{pick, split_target};
 use crate::config::Config;
 use crate::ipc;
 use crate::layout::Direction;
-use crate::protocol::{LayoutPreset, NewWindowOpts, Side, SpawnOpts, SplitOpts, VarKind};
+use crate::protocol::{LayoutPreset, NewWindowOpts, Side, SpawnOpts, SplitOpts};
 use std::collections::VecDeque;
 use std::io::Write;
 use std::process::Stdio;
@@ -31,6 +31,10 @@ enum Simple {
     SelectLayout(Option<LayoutPreset>),
     SpreadLayout,
 }
+
+/// What `display-message` shows without a format.
+const DEFAULT_DISPLAY_MESSAGE: &str =
+    "[#{session_name}] #{window_index}:#{window_name}, current pane #{pane_index} - (#{pane_title})";
 
 /// Commands that destroy something interactively need a `y` first.
 fn needs_confirm(cmd: &Command) -> Option<String> {
@@ -75,15 +79,6 @@ impl App {
         self.run(cmd).await
     }
 
-    /// Runs a command line sent by another client (tmux `detach-client`, `switch-client`); scripted,
-    /// so it never asks for confirmation.
-    pub async fn run_line(&mut self, line: &str) -> Flow {
-        match super::command::parse(line) {
-            Ok(cmd) => self.run(cmd).await,
-            Err(e) => self.say(e),
-        }
-    }
-
     /// Runs a command without the interactive confirmation step (used once confirmed).
     pub async fn run(&mut self, cmd: Command) -> Flow {
         let cmd = match self.run_windows(cmd).await {
@@ -117,6 +112,24 @@ impl App {
                 Some(daemon) => self.simple(Simple::SelectWindow(daemon)).await,
                 None => self.say(format!("can't find window: {index}")),
             },
+            Command::SelectWindowNamed { name } => {
+                let found = self.layout.tabs.iter().find(|t| t.name == name).map(|t| t.index);
+                match found {
+                    Some(index) => self.simple(Simple::SelectWindow(index)).await,
+                    None => self.say(format!("can't find window: {name}")),
+                }
+            }
+            Command::StepAlert { forward } => self.step_alert(forward).await,
+            Command::RotateWindow { down } => {
+                let result = self.client.rotate_window(down).await;
+                self.settle(result)
+            }
+            Command::MoveWindow { to } => self.move_window(to).await,
+            Command::DisplayMessage { format } => {
+                let format = format.as_deref().unwrap_or(DEFAULT_DISPLAY_MESSAGE);
+                let text = super::frame::expand_active(self, format);
+                self.say(text)
+            }
             Command::NextWindow => self.simple(Simple::NextWindow).await,
             Command::PrevWindow => self.simple(Simple::PrevWindow).await,
             Command::LastWindow => self.simple(Simple::LastWindow).await,
@@ -166,11 +179,6 @@ impl App {
             Command::KillServer => self.kill_server().await,
             Command::ReloadConfig => self.reload_config().await,
             Command::Bind { table, key, line } => self.bind_key(table, &key, &line).await,
-            Command::RefreshRuntime => {
-                self.apply_runtime().await;
-                Flow::Continue
-            }
-            Command::Tmux { words } => self.run_tmux(&words).await,
             Command::Sequence(commands) => Box::pin(self.run_sequence(commands)).await,
             Command::Zoom => self.toggle_zoom().await,
             Command::CopyMode(opts) => self.copy_mode_cmd(opts).await,
@@ -213,8 +221,8 @@ impl App {
             return self.say(format!("reload-config: {e}"));
         }
         let daemon = self.client.reload_config(path.as_deref()).await;
-        self.base_config = config;
-        self.apply_runtime().await;
+        self.config = config;
+        self.apply_bindings().await;
         self.layout.dirty = true;
         match daemon {
             Ok(()) => self.say("config reloaded"),
@@ -222,33 +230,24 @@ impl App {
         }
     }
 
-    /// Rebuilds the effective config and keymap: the file's config, then the session's
-    /// `set-option` values, then its `bind-key` / `unbind-key` changes. A value that does not
-    /// apply is reported and skipped.
-    pub async fn apply_runtime(&mut self) {
-        let mut config = self.base_config.clone();
+    /// Rebuilds the keymap: the config's bindings, then the session's `bind-key` / `unbind-key`
+    /// changes. A binding that does not apply is reported and skipped.
+    pub async fn apply_bindings(&mut self) {
         let mut problems = Vec::new();
-        for (name, value) in self.client.get_vars(VarKind::Option).await.unwrap_or_default() {
-            if let Err(e) = config.apply_option(&name, &value) {
-                problems.push(format!("{name}: {e}"));
-            }
-        }
-        let mut keymap = match keymap::resolve(&config) {
+        let mut keymap = match keymap::resolve(&self.config) {
             Ok(keymap) => keymap,
             Err(e) => {
                 problems.push(e);
-                config = self.base_config.clone();
-                keymap::resolve(&config).unwrap_or_else(|_| self.keymap.clone())
+                self.keymap.clone()
             }
         };
-        for (name, line) in self.client.get_vars(VarKind::Binding).await.unwrap_or_default() {
+        for (name, line) in self.client.get_bindings().await.unwrap_or_default() {
             let (table, key) = name.split_once(':').unwrap_or(("prefix", &name));
             let table = keymap::Table::from_name(table).unwrap_or(keymap::Table::Prefix);
             if let Err(e) = keymap.bind(table, key, &line) {
                 problems.push(e);
             }
         }
-        self.config = config;
         self.keymap = keymap;
         self.layout.dirty = true;
         if let Some(first) = problems.first() {
@@ -263,32 +262,34 @@ impl App {
             return self.say(e);
         }
         let name = format!("{}:{key}", table.name());
-        let result = self.client.set_var(VarKind::Binding, &name, Some(line)).await;
+        let result = self.client.set_binding(&name, Some(line)).await;
         self.settle(result)
     }
 
-    /// Any other tmux command, through the shim against this session. Its output is shown on the
-    /// status row.
-    async fn run_tmux(&mut self, words: &[String]) -> Flow {
-        let target = crate::tmux_shim::EnvTarget {
-            endpoint: self.endpoint.clone(),
-            session: self.session.clone(),
+    /// Moves the active window to `to` (the window numbering `base-index` sets).
+    async fn move_window(&mut self, to: usize) -> Flow {
+        let Some(to) = to.checked_sub(self.config.base_index) else {
+            return self.say(format!("can't find window: {to}"));
         };
-        let line = crate::tmux_shim::join_words(words);
-        match crate::tmux_shim::run_in(&target, &line).await {
-            Ok(out) => {
-                self.apply_runtime().await;
-                let mut lines: Vec<String> = out.lines().map(str::to_string).collect();
-                if lines.len() > 1 {
-                    let title = words.first().cloned().unwrap_or_default();
-                    return self.open_overlay(Overlay::text(title, lines)).await;
-                }
-                match lines.pop() {
-                    Some(only) => self.say(only),
-                    None => Flow::Continue,
-                }
-            }
-            Err(e) => self.say(e),
+        let Some(from) = self.layout.tabs.iter().find(|t| t.is_active).map(|t| t.index) else {
+            return self.say("no active window");
+        };
+        let result = self.client.move_window(from, to).await;
+        self.settle(result)
+    }
+
+    /// The next (or previous) window with activity or a bell, wrapping around.
+    async fn step_alert(&mut self, forward: bool) -> Flow {
+        let tabs = &self.layout.tabs;
+        let count = tabs.len();
+        let current = tabs.iter().position(|t| t.is_active).unwrap_or(0);
+        let alert = (1..count)
+            .map(|step| if forward { (current + step) % count } else { (current + count - step) % count })
+            .find(|&i| tabs[i].has_activity || tabs[i].has_bell)
+            .map(|i| tabs[i].index);
+        match alert {
+            Some(index) => self.simple(Simple::SelectWindow(index)).await,
+            None => self.say(format!("no {} window with an alert", if forward { "next" } else { "previous" })),
         }
     }
 

@@ -7,7 +7,7 @@ use super::idempotency::Claim;
 use super::session::{SessionMsg, reply};
 use super::{DaemonState, KILL_GRACE};
 use crate::node::pane::LogQuery;
-use crate::protocol::{ChannelAction, PopupOpts, Request, Response};
+use crate::protocol::{Request, Response};
 
 pub(super) async fn dispatch(state: &Arc<DaemonState>, req: Request) -> Response {
     match req {
@@ -69,7 +69,6 @@ impl Drop for IdemTicket {
 pub(super) async fn execute(state: &Arc<DaemonState>, req: Request) -> Response {
     match req {
         Request::Shutdown => shutdown(state).await,
-        Request::Popup(opts) => popup(state, opts).await,
         Request::Kill { name } => kill(state, &name).await,
         Request::KillWindow { index } => kill_window(state, index).await,
         Request::Wait {
@@ -77,7 +76,6 @@ pub(super) async fn execute(state: &Arc<DaemonState>, req: Request) -> Response 
             condition,
             timeout_ms,
         } => wait(state, &name, condition, timeout_ms).await,
-        Request::WaitFor { channel, action } => wait_for(state, &channel, action).await,
         Request::Logs {
             name,
             tail,
@@ -104,14 +102,21 @@ async fn await_exits(exits: Vec<tokio::sync::oneshot::Receiver<()>>) {
     .await;
 }
 
-async fn shutdown(state: &Arc<DaemonState>) -> Response {
-    match state.ask(|reply| SessionMsg::Shutdown { reply }).await {
+/// Waits for the exits of the stopped panes, then reports success.
+async fn exits_then_ok(
+    exits: Result<Vec<tokio::sync::oneshot::Receiver<()>>, String>,
+) -> Response {
+    match exits {
         Ok(exits) => {
             await_exits(exits).await;
             Response::Ok
         }
         Err(e) => Response::Error(e),
     }
+}
+
+async fn shutdown(state: &Arc<DaemonState>) -> Response {
+    exits_then_ok(state.ask(|reply| SessionMsg::Shutdown { reply }).await).await
 }
 
 async fn kill(state: &Arc<DaemonState>, name: &str) -> Response {
@@ -126,30 +131,14 @@ async fn kill(state: &Arc<DaemonState>, name: &str) -> Response {
     }
 }
 
-/// Opens a popup. A waiting caller is answered when the popup closes, with its program's status.
-async fn popup(state: &Arc<DaemonState>, opts: PopupOpts) -> Response {
-    let opts = Box::new(opts);
-    match state.ask(|reply| SessionMsg::Popup { opts, reply }).await {
-        Ok(Ok(None)) => Response::Ok,
-        Ok(Ok(Some(closed))) => match closed.await {
-            Ok(status) => Response::PopupClosed { status },
-            Err(_) => Response::Error("the popup closed without a status".to_string()),
-        },
-        Ok(Err(e)) | Err(e) => Response::Error(e),
-    }
-}
-
 async fn kill_window(state: &Arc<DaemonState>, index: Option<usize>) -> Response {
-    match state
-        .ask(|reply| SessionMsg::KillWindow { index, reply })
-        .await
-    {
-        Ok(Ok(exits)) => {
-            await_exits(exits).await;
-            Response::Ok
-        }
-        Ok(Err(e)) | Err(e) => Response::Error(e),
-    }
+    exits_then_ok(
+        state
+            .ask(|reply| SessionMsg::KillWindow { index, reply })
+            .await
+            .and_then(|exits| exits),
+    )
+    .await
 }
 
 /// Asked of the pane directly: a full plain read takes milliseconds, and the session must not
@@ -171,27 +160,3 @@ async fn wait(
     reply(waited.await, Response::WaitResult)
 }
 
-/// tmux `wait-for`: blocks this connection, never the session.
-async fn wait_for(state: &Arc<DaemonState>, channel: &str, action: ChannelAction) -> Response {
-    let blocked = {
-        let mut channels = state.channels.lock().unwrap_or_else(|e| e.into_inner());
-        match action {
-            ChannelAction::Wait => channels.wait(channel),
-            ChannelAction::Lock => channels.lock(channel),
-            ChannelAction::Signal => {
-                channels.signal(channel);
-                None
-            }
-            ChannelAction::Unlock => {
-                if let Err(e) = channels.unlock(channel) {
-                    return Response::Error(e);
-                }
-                None
-            }
-        }
-    };
-    if let Some(released) = blocked {
-        let _ = released.await;
-    }
-    Response::Ok
-}

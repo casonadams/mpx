@@ -359,6 +359,62 @@ pub fn draw_items<W: Write>(
     Ok(())
 }
 
+/// Border style of a list panel: a single-line box or the dim `Panel` frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Chrome {
+    Box,
+    Panel,
+}
+
+/// Frame and body of a list panel: the title and footer, then the filter prompt and items.
+pub struct ListPanel<'a> {
+    pub chrome: Chrome,
+    pub title: &'a str,
+    pub footer: &'a str,
+    pub prompt: Option<String>,
+    pub empty: Option<&'a str>,
+}
+
+/// Draws a bordered list panel inside `area`: the filter `prompt` on the last row, then the items
+/// scrolled to the cursor; `empty` replaces them with one dim row when there are none.
+pub fn draw_list_panel<W: Write>(
+    out: &mut W,
+    area: Rect,
+    panel: ListPanel<'_>,
+    items: impl IntoIterator<Item = Vec<Span>>,
+    list: &ListState,
+) -> io::Result<()> {
+    match panel.chrome {
+        Chrome::Box => draw_box(out, area, panel.title, panel.footer)?,
+        Chrome::Panel => draw_panel(out, area, panel.title, panel.footer)?,
+    }
+    let items: Vec<Vec<Span>> = items.into_iter().collect();
+    let rows = body(area, panel.prompt.is_some());
+    if let Some(text) = panel.prompt {
+        draw_prompt(out, area, &text)?;
+    }
+    match panel.empty {
+        Some(hint) if items.is_empty() => put_row(out, rows, 0, &[Span::dim(hint)], false),
+        _ => draw_items(out, rows, &items, list.cursor, list),
+    }
+}
+
+/// A view drawn as a list panel by `render_list_view`: its frame, its rows and its cursor state.
+pub trait ListView {
+    fn panel(&self) -> ListPanel<'_>;
+    fn rows(&self) -> impl Iterator<Item = Vec<Span>> + '_;
+    fn cursor(&self) -> &ListState;
+}
+
+/// Draws `view` as a bordered list panel inside `area`.
+pub fn render_list_view<V: ListView, W: Write>(
+    view: &V,
+    out: &mut W,
+    area: Rect,
+) -> io::Result<()> {
+    draw_list_panel(out, area, view.panel(), view.rows(), view.cursor())
+}
+
 /// Last row of `area`'s interior, used for filter and input prompts.
 pub fn draw_prompt<W: Write>(out: &mut W, area: Rect, text: &str) -> io::Result<()> {
     let interior = inner(area);

@@ -16,8 +16,7 @@ fn focus_script() -> String {
 
 #[tokio::test]
 async fn typed_keys_reach_the_active_pane() {
-    let mut h = Harness::start(Config::default(), ECHO).await;
-    h.frame().await;
+    let mut h = Harness::idle().await;
     h.type_str("hi").await;
     h.key(KeyCode::Enter).await;
     let logs = wait_for(&mut h.probe, MAIN, "hi\r").await;
@@ -75,8 +74,7 @@ async fn focus_reports_reach_only_panes_that_requested_them() {
 
 #[tokio::test]
 async fn prefix_twice_sends_the_prefix_byte() {
-    let mut h = Harness::start(Config::default(), ECHO).await;
-    h.frame().await;
+    let mut h = Harness::idle().await;
     h.ctrl('b').await;
     h.ctrl('b').await;
     wait_for(&mut h.probe, MAIN, "\x02").await;

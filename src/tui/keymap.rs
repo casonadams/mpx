@@ -74,7 +74,6 @@ const DEFAULT_BINDINGS: &[(&str, &str)] = &[
     ("M-Right", "resize-pane -R 5"),
     ("[", "copy-mode"),
     ("]", "paste"),
-    ("f", "command-prompt -I 'find-window '"),
     ("d", "detach-client"),
     ("q", "display-panes"),
     (":", "command-prompt"),

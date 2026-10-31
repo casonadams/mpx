@@ -6,13 +6,32 @@ use crossterm::event::{KeyCode, KeyEvent};
 
 use crate::layout::Rect;
 use crate::protocol::Buffer;
-use crate::tmux_shim::buffer_sample;
 use crate::tui::command::Command;
-use crate::tui::overlay::nav::{Filter, FilterEvent, ListState, has_ctrl};
-use crate::tui::overlay::widgets::{self, Span, Tone, printable};
+use crate::tui::overlay::nav::{Filter, ListState, route_list_key};
+use crate::tui::overlay::widgets::{self, Chrome, ListPanel, Span, Tone, printable};
 use crate::tui::overlay::{OverlayAction, OverlayCtx};
 
 const HINTS: &str = "j/k move  Enter paste  d delete  / filter  q close";
+const SAMPLE_CHARS: usize = 50;
+
+/// The first characters of a buffer, control characters shown as escapes.
+fn buffer_sample(data: &str) -> String {
+    let mut out = String::new();
+    for (i, c) in data.chars().enumerate() {
+        if i == SAMPLE_CHARS {
+            out.push_str("...");
+            break;
+        }
+        match c {
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => out.push('?'),
+            c => out.push(c),
+        }
+    }
+    out
+}
 
 /// `name: N bytes: "sample"`, the line `list-buffers` shows for a buffer.
 pub fn buffer_summary(buffer: &Buffer) -> String {
@@ -43,10 +62,7 @@ impl BufferView {
 
     /// Buffers that pass the filter, in the daemon's order (newest first).
     pub fn visible(&self) -> Vec<&Buffer> {
-        self.buffers
-            .iter()
-            .filter(|b| self.filter.matches(&[b.name.as_str(), b.data.as_str()]))
-            .collect()
+        self.filter.visible(&self.buffers, |b| [b.name.as_str(), b.data.as_str()])
     }
 
     fn highlighted(&self) -> Option<Buffer> {
@@ -54,16 +70,8 @@ impl BufferView {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> OverlayAction {
-        match self.filter.handle(key) {
-            FilterEvent::Edited => {
-                self.list.cursor = 0;
-                return OverlayAction::None;
-            }
-            FilterEvent::Consumed => return OverlayAction::None,
-            FilterEvent::Ignored => {}
-        }
         let len = self.visible().len();
-        if self.list.motion(key, len) || has_ctrl(key) {
+        if route_list_key(&mut self.filter, &mut self.list, key, len) {
             return OverlayAction::None;
         }
         match key.code {
@@ -91,26 +99,8 @@ impl BufferView {
         let list_w = area.width * 2 / 5;
         let list = Rect::new(area.x, area.y, list_w, area.height);
         let preview = Rect::new(area.x + list_w, area.y, area.width - list_w, area.height);
-        self.render_list(out, list)?;
+        widgets::render_list_view(self, out, list)?;
         self.render_preview(out, preview)
-    }
-
-    fn render_list<W: Write>(&self, out: &mut W, area: Rect) -> io::Result<()> {
-        widgets::draw_panel(out, area, "Buffers", HINTS)?;
-        let prompt = self.filter.prompt();
-        let rows = widgets::body(area, prompt.is_some());
-        if let Some(text) = prompt {
-            widgets::draw_prompt(out, area, &text)?;
-        }
-        let visible = self.visible();
-        if visible.is_empty() {
-            return widgets::put_row(out, rows, 0, &[Span::dim("no buffers")], false);
-        }
-        let items: Vec<Vec<Span>> = visible
-            .iter()
-            .map(|b| vec![Span::plain(printable(&buffer_summary(b)))])
-            .collect();
-        widgets::draw_items(out, rows, &items, self.list.cursor, &self.list)
     }
 
     fn render_preview<W: Write>(&self, out: &mut W, area: Rect) -> io::Result<()> {
@@ -128,5 +118,27 @@ impl BufferView {
             .map(|line| Span::plain(printable(line)))
             .collect();
         widgets::draw_preview(out, area, Some(meta), &lines, Some("empty buffer"))
+    }
+}
+
+impl widgets::ListView for BufferView {
+    fn panel(&self) -> ListPanel<'_> {
+        ListPanel {
+            chrome: Chrome::Panel,
+            title: "Buffers",
+            footer: HINTS,
+            prompt: self.filter.prompt(),
+            empty: Some("no buffers"),
+        }
+    }
+
+    fn rows(&self) -> impl Iterator<Item = Vec<Span>> + '_ {
+        self.visible()
+            .into_iter()
+            .map(|b| vec![Span::plain(printable(&buffer_summary(b)))])
+    }
+
+    fn cursor(&self) -> &ListState {
+        &self.list
     }
 }

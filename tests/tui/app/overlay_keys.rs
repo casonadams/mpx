@@ -4,25 +4,12 @@ use crossterm::event::KeyCode;
 use mpx::config::Config;
 use mpx::tui::app::Mode;
 
-use super::support::{ECHO, Harness, MAIN, connect, window};
-
-#[tokio::test]
-async fn help_overlay_lists_bindings_and_escape_closes_it() {
-    let mut h = Harness::start(Config::default(), ECHO).await;
-    h.frame().await;
-    h.prefixed_char('?').await;
-    assert!(matches!(h.app.mode, Mode::Overlay(_)));
-    assert!(h.frame().await.contains("new-window"));
-
-    h.key(KeyCode::Esc).await;
-    assert!(h.mode_is_normal());
-}
+use super::support::{ECHO, Harness, MAIN};
 
 #[tokio::test]
 async fn tree_overlay_enter_runs_the_selected_window_command() {
     let mut h = Harness::start(Config::default(), ECHO).await;
-    let mut seed = connect(&h.sandbox.endpoint(super::support::SESSION)).await;
-    window(&mut seed, "work", ECHO).await;
+    h.open_window("work").await;
     h.frame().await;
     assert_eq!(h.app.active_pane, "work");
 
@@ -32,8 +19,8 @@ async fn tree_overlay_enter_runs_the_selected_window_command() {
 
     h.prefixed_char('w').await;
     h.key(KeyCode::Down).await;
-    h.key(KeyCode::Enter).await;
-    assert!(h.mode_is_normal());
+    h.closes_with(|mode| matches!(mode, Mode::Overlay(_)), KeyCode::Enter)
+        .await;
     h.frame().await;
     assert_eq!(h.app.active_pane, "work");
 }

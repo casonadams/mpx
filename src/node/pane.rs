@@ -173,6 +173,18 @@ pub struct PaneHandle {
 
 const GONE: &str = "Node is unavailable";
 
+/// Sends the message `make` builds around a reply channel and waits for the answer; `gone` is
+/// the error once the actor has stopped.
+pub async fn ask_actor<M, T>(
+    tx: &mpsc::UnboundedSender<M>,
+    gone: &str,
+    make: impl FnOnce(Reply<T>) -> M,
+) -> Result<T, String> {
+    let (reply, rx) = oneshot::channel();
+    tx.send(make(reply)).map_err(|_| gone.to_string())?;
+    rx.await.map_err(|_| gone.to_string())
+}
+
 impl PaneHandle {
     pub fn name(&self) -> &str {
         &self.name
@@ -191,9 +203,7 @@ impl PaneHandle {
     }
 
     async fn ask<T>(&self, make: impl FnOnce(Reply<T>) -> PaneMsg) -> Result<T, String> {
-        let (tx, rx) = oneshot::channel();
-        self.tx.send(make(tx)).map_err(|_| GONE.to_string())?;
-        rx.await.map_err(|_| GONE.to_string())
+        ask_actor(&self.tx, GONE, make).await
     }
 
     pub async fn info(&self, full: bool) -> Result<NodeInfo, String> {

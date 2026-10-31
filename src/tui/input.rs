@@ -230,16 +230,6 @@ impl App {
         }
     }
 
-    /// Panes that receive typed input: the active pane, or every pane of the active window when
-    /// that window has synchronized input on (tmux `synchronize-panes`).
-    fn input_targets(&self) -> Vec<String> {
-        let synchronized = self.layout.tabs.iter().any(|t| t.is_active && t.synchronized);
-        if synchronized && !self.layout.raw.is_empty() {
-            return self.layout.raw.iter().map(|(name, ..)| name.clone()).collect();
-        }
-        vec![self.active_pane.clone()]
-    }
-
     /// Writes bytes to the active pane (focus reports, the prefix key).
     pub async fn write_active(&mut self, bytes: &[u8]) -> Result<(), String> {
         if self.active_pane.is_empty() {
@@ -250,18 +240,9 @@ impl App {
         self.client.send_input(&pane, &text).await
     }
 
-    /// Writes typed bytes to every input target: the active pane, or all panes of a window with
-    /// synchronized input on.
+    /// Writes typed bytes to the active pane.
     async fn write_typed(&mut self, bytes: &[u8]) -> Result<(), String> {
-        if self.active_pane.is_empty() {
-            return Ok(());
-        }
-        let text = String::from_utf8_lossy(bytes).into_owned();
-        let mut result = Ok(());
-        for pane in self.input_targets() {
-            result = result.and(self.client.send_input(&pane, &text).await);
-        }
-        result
+        self.write_active(bytes).await
     }
 
     pub async fn on_paste(&mut self, text: &str) -> Flow {
@@ -271,18 +252,11 @@ impl App {
             }
             return Flow::Continue;
         }
-        if let Mode::Popup(view) = &self.mode {
-            let name = view.name.clone();
-            let result = self.client.paste(&name, text, false).await;
-            return self.settle(result);
-        }
         if self.active_pane.is_empty() {
             return Flow::Continue;
         }
-        let mut result = Ok(());
-        for pane in self.input_targets() {
-            result = result.and(self.client.paste(&pane, text, false).await);
-        }
+        let pane = self.active_pane.clone();
+        let result = self.client.paste(&pane, text, false).await;
         self.settle(result)
     }
 

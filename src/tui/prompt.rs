@@ -2,6 +2,8 @@
 
 use std::collections::VecDeque;
 
+use crate::format::backslash_escape;
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PromptState {
     chars: Vec<char>,
@@ -375,12 +377,5 @@ pub fn expand_template(template: &str, answers: &[String]) -> String {
 
 /// Backslash-escapes the characters the command parser treats specially.
 fn escape_word(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for c in text.chars() {
-        if matches!(c, '\\' | ';' | '\'' | '"' | '$') {
-            out.push('\\');
-        }
-        out.push(c);
-    }
-    out
+    backslash_escape(text, "\\;'\"$")
 }

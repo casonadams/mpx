@@ -1,22 +1,29 @@
 //! Zoom is the daemon's per-window flag: toggled by requests, followed by every terminal through
 //! the layout it reports, and cleared by the changes that move focus or rearrange the layout.
-use super::support::{connect, start, task};
+use super::support::{TestDaemon, split_right, started_with, task};
 use mpx::client::Client;
-use mpx::layout::{Direction, WindowTab};
-use mpx::protocol::{NewWindowOpts, SplitOpts};
+use mpx::layout::WindowTab;
+use mpx::protocol::NewWindowOpts;
 
-fn split_right(target: &str, name: &str) -> SplitOpts {
-    SplitOpts {
-        target: Some(target.into()),
-        spawn: task(name, "cat", &[]),
-        direction: Direction::Horizontal,
-        percent: None,
-        focus: true,
-    }
+/// A daemon with a `left` pane and a focused `right` pane split off it.
+async fn two_panes() -> (TestDaemon, Client) {
+    let (daemon, mut client) = started_with(task("left", "cat", &[])).await;
+    client.split(split_right("left", "right")).await.unwrap();
+    (daemon, client)
+}
+
+/// The focused pane's name and the window tabs, from one layout request.
+async fn screen(client: &mut Client) -> (Option<String>, Vec<WindowTab>) {
+    let (rects, _, tabs) = client.layout(80, 24).await.unwrap();
+    (rects.into_iter().find(|p| p.2).map(|p| p.0), tabs)
 }
 
 async fn tabs(client: &mut Client) -> Vec<WindowTab> {
-    client.layout(80, 24).await.unwrap().2
+    screen(client).await.1
+}
+
+async fn focused(client: &mut Client) -> Option<String> {
+    screen(client).await.0
 }
 
 /// Whether the active window's flag is set.
@@ -24,95 +31,84 @@ async fn zoomed(client: &mut Client) -> bool {
     tabs(client).await.iter().any(|t| t.is_active && t.zoomed)
 }
 
-async fn focused(client: &mut Client) -> Option<String> {
-    let (rects, _, _) = client.layout(80, 24).await.unwrap();
-    rects.into_iter().find(|p| p.2).map(|p| p.0)
+async fn zoom(client: &mut Client, pane: Option<&str>, on: Option<bool>) {
+    client.zoom(pane, on).await.unwrap();
+}
+
+async fn assert_zoomed(client: &mut Client, expected: bool, why: &str) {
+    assert_eq!(zoomed(client).await, expected, "{why}");
 }
 
 #[tokio::test]
 async fn toggling_zoom_sets_and_clears_the_active_windows_flag() {
-    let daemon = start().await;
-    let mut client = connect(&daemon.endpoint).await;
-    client.spawn(task("left", "cat", &[])).await.unwrap();
-    client.split(split_right("left", "right")).await.unwrap();
-    assert!(!zoomed(&mut client).await);
+    let (_daemon, mut client) = two_panes().await;
+    assert_zoomed(&mut client, false, "starts unzoomed").await;
 
-    client.zoom(None, None).await.unwrap();
-    assert!(zoomed(&mut client).await);
-    client.zoom(None, None).await.unwrap();
-    assert!(!zoomed(&mut client).await);
+    zoom(&mut client, None, None).await;
+    assert_zoomed(&mut client, true, "toggles on").await;
+    zoom(&mut client, None, None).await;
+    assert_zoomed(&mut client, false, "toggles off").await;
 
-    client.zoom(None, Some(true)).await.unwrap();
-    client.zoom(None, Some(true)).await.unwrap();
-    assert!(zoomed(&mut client).await, "setting on twice keeps it on");
-    client.zoom(Some("left"), Some(false)).await.unwrap();
-    assert!(!zoomed(&mut client).await);
+    zoom(&mut client, None, Some(true)).await;
+    zoom(&mut client, None, Some(true)).await;
+    assert_zoomed(&mut client, true, "setting on twice keeps it on").await;
+    zoom(&mut client, Some("left"), Some(false)).await;
+    assert_zoomed(&mut client, false, "setting off clears it").await;
 }
 
 #[tokio::test]
 async fn zooming_a_named_pane_focuses_it_first() {
-    let daemon = start().await;
-    let mut client = connect(&daemon.endpoint).await;
-    client.spawn(task("left", "cat", &[])).await.unwrap();
-    client.split(split_right("left", "right")).await.unwrap();
+    let (_daemon, mut client) = two_panes().await;
     assert_eq!(focused(&mut client).await.as_deref(), Some("right"));
 
-    client.zoom(Some("left"), None).await.unwrap();
+    zoom(&mut client, Some("left"), None).await;
     assert_eq!(focused(&mut client).await.as_deref(), Some("left"));
-    assert!(zoomed(&mut client).await);
+    assert_zoomed(&mut client, true, "zooming sets the flag").await;
     assert!(client.zoom(Some("nosuch"), None).await.is_err());
 }
 
 #[tokio::test]
 async fn focusing_another_pane_unzooms_unless_the_zoom_is_kept() {
-    let daemon = start().await;
-    let mut client = connect(&daemon.endpoint).await;
-    client.spawn(task("left", "cat", &[])).await.unwrap();
-    client.split(split_right("left", "right")).await.unwrap();
+    let (_daemon, mut client) = two_panes().await;
 
-    client.zoom(None, None).await.unwrap();
+    zoom(&mut client, None, None).await;
     client.focus("left").await.unwrap();
-    assert!(!zoomed(&mut client).await, "select-pane unzooms");
+    assert_zoomed(&mut client, false, "select-pane unzooms").await;
 
-    client.zoom(None, None).await.unwrap();
+    zoom(&mut client, None, None).await;
     client.focus_with("right", true).await.unwrap();
-    assert!(zoomed(&mut client).await, "select-pane -Z keeps the zoom");
+    assert_zoomed(&mut client, true, "select-pane -Z keeps the zoom").await;
     assert_eq!(focused(&mut client).await.as_deref(), Some("right"));
 
     client.focus_last_with(true).await.unwrap();
-    assert!(zoomed(&mut client).await, "last-pane -Z keeps the zoom");
+    assert_zoomed(&mut client, true, "last-pane -Z keeps the zoom").await;
     client.focus_last().await.unwrap();
-    assert!(!zoomed(&mut client).await, "last-pane unzooms");
+    assert_zoomed(&mut client, false, "last-pane unzooms").await;
 }
 
 #[tokio::test]
 async fn splitting_and_swapping_unzoom_unless_kept() {
-    let daemon = start().await;
-    let mut client = connect(&daemon.endpoint).await;
-    client.spawn(task("left", "cat", &[])).await.unwrap();
-    client.split(split_right("left", "right")).await.unwrap();
+    let (_daemon, mut client) = two_panes().await;
 
-    client.zoom(None, None).await.unwrap();
+    zoom(&mut client, None, None).await;
     client
         .swap_pane_with(Some("left"), Some("right"), true)
         .await
         .unwrap();
-    assert!(zoomed(&mut client).await, "swap-pane -Z keeps the zoom");
+    assert_zoomed(&mut client, true, "swap-pane -Z keeps the zoom").await;
     client.swap_pane("left", "right").await.unwrap();
-    assert!(!zoomed(&mut client).await, "swap-pane unzooms");
+    assert_zoomed(&mut client, false, "swap-pane unzooms").await;
 
-    client.zoom(None, None).await.unwrap();
+    zoom(&mut client, None, None).await;
     client.split(split_right("left", "third")).await.unwrap();
-    assert!(!zoomed(&mut client).await, "a split unzooms");
+    assert_zoomed(&mut client, false, "a split unzooms").await;
 }
 
 #[tokio::test]
 async fn switching_windows_unzooms_the_window_left_behind() {
-    let daemon = start().await;
-    let mut client = connect(&daemon.endpoint).await;
-    client.spawn(task("main", "cat", &[])).await.unwrap();
-    client.zoom(None, None).await.unwrap();
-    assert!(zoomed(&mut client).await);
+    let (_daemon, mut client) = started_with(task("main", "cat", &[])).await;
+    zoom(&mut client, None, None).await;
+    assert_zoomed(&mut client, true, "zoomed before switching").await;
 
     client
         .new_window(NewWindowOpts {
@@ -127,16 +123,13 @@ async fn switching_windows_unzooms_the_window_left_behind() {
     assert!(after[1].is_active && !after[1].zoomed);
 
     client.select_window(0).await.unwrap();
-    assert!(!zoomed(&mut client).await);
+    assert_zoomed(&mut client, false, "selecting back keeps it unzoomed").await;
 }
 
 #[tokio::test]
 async fn the_tab_reports_the_focused_pane_and_the_zoom() {
-    let daemon = start().await;
-    let mut client = connect(&daemon.endpoint).await;
-    client.spawn(task("left", "cat", &[])).await.unwrap();
-    client.split(split_right("left", "right")).await.unwrap();
-    client.zoom(None, None).await.unwrap();
+    let (_daemon, mut client) = two_panes().await;
+    zoom(&mut client, None, None).await;
 
     let tab = tabs(&mut client).await.remove(0);
     assert!(tab.zoomed);

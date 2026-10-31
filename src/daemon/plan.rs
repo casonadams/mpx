@@ -1,7 +1,5 @@
 //! Pure decisions behind starting a node. No process or socket I/O lives here.
 
-use std::path::Path;
-
 use crate::node::process::basename;
 use crate::protocol::PaneId;
 
@@ -12,14 +10,6 @@ pub struct PaneIdentity<'a> {
     pub session: &'a str,
     pub name: &'a str,
     pub id: PaneId,
-}
-
-/// Inputs for tmux compatibility. `shim_dir` is the outcome of locating the `tmux` shim.
-#[derive(Debug, Clone, Copy)]
-pub struct TmuxEnv<'a> {
-    pub daemon_pid: u32,
-    pub shim_dir: Result<&'a Path, &'a str>,
-    pub inherited_path: &'a str,
 }
 
 /// Requested name, or `<command basename>-<id>` when none was requested.
@@ -58,11 +48,6 @@ pub fn default_argv(
     }
 }
 
-/// tmux compatibility is on when either the spawn or the daemon config asks for it.
-pub fn tmux_enabled(spawn_requested: bool, config_default: bool) -> bool {
-    spawn_requested || config_default
-}
-
 /// Pane whose live working directory a new node inherits: none for a plain spawn, the split
 /// target when given, otherwise the focused pane.
 pub fn cwd_anchor<'a>(
@@ -77,47 +62,17 @@ pub fn cwd_anchor<'a>(
     }
 }
 
-/// `PATH` with the shim directory first; `None` when the shim is unavailable.
-pub fn shim_path(tmux: &TmuxEnv) -> Option<String> {
-    let dir = tmux.shim_dir.ok()?.to_string_lossy().into_owned();
-    Some(if tmux.inherited_path.is_empty() {
-        dir
-    } else {
-        format!("{}:{}", dir, tmux.inherited_path)
-    })
-}
-
-fn tmux_vars(pane: &PaneIdentity, pane_ref: &str, tmux: &TmuxEnv) -> Vec<(String, String)> {
-    let mut vars = vec![
-        (
-            "TMUX".to_string(),
-            format!("{},{},0", pane.endpoint, tmux.daemon_pid),
-        ),
-        ("TMUX_PANE".to_string(), pane_ref.to_string()),
-    ];
-    if let Some(path) = shim_path(tmux) {
-        vars.push(("PATH".to_string(), path));
-    }
-    vars
-}
-
-/// Environment for a pane: identity variables, then tmux variables, then the spawn's own env
-/// (which wins on conflicts).
+/// Environment for a pane: identity variables, then the spawn's own env (which wins on conflicts).
 pub fn pane_env(
     pane: &PaneIdentity,
     extra: &[(String, String)],
-    tmux: Option<&TmuxEnv>,
 ) -> Vec<(String, String)> {
-    let pane_ref = format!("%{}", pane.id);
     let mut env = vec![
         ("MPX_ENDPOINT".to_string(), pane.endpoint.to_string()),
         ("MPX_SESSION".to_string(), pane.session.to_string()),
         ("MPX_PANE".to_string(), pane.name.to_string()),
-        ("MPX_PANE_ID".to_string(), pane_ref.clone()),
+        ("MPX_PANE_ID".to_string(), format!("%{}", pane.id)),
     ];
-    if let Some(tmux) = tmux {
-        env.extend(tmux_vars(pane, &pane_ref, tmux));
-    }
     env.extend(extra.iter().cloned());
     env
 }

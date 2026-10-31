@@ -1,9 +1,17 @@
+//! Format expansion (`#{...}`) and the variables panes and sessions provide.
 use mpx::layout::{Rect, WindowTab};
 use mpx::protocol::NodeInfo;
-use mpx::tmux_shim::{PaneView, Vars, expand, pane_vars, pane_view, session_vars};
+use mpx::format::{PaneView, Vars, expand, pane_vars, pane_view};
 
 fn vars(pairs: &[(&'static str, &str)]) -> Vars {
     pairs.iter().map(|(k, v)| (*k, v.to_string())).collect()
+}
+
+/// Asserts each `(format, want)` pair expands under `v`; the message names the failing format.
+fn assert_expands(v: &Vars, cases: &[(&str, &str)]) {
+    for (format, want) in cases {
+        assert_eq!(expand(format, v), *want, "format {format:?}");
+    }
 }
 
 fn base_vars() -> Vars {
@@ -44,21 +52,29 @@ fn unknown_variables_expand_to_empty() {
 
 #[test]
 fn escapes_produce_literal_hash_comma_and_brace() {
-    let v = base_vars();
-    assert_eq!(expand("100##", &v), "100#");
-    assert_eq!(expand("a#,b#}", &v), "a,b}");
-    assert_eq!(expand("#{?flag,a#,b,c}", &v), "a,b");
-    assert_eq!(expand("#{?flag,a#}b,c}", &v), "a}b");
+    assert_expands(
+        &base_vars(),
+        &[
+            ("100##", "100#"),
+            ("a#,b#}", "a,b}"),
+            ("#{?flag,a#,b,c}", "a,b"),
+            ("#{?flag,a#}b,c}", "a}b"),
+        ],
+    );
 }
 
 #[test]
 fn conditional_picks_branch_by_truthiness() {
-    let v = base_vars();
-    assert_eq!(expand("#{?flag,yes,no}", &v), "yes");
-    assert_eq!(expand("#{?off,yes,no}", &v), "no");
-    assert_eq!(expand("#{?empty,yes,no}", &v), "no");
-    assert_eq!(expand("#{?unknown,yes,no}", &v), "no");
-    assert_eq!(expand("#{?off,x}", &v), "");
+    assert_expands(
+        &base_vars(),
+        &[
+            ("#{?flag,yes,no}", "yes"),
+            ("#{?off,yes,no}", "no"),
+            ("#{?empty,yes,no}", "no"),
+            ("#{?unknown,yes,no}", "no"),
+            ("#{?off,x}", ""),
+        ],
+    );
 }
 
 #[test]
@@ -259,16 +275,6 @@ fn window_counts_come_from_the_pane_view() {
         ..Default::default()
     };
     assert_eq!(expand("#{window_panes}/#{session_windows}", &pane_vars(&p)), "3/2");
-}
-
-#[test]
-fn session_vars_expose_session_context() {
-    let v = session_vars("team", 2, 5);
-    assert_eq!(
-        expand("#{session_attached} #{client_session} #{version}", &v),
-        "1 team 3.4"
-    );
-    assert_eq!(expand("#{session_id}|#{window_zoomed_flag}", &v), "|");
 }
 
 #[test]

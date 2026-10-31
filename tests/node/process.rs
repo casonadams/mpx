@@ -5,9 +5,14 @@ use mpx::node::process::{
 
 fn id(comm: Option<&str>, argv: &[&str]) -> Identity {
     Identity {
-        comm: comm.map(str::to_string),
-        argv: argv.iter().map(|a| a.to_string()).collect(),
+        comm: comm.map(Into::into),
+        argv: argv.iter().copied().map(Into::into).collect(),
     }
+}
+
+fn assert_names(identity: Identity, foreground: Option<&str>, detection: &[&str]) {
+    assert_eq!(foreground_name(&identity).as_deref(), foreground);
+    assert_eq!(detection_names(&identity), detection);
 }
 
 #[test]
@@ -73,23 +78,25 @@ fn comm_is_kept_when_it_matches_argv0() {
 
 #[test]
 fn login_shell_dash_is_ignored_when_comparing() {
-    let shell = id(Some("zsh"), &["-zsh"]);
-    assert_eq!(foreground_name(&shell).as_deref(), Some("zsh"));
-    assert_eq!(detection_names(&shell), vec!["zsh"]);
+    assert_names(id(Some("zsh"), &["-zsh"]), Some("zsh"), &["zsh"]);
 }
 
 #[test]
 fn interpreter_names_the_script_it_runs() {
-    let omp = id(Some("node"), &["node", "/opt/omp/bin/omp.js"]);
-    assert_eq!(foreground_name(&omp).as_deref(), Some("omp.js"));
-    assert_eq!(detection_names(&omp), vec!["node", "omp.js"]);
+    assert_names(
+        id(Some("node"), &["node", "/opt/omp/bin/omp.js"]),
+        Some("omp.js"),
+        &["node", "omp.js"],
+    );
 }
 
 #[test]
 fn interpreter_argv0_is_not_used_as_display_name() {
-    let bun_run = id(Some("2.0.1"), &["bun", "/x/codex"]);
-    assert_eq!(foreground_name(&bun_run).as_deref(), Some("2.0.1"));
-    assert_eq!(detection_names(&bun_run), vec!["2.0.1", "bun", "codex"]);
+    assert_names(
+        id(Some("2.0.1"), &["bun", "/x/codex"]),
+        Some("2.0.1"),
+        &["2.0.1", "bun", "codex"],
+    );
 }
 
 #[test]

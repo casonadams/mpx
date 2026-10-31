@@ -1,36 +1,14 @@
 //! Copy mode (prefix `[`, wheel, mouse drag) and mouse focus, through real input events.
 use crossterm::event::{KeyCode, MouseButton, MouseEventKind};
 
-use mpx::config::Config;
 use mpx::layout::Direction;
 use mpx::tui::app::Mode;
 
-use super::support::{ECHO, Harness, MAIN, split};
-
-/// Prints `hello world` on the first row, then READY on the second.
-fn two_lines() -> String {
-    format!(r"printf 'hello world\r\n'; {ECHO}")
-}
-
-/// Prints 40 numbered lines, so the pane has scrollback.
-fn long_output() -> String {
-    format!(r"for i in $(seq 1 40); do printf 'line %s\r\n' $i; done; {ECHO}")
-}
-
-async fn started(script: &str) -> Harness {
-    let mut h = Harness::start(Config::default(), script).await;
-    h.frame().await;
-    h.until("pane text drawn", |app| {
-        app.active_vt()
-            .is_some_and(|vt| vt.snapshot().contains("READY"))
-    })
-    .await;
-    h
-}
+use super::support::{ECHO, Harness, MAIN, long_output, split, two_lines};
 
 #[tokio::test]
 async fn prefix_bracket_enters_copy_mode_and_q_leaves_it() {
-    let mut h = started(ECHO).await;
+    let mut h = Harness::started(ECHO).await;
     h.prefixed_char('[').await;
     assert!(h.frame().await.contains("COPY -0/0"));
     h.key(KeyCode::Char('q')).await;
@@ -40,7 +18,7 @@ async fn prefix_bracket_enters_copy_mode_and_q_leaves_it() {
 
 #[tokio::test]
 async fn keyboard_selection_yanks_the_selected_text() {
-    let mut h = started(&two_lines()).await;
+    let mut h = Harness::started(&two_lines()).await;
     h.prefixed_char('[').await;
     h.key(KeyCode::Char('0')).await;
     h.key(KeyCode::Char('v')).await;
@@ -53,7 +31,7 @@ async fn keyboard_selection_yanks_the_selected_text() {
 
 #[tokio::test]
 async fn mouse_drag_selects_and_release_copies() {
-    let mut h = started(&two_lines()).await;
+    let mut h = Harness::started(&two_lines()).await;
     h.frame().await;
     h.mouse(MouseEventKind::Down(MouseButton::Left), 0, 0).await;
     h.mouse(MouseEventKind::Drag(MouseButton::Left), 4, 0).await;
@@ -67,7 +45,7 @@ async fn mouse_drag_selects_and_release_copies() {
 
 #[tokio::test]
 async fn mouse_wheel_scrolls_into_history() {
-    let mut h = started(&long_output()).await;
+    let mut h = Harness::started(&long_output()).await;
     h.frame().await;
 
     h.mouse(MouseEventKind::ScrollUp, 5, 5).await;
@@ -83,7 +61,7 @@ async fn mouse_wheel_scrolls_into_history() {
 
 #[tokio::test]
 async fn copy_mode_entered_from_the_keyboard_outlasts_the_wheel_and_keys_at_the_bottom() {
-    let mut h = started(&long_output()).await;
+    let mut h = Harness::started(&long_output()).await;
     h.frame().await;
     h.prefixed_char('[').await;
     h.ctrl('u').await;
@@ -95,7 +73,7 @@ async fn copy_mode_entered_from_the_keyboard_outlasts_the_wheel_and_keys_at_the_
 
 #[tokio::test]
 async fn mouse_click_focuses_the_clicked_pane_without_copy_mode() {
-    let mut h = started(ECHO).await;
+    let mut h = Harness::started(ECHO).await;
     split(&mut h.probe, MAIN, "plain", Direction::Horizontal).await;
     h.frame().await;
     let target = h.rect_of("plain");
@@ -114,7 +92,7 @@ async fn mouse_click_focuses_the_clicked_pane_without_copy_mode() {
 
 #[tokio::test]
 async fn leaving_a_pane_in_copy_mode_keeps_its_view_and_returning_resumes_it() {
-    let mut h = started(&long_output()).await;
+    let mut h = Harness::started(&long_output()).await;
     h.frame().await;
     h.mouse(MouseEventKind::ScrollUp, 5, 5).await;
     h.mouse(MouseEventKind::ScrollUp, 5, 5).await;
@@ -136,7 +114,7 @@ async fn leaving_a_pane_in_copy_mode_keeps_its_view_and_returning_resumes_it() {
 
 #[tokio::test]
 async fn the_prefix_alone_does_not_end_copy_mode() {
-    let mut h = started(ECHO).await;
+    let mut h = Harness::started(ECHO).await;
     h.prefixed_char('[').await;
     h.ctrl('b').await;
     h.key(KeyCode::Esc).await;
@@ -145,7 +123,7 @@ async fn the_prefix_alone_does_not_end_copy_mode() {
 
 #[tokio::test]
 async fn clicking_a_pane_in_copy_mode_keeps_its_scroll_and_selects_nothing() {
-    let mut h = started(&long_output()).await;
+    let mut h = Harness::started(&long_output()).await;
     h.frame().await;
     h.mouse(MouseEventKind::ScrollUp, 5, 5).await;
     assert!(h.frame().await.contains("COPY -3/"));
@@ -165,7 +143,7 @@ async fn clicking_a_pane_in_copy_mode_keeps_its_scroll_and_selects_nothing() {
 
 #[tokio::test]
 async fn copy_mode_prefix_opens_the_prefix_menu() {
-    let mut h = started(ECHO).await;
+    let mut h = Harness::started(ECHO).await;
     h.app.config.which_key_delay_ms = 0;
     h.prefixed_char('[').await;
     h.ctrl('b').await;
@@ -174,7 +152,7 @@ async fn copy_mode_prefix_opens_the_prefix_menu() {
 
 #[tokio::test]
 async fn copy_mode_search_up_and_down_moves_cursor_and_scrolls() {
-    let mut h = started(&long_output()).await;
+    let mut h = Harness::started(&long_output()).await;
     h.frame().await;
     h.prefixed_char('[').await;
     assert!(h.frame().await.contains("COPY -0/"));
@@ -218,7 +196,7 @@ fn history_of(h: &Harness) -> usize {
 
 #[tokio::test]
 async fn a_live_pane_keeps_no_scrollback_and_copy_mode_brings_it_back() {
-    let mut h = started(&long_output()).await;
+    let mut h = Harness::started(&long_output()).await;
     h.frame().await;
     assert_eq!(history_of(&h), 0, "the daemon keeps scrollback, not the live view");
 
@@ -236,7 +214,7 @@ async fn a_live_pane_keeps_no_scrollback_and_copy_mode_brings_it_back() {
 
 #[tokio::test]
 async fn stdout_updating_in_copy_mode_anchors_viewport_and_selection() {
-    let mut h = started(ECHO).await;
+    let mut h = Harness::started(ECHO).await;
     let mut fill = String::new();
     for i in 1..=35 {
         fill.push_str(&format!("line {i}\r\n"));

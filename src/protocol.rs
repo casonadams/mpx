@@ -1,37 +1,9 @@
-use crate::config::BorderStyle;
 use crate::keys::TermModes;
 use crate::layout::{Direction, Divider, Rect, WindowTab};
 use serde::{Deserialize, Serialize};
 
 /// Stable numeric pane identifier, rendered as `%N` (tmux-compatible).
 pub type PaneId = u32;
-
-/// Which name/value store of the session a variable request addresses.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum VarKind {
-    /// tmux options (`set-option`), including user options starting with `@`.
-    Option,
-    /// Environment handed to panes created later (`set-environment`).
-    Environment,
-    /// Key bindings made while running (`bind-key`): name `prefix:KEY` or `root:KEY`, value the
-    /// command line, empty for a removed binding.
-    Binding,
-    /// Commands run on events (`set-hook`): name the hook, value the command line.
-    Hook,
-}
-
-/// What a `WaitFor` request does with a channel (tmux `wait-for`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ChannelAction {
-    /// Block until the channel is signaled (returns at once when a signal is already pending).
-    Wait,
-    Signal,
-    /// Block until the channel's lock is free, then hold it.
-    Lock,
-    Unlock,
-}
 
 /// A paste buffer: tmux's stack of copied text.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -139,9 +111,6 @@ pub struct SpawnOpts {
     /// Keep the pane on screen after exit; `None` uses the daemon config default.
     #[serde(default)]
     pub remain_on_exit: Option<bool>,
-    /// Export TMUX/TMUX_PANE and put the mpx `tmux` shim first on PATH.
-    #[serde(default)]
-    pub tmux_compat: bool,
 }
 
 fn default_true() -> bool {
@@ -237,97 +206,9 @@ pub struct WaitOutcome {
     pub matched: Option<String>,
 }
 
-/// Size of a popup along one axis (tmux `display-popup -w`/`-h`): cells, or a percentage of the
-/// terminal's size.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PopupSize {
-    Cells(u16),
-    Percent(u8),
-}
-
-/// Where a popup sits along one axis (tmux `display-popup -x`/`-y`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PopupAnchor {
-    /// This many cells from the start (left or top) edge.
-    Cells(u16),
-    /// The start edge: left or top (tmux `L`, `T`, `W`).
-    Start,
-    /// Centred (tmux `C`).
-    Centre,
-    /// The end edge: right or bottom (tmux `R`, `B`).
-    End,
-    /// The start of the active pane (tmux `P`).
-    Pane,
-}
-
-/// How a popup looks: its size, position and border.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PopupSpec {
-    pub width: PopupSize,
-    pub height: PopupSize,
-    pub x: PopupAnchor,
-    pub y: PopupAnchor,
-    pub border: bool,
-    /// Line style of the border (tmux `-b`); `None` uses the session's pane border lines.
-    pub lines: Option<BorderStyle>,
-    /// Colour of the border (tmux `-S fg=`); `None` uses the pane border colour.
-    pub border_color: Option<String>,
-}
-
-impl Default for PopupSpec {
-    fn default() -> Self {
-        Self {
-            width: PopupSize::Percent(50),
-            height: PopupSize::Percent(50),
-            x: PopupAnchor::Centre,
-            y: PopupAnchor::Centre,
-            border: true,
-            lines: None,
-            border_color: None,
-        }
-    }
-}
-
-/// When a popup closes by itself once its program has exited (tmux `-E` and `-EE`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PopupExit {
-    /// Stays open, showing the exit, until a key is pressed.
-    Stay,
-    /// Closes whatever the status (`-E`).
-    Close,
-    /// Closes only when the status is zero (`-EE`).
-    CloseOnSuccess,
-}
-
-impl PopupExit {
-    /// Whether a popup whose program exited with `code` closes by itself.
-    pub fn closes(self, code: Option<i32>) -> bool {
-        match self {
-            Self::Stay => false,
-            Self::Close => true,
-            Self::CloseOnSuccess => code == Some(0),
-        }
-    }
-}
-
-/// A `display-popup` request: the program runs as an unplaced pane named `popup-N`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PopupOpts {
-    /// The program (an empty command runs the default command), its start directory and
-    /// environment.
-    pub spawn: SpawnOpts,
-    pub spec: PopupSpec,
-    pub exit: PopupExit,
-    /// Reply only once the popup has closed, with the program's status.
-    pub wait: bool,
-}
-
 /// Version of the client-daemon protocol. Bump it on any change an older peer cannot parse, so
 /// clients refuse an incompatible daemon instead of misreading it.
-pub const PROTOCOL: u32 = 7;
+pub const PROTOCOL: u32 = 8;
 
 fn first_protocol() -> u32 {
     1
@@ -516,22 +397,15 @@ pub enum Request {
     ReloadConfig {
         path: Option<String>,
     },
-    /// Set a variable of the session; `None` removes it.
-    SetVar {
-        kind: VarKind,
+    /// Set a key binding made while running (`bind-key`): `name` is `prefix:KEY` or `root:KEY`
+    /// (or a copy-mode table), `line` the command line, empty for a removed binding; `None` forgets
+    /// it. Terminals are told to refresh with `StreamEvent::Bindings`.
+    SetBinding {
         name: String,
-        value: Option<String>,
+        line: Option<String>,
     },
-    /// Turn synchronized input (tmux `synchronize-panes`) on or off for a window; `None` is the
-    /// active window.
-    SetSynchronized {
-        window: Option<usize>,
-        on: bool,
-    },
-    /// All variables of one store, sorted by name.
-    GetVars {
-        kind: VarKind,
-    },
+    /// All runtime key bindings, sorted by name.
+    GetBindings,
     /// Push a paste buffer; `name` replaces a buffer of that name, else a `bufferNNNN` name is made.
     SetBuffer {
         name: Option<String>,
@@ -545,45 +419,9 @@ pub enum Request {
     DeleteBuffer {
         name: Option<String>,
     },
-    WaitFor {
-        channel: String,
-        action: ChannelAction,
-    },
-    /// Have attached terminal clients run this command line (`detach-client`, `switch-client`).
-    /// The reply carries the command's sequence number: `CommandSettled` says when every terminal
-    /// has run it.
-    ClientCommand {
-        line: String,
-    },
-    /// A terminal reports that it has run the client command `seq` and applied its effects (copy
-    /// text reached the paste buffers, pane modes were sent).
-    CommandApplied {
-        seq: u64,
-    },
-    /// Whether every terminal has reported `CommandApplied` for `seq` (or none was attached).
-    CommandSettled {
-        seq: u64,
-    },
-    /// Move pane `src` next to `dst` (tmux `join-pane`).
-    JoinPane {
-        src: String,
-        dst: String,
-        side_by_side: bool,
-    },
-    SwapWindow {
-        a: usize,
-        b: usize,
-    },
     MoveWindow {
         from: usize,
         to: usize,
-    },
-    /// Feed a pane's output to a shell command (tmux `pipe-pane`), replacing an earlier pipe;
-    /// `None` stops piping. With `toggle`, an existing pipe is stopped instead of replaced.
-    PipePane {
-        name: String,
-        command: Option<String>,
-        toggle: bool,
     },
     /// Rotates the panes of the active window through its layout slots (tmux `rotate-window`).
     /// The default moves every pane to the slot before it (the first pane goes last); `down`
@@ -591,39 +429,6 @@ pub enum Request {
     RotateWindow {
         down: bool,
     },
-    /// Restarts a pane's process in place (tmux `respawn-pane`): the pane keeps its name and
-    /// layout slot. `kill` stops a running process first. `cwd` and `command` (program, then its
-    /// arguments) replace the pane's own for this and later respawns.
-    Respawn {
-        name: String,
-        #[serde(default)]
-        kill: bool,
-        #[serde(default)]
-        cwd: Option<String>,
-        #[serde(default)]
-        command: Option<Vec<String>>,
-    },
-    /// Opens a popup (tmux `display-popup`): a program drawn in a floating pane over the attached
-    /// terminals' view. One popup is open per session. With `wait`, the reply comes when the popup
-    /// closes and carries the program's status.
-    Popup(PopupOpts),
-    /// Closes the open popup, stopping its program if it still runs (tmux `display-popup -C`, and
-    /// the key that dismisses a finished popup).
-    ClosePopup,
-    /// Records whether pane `name` is in a mode (copy mode) in terminal `terminal`, as tmux's
-    /// `pane_in_mode` reports it. A pane is in a mode while any terminal has it in one; the daemon
-    /// forgets a terminal's marks when its connection closes (`ForgetPaneModes`).
-    SetPaneMode {
-        name: String,
-        on: bool,
-        terminal: u64,
-    },
-    /// Drops every pane mode that terminal `terminal` reported.
-    ForgetPaneModes {
-        terminal: u64,
-    },
-    /// The panes currently in a mode, sorted by name.
-    PaneModes,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -645,19 +450,9 @@ pub enum Response {
     Screen(String),
     Layout(Vec<(String, Rect, bool)>, Vec<Divider>, Vec<WindowTab>),
     Cwd(Option<String>),
-    Vars(Vec<(String, String)>),
+    Bindings(Vec<(String, String)>),
     Buffer(Buffer),
     Buffers(Vec<Buffer>),
-    /// The popup closed; `status` is its program's exit code (`None` when it had none).
-    PopupClosed {
-        status: Option<i32>,
-    },
-    /// The panes in a mode (see `Request::PaneModes`).
-    PaneModes(Vec<String>),
-    /// The sequence number of a client command (see `Request::ClientCommand`).
-    Seq(u64),
-    /// Whether a client command has settled (see `Request::CommandSettled`).
-    Settled(bool),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -684,22 +479,8 @@ pub enum StreamEvent {
     /// Windows or panes were rearranged (focus, a window switch, a split, a swap...): refetch the
     /// layout. Sent only to subscribers that asked for it, so older clients never see it.
     Layout,
-    /// Run this command line, as if typed at the prompt. Sent only to subscribers that asked for
-    /// layout events (terminal clients). `seq` is acknowledged with `CommandApplied`; 0 means no
-    /// acknowledgement is awaited.
-    ClientCommand {
-        line: String,
-        seq: u64,
-    },
-    /// A popup opened: terminals draw the pane `name` over their view, sized by `spec`.
-    PopupOpen {
-        name: String,
-        spec: PopupSpec,
-    },
-    /// The popup closed: terminals remove it.
-    PopupClose {
-        name: String,
-    },
+    /// The session's runtime key bindings changed: terminals re-read them.
+    Bindings,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

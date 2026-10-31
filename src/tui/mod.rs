@@ -8,7 +8,6 @@ pub mod keymap;
 pub mod labels;
 pub mod overlay;
 pub mod panes;
-pub mod popup;
 pub mod prompt;
 pub mod render;
 pub mod stream;

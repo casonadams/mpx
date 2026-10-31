@@ -1,5 +1,6 @@
 mod daemon {
     mod basics;
+    mod config_policy;
     mod env;
     mod exit_drain;
     mod idempotency;
@@ -8,19 +9,16 @@ mod daemon {
     mod layout;
     mod lifecycle;
     mod logs;
-    mod options;
-    mod pane_modes;
     mod pacing;
     mod panes;
     mod plan;
-    mod popup;
     mod prompt;
+    mod rotate;
     mod snapshot;
+    mod state;
     mod stream;
     mod support;
     mod task_node;
-    mod tmux_ops;
-    mod tmux_state;
     mod wait;
     mod zoom;
 }

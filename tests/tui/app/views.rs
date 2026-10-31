@@ -5,27 +5,23 @@ use std::time::{Duration, Instant};
 use crossterm::event::KeyCode;
 
 use mpx::config::Config;
-use mpx::layout::Direction;
 use mpx::tui::app::{ClockSource, Mode};
 
-use super::support::{ECHO, Harness, MAIN, split, wait_for};
+use super::support::{ECHO, Harness, MAIN, SESSION, wait_for};
 
-/// Types `line` at the `:` prompt and submits it.
-async fn type_command(h: &mut Harness, line: &str) {
-    h.prefixed_char(':').await;
-    h.type_str(line).await;
-    h.key(KeyCode::Enter).await;
+/// What opens an overlay or reports on the status row: a `:` command line, or a key after the prefix.
+enum Opener {
+    Command(&'static str),
+    Prefixed(char),
 }
 
 #[tokio::test]
 async fn display_panes_draws_numbers_and_a_digit_selects_that_pane() {
     let mut h = Harness::start(Config::default(), ECHO).await;
-    split(&mut h.probe, MAIN, "side", Direction::Horizontal).await;
-    h.frame().await;
-    h.app.refresh_nodes().await;
+    h.split_side("side").await;
     assert_eq!(h.app.active_pane, MAIN);
 
-    type_command(&mut h, "display-panes -d 0").await;
+    h.command("display-panes -d 0").await;
     assert!(matches!(h.app.mode, Mode::Panes { until: None }));
     let shown = h.frame().await;
     assert!(shown.contains('█'), "numbers are drawn large:\n{shown}");
@@ -37,80 +33,100 @@ async fn display_panes_draws_numbers_and_a_digit_selects_that_pane() {
 }
 
 #[tokio::test]
-async fn a_digit_without_a_pane_or_any_other_key_only_dismisses_the_numbers() {
-    let mut h = Harness::start(Config::default(), ECHO).await;
-    h.frame().await;
-
-    type_command(&mut h, "display-panes -d 0").await;
-    h.key(KeyCode::Char('7')).await;
-    assert!(h.mode_is_normal());
-    assert_eq!(h.app.active_pane, MAIN);
-
-    type_command(&mut h, "display-panes -d 0").await;
-    h.key(KeyCode::Esc).await;
-    assert!(h.mode_is_normal());
+async fn a_digit_or_other_key_only_dismisses_the_numbers() {
+    for key in [KeyCode::Char('7'), KeyCode::Esc] {
+        let mut h = Harness::idle().await;
+        h.command("display-panes -d 0").await;
+        h.key(key).await;
+        assert!(h.mode_is_normal(), "{key:?} dismisses the numbers");
+        assert_eq!(h.app.active_pane, MAIN);
+    }
 }
 
 #[tokio::test]
 async fn display_panes_times_out_after_its_duration_or_the_configured_default() {
-    let mut h = Harness::start(Config::default(), ECHO).await;
-    h.frame().await;
+    let mut h = Harness::idle().await;
 
-    type_command(&mut h, "display-panes -d 1000").await;
+    h.command("display-panes -d 1000").await;
     assert!(h.app.display_deadline().is_some());
     h.app.expire_panes(Instant::now());
     assert!(matches!(h.app.mode, Mode::Panes { .. }), "not due yet");
     h.app.expire_panes(Instant::now() + Duration::from_secs(2));
     assert!(h.mode_is_normal());
 
-    type_command(&mut h, "display-panes").await;
+    h.command("display-panes").await;
     assert!(
         matches!(h.app.mode, Mode::Panes { until: Some(_) }),
         "no -d takes display-panes-time"
     );
 }
 
+/// Whether the app is in the mode an overlay opens.
+type ModeCheck = fn(&Mode) -> bool;
+
+/// Each overlay opens on its command or key, draws its text, and closes on its own key.
 #[tokio::test]
-async fn clock_mode_fills_the_active_pane_until_a_key_is_pressed() {
-    let mut h = Harness::start(Config::default(), ECHO).await;
-    h.app.clock = ClockSource::Fixed(9, 41);
-    h.frame().await;
-
-    type_command(&mut h, "clock-mode").await;
-    assert!(matches!(&h.app.mode, Mode::Clock { pane } if pane == MAIN));
-    let shown = h.frame().await;
-    assert!(shown.contains('█'), "the digits are drawn:\n{shown}");
-
-    h.key(KeyCode::Char('a')).await;
-    assert!(h.mode_is_normal(), "any key ends clock mode");
+async fn overlays_open_show_their_text_and_close_on_their_key() {
+    let cases: [(Opener, ModeCheck, &str, KeyCode); 2] = [
+        (
+            Opener::Command("clock-mode"),
+            |mode| matches!(mode, Mode::Clock { pane } if pane == MAIN),
+            "█",
+            KeyCode::Char('a'),
+        ),
+        (
+            Opener::Prefixed('?'),
+            |mode| matches!(mode, Mode::Overlay(_)),
+            "new-window",
+            KeyCode::Esc,
+        ),
+    ];
+    for (opener, shows, text, close) in cases {
+        let mut h = Harness::start(Config::default(), ECHO).await;
+        h.app.clock = ClockSource::Fixed(9, 41);
+        h.frame().await;
+        let shown = match opener {
+            Opener::Command(line) => h.command_frame(line).await,
+            Opener::Prefixed(c) => h.prefixed_frame(c).await,
+        };
+        assert!(shown.contains(text), "{text:?} missing from:\n{shown}");
+        h.closes_with(shows, close).await;
+    }
 }
 
+/// Commands and keys that report on the status row, with the message each leaves there.
 #[tokio::test]
-async fn clock_mode_names_a_missing_target_on_the_status_row() {
-    let mut h = Harness::start(Config::default(), ECHO).await;
-    h.frame().await;
-    type_command(&mut h, "clock-mode -t nowhere").await;
-    assert!(h.mode_is_normal());
-    assert_eq!(h.app.live_message(), Some("no pane nowhere"));
+async fn commands_and_keys_report_their_outcome_on_the_status_row() {
+    let cases = [
+        (Opener::Command("clock-mode -t nowhere"), "no pane nowhere"),
+        (Opener::Command("display-message window #{window_index}"), "window 0"),
+        (Opener::Prefixed(')'), "no other session"),
+    ];
+    for (opener, want) in cases {
+        let mut h = Harness::idle().await;
+        let message = match opener {
+            Opener::Command(line) => h.command_message(line).await,
+            Opener::Prefixed(c) => h.prefixed_message(c).await,
+        };
+        assert_eq!(message.as_deref(), Some(want));
+        assert!(h.mode_is_normal());
+        assert_eq!(h.app.session, SESSION);
+    }
 }
 
 #[tokio::test]
 async fn show_messages_lists_the_status_row_messages() {
-    let mut h = Harness::start(Config::default(), ECHO).await;
-    h.frame().await;
+    let mut h = Harness::idle().await;
     h.app.say("first note");
     h.app.say("second note");
 
-    type_command(&mut h, "show-messages").await;
-    assert!(matches!(h.app.mode, Mode::Overlay(_)));
-    let shown = h.frame().await;
+    let shown = h.command_frame("show-messages").await;
     assert!(
         shown.contains("first note") && shown.contains("second note"),
         "{shown}"
     );
-
-    h.key(KeyCode::Char('q')).await;
-    assert!(h.mode_is_normal());
+    h.closes_with(|mode| matches!(mode, Mode::Overlay(_)), KeyCode::Char('q'))
+        .await;
 }
 
 #[tokio::test]
@@ -139,7 +155,7 @@ async fn list_buffers_shows_each_buffer_with_its_size_and_sample() {
         .expect("set buffer");
     h.frame().await;
 
-    type_command(&mut h, "list-buffers").await;
+    h.command("list-buffers").await;
     assert!(matches!(h.app.mode, Mode::Overlay(_)));
     let shown = h.frame().await;
     assert!(
@@ -161,7 +177,7 @@ async fn choose_buffer_pastes_the_highlighted_buffer_and_deletes_on_d() {
         .expect("set buffer");
     h.frame().await;
 
-    type_command(&mut h, "choose-buffer").await;
+    h.command("choose-buffer").await;
     assert!(matches!(h.app.mode, Mode::Overlay(_)));
     let shown = h.frame().await;
     assert!(
@@ -174,7 +190,7 @@ async fn choose_buffer_pastes_the_highlighted_buffer_and_deletes_on_d() {
     let output = wait_for(&mut h.probe, MAIN, "fresh text").await;
     assert!(output.contains("fresh text"), "the newest buffer is pasted");
 
-    type_command(&mut h, "choose-buffer").await;
+    h.command("choose-buffer").await;
     h.key(KeyCode::Char('d')).await;
     assert!(
         matches!(h.app.mode, Mode::Overlay(_)),
@@ -191,46 +207,12 @@ async fn choose_buffer_pastes_the_highlighted_buffer_and_deletes_on_d() {
     assert_eq!(names, vec!["older".to_string()]);
 }
 
-#[tokio::test]
-async fn multi_line_tmux_output_opens_a_text_overlay() {
-    let mut h = Harness::start(Config::default(), ECHO).await;
-    split(&mut h.probe, MAIN, "side", Direction::Horizontal).await;
-    h.frame().await;
-
-    type_command(&mut h, "list-panes").await;
-    assert!(
-        matches!(h.app.mode, Mode::Overlay(_)),
-        "two lines open the overlay"
-    );
-    let shown = h.frame().await;
-    assert!(
-        shown.contains("list-panes"),
-        "titled with the command:\n{shown}"
-    );
-    h.key(KeyCode::Char('q')).await;
-    assert!(h.mode_is_normal());
-}
-
-#[tokio::test]
-async fn one_line_of_tmux_output_stays_on_the_status_row() {
-    let mut h = Harness::start(Config::default(), ECHO).await;
-    h.frame().await;
-
-    type_command(&mut h, "list-panes").await;
-    assert!(h.mode_is_normal());
-    assert!(
-        h.app.live_message().is_some(),
-        "the line is the status message"
-    );
-}
-
 #[cfg(unix)]
 #[tokio::test]
 async fn suspend_client_asks_the_event_loop_to_stop_the_process() {
-    let mut h = Harness::start(Config::default(), ECHO).await;
-    h.frame().await;
+    let mut h = Harness::idle().await;
 
-    type_command(&mut h, "suspend-client").await;
+    h.command("suspend-client").await;
     assert!(h.mode_is_normal());
     assert!(h.app.suspend_requested);
 }

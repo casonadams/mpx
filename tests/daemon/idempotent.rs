@@ -1,10 +1,8 @@
-use super::support::{connect, logs_until, start, task};
+use super::support::{connect, logs_until, started_with, task};
 
 #[tokio::test]
 async fn repeated_key_pastes_once() {
-    let daemon = start().await;
-    let mut client = connect(&daemon.endpoint).await;
-    client.spawn(task("sink", "cat", &[])).await.unwrap();
+    let (_daemon, mut client) = started_with(task("sink", "cat", &[])).await;
 
     client
         .idempotency_key("paste-1")
@@ -23,9 +21,7 @@ async fn repeated_key_pastes_once() {
 
 #[tokio::test]
 async fn concurrent_repeats_of_a_key_paste_once() {
-    let daemon = start().await;
-    let mut client = connect(&daemon.endpoint).await;
-    client.spawn(task("racer", "cat", &[])).await.unwrap();
+    let (daemon, mut client) = started_with(task("racer", "cat", &[])).await;
 
     let mut racers = Vec::new();
     for _ in 0..2 {
@@ -47,9 +43,7 @@ async fn concurrent_repeats_of_a_key_paste_once() {
 
 #[tokio::test]
 async fn nested_idempotent_requests_are_rejected() {
-    let daemon = start().await;
-    let mut client = connect(&daemon.endpoint).await;
-    client.spawn(task("nest", "cat", &[])).await.unwrap();
+    let (_daemon, mut client) = started_with(task("nest", "cat", &[])).await;
     let err = client
         .idempotency_key("outer")
         .stream_logs(Some("nest".to_string()), None, |_| false)

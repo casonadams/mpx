@@ -1,7 +1,7 @@
 //! The session actor: sole owner of the workspace, pane handles, exited history, session-wide
 //! subscribers, the idempotency cache and snapshot saving. Pane exits arrive on the same mailbox
 //! as requests, so a request sent after an exit was observed always sees the updated layout.
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -14,7 +14,6 @@ use tracing::warn;
 use super::idempotency::{Claim, IdemCache};
 use super::plan::{self, PaneIdentity};
 use super::snapshot::{PaneRecord, build_snapshot};
-use super::pipes::Pipes;
 use super::stores::Stores;
 use crate::node::sleep_until_opt;
 use crate::config::Config;
@@ -26,11 +25,10 @@ use crate::node::process::basename;
 use crate::node::sink::Sink;
 use crate::node::{SpawnSpec, now_ms};
 use crate::protocol::{
-    NewWindowOpts, NodeInfo, PaneId, PopupExit, PopupOpts, PopupSpec, Request, Response,
-    SessionInfo, SpawnOpts, SplitOpts, StreamEvent, VarKind,
+    NewWindowOpts, NodeInfo, PaneId, Request, Response,
+    SessionInfo, SpawnOpts, SplitOpts, StreamEvent,
 };
 use crate::store::{SessionSnapshot, SnapshotStore, WindowPlan, plan_restore};
-use crate::tmux_shim;
 
 pub(super) type Reply<T> = oneshot::Sender<T>;
 
@@ -82,12 +80,6 @@ pub(super) enum SessionMsg {
         key: String,
     },
     Notice(PaneNotice),
-    /// Opens the popup (tmux `display-popup`). The reply carries a receiver for the popup's
-    /// status when the caller waits for it to close.
-    Popup {
-        opts: Box<PopupOpts>,
-        reply: Reply<Result<Option<oneshot::Receiver<Option<i32>>>, String>>,
-    },
 }
 
 /// Which session-wide events a subscriber receives.
@@ -102,13 +94,7 @@ impl Filter {
     /// Whether `event` goes to this subscriber; `shown` says if a pane is in the active window.
     fn accepts(&self, event: &StreamEvent, shown: impl Fn(&str) -> bool) -> bool {
         match (self, event) {
-            (
-                _,
-                StreamEvent::Layout
-                | StreamEvent::ClientCommand { .. }
-                | StreamEvent::PopupOpen { .. }
-                | StreamEvent::PopupClose { .. },
-            ) => {
+            (_, StreamEvent::Layout | StreamEvent::Bindings) => {
                 matches!(self, Filter::ActiveWindow { layout: true })
             }
             (Filter::Everything, _) => true,
@@ -151,21 +137,6 @@ pub(super) struct Entry {
     pub exited: bool,
 }
 
-/// The session's open popup (tmux `display-popup`): an unplaced pane that terminals draw over their
-/// view. Its program's exit closes the popup when `exit` says so; otherwise a key does.
-struct Popup {
-    name: String,
-    spec: PopupSpec,
-    exit: PopupExit,
-    /// The program has exited; its pane stays until the popup closes.
-    exited: bool,
-    /// The program was asked to stop: the popup closes when it exits.
-    closing: bool,
-    status: Option<i32>,
-    /// Callers waiting for the popup to close, answered with its status.
-    waiters: Vec<Reply<Option<i32>>>,
-}
-
 /// Where a new pane goes in the layout.
 pub(super) enum Placement {
     /// Split the focused pane of the active window (new window when empty).
@@ -194,8 +165,6 @@ enum Next {
 struct Session {
     session: String,
     endpoint: String,
-    /// The config as loaded; `config` is this with the session's options on top.
-    base_config: Config,
     config: Config,
     created_ms: u64,
     restored_ms: Option<u64>,
@@ -212,17 +181,9 @@ struct Session {
     pacing: Arc<Pacing>,
     /// Named subscribers waiting for a pane of that name: name, replay offset, sink.
     pending: Vec<(String, Option<u64>, Sink)>,
-    /// The open popup, if any.
-    popup: Option<Popup>,
     idem: IdemCache<Response>,
     snapshots: SnapshotStore,
     stores: Stores,
-    /// Sequence number of the last client command sent to the terminals.
-    command_seq: u64,
-    /// Client commands not yet applied by every terminal: sequence number and the terminals still
-    /// to report.
-    command_pending: BTreeMap<u64, usize>,
-    pipes: Pipes,
     save_due: Option<Instant>,
     shutting_down: bool,
 }
@@ -244,7 +205,6 @@ pub(super) async fn run(boot: Boot, mut rx: mpsc::UnboundedReceiver<SessionMsg>)
     let mut session = Session {
         session: session.clone(),
         endpoint,
-        base_config: config.clone(),
         config,
         created_ms: now_ms(),
         restored_ms: None,
@@ -257,13 +217,9 @@ pub(super) async fn run(boot: Boot, mut rx: mpsc::UnboundedReceiver<SessionMsg>)
         relay: Arc::new(AtomicBool::new(false)),
         pacing,
         pending: Vec::new(),
-        popup: None,
         idem: IdemCache::default(),
         snapshots: SnapshotStore::in_dir(&state_dir),
         stores: Stores::default(),
-        command_seq: 0,
-        command_pending: BTreeMap::new(),
-        pipes: Pipes::default(),
         save_due: None,
         shutting_down: false,
     };
@@ -292,11 +248,7 @@ impl Session {
             SessionMsg::Req { req, reply } => {
                 let mutates = !is_read_only(&req);
                 let before = mutates.then(|| self.workspace.clone());
-                let hook = super::hooks::after_request(&req);
                 let resp = self.request(*req).await;
-                if let Some(hook) = hook.filter(|_| !matches!(resp, Response::Error(_))) {
-                    self.fire_hook(hook);
-                }
                 if mutates {
                     self.schedule_save();
                 }
@@ -315,9 +267,6 @@ impl Session {
             }
             SessionMsg::KillWindow { index, reply } => {
                 let result = self.kill_window(index);
-                if result.is_ok() {
-                    self.fire_hook("after-kill-window");
-                }
                 self.schedule_save();
                 let _ = reply.send(result);
             }
@@ -327,22 +276,12 @@ impl Session {
             }
             SessionMsg::Subscribe {
                 filter,
-                mut sink,
+                sink,
                 reply,
             } => {
-                let terminal = matches!(filter, Filter::ActiveWindow { layout: true });
-                if let Some(popup) = self.popup.as_ref().filter(|_| terminal) {
-                    let _ = sink.push(StreamEvent::PopupOpen {
-                        name: popup.name.clone(),
-                        spec: popup.spec.clone(),
-                    });
-                }
                 self.filters.push((filter, sink));
                 self.sync_relay();
                 let _ = reply.send(());
-                if terminal {
-                    self.fire_hook("client-attached");
-                }
             }
             SessionMsg::SubscribeNode {
                 name,
@@ -359,10 +298,6 @@ impl Session {
             SessionMsg::IdemFinish { key, value } => self.idem.finish(&key, *value, now_ms()),
             SessionMsg::IdemAbandon { key } => self.idem.abandon(&key),
             SessionMsg::Notice(notice) => self.notice(notice),
-            SessionMsg::Popup { opts, reply } => {
-                let result = self.popup_open(*opts).await;
-                let _ = reply.send(result);
-            }
         }
     }
 
@@ -385,64 +320,25 @@ impl Session {
                         name: name.clone(),
                         code,
                     });
-                    self.popup_exited(&name, code);
                 }
             }
         }
     }
 
-    /// Runs the command line set for `hook`, if one is set. The receiver resolves when it is done.
-    fn fire_hook(&self, hook: &str) -> Option<std::sync::mpsc::Receiver<()>> {
-        let line = self.stores.hook(hook)?.clone();
-        let target = tmux_shim::EnvTarget {
-            endpoint: self.endpoint.clone(),
-            session: self.session.clone(),
-        };
-        Some(super::hooks::fire(target, line))
-    }
-
-    /// `config` again: the loaded config with the session's `set-option` values applied.
-    fn rebuild_config(&mut self) {
-        let mut config = self.base_config.clone();
-        for (name, value) in self.stores.vars(VarKind::Option) {
-            if let Err(e) = config.apply_option(&name, &value) {
-                warn!("option {name}: {e}");
-            }
-        }
-        self.config = config;
-        self.sync_relay();
-    }
-
-    /// Panes relay output to the session while session-wide subscribers exist, or while activity
-    /// or bell monitoring was turned on explicitly (flags then work with no terminal attached).
-    /// The defaults alone do not: relaying every chunk of every pane costs a flood about half its
-    /// speed, and a terminal that is attached subscribes anyway.
+    /// Panes relay output to the session only while session-wide subscribers exist: relaying every
+    /// chunk of every pane costs a flood about half its speed, and an attached terminal subscribes
+    /// anyway.
     fn sync_relay(&self) {
-        let options = self.stores.vars(VarKind::Option);
-        let on = |name: &str| {
-            options
-                .iter()
-                .any(|(k, v)| k == name && crate::config::parse_switch(v) == Ok(true))
-        };
-        let monitored = on("monitor-activity") || on("monitor-bell");
         let subscribed = self.filters.iter().any(|(filter, _)| filter.session_wide());
-        self.relay.store(monitored || subscribed, Ordering::Relaxed);
-    }
-
-    /// Terminal subscribers still on the list: those that follow the active window and its layout.
-    fn terminal_count(&self) -> usize {
-        let terminal = |f: &Filter| matches!(f, Filter::ActiveWindow { layout: true });
-        self.filters.iter().filter(|(f, _)| terminal(f)).count()
+        self.relay.store(subscribed, Ordering::Relaxed);
     }
 
     /// Sends `event` to every subscriber it reaches; returns how many subscribers accepted it.
     fn fanout(&mut self, event: &StreamEvent) -> usize {
         let workspace = &self.workspace;
-        let popup = self.popup.as_ref().map(|p| p.name.as_str());
         let shown = |name: &str| {
-            workspace.active_window().is_some_and(|w| w.contains(name)) || popup == Some(name)
+            workspace.active_window().is_some_and(|w| w.contains(name))
         };
-        let before = self.terminal_count();
         let mut accepted = 0;
         self.filters.retain_mut(|(filter, sink)| {
             if filter.accepts(event, shown) {
@@ -453,9 +349,6 @@ impl Session {
                 !sink.is_closed()
             }
         });
-        for _ in self.terminal_count()..before {
-            self.fire_hook("client-detached");
-        }
         self.sync_relay();
         accepted
     }
@@ -480,79 +373,34 @@ impl Session {
             Request::ReloadConfig { path } => {
                 match Config::load_at(path.as_deref().map(std::path::Path::new)) {
                     Ok(config) => {
-                        self.base_config = config;
-                        self.rebuild_config();
+                        self.config = config;
+                        self.sync_relay();
                         Response::Ok
                     }
                     Err(e) => Response::Error(e),
                 }
             }
-            Request::Popup(_) => {
-                Response::Error("display-popup is opened by a client connection".to_string())
-            }
-            Request::ClosePopup => {
-                self.close_popup();
-                Response::Ok
-            }
-            req @ (Request::SetVar { .. }
-            | Request::GetVars { .. }
+            req @ (Request::SetBinding { .. }
+            | Request::GetBindings
             | Request::SetBuffer { .. }
             | Request::GetBuffer { .. }
             | Request::ListBuffers
             | Request::DeleteBuffer { .. }
-            | Request::ClientCommand { .. }
-            | Request::JoinPane { .. }
-            | Request::SwapWindow { .. }
             | Request::MoveWindow { .. }
-            | Request::PipePane { .. }
-            | Request::RotateWindow { .. }
-            | Request::SetSynchronized { .. }
-            | Request::SetPaneMode { .. }
-            | Request::ForgetPaneModes { .. }
-            | Request::PaneModes
-            | Request::CommandApplied { .. }
-            | Request::CommandSettled { .. }
-            | Request::Respawn { .. }) => self.tmux_request(req),
+            | Request::RotateWindow { .. }) => self.state_request(req),
             req => self.target_request(req).await,
         }
     }
 
-    /// Requests behind the tmux surface: variables, paste buffers, client commands, window and pane
-    /// moves and pipes.
-    fn tmux_request(&mut self, req: Request) -> Response {
+    /// Requests on the session's own state: runtime key bindings, paste buffers and window moves.
+    fn state_request(&mut self, req: Request) -> Response {
         match req {
-            Request::SetVar { kind, name, value } => {
-                if kind == VarKind::Hook && !super::hooks::HOOK_NAMES.contains(&name.as_str()) {
-                    return Response::Error(format!("unknown hook: {name}"));
-                }
-                if let (VarKind::Option, Some(value)) = (kind, &value) {
-                    // Checked on a copy first, so an invalid value is refused and never stored.
-                    if let Err(e) = self.base_config.clone().apply_option(&name, value) {
-                        return Response::Error(e);
-                    }
-                }
-                self.stores.set_var(kind, name, value);
-                if kind == VarKind::Option {
-                    self.rebuild_config();
-                }
-                if matches!(kind, VarKind::Option | VarKind::Binding) {
-                    self.fanout(&StreamEvent::ClientCommand {
-                        line: "refresh-runtime".to_string(),
-                        seq: 0,
-                    });
-                }
+            Request::SetBinding { name, line } => {
+                self.stores.set_binding(name, line);
+                self.fanout(&StreamEvent::Bindings);
                 Response::Ok
             }
-            Request::GetVars { kind } => Response::Vars(self.stores.vars(kind)),
-            Request::SetPaneMode { name, on, terminal } => {
-                self.stores.set_pane_mode(&name, terminal, on);
-                Response::Ok
-            }
-            Request::ForgetPaneModes { terminal } => {
-                self.stores.forget_terminal(terminal);
-                Response::Ok
-            }
-            Request::PaneModes => Response::PaneModes(self.stores.pane_modes()),
+            Request::GetBindings => Response::Bindings(self.stores.bindings()),
             Request::SetBuffer { name, data } => {
                 self.stores.push_buffer(name, data);
                 Response::Ok
@@ -569,57 +417,13 @@ impl Session {
                     Response::Error(no_buffer(name.as_deref()))
                 }
             }
-            Request::ClientCommand { line } => {
-                self.command_seq += 1;
-                let seq = self.command_seq;
-                let accepted = self.fanout(&StreamEvent::ClientCommand { line, seq });
-                if accepted > 0 {
-                    self.command_pending.insert(seq, accepted);
-                }
-                Response::Seq(seq)
-            }
-            Request::CommandApplied { seq } => {
-                if let Some(left) = self.command_pending.get_mut(&seq) {
-                    *left -= 1;
-                    if *left == 0 {
-                        self.command_pending.remove(&seq);
-                    }
-                }
-                Response::Ok
-            }
-            Request::CommandSettled { seq } => {
-                Response::Settled(!self.command_pending.contains_key(&seq))
-            }
-            Request::JoinPane {
-                src,
-                dst,
-                side_by_side,
-            } => self.join_pane(&src, &dst, side_by_side),
-            Request::SwapWindow { a, b } => {
-                check(self.workspace.swap_windows(a, b), "No such window")
-            }
             Request::MoveWindow { from, to } => {
                 check(self.workspace.move_window(from, to), "No such window")
             }
-            Request::PipePane {
-                name,
-                command,
-                toggle,
-            } => self.pipe_pane(&name, command, toggle),
             Request::RotateWindow { down } => {
                 check(self.workspace.rotate_active(down), "No window")
             }
-            Request::SetSynchronized { window, on } => {
-                let idx = window.unwrap_or(self.workspace.active_idx);
-                check(self.workspace.set_synchronized(idx, on), "Window index out of bounds")
-            }
-            Request::Respawn {
-                name,
-                kill,
-                cwd,
-                command,
-            } => self.respawn(&name, kill, cwd, command),
-            other => Response::Error(format!("not a tmux request: {other:?}")),
+            other => Response::Error(format!("not a state request: {other:?}")),
         }
     }
 
@@ -829,40 +633,6 @@ impl Session {
         self.resolve(target).ok_or_else(|| not_found(target))
     }
 
-    fn pipe_pane(&mut self, name: &str, command: Option<String>, toggle: bool) -> Response {
-        let pane = match self.target_name(name) {
-            Ok(pane) => pane,
-            Err(e) => return Response::Error(e),
-        };
-        let Some(command) = command.filter(|c| !c.trim().is_empty()) else {
-            self.pipes.close(&pane);
-            return Response::Ok;
-        };
-        let opened = self
-            .handle_of(&pane)
-            .and_then(|handle| self.pipes.open(&pane, &handle, &command, toggle));
-        match opened {
-            Ok(()) => Response::Ok,
-            Err(e) => Response::Error(e),
-        }
-    }
-
-    fn join_pane(&mut self, src: &str, dst: &str, side_by_side: bool) -> Response {
-        let (src, dst) = match (self.target_name(src), self.target_name(dst)) {
-            (Ok(src), Ok(dst)) => (src, dst),
-            (Err(e), _) | (_, Err(e)) => return Response::Error(e),
-        };
-        let dir = if side_by_side {
-            Direction::Horizontal
-        } else {
-            Direction::Vertical
-        };
-        match self.workspace.join_pane(&src, &dst, dir) {
-            Ok(()) => Response::Ok,
-            Err(e) => Response::Error(e),
-        }
-    }
-
     /// Handle of a live or exited pane.
     fn handle_of(&self, target: &str) -> Result<PaneHandle, String> {
         let name = self.target_name(target)?;
@@ -896,7 +666,6 @@ impl Session {
         for entry in self
             .nodes
             .values()
-            .filter(|e| !self.is_popup(e.handle.name()))
         {
             if let Ok(mut info) = entry.handle.info(true).await {
                 info.window = self.workspace.window_of(entry.handle.name());
@@ -1109,8 +878,7 @@ impl Session {
             name,
             id,
         };
-        let tmux = plan::tmux_enabled(opts.tmux_compat, self.config.tmux_compat);
-        let env = self.pane_env(&identity, &opts.env, tmux);
+        let env = self.pane_env(&identity, &opts.env);
         let spec = SpawnSpec {
             name: name.to_string(),
             id,
@@ -1133,29 +901,8 @@ impl Session {
         &self,
         identity: &PaneIdentity,
         extra: &[(String, String)],
-        tmux: bool,
     ) -> Vec<(String, String)> {
-        let merged: Vec<(String, String)> = self
-            .stores
-            .environment()
-            .into_iter()
-            .chain(extra.iter().cloned())
-            .collect();
-        let extra = merged.as_slice();
-        if !tmux {
-            return plan::pane_env(identity, extra, None);
-        }
-        let shim = tmux_shim::shim_dir();
-        if let Err(e) = &shim {
-            warn!("tmux shim unavailable, PATH not updated: {}", e);
-        }
-        let inherited = std::env::var("PATH").unwrap_or_default();
-        let tmux_env = plan::TmuxEnv {
-            daemon_pid: std::process::id(),
-            shim_dir: shim.as_deref().map_err(String::as_str),
-            inherited_path: &inherited,
-        };
-        plan::pane_env(identity, extra, Some(&tmux_env))
+        plan::pane_env(identity, extra)
     }
 
     /// Attaches a subscriber to a pane, or holds it until a pane of that name is spawned.
@@ -1217,7 +964,6 @@ impl Session {
             return false;
         }
         entry.exited = true;
-        self.fire_hook("pane-exited");
         let Some(entry) = self.nodes.get(name) else {
             return true;
         };
@@ -1230,57 +976,12 @@ impl Session {
                 self.history.push_back(entry);
             }
             self.workspace.remove(name);
-            self.stores.forget_pane_mode(name);
             while self.history.len() > self.config.history_limit {
                 self.history.pop_front();
             }
         }
         self.schedule_save();
         true
-    }
-
-    /// Restarts a pane's process in its place (tmux `respawn-pane`): the pane keeps its name and
-    /// layout slot. An exited pane keeps its id. A running one must be killed first (`kill`), and
-    /// its replacement takes a new id, so the old process's exit cannot end the new one.
-    fn respawn(
-        &mut self,
-        target: &str,
-        kill: bool,
-        cwd: Option<String>,
-        command: Option<Vec<String>>,
-    ) -> Response {
-        let name = match self.target_name(target) {
-            Ok(name) => name,
-            Err(e) => return Response::Error(e),
-        };
-        let Some(entry) = self.nodes.get(&name) else {
-            return Response::Error(format!("can't respawn pane: {name}"));
-        };
-        let (exited, old_id) = (entry.exited, entry.handle.id());
-        if !exited && !kill {
-            return Response::Error(format!("pane %{old_id} still active"));
-        }
-        let mut opts = entry.opts.clone();
-        if let Some(argv) = command.filter(|argv| !argv.is_empty()) {
-            let mut argv = argv.into_iter();
-            opts.command = argv.next().unwrap_or_default();
-            opts.args = argv.collect();
-        }
-        if cwd.is_some() {
-            opts.cwd = cwd;
-        }
-        let id = if exited { old_id } else { self.next_pane_id };
-        let spawn_cwd = opts.cwd.clone().or_else(current_dir);
-        let handle = match self.spawn_pane(&name, id, &opts, spawn_cwd) {
-            Ok(handle) => handle,
-            Err(e) => return Response::Error(e),
-        };
-        if !exited {
-            drop(self.nodes[&name].handle.request_kill());
-            self.next_pane_id += 1;
-        }
-        self.register(name, handle, opts);
-        Response::Ok
     }
 
     /// Starts a kill of a live pane (the receiver resolves on exit), or removes an exited one.
@@ -1296,112 +997,12 @@ impl Session {
             }
             self.nodes.remove(name);
             self.workspace.remove(name);
-            self.stores.forget_pane_mode(name);
             return None;
         }
         if let Some(pos) = self.history.iter().rposition(|e| e.handle.name() == name) {
             self.history.remove(pos);
         }
         None
-    }
-
-    /// Whether `name` is the open popup's pane.
-    fn is_popup(&self, name: &str) -> bool {
-        self.popup.as_ref().is_some_and(|p| p.name == name)
-    }
-
-    /// Opens a popup: its program runs as an unplaced pane that every terminal draws over its view.
-    /// With `wait`, the receiver resolves with the status once the popup closes.
-    async fn popup_open(
-        &mut self,
-        opts: PopupOpts,
-    ) -> Result<Option<oneshot::Receiver<Option<i32>>>, String> {
-        if self.popup.is_some() {
-            return Err("a popup is already open".to_string());
-        }
-        let PopupOpts {
-            mut spawn,
-            spec,
-            exit,
-            wait,
-        } = opts;
-        // The pane stays after its program exits: the popup decides when it closes.
-        spawn.remain_on_exit = Some(true);
-        self.resolve_command(&mut spawn);
-        let id = self.next_pane_id;
-        let name = format!("popup-{id}");
-        let cwd = match spawn.cwd.clone() {
-            Some(cwd) => Some(cwd),
-            None => {
-                let anchor = self
-                    .workspace
-                    .active_window()
-                    .and_then(|w| w.focused.clone());
-                self.anchor_cwd(anchor).await.or_else(current_dir)
-            }
-        };
-        let handle = self.spawn_pane(&name, id, &spawn, cwd)?;
-        self.next_pane_id += 1;
-        self.register(name.clone(), handle, spawn);
-        let (rx, waiters) = if wait {
-            let (tx, rx) = oneshot::channel();
-            (Some(rx), vec![tx])
-        } else {
-            (None, Vec::new())
-        };
-        self.popup = Some(Popup {
-            name: name.clone(),
-            spec: spec.clone(),
-            exit,
-            exited: false,
-            closing: false,
-            status: None,
-            waiters,
-        });
-        self.fanout(&StreamEvent::PopupOpen { name, spec });
-        Ok(rx)
-    }
-
-    /// The popup's program exited: the popup closes when its exit rule or a pending close says so,
-    /// and otherwise stays until a key closes it.
-    fn popup_exited(&mut self, name: &str, code: Option<i32>) {
-        let Some(popup) = self.popup.as_mut().filter(|p| p.name == name) else {
-            return;
-        };
-        popup.exited = true;
-        popup.status = code;
-        if popup.closing || popup.exit.closes(code) {
-            self.finish_popup();
-        }
-    }
-
-    /// Closes the popup. A running program is stopped and the popup closes when it exits; a
-    /// finished one closes now.
-    fn close_popup(&mut self) {
-        let Some(popup) = self.popup.as_mut() else {
-            return;
-        };
-        let running = self.nodes.get(&popup.name).is_some_and(|e| !e.exited);
-        if !running {
-            self.finish_popup();
-            return;
-        }
-        popup.closing = true;
-        if let Some(entry) = self.nodes.get(&popup.name) {
-            drop(entry.handle.request_kill());
-        }
-    }
-
-    /// Removes the popup's pane, answers its waiters with the status, and tells every terminal.
-    fn finish_popup(&mut self) {
-        let Some(popup) = self.popup.take() else {
-            return;
-        };
-        let _ = self.kill_entry(&popup.name);
-        for waiter in popup.waiters {
-            let _ = waiter.send(popup.status);
-        }
-        self.fanout(&StreamEvent::PopupClose { name: popup.name });
     }
 
     fn kill_window(&mut self, index: Option<usize>) -> Result<Vec<oneshot::Receiver<()>>, String> {
@@ -1416,10 +1017,6 @@ impl Session {
     /// Saves a clean snapshot, then starts killing every running pane. Later saves are disabled.
     async fn shutdown(&mut self) -> Vec<oneshot::Receiver<()>> {
         self.save(true).await;
-        if let Some(done) = self.fire_hook("session-closed") {
-            // A hook that talks back to this session would wait on it, so the wait is short.
-            let _ = done.recv_timeout(Duration::from_millis(500));
-        }
         self.shutting_down = true;
         self.save_due = None;
         self.nodes
@@ -1571,7 +1168,6 @@ fn is_read_only(req: &Request) -> bool {
         Request::Ping
             | Request::Info
             | Request::List
-            | Request::PaneModes
             | Request::Logs { .. }
             | Request::Screen { .. }
             | Request::Layout { .. }
@@ -1581,13 +1177,12 @@ fn is_read_only(req: &Request) -> bool {
             | Request::SendKeys { .. }
             | Request::Paste { .. }
             | Request::ResizePane { .. }
-            | Request::SetVar { .. }
-            | Request::GetVars { .. }
+            | Request::SetBinding { .. }
+            | Request::GetBindings
             | Request::SetBuffer { .. }
             | Request::GetBuffer { .. }
             | Request::ListBuffers
             | Request::DeleteBuffer { .. }
-            | Request::ClientCommand { .. }
     )
 }
 

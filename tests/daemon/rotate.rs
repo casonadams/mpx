@@ -1,21 +1,10 @@
 //! Window rotation through the daemon client.
-use mpx::layout::{Direction, Rect};
-use mpx::protocol::SplitOpts;
+use mpx::layout::Rect;
 
-use super::support::{connect, start, task};
+use super::support::{connect, fresh, split_right, start, task};
 
 fn names(layout: &[(String, Rect, bool)]) -> Vec<String> {
     layout.iter().map(|p| p.0.clone()).collect()
-}
-
-fn split_right(target: &str, name: &str) -> SplitOpts {
-    SplitOpts {
-        target: Some(target.into()),
-        spawn: task(name, "cat", &[]),
-        direction: Direction::Horizontal,
-        percent: None,
-        focus: true,
-    }
 }
 
 #[tokio::test]
@@ -42,7 +31,6 @@ async fn rotate_window_moves_names_through_the_slots_and_focus_stays_on_its_pane
 
 #[tokio::test]
 async fn rotate_window_without_a_window_is_an_error() {
-    let daemon = start().await;
-    let mut client = connect(&daemon.endpoint).await;
+    let (_daemon, mut client) = fresh().await;
     assert!(client.rotate_window(false).await.is_err());
 }

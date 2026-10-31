@@ -1,13 +1,13 @@
 use std::path::Path;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
 use mpx::client::Client;
 use mpx::config::Config;
 use mpx::daemon::{DaemonState, handle_client};
 use mpx::ipc::IpcListener;
-use mpx::protocol::{SpawnOpts, WaitCondition};
+use mpx::layout::Direction;
+use mpx::protocol::{SpawnOpts, SplitOpts, WaitCondition};
 
 pub const SESSION: &str = "test";
 
@@ -50,8 +50,7 @@ pub async fn serve_session(
     config: Config,
 ) -> String {
     let endpoint = mpx::ipc::endpoint_in(socket_dir, session);
-    #[allow(unused_mut)]
-    let mut listener = IpcListener::bind(&endpoint).expect("bind");
+    let listener = IpcListener::bind(&endpoint).expect("bind");
     let state = DaemonState::new(
         session.to_string(),
         endpoint.clone(),
@@ -59,17 +58,52 @@ pub async fn serve_session(
         state_dir.to_path_buf(),
     )
     .await;
-
-    tokio::spawn(async move {
-        while let Ok(stream) = listener.accept().await {
-            tokio::spawn(handle_client(Arc::clone(&state), stream));
-        }
-    });
+    tokio::spawn(accept_clients(listener, state));
     endpoint
+}
+
+async fn accept_clients(
+    #[allow(unused_mut)] mut listener: IpcListener,
+    state: Arc<DaemonState>,
+) {
+    while let Ok(stream) = listener.accept().await {
+        tokio::spawn(handle_client(Arc::clone(&state), stream));
+    }
 }
 
 pub async fn connect(endpoint: &str) -> Client {
     Client::connect(endpoint).await.expect("connect")
+}
+
+/// A started daemon, connected to, with `spawn` already running. The daemon is returned so the
+/// caller keeps it alive.
+pub async fn started_with(spawn: SpawnOpts) -> (TestDaemon, Client) {
+    let (daemon, mut client) = fresh().await;
+    client.spawn(spawn).await.unwrap();
+    (daemon, client)
+}
+
+/// A started daemon, connected to, with nothing running.
+pub async fn fresh() -> (TestDaemon, Client) {
+    let daemon = start().await;
+    let client = connect(&daemon.endpoint).await;
+    (daemon, client)
+}
+
+/// A focused `cat` pane `name` split off `target`, side by side.
+pub fn split_right(target: &str, name: &str) -> SplitOpts {
+    split_with(target, name, true, None)
+}
+
+/// A `cat` pane `name` split off `target` in the horizontal direction.
+pub fn split_with(target: &str, name: &str, focus: bool, percent: Option<u8>) -> SplitOpts {
+    SplitOpts {
+        target: Some(target.into()),
+        spawn: task(name, "cat", &[]),
+        direction: Direction::Horizontal,
+        percent,
+        focus,
+    }
 }
 
 pub fn task(name: &str, command: &str, args: &[&str]) -> SpawnOpts {
@@ -117,16 +151,4 @@ pub async fn logs_until(client: &mut Client, name: &str, needle: &str) -> String
     assert!(outcome.satisfied, "'{needle}' never appeared in {name}");
     let (data, _) = client.logs(name, None, false, None).await.expect("logs");
     data
-}
-
-/// Polls `check` until it yields a value, failing after `timeout`.
-pub async fn eventually<T>(timeout: Duration, mut check: impl FnMut() -> Option<T>) -> T {
-    let deadline = Instant::now() + timeout;
-    loop {
-        if let Some(value) = check() {
-            return value;
-        }
-        assert!(Instant::now() < deadline, "condition not met in time");
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
 }

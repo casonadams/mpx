@@ -8,7 +8,7 @@ use mpx::layout::Direction;
 use mpx::protocol::{NewWindowOpts, SpawnOpts};
 use mpx::tui::app::{FRAME_BUDGET, FRAMES_PER_BUDGET, needs_redraw, next_frame};
 
-use super::support::{ECHO, Harness, MAIN, SESSION, connect, exited, pane, split, window};
+use super::support::{ECHO, Harness, MAIN, exited, pane, split, window};
 
 async fn start() -> Harness {
     Harness::start(Config::default(), ECHO).await
@@ -17,8 +17,7 @@ async fn start() -> Harness {
 #[tokio::test]
 async fn status_row_shows_session_and_window_names() {
     let mut h = start().await;
-    let mut seed = connect(&h.sandbox.endpoint(SESSION)).await;
-    window(&mut seed, "work", ECHO).await;
+    h.open_window("work").await;
     let drawn = h.frame().await;
     assert!(
         drawn.contains("[test] 0:main-"),
@@ -215,42 +214,28 @@ async fn pane_output_schedules_a_frame_without_holding_up_input() {
     assert_eq!(h.app.frame_due, None);
 }
 
-/// Bytes of the next frame. Only its size is asserted: frames are incremental, so their content is
-/// checked through the harness terminal elsewhere.
-async fn frame_bytes(h: &mut Harness) -> usize {
-    h.app.layout.dirty = true;
-    assert!(h.app.prepare_frame().await);
-    let mut out = Vec::new();
-    mpx::tui::frame::draw(&mut h.app, &mut out).expect("draw");
-    h.terminal.feed(&out);
-    out.len()
-}
-
-async fn emit_line(h: &mut Harness, text: &str) {
-    let marker = text.to_string();
-    h.probe.send_input(MAIN, &format!("{text}\r\n")).await.expect("send");
-    h.until(text, move |app| {
-        app.vt
-            .get(MAIN)
-            .is_some_and(|vt| vt.snapshot().contains(&marker))
-    })
-    .await;
+/// Fills a pane with 40 lines, then scrolls it by one more: that one-line scroll must send far
+/// fewer bytes than a full repaint.
+async fn scroll_by_one_line_is_incremental(h: &mut Harness) {
+    for i in 0..40 {
+        let line = format!("filler line {i:02} with some width to it");
+        h.emit(MAIN, &format!("{line}\r\n"), &line).await;
+    }
+    let repaint = h.draw_frame().await.len();
+    let line = "one more line";
+    h.emit(MAIN, &format!("{line}\r\n"), line).await;
+    let scrolled = h.draw_frame().await.len();
+    assert!(
+        scrolled * 5 < repaint,
+        "a one-line scroll sent {scrolled} bytes; a full frame is {repaint}"
+    );
 }
 
 #[tokio::test]
 async fn a_scrolled_full_width_pane_sends_only_the_new_line() {
     let mut h = start().await;
     h.frame().await;
-    for i in 0..40 {
-        emit_line(&mut h, &format!("filler line {i:02} with some width to it")).await;
-    }
-    let repaint = frame_bytes(&mut h).await;
-    emit_line(&mut h, "one more line").await;
-    let scrolled = frame_bytes(&mut h).await;
-    assert!(
-        scrolled * 5 < repaint,
-        "a one-line scroll sent {scrolled} bytes; a full frame is {repaint}"
-    );
+    scroll_by_one_line_is_incremental(&mut h).await;
 }
 
 #[test]
@@ -341,16 +326,7 @@ async fn full_width_pane_scroll_sends_only_the_new_line() {
     h.app.canvas.set_lr_margins(true);
     h.frame().await;
     assert_eq!(h.rect_of(MAIN).x, 0, "panes keep 100% width with zero stolen columns");
-    for i in 0..40 {
-        emit_line(&mut h, &format!("filler line {i:02} with some width to it")).await;
-    }
-    let repaint = frame_bytes(&mut h).await;
-    emit_line(&mut h, "one more line").await;
-    let scrolled = frame_bytes(&mut h).await;
-    assert!(
-        scrolled * 5 < repaint,
-        "a one-line scroll sent {scrolled} bytes; a full frame is {repaint}"
-    );
+    scroll_by_one_line_is_incremental(&mut h).await;
 }
 
 #[test]

@@ -67,7 +67,7 @@ impl Conv {
     }
 
     fn line(&mut self, line: usize, src: &str) {
-        match tokenize(src) {
+        match crate::cmdline::split_commands(src) {
             Ok(commands) => {
                 for words in commands {
                     self.command(line, &words);
@@ -186,6 +186,19 @@ impl Conv {
         if value.is_empty() {
             return self.note(line, format!("set {name}: missing value"));
         }
+        if !(self.session_option(line, name, value)
+            || self.style_option(line, name, value)
+            || self.ui_option(line, name, value))
+        {
+            self.note(
+                line,
+                format!("option '{name}' has no mpx equivalent; ignored"),
+            );
+        }
+    }
+
+    /// Options the daemon acts on. False when `name` is not one of them.
+    fn session_option(&mut self, line: usize, name: &str, value: &str) -> bool {
         match name {
             "prefix" => match KeySpec::parse(value) {
                 Ok(_) => {
@@ -235,6 +248,14 @@ impl Conv {
             "default-command" => {
                 self.top.insert("default_command", toml_str(value));
             }
+            _ => return false,
+        }
+        true
+    }
+
+    /// Colour and border options. False when `name` is not one of them.
+    fn style_option(&mut self, line: usize, name: &str, value: &str) -> bool {
+        match name {
             "status-style" => self.colors(
                 line,
                 name,
@@ -247,22 +268,15 @@ impl Conv {
             "pane-active-border-style" => {
                 self.colors(line, name, value, &[("fg", "border_active")]);
             }
-            "pane-border-lines" => {
-                let style = match value {
-                    "single" | "double" | "rounded" => value,
-                    "simple" => {
-                        self.note(line, "pane-border-lines simple: approximated as ascii");
-                        "ascii"
-                    }
-                    _ => {
-                        return self.note(
-                            line,
-                            format!("pane-border-lines '{value}' has no mpx equivalent; ignored"),
-                        );
-                    }
-                };
-                self.style.insert("border_style", toml_str(style));
-            }
+            "pane-border-lines" => self.border_lines(line, value),
+            _ => return false,
+        }
+        true
+    }
+
+    /// Mouse and copy-mode options. False when `name` is not one of them.
+    fn ui_option(&mut self, line: usize, name: &str, value: &str) -> bool {
+        match name {
             "mouse" => self.flag(line, name, "mouse", value),
             "mode-keys" => match value {
                 "vi" | "emacs" => {
@@ -270,11 +284,26 @@ impl Conv {
                 }
                 _ => self.note(line, format!("mode-keys '{value}' is not vi or emacs")),
             },
-            _ => self.note(
-                line,
-                format!("option '{name}' has no mpx equivalent; ignored"),
-            ),
+            _ => return false,
         }
+        true
+    }
+
+    fn border_lines(&mut self, line: usize, value: &str) {
+        let style = match value {
+            "single" | "double" | "rounded" => value,
+            "simple" => {
+                self.note(line, "pane-border-lines simple: approximated as ascii");
+                "ascii"
+            }
+            _ => {
+                return self.note(
+                    line,
+                    format!("pane-border-lines '{value}' has no mpx equivalent; ignored"),
+                );
+            }
+        };
+        self.style.insert("border_style", toml_str(style));
     }
 
     fn flag(&mut self, line: usize, name: &str, key: &'static str, value: &str) {
@@ -484,59 +513,6 @@ fn logical_lines(text: &str) -> Vec<(usize, String)> {
         out.push(pending);
     }
     out
-}
-
-/// Splits one logical line into tmux commands at unquoted `;`. Quotes group words, `\x` escapes `x`
-/// (so `\;` is a literal `;` word, as bind chains use), and `;` may follow a word directly.
-fn tokenize(line: &str) -> Result<Vec<Vec<String>>, String> {
-    let mut commands: Vec<Vec<String>> = vec![Vec::new()];
-    let mut word: Option<String> = None;
-    let mut chars = line.chars().peekable();
-    while let Some(c) = chars.next() {
-        match c {
-            '\'' => {
-                let w = word.get_or_insert_with(String::new);
-                loop {
-                    match chars.next() {
-                        Some('\'') => break,
-                        Some(ch) => w.push(ch),
-                        None => return Err("unterminated single quote".to_string()),
-                    }
-                }
-            }
-            '"' => {
-                let w = word.get_or_insert_with(String::new);
-                loop {
-                    match chars.next() {
-                        Some('"') => break,
-                        Some('\\') if matches!(chars.peek(), Some('"' | '\\')) => {
-                            w.push(chars.next().unwrap_or('\\'));
-                        }
-                        Some(ch) => w.push(ch),
-                        None => return Err("unterminated double quote".to_string()),
-                    }
-                }
-            }
-            '\\' => word
-                .get_or_insert_with(String::new)
-                .push(chars.next().unwrap_or('\\')),
-            ';' => {
-                end_word(&mut commands, &mut word);
-                commands.push(Vec::new());
-            }
-            c if c.is_whitespace() => end_word(&mut commands, &mut word),
-            c => word.get_or_insert_with(String::new).push(c),
-        }
-    }
-    end_word(&mut commands, &mut word);
-    commands.retain(|words| !words.is_empty());
-    Ok(commands)
-}
-
-fn end_word(commands: &mut [Vec<String>], word: &mut Option<String>) {
-    if let (Some(w), Some(current)) = (word.take(), commands.last_mut()) {
-        current.push(w);
-    }
 }
 
 fn on_off(value: &str) -> Option<bool> {

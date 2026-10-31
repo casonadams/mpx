@@ -16,6 +16,12 @@ fn default_keymap() -> mpx::tui::keymap::Keymap {
     resolve(&Config::default()).expect("default keymap resolves")
 }
 
+fn config_with_bind(key: &str, command: &str) -> Config {
+    let mut config = Config::default();
+    config.bind.insert(key.to_string(), command.to_string());
+    config
+}
+
 fn command_of(keymap: &mpx::tui::keymap::Keymap, ev: &KeyEvent) -> Option<Command> {
     command_in(keymap, Table::Prefix, ev)
 }
@@ -49,7 +55,6 @@ fn default_table_binds_digits_and_core_keys() {
     assert_eq!(find("\""), Some("split-window"));
     assert_eq!(find("x"), Some("kill-pane"));
     assert_eq!(find("]"), Some("paste"));
-    assert_eq!(find("f"), Some("command-prompt -I 'find-window '"));
     assert_eq!(find("."), Some("command-prompt \"move-window -t '%%'\""));
     assert_eq!(
         find("'"),
@@ -144,10 +149,7 @@ fn help_entries_show_key_and_source_command() {
 
 #[test]
 fn config_bind_replaces_a_default_key() {
-    let mut config = Config::default();
-    config
-        .bind
-        .insert("d".to_string(), "kill-server".to_string());
+    let config = config_with_bind("d", "kill-server");
     let keymap = resolve(&config).unwrap();
     assert!(matches!(
         command_of(&keymap, &key('d')),
@@ -165,18 +167,14 @@ fn config_bind_replaces_a_default_key() {
 
 #[test]
 fn config_bind_adds_a_new_key() {
-    let mut config = Config::default();
-    config.bind.insert("C-x".to_string(), "choose-tree".to_string());
+    let config = config_with_bind("C-x", "choose-tree");
     let keymap = resolve(&config).unwrap();
     assert_eq!(command_of(&keymap, &ctrl('x')), Some(Command::OpenTree));
 }
 
 #[test]
 fn invalid_config_bind_is_rejected() {
-    let mut config = Config::default();
-    config
-        .bind
-        .insert("y".to_string(), "frobnicate".to_string());
+    let config = config_with_bind("y", "frobnicate");
     let err = resolve(&config).unwrap_err();
     assert!(err.contains("bind y"), "{err}");
     assert!(err.contains("unknown command"), "{err}");
@@ -262,8 +260,8 @@ fn tmux_default_prefix_keys_are_bound_to_their_tmux_commands() {
     let ctrl_code = |code| named(code, KeyModifiers::CONTROL);
     let alt_code = |code| named(code, KeyModifiers::ALT);
 
-    assert!(matches!(bound(ctrl('o')), Some(Command::Tmux { ref words }) if words.as_slice() == ["rotate-window"]));
-    assert!(matches!(bound(alt('o')), Some(Command::Tmux { ref words }) if words.as_slice() == ["rotate-window", "-D"]));
+    assert!(matches!(bound(ctrl('o')), Some(Command::RotateWindow { down: false })));
+    assert!(matches!(bound(alt('o')), Some(Command::RotateWindow { down: true })));
     assert!(matches!(bound(ctrl('z')), Some(Command::SuspendClient)));
     assert!(matches!(bound(key('q')), Some(Command::DisplayPanes { .. })), "q shows pane numbers, d detaches");
     assert!(matches!(bound(key('d')), Some(Command::Detach)));
@@ -272,13 +270,13 @@ fn tmux_default_prefix_keys_are_bound_to_their_tmux_commands() {
     assert!(matches!(bound(key('#')), Some(Command::ListBuffers)));
     assert!(matches!(bound(key('=')), Some(Command::ChooseBuffer)));
     assert!(matches!(bound(key('E')), Some(Command::SpreadLayout)));
-    assert!(matches!(bound(key('i')), Some(Command::Tmux { ref words }) if words[0] == "display-message" && words.contains(&"-p".to_string())));
+    assert!(matches!(bound(key('i')), Some(Command::DisplayMessage { format: None })));
     assert!(matches!(bound(named(KeyCode::PageUp, KeyModifiers::NONE)), Some(Command::CopyMode(o)) if o.page_up));
     assert!(matches!(bound(ctrl_code(KeyCode::Up)), Some(Command::ResizePane { side: Side::Up, cells: 1 })));
     assert!(matches!(bound(alt_code(KeyCode::Right)), Some(Command::ResizePane { side: Side::Right, cells: 5 })));
     assert!(matches!(bound(alt('1')), Some(Command::SelectLayout { preset: Some(_) })));
     assert!(matches!(bound(alt('7')), Some(Command::SelectLayout { preset: Some(_) })));
-    assert!(matches!(bound(alt('n')), Some(Command::Tmux { .. })));
+    assert!(matches!(bound(alt('n')), Some(Command::StepAlert { forward: true })));
     // The vim motions stay where they are.
     for c in ['h', 'j', 'k', 'l'] {
         assert!(matches!(bound(key(c)), Some(Command::SelectPaneDir { .. })), "{c}");

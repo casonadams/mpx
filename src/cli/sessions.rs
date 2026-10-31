@@ -16,7 +16,7 @@ use crate::config::home_dir;
 use crate::daemon::run_daemon;
 use crate::ipc;
 use crate::store;
-use crate::tmux_shim::convert;
+use crate::import_tmux::convert;
 use crate::tui::app::AppOptions;
 use crate::tui::status::{clock_hms, local_utc_offset};
 use crate::tui::{StartView, run_tui};
@@ -297,8 +297,6 @@ fn spawn_daemon(r: &Resolved) -> Result<(), String> {
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
-        // Started through the `tmux` link, argv[0] would make the daemon run as the tmux shim.
-        cmd.arg0("mpx");
         // SAFETY: setsid is async-signal-safe and touches nothing shared with the parent.
         unsafe {
             cmd.pre_exec(|| {

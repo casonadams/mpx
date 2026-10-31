@@ -320,16 +320,20 @@ fn dirname(v: &str) -> String {
     }
 }
 
-fn shell_quote(v: &str) -> String {
-    const SPECIAL: &str = "\\\"'$`!*?&;|<>()[]{}#~^ \t\n";
-    let mut out = String::with_capacity(v.len());
-    for c in v.chars() {
-        if SPECIAL.contains(c) {
+/// `text` with a backslash before each character that appears in `special`.
+pub(crate) fn backslash_escape(text: &str, special: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        if special.contains(c) {
             out.push('\\');
         }
         out.push(c);
     }
     out
+}
+
+fn shell_quote(v: &str) -> String {
+    backslash_escape(v, "\\\"'$`!*?&;|<>()[]{}#~^ \t\n")
 }
 
 /// Literal text of `#{l:...}`: only the escapes `##`, `#,`, `#}` are processed.
@@ -426,28 +430,71 @@ pub fn pane_vars(p: &PaneView) -> Vars {
     vars
 }
 
-/// tmux's window flag order: `#` activity, `!` bell, `*` active, `Z` zoomed, `-` last, `M` marked pane.
+/// The tmux window flags of one window; `render` writes them in tmux's order.
+#[derive(Default)]
+pub(crate) struct WindowFlags {
+    pub(crate) activity: bool,
+    pub(crate) bell: bool,
+    pub(crate) current: bool,
+    pub(crate) zoomed: bool,
+    pub(crate) last: bool,
+    pub(crate) marked: bool,
+}
+
+impl WindowFlags {
+    /// `#` activity, `!` bell, `*` current, `Z` zoomed, `-` last, `M` marked pane.
+    pub(crate) fn render(&self) -> String {
+        let mut flags = String::new();
+        if self.activity {
+            flags.push('#');
+        }
+        if self.bell {
+            flags.push('!');
+        }
+        if self.current {
+            flags.push('*');
+        }
+        if self.zoomed {
+            flags.push('Z');
+        }
+        if self.last {
+            flags.push('-');
+        }
+        if self.marked {
+            flags.push('M');
+        }
+        flags
+    }
+
+    /// Flags of a tab; `zoomed` applies only to the active window.
+    pub(crate) fn of_tab(tab: &WindowTab, zoomed: bool) -> Self {
+        let (activity, bell, current) = (tab.has_activity, tab.has_bell, tab.is_active);
+        Self {
+            activity,
+            bell,
+            current,
+            zoomed: current && zoomed,
+            last: tab.is_last,
+            marked: tab.has_marked,
+        }
+    }
+}
+
+impl From<&PaneView> for WindowFlags {
+    fn from(p: &PaneView) -> Self {
+        Self {
+            activity: p.window_activity,
+            bell: p.window_bell,
+            current: p.window_active,
+            zoomed: p.window_zoomed,
+            last: p.window_last,
+            marked: p.window_marked,
+        }
+    }
+}
+
 fn window_flags(p: &PaneView) -> String {
-    let mut flags = String::new();
-    if p.window_activity {
-        flags.push('#');
-    }
-    if p.window_bell {
-        flags.push('!');
-    }
-    if p.window_active {
-        flags.push('*');
-    }
-    if p.window_zoomed {
-        flags.push('Z');
-    }
-    if p.window_last {
-        flags.push('-');
-    }
-    if p.window_marked {
-        flags.push('M');
-    }
-    flags
+    WindowFlags::from(p).render()
 }
 
 /// View of one pane from its node position, the current layout rectangles and the window tabs.

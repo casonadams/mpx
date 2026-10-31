@@ -1,11 +1,10 @@
 use crossterm::event::{Event, KeyEvent, KeyEventKind, MouseEventKind};
-use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::io::{BufWriter, Write, stdout};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{self, UnboundedReceiver, unbounded_channel};
 use tokio::task::JoinHandle;
-use uuid::Uuid;
 
 use super::canvas::Canvas;
 use super::command::Command;
@@ -14,7 +13,6 @@ use super::frame;
 use super::keymap::{self, Keymap};
 use super::overlay::Overlay;
 use super::panes::{BorderGrab, LayoutCache, PaneRect, resized_elsewhere, sync_dims};
-use super::popup::PopupView;
 use super::prompt::PromptRun;
 use super::render::copy_to_clipboard;
 use super::statusline::{self, Rows, Target};
@@ -57,8 +55,6 @@ pub enum Mode {
     Clock {
         pane: String,
     },
-    /// A popup (tmux `display-popup`) drawn over the panes until its program's pane closes.
-    Popup(PopupView),
 }
 
 /// Event-stream subscription for the attached session. Events tagged with an older
@@ -99,10 +95,7 @@ pub struct App {
     pub endpoint: String,
     pub session: String,
     pub client: Client,
-    /// The effective config: `base_config` with the session's `set-option` values on top.
     pub config: Config,
-    /// The config as loaded from the file (and `-f`), before runtime options.
-    pub base_config: Config,
     /// Config file given with `-f`; `reload-config` re-reads it instead of the default location.
     pub config_path: Option<PathBuf>,
     pub keymap: Keymap,
@@ -119,10 +112,6 @@ pub struct App {
     /// Copy-mode state of panes that are not in the foreground: a pane keeps its scroll position,
     /// cursor and selection while the prefix is pending or focus moves elsewhere.
     pub parked_copy: HashMap<String, CopyState>,
-    /// Names this terminal to the daemon, which keeps the pane modes it reports apart from others'.
-    pub terminal_id: u64,
-    /// Panes this terminal last told the daemon it has in copy mode.
-    pub reported_modes: BTreeSet<String>,
     pub vt: HashMap<String, VtScreen>,
     pub passthroughs: Vec<Vec<u8>>,
     pub pane_dims: HashMap<String, (u16, u16)>,
@@ -165,8 +154,6 @@ pub struct App {
     pub clipboard: Clipboard,
     /// What the terminal currently shows, so frames send only changed cells.
     pub canvas: Canvas,
-    /// The popup's border and program screen: drawn on their own canvas, over the panes.
-    pub popup_canvas: Canvas,
     pub last_copy: Option<String>,
     /// Text yanked while handling the current event, pushed to the session's paste buffers after it.
     pub yanks: Vec<String>,
@@ -253,7 +240,6 @@ impl App {
             endpoint: endpoint.to_string(),
             session: session.to_string(),
             client,
-            base_config: config.clone(),
             config,
             config_path,
             keymap,
@@ -265,8 +251,6 @@ impl App {
             press: None,
             border_drag: None,
             parked_copy: HashMap::new(),
-            terminal_id: Uuid::new_v4().as_u128() as u64,
-            reported_modes: BTreeSet::new(),
             vt: HashMap::new(),
             passthroughs: Vec::new(),
             pane_dims: HashMap::new(),
@@ -297,7 +281,6 @@ impl App {
             fixed_size: size,
             clipboard: Clipboard::System,
             canvas: Canvas::default(),
-            popup_canvas: Canvas::default(),
             last_copy: None,
             yanks: Vec::new(),
             host_colors: super::render::HostColors::default(),
@@ -306,7 +289,7 @@ impl App {
             clock: ClockSource::default(),
         };
         app.subscribe(sub_client);
-        app.apply_runtime().await;
+        app.apply_bindings().await;
         app.refresh_nodes().await;
         if let Ok(info) = app.client.info().await
             && let Some(restored_ms) = info.restored_ms
@@ -388,7 +371,6 @@ impl App {
         // their terminals and rebuilding their screens waits for the release.
         if self.border_drag.is_none() {
             self.sync_pane_sizes().await;
-            self.sync_popup().await;
         }
         self.route_focus().await;
         true
@@ -518,9 +500,7 @@ impl App {
             StreamEvent::Output { name, .. } => self.keeps_screen(name),
             _ => true,
         });
-        if matches!(self.apply_batch(batch).await, Flow::Quit) {
-            return Flow::Quit;
-        }
+        self.apply_batch(batch).await;
         if !shown {
             return Flow::Continue;
         }
@@ -568,33 +548,17 @@ impl App {
         Flow::Continue
     }
 
-    /// Applies the events of the current subscription; a client command may end the session view.
-    /// Each client command is acknowledged once its copies and pane modes have reached the daemon,
-    /// so the shim that sent it can rely on them.
-    async fn apply_batch(&mut self, batch: Vec<(u64, StreamEvent)>) -> Flow {
-        let mut acks = Vec::new();
+    /// Applies the events of the current subscription.
+    async fn apply_batch(&mut self, batch: Vec<(u64, StreamEvent)>) {
         for (generation, event) in batch {
-            if let StreamEvent::ClientCommand { seq, .. } = &event
-                && *seq != 0
-            {
-                acks.push(*seq);
-            }
             if generation != self.sub.generation {
                 continue;
             }
-            if let StreamEvent::ClientCommand { line, .. } = event {
-                if matches!(self.run_line(&line).await, Flow::Quit) {
-                    return Flow::Quit;
-                }
-            } else if self.apply_event(event).await {
+            if self.apply_event(event).await {
                 self.layout.dirty = true;
             }
         }
         self.after_input().await;
-        for seq in acks {
-            let _ = self.client.command_applied(seq).await;
-        }
-        Flow::Continue
     }
 
     pub async fn on_event(&mut self, ev: Event) -> Flow {
@@ -603,29 +567,11 @@ impl App {
         flow
     }
 
-    /// Work that follows every input or stream batch: copies made reach the paste buffers, and the
-    /// daemon hears which panes this terminal has in copy mode.
+    /// Work that follows every input or stream batch: copies made reach the paste buffers.
     async fn after_input(&mut self) {
         for text in std::mem::take(&mut self.yanks) {
             let _ = self.client.set_buffer(None, &text).await;
         }
-        self.sync_pane_modes().await;
-    }
-
-    /// Tells the daemon which panes this terminal has in copy mode, so `pane_in_mode` is right.
-    async fn sync_pane_modes(&mut self) {
-        let mut now: BTreeSet<String> = self.parked_copy.keys().cloned().collect();
-        if matches!(self.mode, Mode::Copy(_)) && !self.active_pane.is_empty() {
-            now.insert(self.active_pane.clone());
-        }
-        let terminal = self.terminal_id;
-        for name in now.difference(&self.reported_modes) {
-            let _ = self.client.set_pane_mode(name, true, terminal).await;
-        }
-        for name in self.reported_modes.difference(&now) {
-            let _ = self.client.set_pane_mode(name, false, terminal).await;
-        }
-        self.reported_modes = now;
     }
 
     async fn handle_event(&mut self, ev: Event) -> Flow {
@@ -734,7 +680,6 @@ impl App {
             Mode::Panes { .. } => self.panes_key(key).await,
             // The mode is already back to normal: any key ends clock mode and is not forwarded.
             Mode::Clock { .. } => Flow::Continue,
-            Mode::Popup(view) => self.popup_key(view, key).await,
         }
     }
 }

@@ -48,27 +48,18 @@ impl App {
                 false
             }
             StreamEvent::Exit { name, .. } => {
-                if self.is_popup(&name) {
-                    self.mark_popup_finished(&name);
-                } else {
-                    self.vt.remove(&name);
-                    self.expected.remove(&name);
-                    self.pane_dims.remove(&name);
-                }
-                true
-            }
-            StreamEvent::PopupOpen { name, spec } => {
-                self.open_popup(name, spec).await;
-                true
-            }
-            StreamEvent::PopupClose { name } => {
-                self.close_popup_screen(&name);
+                self.vt.remove(&name);
+                self.expected.remove(&name);
+                self.pane_dims.remove(&name);
                 true
             }
             // Panes created or rearranged from outside (an agent's split, `mpx focus`) show at
             // once, not at the next tick.
             StreamEvent::Spawned { .. } | StreamEvent::Layout => true,
-            StreamEvent::ClientCommand { .. } => false,
+            StreamEvent::Bindings => {
+                self.apply_bindings().await;
+                true
+            }
             StreamEvent::Lagged => {
                 self.resync_all().await;
                 true
@@ -128,7 +119,6 @@ impl App {
     pub fn keeps_screen(&self, name: &str) -> bool {
         self.panes.iter().any(|(pane, ..)| pane == name)
             || self.parked_copy.contains_key(name)
-            || self.is_popup(name)
     }
 
     /// Panes that just came into view may have missed output while hidden (the daemon sends only

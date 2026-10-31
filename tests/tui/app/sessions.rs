@@ -21,18 +21,8 @@ async fn paren_keys_step_between_running_sessions() {
 }
 
 #[tokio::test]
-async fn stepping_with_no_other_session_says_so() {
-    let mut h = Harness::start(Config::default(), ECHO).await;
-    h.frame().await;
-    h.prefixed_char(')').await;
-    assert_eq!(h.app.live_message(), Some("no other session"));
-    assert_eq!(h.app.session, SESSION);
-}
-
-#[tokio::test]
 async fn the_tui_ends_when_its_daemon_goes_away() {
-    let mut h = Harness::start(Config::default(), ECHO).await;
-    h.frame().await;
+    let mut h = Harness::idle().await;
     let _ = h.probe.shutdown().await;
     h.app.layout.dirty = true;
     assert!(!h.app.prepare_frame().await, "nothing left to show");

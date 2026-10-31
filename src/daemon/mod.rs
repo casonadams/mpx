@@ -1,11 +1,8 @@
-mod channels;
 mod dispatch;
-pub mod hooks;
 pub mod idempotency;
 pub mod plan;
 mod session;
 pub mod snapshot;
-mod pipes;
 mod stores;
 
 use futures_util::{SinkExt, StreamExt};
@@ -19,7 +16,7 @@ use tracing::{error, info, warn};
 
 use crate::config::Config;
 use crate::ipc::{AsyncStream, IpcListener};
-use crate::node::pane::PaneHandle;
+use crate::node::pane::{PaneHandle, ask_actor};
 use crate::node::sink::Sink;
 use crate::node::now_ms;
 use crate::node::pacing::{Backlog, CloseOnDrop, Pacing};
@@ -36,7 +33,6 @@ pub struct DaemonState {
     /// Shared with the session's pane readers: attached terminals' backlogs pace their output.
     pacing: Arc<Pacing>,
     shutdown: watch::Sender<bool>,
-    channels: std::sync::Mutex<channels::Channels>,
 }
 
 impl DaemonState {
@@ -67,7 +63,6 @@ impl DaemonState {
             tx,
             pacing,
             shutdown,
-            channels: std::sync::Mutex::default(),
         })
     }
 
@@ -75,11 +70,7 @@ impl DaemonState {
         &self,
         make: impl FnOnce(oneshot::Sender<T>) -> SessionMsg,
     ) -> Result<T, String> {
-        let (reply, rx) = oneshot::channel();
-        self.tx
-            .send(make(reply))
-            .map_err(|_| SESSION_GONE.to_string())?;
-        rx.await.map_err(|_| SESSION_GONE.to_string())
+        ask_actor(&self.tx, SESSION_GONE, make).await
     }
 
     async fn session_req(&self, req: Request) -> Response {
@@ -275,7 +266,6 @@ async fn subscribe_node<S: AsyncStream>(
 pub async fn handle_client<S: AsyncStream>(state: Arc<DaemonState>, stream: S) {
     let mut framed = Framed::new(stream, LinesCodec::new());
     // Terminals that reported pane modes over this connection: their marks go when it closes.
-    let mut terminals = std::collections::BTreeSet::new();
 
     while let Some(line_res) = framed.next().await {
         let line = match line_res {
@@ -311,9 +301,6 @@ pub async fn handle_client<S: AsyncStream>(state: Arc<DaemonState>, stream: S) {
             }
             req => {
                 let shutdown = matches!(req, Request::Shutdown);
-                if let Request::SetPaneMode { terminal, .. } = &req {
-                    terminals.insert(*terminal);
-                }
                 let resp = dispatch::dispatch(&state, req).await;
                 if !send_message(&mut framed, &DaemonMessage::Response(resp)).await {
                     break;
@@ -324,9 +311,6 @@ pub async fn handle_client<S: AsyncStream>(state: Arc<DaemonState>, stream: S) {
                 }
             }
         }
-    }
-    for terminal in terminals {
-        dispatch::dispatch(&state, Request::ForgetPaneModes { terminal }).await;
     }
 }
 

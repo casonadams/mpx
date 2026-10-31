@@ -81,6 +81,27 @@ pub enum Command {
     SelectWindow {
         index: usize,
     },
+    /// `select-window -t name`: the window with that name.
+    SelectWindowNamed {
+        name: String,
+    },
+    /// `rotate-window [-D]`: the active window's panes move through its layout slots.
+    RotateWindow {
+        down: bool,
+    },
+    /// `move-window -t index`: moves the active window to that index.
+    MoveWindow {
+        to: usize,
+    },
+    /// `display-message [-p] [format]`: the expanded format on the status row; with no format it
+    /// describes the current pane.
+    DisplayMessage {
+        format: Option<String>,
+    },
+    /// `next-window -a` / `previous-window -a`: the next window with activity or a bell.
+    StepAlert {
+        forward: bool,
+    },
     NextWindow,
     PrevWindow,
     LastWindow,
@@ -156,12 +177,6 @@ pub enum Command {
         table: Table,
         key: String,
         line: String,
-    },
-    /// Re-read the session's options and key bindings (sent when another client changes them).
-    RefreshRuntime,
-    /// Any other tmux command, run as the `tmux` shim would against this session.
-    Tmux {
-        words: Vec<String>,
     },
     /// `display-panes [-d ms]`: number each visible pane until a digit picks one, a key is
     /// pressed or the time runs out. `None` takes `display-panes-time`; `Some(0)` waits for a key.
@@ -255,7 +270,7 @@ type Group = fn(&str, &[String]) -> Option<Result<Command, String>>;
 pub fn parse(line: &str) -> Result<Command, String> {
     if line.contains(';') {
         let mut commands = Vec::new();
-        for words in crate::tmux_shim::split_commands(line)? {
+        for words in crate::cmdline::split_commands(line)? {
             commands.push(parse_words(&words)?);
         }
         return match commands.len() {
@@ -275,37 +290,7 @@ fn parse_words(words: &[String]) -> Result<Command, String> {
     groups
         .into_iter()
         .find_map(|group| group(name, args))
-        .unwrap_or_else(|| tmux_fallback(name, args))
-}
-
-/// A tmux command with no TUI form runs through the shim, so every command the `tmux` shim knows
-/// also works at the `:` prompt, in key bindings and in sourced files.
-fn tmux_fallback(name: &str, args: &[String]) -> Result<Command, String> {
-    if crate::tmux_shim::spec(crate::tmux_shim::canonical(name)).is_none() {
-        return Err(format!("unknown command: {name}"));
-    }
-    let mut words = vec![name.to_string()];
-    words.extend_from_slice(args);
-    if crate::tmux_shim::canonical(name) == "display-message" {
-        add_display_defaults(&mut words)?;
-    }
-    Ok(Command::Tmux { words })
-}
-
-/// `display-message` shows its text on the status row, so it prints (`-p`), and with no format it
-/// describes the current pane as tmux does.
-fn add_display_defaults(words: &mut Vec<String>) -> Result<(), String> {
-    let inv = crate::tmux_shim::parse_invocation(words)?;
-    if !inv.has('p') {
-        words.insert(1, "-p".to_string());
-    }
-    if inv.operands.is_empty() {
-        words.push(
-            "[#{session_name}] #{window_index}:#{window_name}, current pane #{pane_index} - (#{pane_title})"
-                .to_string(),
-        );
-    }
-    Ok(())
+        .unwrap_or_else(|| Err(format!("unknown command: {name}")))
 }
 
 const BIND: Spec = Spec {
@@ -350,7 +335,7 @@ fn bind_key(name: &str, args: &[String]) -> Result<Command, String> {
     Ok(Command::Bind {
         table,
         key: key.clone(),
-        line: crate::tmux_shim::command_line(command),
+        line: crate::cmdline::command_line(command),
     })
 }
 
@@ -420,8 +405,8 @@ fn window_cmd(name: &str, args: &[String]) -> Option<Result<Command, String>> {
         "kill-window" => kill_window(name, args),
         "rename-window" => rename_window(args),
         "select-window" => select_window(name, args),
-        "next-window" if args == ["-a"] => tmux_fallback(name, args),
-        "previous-window" if args == ["-a"] => tmux_fallback(name, args),
+        "next-window" if args == ["-a"] => Ok(Command::StepAlert { forward: true }),
+        "previous-window" if args == ["-a"] => Ok(Command::StepAlert { forward: false }),
         "next-window" | "tabnext" | "tabn" => bare(name, args, Command::NextWindow),
         "previous-window" | "prev-window" | "tabprevious" | "tabp" => {
             bare(name, args, Command::PrevWindow)
@@ -463,19 +448,20 @@ fn misc_cmd(name: &str, args: &[String]) -> Option<Result<Command, String>> {
                 then: Box::new(Command::KillServer),
             },
         ),
+        "rotate-window" | "rotatew" => rotate_window(name, args),
+        "move-window" | "movew" => move_window(name, args),
+        "display-message" | "display" => display_message(name, args),
         "choose-tree" => choose_tree(name, args),
         "choose-buffer" => bare(name, args, Command::ChooseBuffer),
         "display-panes" | "displayp" => display_panes(name, args),
         "clock-mode" => clock_mode(name, args),
         "show-messages" | "showmsgs" => bare(name, args, Command::ShowMessages),
-        "list-buffers" | "lsb" if args.is_empty() => Ok(Command::ListBuffers),
-        "list-buffers" | "lsb" => tmux_fallback(name, args),
+        "list-buffers" | "lsb" => bare(name, args, Command::ListBuffers),
         "suspend-client" | "suspendc" => bare(name, args, Command::SuspendClient),
         "list-keys" | "help" => bare(name, args, Command::OpenHelp),
         "send-prefix" => bare(name, args, Command::SendPrefix),
         "reload-config" => bare(name, args, Command::ReloadConfig),
         "source-file" if args.is_empty() => Ok(Command::ReloadConfig),
-        "refresh-runtime" => bare(name, args, Command::RefreshRuntime),
         "bind-key" | "bind" => bind_key(name, args),
         "unbind-key" | "unbind" => unbind_key(name, args),
         "next-session" => bare(name, args, Command::NextSession),
@@ -498,13 +484,41 @@ fn bare(name: &str, args: &[String], cmd: Command) -> Result<Command, String> {
     }
 }
 
-/// `last-pane` alone is the TUI's; with options (`-Z`) the shim handles it.
+const ROTATE: Spec = Spec {
+    bools: &["-D", "-U"],
+    values: &[],
+    stop_at_arg: false,
+};
+const DISPLAY_MESSAGE: Spec = Spec {
+    bools: &["-p"],
+    values: &[],
+    stop_at_arg: true,
+};
+
+fn rotate_window(name: &str, args: &[String]) -> Result<Command, String> {
+    let o = parse_opts(name, args, ROTATE)?;
+    o.no_rest(name)?;
+    Ok(Command::RotateWindow { down: o.has("-D") })
+}
+
+fn move_window(name: &str, args: &[String]) -> Result<Command, String> {
+    let o = parse_opts(name, args, KILL_TARGET)?;
+    o.no_rest(name)?;
+    let raw = o
+        .value("-t")
+        .ok_or_else(|| format!("{name}: need -t <index>"))?;
+    let to = parse_index(raw).map_err(|_| format!("{name}: invalid window index '{raw}'"))?;
+    Ok(Command::MoveWindow { to })
+}
+
+fn display_message(name: &str, args: &[String]) -> Result<Command, String> {
+    let o = parse_opts(name, args, DISPLAY_MESSAGE)?;
+    let format = (!o.rest.is_empty()).then(|| o.rest.join(" "));
+    Ok(Command::DisplayMessage { format })
+}
+
 fn last_pane(name: &str, args: &[String]) -> Result<Command, String> {
-    if args.is_empty() {
-        Ok(Command::LastPane)
-    } else {
-        tmux_fallback(name, args)
-    }
+    bare(name, args, Command::LastPane)
 }
 
 /// Option shape for one command: which flags are switches, which take a value, and whether
@@ -751,8 +765,9 @@ fn select_window(name: &str, args: &[String]) -> Result<Command, String> {
         .ok_or_else(|| format!("{name}: need -t <index>"))?;
     match parse_index(raw) {
         Ok(index) => Ok(Command::SelectWindow { index }),
-        // A window name (`-t ':name'`) is resolved by the shim.
-        Err(_) => tmux_fallback(name, args),
+        Err(_) => Ok(Command::SelectWindowNamed {
+            name: raw.rsplit(':').next().unwrap_or(raw).to_string(),
+        }),
     }
 }
 
@@ -768,7 +783,7 @@ fn select_pane(name: &str, args: &[String]) -> Result<Command, String> {
     let o = parse_opts(name, args, SELECT_PANE)?;
     o.no_rest(name)?;
     if o.has("-Z") {
-        return tmux_fallback(name, args);
+        return Err(format!("{name}: -Z is not supported"));
     }
     if o.has("-M") {
         return Ok(Command::ClearMark);
@@ -805,7 +820,7 @@ fn resize_pane(name: &str, args: &[String]) -> Result<Command, String> {
     let o = parse_opts(name, args, RESIZE_PANE)?;
     if o.has("-Z") {
         return if o.value("-t").is_some() {
-            tmux_fallback(name, args)
+            Err(format!("{name}: -Z does not take -t"))
         } else {
             Ok(Command::Zoom)
         };
@@ -824,7 +839,7 @@ fn swap_pane(name: &str, args: &[String]) -> Result<Command, String> {
     let o = parse_opts(name, args, SWAP_PANE)?;
     o.no_rest(name)?;
     if o.has("-Z") {
-        return tmux_fallback(name, args);
+        return Err(format!("{name}: -Z is not supported"));
     }
     if o.has("-D") {
         Ok(Command::SwapPane { next: true })
@@ -947,7 +962,7 @@ fn confirm_before(name: &str, args: &[String]) -> Result<Command, String> {
     if o.rest.is_empty() {
         return Err(format!("{name}: need a command"));
     }
-    let line = crate::tmux_shim::command_line(&o.rest);
+    let line = crate::cmdline::command_line(&o.rest);
     let then = parse(&line)?;
     if o.has("-y") {
         return Ok(then);

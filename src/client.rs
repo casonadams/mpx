@@ -5,8 +5,8 @@ use tokio_util::codec::{Framed, FramedParts, LengthDelimitedCodec, LinesCodec};
 use crate::ipc::{IpcStream, connect_stream};
 use crate::layout::{Divider, Rect, WindowTab};
 use crate::protocol::{
-    Buffer, ChannelAction, DaemonMessage, LayoutPreset, NewWindowOpts, NodeInfo, PROTOCOL,
-    PopupOpts, Request, Response, SessionInfo, Side, SpawnOpts, SplitOpts, StreamEvent, VarKind,
+    Buffer, DaemonMessage, LayoutPreset, NewWindowOpts, NodeInfo, PROTOCOL,
+    Request, Response, SessionInfo, Side, SpawnOpts, SplitOpts, StreamEvent,
     WaitCondition, WaitOutcome,
 };
 use crate::wire;
@@ -215,20 +215,6 @@ impl Client {
             submit,
         };
         self.call_ok("Paste", req).await
-    }
-
-    /// Opens a popup. With `opts.wait`, returns once it closes, with its program's status.
-    pub async fn popup(&mut self, opts: PopupOpts) -> Result<Option<i32>, String> {
-        match self.call(Request::Popup(opts)).await? {
-            Response::PopupClosed { status } => Ok(status),
-            Response::Ok => Ok(None),
-            other => Err(unexpected("Popup", other)),
-        }
-    }
-
-    /// Closes the open popup (tmux `display-popup -C`).
-    pub async fn close_popup(&mut self) -> Result<(), String> {
-        self.call_ok("ClosePopup", Request::ClosePopup).await
     }
 
     pub async fn kill(&mut self, name: &str) -> Result<(), String> {
@@ -462,23 +448,6 @@ impl Client {
             .await
     }
 
-    /// Restarts a pane's process in place (`respawn-pane`); see `Request::Respawn`.
-    pub async fn respawn(
-        &mut self,
-        name: &str,
-        kill: bool,
-        cwd: Option<String>,
-        command: Option<Vec<String>>,
-    ) -> Result<(), String> {
-        let req = Request::Respawn {
-            name: name.to_string(),
-            kill,
-            cwd,
-            command,
-        };
-        self.call_ok("Respawn", req).await
-    }
-
     pub async fn rename_session(&mut self, name: &str) -> Result<(), String> {
         self.call_ok(
             "RenameSession",
@@ -495,49 +464,20 @@ impl Client {
         self.call_ok("ReloadConfig", Request::ReloadConfig { path }).await
     }
 
-    /// Sets (or with `None` removes) a variable of the session's option or environment store.
-    pub async fn set_var(
-        &mut self,
-        kind: VarKind,
-        name: &str,
-        value: Option<&str>,
-    ) -> Result<(), String> {
-        let req = Request::SetVar {
-            kind,
+    /// Sets (or with `None` forgets) a runtime key binding; see `Request::SetBinding`.
+    pub async fn set_binding(&mut self, name: &str, line: Option<&str>) -> Result<(), String> {
+        let req = Request::SetBinding {
             name: name.to_string(),
-            value: value.map(str::to_string),
+            line: line.map(str::to_string),
         };
-        self.call_ok("SetVar", req).await
+        self.call_ok("SetBinding", req).await
     }
 
-    /// Turns synchronized input on or off for a window; `None` is the active window.
-    pub async fn set_synchronized(&mut self, window: Option<usize>, on: bool) -> Result<(), String> {
-        self.call_ok("SetSynchronized", Request::SetSynchronized { window, on }).await
-    }
-
-    pub async fn get_vars(&mut self, kind: VarKind) -> Result<Vec<(String, String)>, String> {
-        match self.call(Request::GetVars { kind }).await? {
-            Response::Vars(vars) => Ok(vars),
-            other => Err(unexpected("GetVars", other)),
-        }
-    }
-
-    /// Records whether pane `name` is in a mode (copy mode) in terminal `terminal`; the daemon's
-    /// `pane_in_mode` reads it.
-    pub async fn set_pane_mode(&mut self, name: &str, on: bool, terminal: u64) -> Result<(), String> {
-        let req = Request::SetPaneMode {
-            name: name.to_string(),
-            on,
-            terminal,
-        };
-        self.call_ok("SetPaneMode", req).await
-    }
-
-    /// The names of the panes that are in a mode.
-    pub async fn pane_modes(&mut self) -> Result<Vec<String>, String> {
-        match self.call(Request::PaneModes).await? {
-            Response::PaneModes(names) => Ok(names),
-            other => Err(unexpected("PaneModes", other)),
+    /// The runtime key bindings, sorted by name.
+    pub async fn get_bindings(&mut self) -> Result<Vec<(String, String)>, String> {
+        match self.call(Request::GetBindings).await? {
+            Response::Bindings(bindings) => Ok(bindings),
+            other => Err(unexpected("GetBindings", other)),
         }
     }
 
@@ -576,84 +516,10 @@ impl Client {
         self.call_ok("DeleteBuffer", req).await
     }
 
-    /// tmux `wait-for`: blocks until the action completes on the daemon.
-    pub async fn wait_for(&mut self, channel: &str, action: ChannelAction) -> Result<(), String> {
-        let req = Request::WaitFor {
-            channel: channel.to_string(),
-            action,
-        };
-        self.call_ok("WaitFor", req).await
-    }
-
-    /// Has every attached terminal run `line` as a command; returns its sequence number.
-    pub async fn client_command(&mut self, line: &str) -> Result<u64, String> {
-        let req = Request::ClientCommand {
-            line: line.to_string(),
-        };
-        match self.call(req).await? {
-            Response::Seq(seq) => Ok(seq),
-            other => Err(unexpected("ClientCommand", other)),
-        }
-    }
-
-    /// Waits (bounded) until every terminal has applied client command `seq`. With no terminal
-    /// attached it returns at once; a terminal that never reports only delays it to the bound.
-    pub async fn wait_command(&mut self, seq: u64) -> Result<(), String> {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-        loop {
-            match self.call(Request::CommandSettled { seq }).await? {
-                Response::Settled(false) if std::time::Instant::now() < deadline => {
-                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-                }
-                Response::Settled(_) => return Ok(()),
-                other => return Err(unexpected("CommandSettled", other)),
-            }
-        }
-    }
-
-    /// Reports that this terminal has run client command `seq` and applied its effects.
-    pub async fn command_applied(&mut self, seq: u64) -> Result<(), String> {
-        self.call_ok("CommandApplied", Request::CommandApplied { seq }).await
-    }
-
-    /// Moves pane `src` next to `dst`, splitting it side by side or stacked.
-    pub async fn join_pane(
-        &mut self,
-        src: &str,
-        dst: &str,
-        side_by_side: bool,
-    ) -> Result<(), String> {
-        let req = Request::JoinPane {
-            src: src.to_string(),
-            dst: dst.to_string(),
-            side_by_side,
-        };
-        self.call_ok("JoinPane", req).await
-    }
-
-    pub async fn swap_window(&mut self, a: usize, b: usize) -> Result<(), String> {
-        self.call_ok("SwapWindow", Request::SwapWindow { a, b }).await
-    }
-
     pub async fn move_window(&mut self, from: usize, to: usize) -> Result<(), String> {
         self.call_ok("MoveWindow", Request::MoveWindow { from, to }).await
     }
 
-    /// Pipes a pane's output into `command`; `None` stops piping. `toggle` stops an existing pipe
-    /// instead of replacing it.
-    pub async fn pipe_pane(
-        &mut self,
-        name: &str,
-        command: Option<&str>,
-        toggle: bool,
-    ) -> Result<(), String> {
-        let req = Request::PipePane {
-            name: name.to_string(),
-            command: command.map(str::to_string),
-            toggle,
-        };
-        self.call_ok("PipePane", req).await
-    }
     /// Recreates the session from its last snapshot.
     pub async fn restore(&mut self) -> Result<(), String> {
         self.call_ok("Restore", Request::Restore).await

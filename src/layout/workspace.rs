@@ -21,9 +21,6 @@ pub struct WindowTab {
     pub marked_pane: Option<String>,
     #[serde(default)]
     pub agent_badge: Option<String>,
-    /// Typed input and paste go to every pane of the window (tmux `synchronize-panes`).
-    #[serde(default)]
-    pub synchronized: bool,
     /// The window is zoomed: its focused pane fills the window's area (tmux `Z` flag).
     #[serde(default)]
     pub zoomed: bool,
@@ -53,9 +50,6 @@ pub struct Window {
     pub has_activity: bool,
     #[serde(default)]
     pub has_bell: bool,
-    /// Typed input and paste go to every pane of the window (tmux `synchronize-panes`).
-    #[serde(default)]
-    pub synchronized: bool,
     /// Zoomed: only the focused pane is shown. Any change to the layout unzooms the window.
     #[serde(default)]
     pub zoomed: bool,
@@ -74,7 +68,6 @@ impl Window {
             preset: None,
             has_activity: false,
             has_bell: false,
-            synchronized: false,
             zoomed: false,
         }
     }
@@ -316,7 +309,6 @@ impl Workspace {
             preset: None,
             has_activity: false,
             has_bell: false,
-            synchronized: false,
             zoomed: false,
         });
         self.windows.len() - 1
@@ -389,7 +381,6 @@ impl Workspace {
                     is_last: Some(i) == self.last_window,
                     has_activity: w.has_activity,
                     has_bell: w.has_bell,
-                    synchronized: w.synchronized,
                     zoomed: w.zoomed,
                     focused: w.focused.clone(),
                     has_marked,
@@ -568,17 +559,6 @@ impl Workspace {
         }
     }
 
-    /// Turns synchronized input on or off for the window at `idx`; false when there is no such window.
-    pub fn set_synchronized(&mut self, idx: usize, on: bool) -> bool {
-        match self.windows.get_mut(idx) {
-            Some(win) => {
-                win.synchronized = on;
-                true
-            }
-            None => false,
-        }
-    }
-
     /// Sets the automatic name of a window unless it was renamed explicitly.
     pub fn set_auto_name(&mut self, idx: usize, name: Option<String>) {
         if let Some(win) = self.windows.get_mut(idx)
@@ -669,39 +649,6 @@ impl Workspace {
         self.windows
             .push(Window::new(id, name.to_string(), name.to_string()));
         self.set_active(self.windows.len() - 1);
-        true
-    }
-
-    /// Moves pane `src` next to `target`, splitting `target` in direction `dir`, whichever windows
-    /// they live in. A window left without panes goes away.
-    pub fn join_pane(&mut self, src: &str, target: &str, dir: Direction) -> Result<(), String> {
-        if src == target {
-            return Err("Cannot join a pane to itself".to_string());
-        }
-        let from = self
-            .window_of(src)
-            .ok_or_else(|| format!("Node '{src}' not found"))?;
-        if self.window_of(target).is_none() {
-            return Err(format!("Node '{target}' not found"));
-        }
-        self.windows[from].remove(src);
-        let to = self.window_of(target).unwrap_or(from);
-        if !self.windows[to].split_at(Some(target), src.to_string(), dir, None, true) {
-            return Err("Split target not found".to_string());
-        }
-        self.drop_empty_windows();
-        if let Some(idx) = self.window_of(target) {
-            self.set_active(idx);
-        }
-        Ok(())
-    }
-
-    /// Exchanges the positions of two windows; the active and last window stay the same windows.
-    pub fn swap_windows(&mut self, a: usize, b: usize) -> bool {
-        if a == b || a >= self.windows.len() || b >= self.windows.len() {
-            return false;
-        }
-        self.reorder(|windows| windows.swap(a, b));
         true
     }
 

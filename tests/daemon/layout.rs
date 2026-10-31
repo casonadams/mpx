@@ -1,16 +1,6 @@
-use super::support::{connect, start, task};
-use mpx::layout::Direction;
-use mpx::protocol::{LayoutPreset, NewWindowOpts, NodeState, Side, SplitOpts};
-
-fn split_of(target: &str, name: &str, focus: bool, percent: Option<u8>) -> SplitOpts {
-    SplitOpts {
-        target: Some(target.into()),
-        spawn: task(name, "cat", &[]),
-        direction: Direction::Horizontal,
-        percent,
-        focus,
-    }
-}
+use super::support::{connect, split_right, split_with, start, started_with, task};
+use mpx::client::Client;
+use mpx::protocol::{LayoutPreset, NewWindowOpts, NodeState, Side};
 
 fn window_opts(label: &str, name: &str, focus: bool) -> NewWindowOpts {
     NewWindowOpts {
@@ -24,29 +14,27 @@ fn focused_pane(layout: &[(String, mpx::layout::Rect, bool)]) -> Option<String> 
     layout.iter().find(|p| p.2).map(|p| p.0.clone())
 }
 
+async fn kill_all(client: &mut Client, names: &[&str]) {
+    for name in names {
+        client.kill(name).await.unwrap();
+    }
+}
+
 #[tokio::test]
 async fn focus_last_returns_to_the_previous_pane() {
-    let daemon = start().await;
-    let mut client = connect(&daemon.endpoint).await;
-    client.spawn(task("left", "cat", &[])).await.unwrap();
-    client
-        .split(split_of("left", "right", true, None))
-        .await
-        .unwrap();
+    let (_daemon, mut client) = started_with(task("left", "cat", &[])).await;
+    client.split(split_right("left", "right")).await.unwrap();
     client.focus_last().await.unwrap();
     let (layout, _, _) = client.layout(80, 24).await.unwrap();
     assert_eq!(focused_pane(&layout).as_deref(), Some("left"));
-    client.kill("left").await.unwrap();
-    client.kill("right").await.unwrap();
+    kill_all(&mut client, &["left", "right"]).await;
 }
 
 #[tokio::test]
 async fn split_percent_gives_the_new_pane_that_share() {
-    let daemon = start().await;
-    let mut client = connect(&daemon.endpoint).await;
-    client.spawn(task("main-p", "cat", &[])).await.unwrap();
+    let (_daemon, mut client) = started_with(task("main-p", "cat", &[])).await;
     client
-        .split(split_of("main-p", "small", false, Some(25)))
+        .split(split_with("main-p", "small", false, Some(25)))
         .await
         .unwrap();
     let (layout, _, _) = client.layout(80, 24).await.unwrap();
@@ -56,15 +44,12 @@ async fn split_percent_gives_the_new_pane_that_share() {
         Some("main-p"),
         "focus false"
     );
-    client.kill("main-p").await.unwrap();
-    client.kill("small").await.unwrap();
+    kill_all(&mut client, &["main-p", "small"]).await;
 }
 
 #[tokio::test]
 async fn new_window_without_focus_keeps_the_active_window() {
-    let daemon = start().await;
-    let mut client = connect(&daemon.endpoint).await;
-    client.spawn(task("first-win", "cat", &[])).await.unwrap();
+    let (_daemon, mut client) = started_with(task("first-win", "cat", &[])).await;
     client
         .new_window(window_opts("bg", "bg-node", false))
         .await
@@ -72,15 +57,12 @@ async fn new_window_without_focus_keeps_the_active_window() {
     let (_, _, tabs) = client.layout(80, 24).await.unwrap();
     assert_eq!(tabs.len(), 2);
     assert!(tabs[0].is_active);
-    client.kill("first-win").await.unwrap();
-    client.kill("bg-node").await.unwrap();
+    kill_all(&mut client, &["first-win", "bg-node"]).await;
 }
 
 #[tokio::test]
 async fn last_window_toggles_between_windows() {
-    let daemon = start().await;
-    let mut client = connect(&daemon.endpoint).await;
-    client.spawn(task("w0-pane", "cat", &[])).await.unwrap();
+    let (_daemon, mut client) = started_with(task("w0-pane", "cat", &[])).await;
     client
         .new_window(window_opts("w1", "w1-pane", true))
         .await
@@ -91,19 +73,16 @@ async fn last_window_toggles_between_windows() {
     client.last_window().await.unwrap();
     let (_, _, tabs) = client.layout(80, 24).await.unwrap();
     assert!(tabs[1].is_active);
-    client.kill("w0-pane").await.unwrap();
-    client.kill("w1-pane").await.unwrap();
+    kill_all(&mut client, &["w0-pane", "w1-pane"]).await;
 }
 
 #[tokio::test]
 async fn rename_is_sticky_against_automatic_naming() {
-    let daemon = start().await;
-    let mut client = connect(&daemon.endpoint).await;
-    client.spawn(task("named-pane", "cat", &[])).await.unwrap();
+    let (_daemon, mut client) = started_with(task("named-pane", "cat", &[])).await;
     client.rename_window(None, "work").await.unwrap();
     let (_, _, tabs) = client.layout(80, 24).await.unwrap();
     assert_eq!(tabs[0].name, "work");
-    client.kill("named-pane").await.unwrap();
+    kill_all(&mut client, &["named-pane"]).await;
 }
 
 #[tokio::test]
@@ -119,7 +98,7 @@ async fn unnamed_window_is_named_after_its_command() {
         .unwrap();
     let (_, _, tabs) = client.layout(80, 24).await.unwrap();
     assert_eq!(tabs[0].name, "cat");
-    client.kill("cat-pane").await.unwrap();
+    kill_all(&mut client, &["cat-pane"]).await;
 }
 
 #[tokio::test]
@@ -132,14 +111,12 @@ async fn a_name_given_at_creation_is_kept_against_automatic_naming() {
         .unwrap();
     let (_, _, tabs) = client.layout(80, 24).await.unwrap();
     assert_eq!(tabs[0].name, "shell-win");
-    client.kill("cat-pane").await.unwrap();
+    kill_all(&mut client, &["cat-pane"]).await;
 }
 
 #[tokio::test]
 async fn kill_window_removes_all_its_panes() {
-    let daemon = start().await;
-    let mut client = connect(&daemon.endpoint).await;
-    client.spawn(task("keep-win", "cat", &[])).await.unwrap();
+    let (_daemon, mut client) = started_with(task("keep-win", "cat", &[])).await;
     client
         .new_window(window_opts("doomed", "doomed-pane", true))
         .await
@@ -151,35 +128,27 @@ async fn kill_window_removes_all_its_panes() {
     );
     let (_, _, tabs) = client.layout(80, 24).await.unwrap();
     assert_eq!(tabs.len(), 1);
-    client.kill("keep-win").await.unwrap();
+    kill_all(&mut client, &["keep-win"]).await;
 }
 
 #[tokio::test]
 async fn swap_pane_exchanges_positions() {
-    let daemon = start().await;
-    let mut client = connect(&daemon.endpoint).await;
-    client.spawn(task("sw-a", "cat", &[])).await.unwrap();
+    let (_daemon, mut client) = started_with(task("sw-a", "cat", &[])).await;
     client
-        .split(split_of("sw-a", "sw-b", false, None))
+        .split(split_with("sw-a", "sw-b", false, None))
         .await
         .unwrap();
     client.swap_pane("sw-a", "sw-b").await.unwrap();
     let (layout, _, _) = client.layout(80, 24).await.unwrap();
     let left = layout.iter().min_by_key(|p| p.1.x).unwrap();
     assert_eq!(left.0, "sw-b");
-    client.kill("sw-a").await.unwrap();
-    client.kill("sw-b").await.unwrap();
+    kill_all(&mut client, &["sw-a", "sw-b"]).await;
 }
 
 #[tokio::test]
 async fn mark_pane_and_swap_with_marked_pane() {
-    let daemon = start().await;
-    let mut client = connect(&daemon.endpoint).await;
-    client.spawn(task("mk-a", "cat", &[])).await.unwrap();
-    client
-        .split(split_of("mk-a", "mk-b", true, None))
-        .await
-        .unwrap();
+    let (_daemon, mut client) = started_with(task("mk-a", "cat", &[])).await;
+    client.split(split_right("mk-a", "mk-b")).await.unwrap();
 
     // Mark mk-a (which is not focused since mk-b was focused on split)
     client.mark_pane(Some("mk-a"), false).await.unwrap();
@@ -206,35 +175,26 @@ async fn mark_pane_and_swap_with_marked_pane() {
     let (_, _, tabs) = client.layout(80, 24).await.unwrap();
     assert!(!tabs[0].has_marked);
 
-    client.kill("mk-a").await.unwrap();
-    client.kill("mk-b").await.unwrap();
+    kill_all(&mut client, &["mk-a", "mk-b"]).await;
 }
 
 #[tokio::test]
 async fn break_pane_moves_it_into_a_new_window() {
-    let daemon = start().await;
-    let mut client = connect(&daemon.endpoint).await;
-    client.spawn(task("bk-a", "cat", &[])).await.unwrap();
-    client
-        .split(split_of("bk-a", "bk-b", true, None))
-        .await
-        .unwrap();
+    let (_daemon, mut client) = started_with(task("bk-a", "cat", &[])).await;
+    client.split(split_right("bk-a", "bk-b")).await.unwrap();
     client.break_pane("bk-b").await.unwrap();
     let (layout, _, tabs) = client.layout(80, 24).await.unwrap();
     assert_eq!(tabs.len(), 2);
     assert_eq!(layout.len(), 1);
     assert_eq!(layout[0].0, "bk-b");
-    client.kill("bk-a").await.unwrap();
-    client.kill("bk-b").await.unwrap();
+    kill_all(&mut client, &["bk-a", "bk-b"]).await;
 }
 
 #[tokio::test]
 async fn even_horizontal_preset_equalises_widths() {
-    let daemon = start().await;
-    let mut client = connect(&daemon.endpoint).await;
-    client.spawn(task("ev-a", "cat", &[])).await.unwrap();
+    let (_daemon, mut client) = started_with(task("ev-a", "cat", &[])).await;
     client
-        .split(split_of("ev-a", "ev-b", false, Some(10)))
+        .split(split_with("ev-a", "ev-b", false, Some(10)))
         .await
         .unwrap();
     client
@@ -245,17 +205,14 @@ async fn even_horizontal_preset_equalises_widths() {
     let a = layout.iter().find(|p| p.0 == "ev-a").unwrap().1.width;
     let b = layout.iter().find(|p| p.0 == "ev-b").unwrap().1.width;
     assert!(a.abs_diff(b) <= 1, "widths {a} and {b}");
-    client.kill("ev-a").await.unwrap();
-    client.kill("ev-b").await.unwrap();
+    kill_all(&mut client, &["ev-a", "ev-b"]).await;
 }
 
 #[tokio::test]
 async fn resize_split_moves_the_border() {
-    let daemon = start().await;
-    let mut client = connect(&daemon.endpoint).await;
-    client.spawn(task("rs-a", "cat", &[])).await.unwrap();
+    let (_daemon, mut client) = started_with(task("rs-a", "cat", &[])).await;
     client
-        .split(split_of("rs-a", "rs-b", false, None))
+        .split(split_with("rs-a", "rs-b", false, None))
         .await
         .unwrap();
     client
@@ -270,15 +227,12 @@ async fn resize_split_moves_the_border() {
             .await
             .is_err()
     );
-    client.kill("rs-a").await.unwrap();
-    client.kill("rs-b").await.unwrap();
+    kill_all(&mut client, &["rs-a", "rs-b"]).await;
 }
 
 #[tokio::test]
 async fn window_navigation_and_select_window_report_bounds() {
-    let daemon = start().await;
-    let mut client = connect(&daemon.endpoint).await;
-    client.spawn(task("nav-a", "cat", &[])).await.unwrap();
+    let (_daemon, mut client) = started_with(task("nav-a", "cat", &[])).await;
     client
         .new_window(window_opts("nav-b", "nav-b-pane", true))
         .await
@@ -287,6 +241,5 @@ async fn window_navigation_and_select_window_report_bounds() {
     client.prev_window().await.unwrap();
     client.select_window(0).await.unwrap();
     assert!(client.select_window(9).await.is_err());
-    client.kill("nav-a").await.unwrap();
-    client.kill("nav-b-pane").await.unwrap();
+    kill_all(&mut client, &["nav-a", "nav-b-pane"]).await;
 }

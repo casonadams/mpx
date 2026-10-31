@@ -22,13 +22,28 @@ fn ctrl(c: char) -> KeyEvent {
     KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)
 }
 
+/// Runs `run` on each input and compares it with the expected output.
+fn check<I, E, O>(cases: &[(I, E)], run: impl Fn(I) -> O)
+where
+    I: Copy + std::fmt::Debug,
+    E: Copy + std::fmt::Debug,
+    O: PartialEq<E> + std::fmt::Debug,
+{
+    for &(input, want) in cases {
+        assert_eq!(run(input), want, "{input:?}");
+    }
+}
+
 #[test]
 fn fuzzy_match_is_case_insensitive_ordered_subsequence() {
-    assert!(fuzzy_match("", "anything"));
-    assert!(fuzzy_match("clde", "Claude"));
-    assert!(fuzzy_match("a-b", "alpha-beta"));
-    assert!(!fuzzy_match("xyz", "anything"));
-    assert!(!fuzzy_match("ba", "ab"));
+    let cases = [
+        (("", "anything"), true),
+        (("clde", "Claude"), true),
+        (("a-b", "alpha-beta"), true),
+        (("xyz", "anything"), false),
+        (("ba", "ab"), false),
+    ];
+    check(&cases, |(needle, haystack)| fuzzy_match(needle, haystack));
 }
 
 #[test]
@@ -104,6 +119,21 @@ fn act(view: &mut TreeView, label: &str, k: KeyEvent) -> OverlayAction {
     view.handle_key(k)
 }
 
+/// Presses `p`, collapses `label` with `h`, and draws the tree in `area`.
+fn collapse_and_draw(mut view: TreeView, label: &str, area: Rect) -> String {
+    view.handle_key(key('p'));
+    assert_eq!(act(&mut view, label, key('h')), OverlayAction::None);
+    draw_tree(&view, area)
+}
+
+/// Opens the filter with `/` and types `text`, feeding each key to `press`.
+fn type_filter(mut press: impl FnMut(KeyEvent) -> OverlayAction, text: &str) {
+    press(key('/'));
+    for c in text.chars() {
+        press(key(c));
+    }
+}
+
 #[test]
 fn tree_lists_sessions_windows_and_panes_expanded_by_default() {
     assert_eq!(
@@ -115,12 +145,20 @@ fn tree_lists_sessions_windows_and_panes_expanded_by_default() {
 }
 
 #[test]
-fn tree_h_collapses_a_session_and_l_expands_it_again() {
-    let mut view = tree();
-    assert_eq!(act(&mut view, "main", key('h')), OverlayAction::None);
-    assert_eq!(view.labels(), vec!["main", "work", "edit", "claude"]);
-    assert_eq!(act(&mut view, "main", key('l')), OverlayAction::None);
-    assert_eq!(view.labels().len(), 9);
+fn tree_h_collapses_and_l_expands_sessions_and_windows() {
+    let full = tree().labels();
+    let cases: [(&str, Vec<&str>); 3] = [
+        ("main", vec!["main", "work", "edit", "claude"]),
+        ("shell", vec!["main", "shell", "logs", "tail", "work", "edit", "claude"]),
+        ("work", vec!["main", "shell", "zsh", "vim", "logs", "tail", "work"]),
+    ];
+    for (label, collapsed) in cases {
+        let mut view = tree();
+        assert_eq!(act(&mut view, label, key('h')), OverlayAction::None, "h on {label}");
+        assert_eq!(view.labels(), collapsed, "h on {label}");
+        assert_eq!(act(&mut view, label, key('l')), OverlayAction::None, "l on {label} must not select");
+        assert_eq!(view.labels(), full, "l on {label} expands it");
+    }
 }
 
 #[test]
@@ -135,148 +173,114 @@ fn tree_h_on_a_leaf_moves_to_its_parent_window() {
 }
 
 #[test]
-fn tree_collapsed_window_hides_its_panes() {
-    let mut view = tree();
-    assert_eq!(act(&mut view, "shell", key('h')), OverlayAction::None);
-    assert_eq!(
-        view.labels(),
-        vec!["main", "shell", "logs", "tail", "work", "edit", "claude"]
-    );
-}
-
-#[test]
-fn tree_enter_on_other_session_switches_to_it() {
-    let mut view = tree();
-    assert_eq!(
-        act(&mut view, "work", code(KeyCode::Enter)),
-        OverlayAction::Run(vec![Command::SwitchSession {
-            name: "work".to_string()
-        }])
-    );
-}
-
-#[test]
-fn tree_enter_on_current_session_just_closes() {
-    let mut view = tree();
-    assert_eq!(
-        act(&mut view, "main", code(KeyCode::Enter)),
-        OverlayAction::Close
-    );
-}
-
-#[test]
-fn tree_enter_on_window_selects_it_and_switches_first_when_remote() {
-    let mut view = tree();
-    assert_eq!(
-        act(&mut view, "logs", code(KeyCode::Enter)),
-        OverlayAction::Run(vec![Command::SelectWindow { index: 1 }])
-    );
-
-    let mut view = tree();
-    assert_eq!(
-        act(&mut view, "edit", code(KeyCode::Enter)),
-        OverlayAction::Run(vec![
-            Command::SwitchSession {
-                name: "work".to_string()
-            },
-            Command::SelectWindow { index: 0 },
-        ])
-    );
-}
-
-#[test]
-fn tree_enter_on_pane_selects_session_qualified_pane() {
-    let mut view = tree();
-    assert_eq!(
-        act(&mut view, "claude", code(KeyCode::Enter)),
-        OverlayAction::Run(vec![Command::SelectPane {
-            target: "work:%4".to_string()
-        }])
-    );
-}
-
-#[test]
-fn tree_l_on_collapsed_session_expands_instead_of_selecting() {
-    let mut view = tree();
-    act(&mut view, "work", key('h'));
-    assert_eq!(view.labels().len(), 7);
-    assert_eq!(
-        act(&mut view, "work", key('l')),
-        OverlayAction::None,
-        "l on collapsed session does not run select"
-    );
-    assert_eq!(view.labels().len(), 9, "session expanded");
-}
-
-#[test]
-fn tree_x_confirms_kill_for_each_node_kind() {
-    let mut view = tree();
-    assert_eq!(
-        act(&mut view, "claude", key('x')),
-        OverlayAction::Run(vec![Command::Confirm {
-            prompt: "kill pane claude?".to_string(),
-            then: Box::new(Command::KillPane {
-                target: Some("work:%4".to_string()),
-            }),
-        }])
-    );
-
-    let mut view = tree();
-    assert_eq!(
-        act(&mut view, "edit", key('x')),
-        OverlayAction::Run(vec![
-            Command::SwitchSession {
+fn tree_enter_acts_on_the_row_it_is_on() {
+    let cases: [(&str, OverlayAction); 5] = [
+        ("main", OverlayAction::Close),
+        (
+            "work",
+            OverlayAction::Run(vec![Command::SwitchSession {
                 name: "work".to_string(),
-            },
-            Command::Confirm {
-                prompt: "kill window edit?".to_string(),
-                then: Box::new(Command::KillWindow { index: Some(0) }),
-            },
-        ])
-    );
-
-    let mut view = tree();
-    assert_eq!(
-        act(&mut view, "work", key('x')),
-        OverlayAction::Run(vec![
-            Command::SwitchSession {
-                name: "work".to_string(),
-            },
-            Command::Confirm {
-                prompt: "kill session work?".to_string(),
-                then: Box::new(Command::KillServer),
-            },
-        ])
-    );
-}
-
-#[test]
-fn tree_kill_on_current_session_needs_no_switch() {
-    let mut view = tree();
-    assert_eq!(
-        act(&mut view, "main", key('x')),
-        OverlayAction::Run(vec![Command::Confirm {
-            prompt: "kill session main?".to_string(),
-            then: Box::new(Command::KillServer),
-        }])
-    );
-}
-
-#[test]
-fn tree_filter_keeps_matching_nodes_and_their_ancestors() {
-    let mut view = tree();
-    view.handle_key(key('/'));
-    for c in "vim".chars() {
-        view.handle_key(key(c));
+            }]),
+        ),
+        ("logs", OverlayAction::Run(vec![Command::SelectWindow { index: 1 }])),
+        (
+            "edit",
+            OverlayAction::Run(vec![
+                Command::SwitchSession {
+                    name: "work".to_string(),
+                },
+                Command::SelectWindow { index: 0 },
+            ]),
+        ),
+        (
+            "claude",
+            OverlayAction::Run(vec![Command::SelectPane {
+                target: "work:%4".to_string(),
+            }]),
+        ),
+    ];
+    for (label, want) in cases {
+        let mut view = tree();
+        assert_eq!(act(&mut view, label, code(KeyCode::Enter)), want, "Enter on {label}");
     }
-    assert_eq!(view.labels(), vec!["main", "shell", "vim"]);
 }
 
 #[test]
-fn tree_q_and_esc_close() {
-    let mut view = tree();
-    assert_eq!(view.handle_key(key('q')), OverlayAction::Close);
-    assert_eq!(view.handle_key(code(KeyCode::Esc)), OverlayAction::Close);
+fn tree_x_asks_to_kill_the_row_it_is_on() {
+    let cases: [(&str, OverlayAction); 4] = [
+        (
+            "claude",
+            OverlayAction::Run(vec![Command::Confirm {
+                prompt: "kill pane claude?".to_string(),
+                then: Box::new(Command::KillPane {
+                    target: Some("work:%4".to_string()),
+                }),
+            }]),
+        ),
+        (
+            "edit",
+            OverlayAction::Run(vec![
+                Command::SwitchSession {
+                    name: "work".to_string(),
+                },
+                Command::Confirm {
+                    prompt: "kill window edit?".to_string(),
+                    then: Box::new(Command::KillWindow { index: Some(0) }),
+                },
+            ]),
+        ),
+        (
+            "work",
+            OverlayAction::Run(vec![
+                Command::SwitchSession {
+                    name: "work".to_string(),
+                },
+                Command::Confirm {
+                    prompt: "kill session work?".to_string(),
+                    then: Box::new(Command::KillServer),
+                },
+            ]),
+        ),
+        (
+            "main",
+            OverlayAction::Run(vec![Command::Confirm {
+                prompt: "kill session main?".to_string(),
+                then: Box::new(Command::KillServer),
+            }]),
+        ),
+    ];
+    for (label, want) in cases {
+        let mut view = tree();
+        assert_eq!(act(&mut view, label, key('x')), want, "x on {label}");
+    }
+}
+
+#[test]
+fn tree_filter_keeps_matching_rows_and_their_ancestors() {
+    let cases = [
+        (tree(), "vim", vec!["main", "shell", "vim"]),
+        // Matches a pane's program; its session and window stay as ancestors.
+        (busy_tree(), "claude", vec!["work", "editor", "claude"]),
+    ];
+    for (mut view, query, want) in cases {
+        type_filter(|k| view.handle_key(k), query);
+        assert_eq!(view.labels(), want, "filter {query:?}");
+    }
+}
+
+#[test]
+fn overlays_close_on_their_close_keys() {
+    let cases: [(&str, Overlay, KeyEvent); 6] = [
+        ("tree q", Overlay::Tree(tree()), key('q')),
+        ("tree esc", Overlay::Tree(tree()), code(KeyCode::Esc)),
+        ("help q", Overlay::help(help_entries()), key('q')),
+        ("help esc", Overlay::help(help_entries()), code(KeyCode::Esc)),
+        ("palette esc", Overlay::palette(sample_palette()), code(KeyCode::Esc)),
+        ("palette ctrl-c", Overlay::palette(sample_palette()), ctrl('c')),
+    ];
+    for (name, mut overlay, k) in cases {
+        assert_eq!(overlay.handle_key(k), OverlayAction::Close, "{name}");
+    }
 }
 
 #[test]
@@ -368,20 +372,9 @@ fn help_entries() -> Vec<HelpEntry> {
 #[test]
 fn help_filter_matches_key_or_command_text() {
     let mut help = HelpView::new(help_entries());
-    help.handle_key(key('/'));
-    for c in "close".chars() {
-        help.handle_key(key(c));
-    }
+    type_filter(|k| help.handle_key(k), "close");
     assert_eq!(help.visible().len(), 1);
     assert_eq!(help.visible()[0].key, "q");
-}
-
-#[test]
-fn help_overlay_closes_on_q_and_esc() {
-    let mut overlay = Overlay::help(help_entries());
-    assert_eq!(overlay.handle_key(key('q')), OverlayAction::Close);
-    let mut overlay = Overlay::help(help_entries());
-    assert_eq!(overlay.handle_key(code(KeyCode::Esc)), OverlayAction::Close);
 }
 
 #[test]
@@ -398,12 +391,6 @@ fn help_motion_keys_do_not_close() {
     }
 }
 
-fn render_to_string(overlay: &Overlay, area: Rect) -> String {
-    let mut buf: Vec<u8> = Vec::new();
-    overlay.render(&mut buf, area).expect("render");
-    String::from_utf8_lossy(&buf).into_owned()
-}
-
 #[test]
 fn overlays_render_into_tiny_and_empty_areas_without_panicking() {
     for area in [
@@ -411,23 +398,28 @@ fn overlays_render_into_tiny_and_empty_areas_without_panicking() {
         Rect::new(0, 0, 1, 1),
         Rect::new(0, 0, 5, 2),
     ] {
-        render_to_string(&Overlay::tree(), area);
-        render_to_string(&Overlay::help(help_entries()), area);
+        render_text(&Overlay::tree(), area);
+        render_text(&Overlay::help(help_entries()), area);
     }
 }
 
 #[test]
-fn tree_render_shows_session_and_pane_names() {
-    let text = render_to_string(&Overlay::Tree(tree()), Rect::new(0, 0, 60, 20));
-    assert!(text.contains("main"));
-    assert!(text.contains("zsh"));
-}
-
-#[test]
-fn help_render_shows_entries_and_title() {
-    let text = render_to_string(&Overlay::help(help_entries()), Rect::new(0, 0, 60, 10));
-    assert!(text.contains("Help"));
-    assert!(text.contains("close overlay"));
+fn overlays_render_their_title_and_entries() {
+    let cases: [(&str, Overlay, Rect, &[&str]); 2] = [
+        ("tree", Overlay::Tree(tree()), Rect::new(0, 0, 60, 20), &["main", "zsh"]),
+        (
+            "help",
+            Overlay::help(help_entries()),
+            Rect::new(0, 0, 60, 10),
+            &["Help", "close overlay"],
+        ),
+    ];
+    for (name, overlay, area, needles) in cases {
+        let text = render_text(&overlay, area);
+        for needle in needles {
+            assert!(text.contains(*needle), "{name} should show {needle:?}:\n{text}");
+        }
+    }
 }
 
 fn snapshot_overlay(
@@ -444,7 +436,7 @@ fn snapshot_overlay(
     screen.snapshot()
 }
 
-fn draw_tree(view: &TreeView, area: Rect) -> String {
+pub(super) fn draw_tree(view: &TreeView, area: Rect) -> String {
     snapshot_overlay(area, |buf| view.render(buf, area))
 }
 
@@ -462,11 +454,8 @@ fn tree_render_shows_expanded_and_collapsed_arrows() {
 
 #[test]
 fn tree_render_shows_collapsed_window_arrow_and_hides_its_panes() {
-    let mut view = tree();
-    view.handle_key(key('p'));
-    assert_eq!(act(&mut view, "logs", key('h')), OverlayAction::None);
-    let text = draw_tree(&view, Rect::new(0, 0, 80, 30));
-    assert!(text.contains("▸ 1 logs"));
+    let text = collapse_and_draw(tree(), "logs", Rect::new(0, 0, 80, 30));
+    assert_row(&text, "logs", "▸ 1 logs");
     assert!(!text.contains("tail"));
 }
 
@@ -523,40 +512,39 @@ fn row_with<'a>(text: &'a str, needle: &str) -> &'a str {
         .unwrap_or_else(|| panic!("no row with {needle}:\n{text}"))
 }
 
+fn assert_row(text: &str, row: &str, needle: &str) {
+    assert!(row_with(text, row).contains(needle), "{needle:?} not on row {row:?}:\n{text}");
+}
+
 #[test]
 fn tree_lists_the_current_session_first() {
     assert_eq!(busy_tree().labels()[0], "main");
 }
 
+/// `busy_tree` drawn at the size the busy-tree render tests share.
+fn busy_text() -> String {
+    draw_tree(&busy_tree(), Rect::new(0, 0, 100, 12))
+}
+
 #[test]
 fn tree_title_counts_sessions() {
-    let text = draw_tree(&busy_tree(), Rect::new(0, 0, 100, 12));
+    let text = busy_text();
     assert!(text.contains("Sessions · 2"), "{text}");
 }
 
 #[test]
-fn tree_marks_current_session_active_window_and_focused_pane_distinctly() {
-    let text = draw_tree(&busy_tree(), Rect::new(0, 0, 100, 12));
-    assert!(row_with(&text, "▾ main").contains("current"), "{text}");
+fn busy_tree_rows_show_current_marker_program_and_exit_code() {
+    let text = busy_text();
+    assert_row(&text, "▾ main", "current");
+    assert_row(&text, "zsh", "zsh");
+    assert_row(&text, "build", "exit 1");
     assert!(!row_with(&text, "▾ work").contains("current"), "{text}");
 }
 
 #[test]
-fn tree_pane_rows_show_program_short_cwd_state_and_exit_code() {
-    let text = draw_tree(&busy_tree(), Rect::new(0, 0, 100, 12));
-    assert!(row_with(&text, "zsh").contains("zsh"), "{text}");
-    let build = row_with(&text, "build");
-    assert!(build.contains("exit 1"), "{build}");
-}
-
-#[test]
 fn tree_collapsed_session_rolls_up_exits() {
-    let mut view = busy_tree();
-    view.handle_key(key('p'));
-    assert_eq!(act(&mut view, "main", key('h')), OverlayAction::None);
-    let text = draw_tree(&view, Rect::new(0, 0, 100, 12));
-    let main_row = row_with(&text, "main");
-    assert!(main_row.contains("1 exited"), "{main_row}");
+    let text = collapse_and_draw(busy_tree(), "main", Rect::new(0, 0, 100, 12));
+    assert_row(&text, "main", "1 exited");
 }
 
 #[test]
@@ -568,29 +556,20 @@ fn tree_narrow_rows_drop_the_detail_column() {
 }
 
 #[test]
-fn tree_filter_matches_pane_program_and_directory() {
-    let mut view = busy_tree();
-    view.handle_key(key('/'));
-    "claude".chars().for_each(|c| {
-        view.handle_key(key(c));
-    });
-    assert_eq!(view.labels(), vec!["work", "editor", "claude"]);
-}
-
-#[test]
 fn tree_preview_names_the_pane_a_session_row_would_show() {
     let text = draw_tree(&busy_tree(), Rect::new(0, 0, 100, 20));
-    let meta = row_with(&text, "main:%3");
-    assert!(meta.contains("zsh"), "{text}");
+    assert_row(&text, "main:%3", "zsh");
 }
 
 #[test]
 fn short_path_replaces_only_a_whole_home_prefix() {
-    let home = Some("/home/me");
-    assert_eq!(short_path("/home/me", home), "~");
-    assert_eq!(short_path("/home/me/src", home), "~/src");
-    assert_eq!(short_path("/home/other", home), "/home/other");
-    assert_eq!(short_path("/opt", home), "/opt");
+    let cases = [
+        ("/home/me", "~"),
+        ("/home/me/src", "~/src"),
+        ("/home/other", "/home/other"),
+        ("/opt", "/opt"),
+    ];
+    check(&cases, |path| short_path(path, Some("/home/me")));
 }
 
 fn sample_palette() -> PaletteView {
@@ -692,13 +671,6 @@ fn palette_executes_commands_and_arbitrary_lines() {
 }
 
 #[test]
-fn palette_escape_and_ctrl_c_closes() {
-    let mut view = sample_palette();
-    assert_eq!(view.handle_key(code(KeyCode::Esc)), OverlayAction::Close);
-    assert_eq!(view.handle_key(ctrl('c')), OverlayAction::Close);
-}
-
-#[test]
 fn palette_sessions_tab_selection() {
     let mut view = sample_palette();
     view.sessions = vec![TreeSession {
@@ -741,10 +713,9 @@ fn palette_sessions_tab_selection() {
 fn palette_renders_tabs_and_search_prompt() {
     let view = sample_palette();
     let text = draw_palette(&view, Rect::new(0, 0, 100, 20));
-    assert!(text.contains("[ Commands ]"), "{text}");
-    assert!(text.contains("Sessions & Panes"), "{text}");
-    assert!(text.contains("Help"), "{text}");
-    assert!(text.contains(" > _"), "{text}");
+    for needle in ["[ Commands ]", "Sessions & Panes", "Help", " > _"] {
+        assert!(text.contains(needle), "{needle:?} missing:\n{text}");
+    }
 }
 
 /// The text an overlay draws in `area`.

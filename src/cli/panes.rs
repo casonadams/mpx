@@ -5,8 +5,8 @@ use super::sessions::{apply_key, ensure_client};
 use super::windows;
 use crate::client::Client;
 use crate::layout::Direction;
+use crate::node::process::file_name;
 use crate::protocol::{NodeInfo, SpawnOpts, SplitOpts, StreamEvent};
-use crate::tmux_shim::pane_key;
 
 /// Arguments of `mpx split`, grouped so the handler stays under the parameter budget.
 pub struct SplitRequest {
@@ -16,7 +16,6 @@ pub struct SplitRequest {
     pub percent: Option<u8>,
     pub env: Vec<String>,
     pub pty: bool,
-    pub tmux_compat: bool,
     pub detach: bool,
     pub command: String,
     pub args: Vec<String>,
@@ -29,16 +28,12 @@ pub struct RunRequest {
     pub cwd: Option<String>,
     pub env: Vec<String>,
     pub remain: bool,
-    pub tmux_compat: bool,
     pub command: String,
     pub args: Vec<String>,
 }
 
 pub fn default_node_name(command: &str) -> String {
-    std::path::Path::new(command)
-        .file_name()
-        .map(|f| f.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "task".to_string())
+    file_name(command).unwrap_or_else(|| "task".to_string())
 }
 
 /// The command and its arguments from an `argv` positional, or `None` when it is empty.
@@ -56,6 +51,15 @@ fn current_dir() -> Option<String> {
     std::env::current_dir()
         .ok()
         .map(|p| p.to_string_lossy().into_owned())
+}
+
+/// Target key for a tmux-style target: strips `session:` and `window.` prefixes, keeping `%id` or a node name.
+fn pane_key(target: &str) -> &str {
+    let last = target.rsplit(':').next().unwrap_or(target);
+    match last.rsplit_once('.') {
+        Some((_, pane)) if pane.starts_with('%') => pane,
+        _ => last,
+    }
 }
 
 /// Node name for a tmux-style target: `%id` is looked up, anything else is taken as a name.
@@ -95,7 +99,6 @@ pub async fn run(cmd: Commands, r: &Resolved) -> Result<i32, String> {
             cwd,
             env,
             remain,
-            tmux_compat,
             argv,
         } => {
             let (command, args) =
@@ -106,7 +109,6 @@ pub async fn run(cmd: Commands, r: &Resolved) -> Result<i32, String> {
                 cwd,
                 env,
                 remain,
-                tmux_compat,
                 command,
                 args,
             };
@@ -186,7 +188,6 @@ pub async fn run(cmd: Commands, r: &Resolved) -> Result<i32, String> {
             percent,
             env,
             pty,
-            tmux_compat,
             detach,
             argv,
             ..
@@ -200,7 +201,6 @@ pub async fn run(cmd: Commands, r: &Resolved) -> Result<i32, String> {
                 percent,
                 env,
                 pty,
-                tmux_compat,
                 detach,
                 command,
                 args,
@@ -235,7 +235,6 @@ async fn run_node(r: &Resolved, req: RunRequest) -> Result<i32, String> {
             cwd: req.cwd,
             env: parse_env_pairs(&req.env)?,
             remain_on_exit: req.remain.then_some(true),
-            tmux_compat: req.tmux_compat,
         })
         .await
         .map_err(|e| format!("Run error: {e}"))?;
@@ -423,7 +422,6 @@ async fn split(r: &Resolved, req: SplitRequest) -> Result<i32, String> {
                 cwd: current_dir(),
                 env: parse_env_pairs(&req.env)?,
                 remain_on_exit: None,
-                tmux_compat: req.tmux_compat,
             },
             direction,
             percent: req.percent,

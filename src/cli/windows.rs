@@ -169,7 +169,6 @@ async fn new_window(r: &Resolved, req: NewWindowRequest) -> Result<i32, String> 
                 cwd: req.cwd,
                 env: parse_env_pairs(&req.env)?,
                 remain_on_exit: None,
-                tmux_compat: false,
             },
             focus: req.focus,
         })

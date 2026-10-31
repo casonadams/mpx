@@ -16,7 +16,7 @@ pub use sessions::{
     RestoreOutcome, apply_key, daemon_args, ensure_session, restore_session, run_cli,
 };
 
-/// Process entry point behind the `mpx` binary: tmux multicall, tracing, clap parsing and dispatch.
+/// Process entry point behind the `mpx` binary: tracing, clap parsing and dispatch.
 /// Returns the process exit code.
 pub fn main_entry(argv: Vec<String>) -> i32 {
     // One thread: mpx's work is actors passing messages, and with a worker pool every message
@@ -33,17 +33,7 @@ pub fn main_entry(argv: Vec<String>) -> i32 {
     }
 }
 
-/// True when the binary was invoked as `tmux` (symlink or copy in the shim directory).
-fn is_tmux_invocation(argv0: Option<&String>) -> bool {
-    argv0
-        .and_then(|a| std::path::Path::new(a).file_name())
-        .is_some_and(|name| name == "tmux" || name == "tmux.exe")
-}
-
 async fn entry(argv: Vec<String>) -> i32 {
-    if is_tmux_invocation(argv.first()) {
-        return crate::tmux_shim::run(argv[1..].to_vec()).await;
-    }
     let _ = tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .try_init();
@@ -182,10 +172,6 @@ pub enum Commands {
         /// Keep the pane on screen after the process exits
         #[arg(long)]
         remain: bool,
-
-        /// Export TMUX/TMUX_PANE and the tmux shim to the process
-        #[arg(long = "tmux-compat")]
-        tmux_compat: bool,
 
         /// Command to execute, then its arguments; options after the command are its own
         #[arg(
@@ -328,10 +314,6 @@ pub enum Commands {
         /// Run inside an interactive PTY
         #[arg(long)]
         pty: bool,
-
-        /// Export TMUX/TMUX_PANE and the tmux shim to the process
-        #[arg(long = "tmux-compat")]
-        tmux_compat: bool,
 
         /// Do not focus the new pane (tmux -d)
         #[arg(short = 'd', long = "detach", alias = "no-focus")]

@@ -25,7 +25,6 @@ impl App {
                 | Mode::Prompt(_)
                 | Mode::Confirm(..)
                 | Mode::Clock { .. }
-                | Mode::Popup(_)
         ) {
             return Flow::Continue;
         }

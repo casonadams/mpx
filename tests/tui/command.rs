@@ -353,22 +353,12 @@ fn confirm_before_asks_then_runs_the_command() {
 }
 
 #[test]
-fn zoom_and_keep_zoom_forms_route_as_tmux_does() {
+fn zoom_is_the_only_zoom_form() {
     assert_eq!(ok("resize-pane -Z"), Command::Zoom);
-    assert_eq!(
-        ok("resize-pane -Z -t work"),
-        Command::Tmux {
-            words: vec![
-                "resize-pane".into(),
-                "-Z".into(),
-                "-t".into(),
-                "work".into(),
-            ],
-        }
-    );
-    assert!(matches!(ok("select-pane -Z -t x"), Command::Tmux { .. }));
-    assert!(matches!(ok("last-pane -Z"), Command::Tmux { .. }));
-    assert!(matches!(ok("swap-pane -Z -s a -t b"), Command::Tmux { .. }));
+    assert!(err("resize-pane -Z -t work").contains("-Z does not take -t"));
+    assert!(err("select-pane -Z -t x").contains("-Z is not supported"));
+    assert!(err("last-pane -Z").contains("takes no arguments"));
+    assert!(err("swap-pane -Z -s a -t b").contains("-Z is not supported"));
     assert_eq!(ok("last-pane"), Command::LastPane);
 }
 
@@ -383,13 +373,21 @@ fn rename_window_accepts_the_end_of_options_marker() {
 }
 
 #[test]
-fn select_window_by_name_is_left_to_the_shim() {
+fn select_window_by_name_resolves_against_the_window_tabs() {
     assert_eq!(
         ok("select-window -t ':logs'"),
-        Command::Tmux {
-            words: vec!["select-window".into(), "-t".into(), ":logs".into()],
-        }
+        Command::SelectWindowNamed { name: "logs".into() }
     );
+    assert_eq!(
+        ok("select-window -t logs"),
+        Command::SelectWindowNamed { name: "logs".into() }
+    );
+}
+
+#[test]
+fn next_and_previous_window_with_a_step_to_an_alert() {
+    assert_eq!(ok("next-window -a"), Command::StepAlert { forward: true });
+    assert_eq!(ok("previous-window -a"), Command::StepAlert { forward: false });
 }
 
 #[test]
@@ -478,20 +476,14 @@ fn bind_and_unbind_name_the_table_and_the_command_line() {
 }
 
 #[test]
-fn commands_only_the_shim_knows_run_through_it() {
-    match ok("set-option -g @theme dark") {
-        Command::Tmux { words } => assert_eq!(words, ["set-option", "-g", "@theme", "dark"]),
-        other => panic!("{other:?}"),
-    }
-    assert!(matches!(ok("source-file ~/.tmux.conf"), Command::Tmux { .. }));
+fn source_file_without_a_file_reloads_the_config_and_display_message_formats() {
     assert_eq!(ok("source-file"), Command::ReloadConfig, "without a file it reloads the config");
-    assert!(matches!(ok("display-message hi"), Command::Tmux { .. }));
-    match ok("rotate-window -D") {
-        Command::Tmux { words } => assert_eq!(words, ["rotate-window", "-D"]),
-        other => panic!("{other:?}"),
-    }
-    assert!(matches!(ok("respawn-pane -k"), Command::Tmux { .. }));
-    assert!(matches!(ok("find-window -C build"), Command::Tmux { .. }));
+    assert!(err("set-option -g @theme dark").contains("unknown command"));
+    assert_eq!(
+        ok("display-message -p hello world"),
+        Command::DisplayMessage { format: Some("hello world".into()) }
+    );
+    assert_eq!(ok("display-message"), Command::DisplayMessage { format: None });
 }
 
 #[test]
@@ -537,11 +529,8 @@ fn buffer_and_message_commands_parse_bare() {
 }
 
 #[test]
-fn list_buffers_with_flags_goes_through_the_shim() {
-    assert!(matches!(
-        ok("list-buffers -F #{buffer_name}"),
-        Command::Tmux { .. }
-    ));
+fn list_buffers_takes_no_arguments() {
+    assert!(err("list-buffers -F #{buffer_name}").contains("takes no arguments"));
 }
 
 #[test]
@@ -550,8 +539,8 @@ fn joined_words_parse_back_to_the_same_words() {
         .iter()
         .map(|w| w.to_string())
         .collect();
-    let line = mpx::tmux_shim::join_words(&words);
-    let back = mpx::tmux_shim::split_commands(&line).unwrap();
+    let line = mpx::cmdline::join_words(&words);
+    let back = mpx::cmdline::split_commands(&line).unwrap();
     assert_eq!(back, [
         vec!["send-keys", "a b", "it's", "x;y"],
         vec!["", "plain"],

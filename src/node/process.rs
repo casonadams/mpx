@@ -38,11 +38,15 @@ pub fn parse_procargs2(buf: &[u8]) -> Option<Vec<String>> {
     )
 }
 
-pub fn basename(path: &str) -> String {
+/// Last component of `path`, when it has one.
+pub fn file_name(path: &str) -> Option<String> {
     std::path::Path::new(path)
         .file_name()
         .map(|f| f.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.to_string())
+}
+
+pub fn basename(path: &str) -> String {
+    file_name(path).unwrap_or_else(|| path.to_string())
 }
 
 /// Basename of an argv entry without a login-shell dash; `None` when empty.

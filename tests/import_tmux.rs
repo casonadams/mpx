@@ -1,6 +1,6 @@
-//! tmux shim: conf (`mpx import-tmux` conversion).
+//! `mpx import-tmux` conversion of a tmux config.
 use mpx::config::{BorderStyle, Config};
-use mpx::tmux_shim::{Converted, convert};
+use mpx::import_tmux::{Converted, convert};
 use mpx::tui::keymap;
 
 const SAMPLE: &str = r##"# mpx-style tmux.conf used by the import tests
