@@ -1,6 +1,6 @@
 [package]
 name = "mpx"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 authors = ["Cason Adams <casonadams@gmail.com>"]
 description = "A simple, ultra-performant process and stream multiplexer in Rust"
