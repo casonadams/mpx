@@ -21,7 +21,6 @@ If you pause after the prefix, a shortcut popup lists common action keys after `
 | `M-n` / `M-p` | `next-window -a` / `previous-window -a` | Next / previous window with activity or a bell |
 | `'` | `command-prompt -T window-target` | Prompt for a window name or index (Tab completes names), then select it |
 | `.` | `command-prompt` | Prompt for a target and move this window there (`move-window -t`) |
-| `f` | `find-window` | Prompt for text; lists windows whose name, title or content match |
 | `,` | `command-prompt -I "#W"` | Rename window (prompt prefilled with the current name) |
 | `&` | `kill-window` | Close window (asks y/n) |
 
@@ -77,7 +76,7 @@ If you pause after the prefix, a shortcut popup lists common action keys after `
 
 ## Changing bindings while running
 
-`:bind-key [-n] key command...` and `:unbind-key [-n] key` (or `tmux bind-key ...` from a script) change the keymap of the running session at once, in every attached terminal; a terminal attaching later picks them up too. `-n` binds without the prefix. Chain commands with `\;` (`:bind r source-file ~/.tmux.conf \; display-message reloaded`). Bindings last until the daemon stops; put lasting ones in `[bind]` / `[bind_root]` of `config.toml` or in a tmux config you `source-file`. Any tmux command works at the prompt: `:set-option -g ...`, `:source-file ~/.tmux.conf`, `:display-message ...`.
+`:bind-key [-n] key command...` and `:unbind-key [-n] key` change the keymap of the running session at once, in every attached terminal; a terminal attaching later picks them up too. `-n` binds without the prefix. Chain commands with `\;` (`:bind r reload-config \; display-message reloaded`). Bindings last until the daemon stops; put lasting ones in `[bind]` / `[bind_root]` of `config.toml`. Only the commands in the table below are available; others fail with `unknown command`.
 
 ## Command Prompt (`Prefix :`)
 
@@ -88,7 +87,10 @@ Vim-style command line on the status row. Supports tab-completion, history (`Up`
 | `split-window [-h] [-d] [-c dir] [cmd...]` | `split`, `sp`, `vsplit`, `vs` | Split active pane |
 | `new-window [-n name] [-c dir] [cmd...]` | `new`, `tabnew` | Create window |
 | `rename-session NAME` | `rename` | Rename current session |
-| `reload-config` | `source-file` | Re-read the config file into the TUI and the session's daemon |
+| `reload-config` | `source-file` (without a file) | Re-read the config file into the TUI and the session's daemon |
+| `rotate-window [-D]` | `rotatew` | Move each pane to the layout slot before its own (`-D`: after) |
+| `move-window -t INDEX` | `movew` | Move the active window to INDEX |
+| `display-message [-p] [FORMAT]` | `display` | Show the expanded [format](CLI.md#formats) on the status row; without one, describe the current pane |
 | `rename-window NAME` | `renamew` | Rename active window |
 | `kill-pane [-t TARGET]` | `killp` | Close pane |
 | `kill-window [-t INDEX]` | `killw` | Close window |
@@ -100,7 +102,6 @@ Vim-style command line on the status row. Supports tab-completion, history (`Up`
 | `clock-mode [-t PANE]` | | Big clock filling the pane until a key is pressed |
 | `command-prompt [-1bFkN] [-I initial,...] [-p prompt,...] [-T type] [template]` | | Asks each prompt (`-p`, default `(command) ` with a template). With a template the answers replace `%%` (`%1`..`%9` for the nth prompt; `%%%` quotes the answer for the command parser) and the result runs; without one the typed line runs. `-1`/`-k`: one key, no Enter. `-N`: digits only. `-F`: formats in the prompt and initial text |
 | `confirm-before [-y] [-p prompt] command` | | Asks `y`/`n` (default `Confirm 'command'? (y/n)`), then runs the command on `y`. `-y` runs it at once |
-| `display-popup [-BCE] [-b LINES] [-w W] [-h H] [-x X] [-y Y] [-d DIR] [-e VAR=val] [cmd]` | | Open `cmd` in a popup over the panes; see [Popups](#popups). `-s` and `-t` are accepted and not used |
 | `show-messages` | `showmsgs` | Status-row messages of this session, oldest first (last 100) |
 | `list-buffers` | `lsb` | Paste buffers in a list: `name: N bytes: "sample"` |
 | `choose-buffer` | | Paste buffers, newest first, with a preview: Enter pastes the highlighted one, `d` deletes it, `/` filters |
@@ -108,12 +109,6 @@ Vim-style command line on the status row. Supports tab-completion, history (`Up`
 | `palette [commands\|sessions\|help]` | `command-palette` | Fuzzy command palette |
 
 ---
-
-## Popups
-
-While a popup is open (see [Popups in the CLI reference](CLI.md#popups)), every key goes to its program: the prefix is not intercepted, `Ctrl-c` reaches the program, and the panes beneath get no input. Mouse events are ignored.
-
-When the program exits, a popup opened with `-E` closes by itself. Otherwise it stays on screen with its output and a note, and the next key closes it (`Esc` included). `display-popup -C` from a script closes it at any time, stopping the program if it still runs.
 
 ## Vi Copy Mode (`Prefix [`)
 

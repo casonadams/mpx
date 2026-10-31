@@ -18,7 +18,6 @@ prefix = "C-b"          # tmux notation: C-a, C-Space, M-b ...
 remain_on_exit = false  # panes stay on screen after exit: false, true, or "failed" (non-zero exit only)
 history_limit = 64      # exited, removed panes whose logs stay readable
 scrollback_lines = 100000  # lines of scrollback per pane for captures (tmux history-limit)
-tmux_compat = true      # export TMUX/TMUX_PANE + the tmux shim in every pane (default: true)
 allow_passthrough = true # passthrough from active pane: true, false, or "all" (every pane shown)
 restore = true          # when a session starts, recreate its last layout and resume processes
 which_key_delay_ms = 300  # wait after the prefix key before showing the shortcut popup (0 = at once)
@@ -88,20 +87,19 @@ fallback = ["nvim", "-S", "Session.vim"]
 | `prefix` | string | `"C-b"` | TUI | Prefix key for all multiplexer shortcuts (e.g. `"C-a"`, `"C-Space"`). Press twice to send literal key to active pane. |
 | `remain_on_exit` | `true`, `false`, or `"failed"` | `false` | Daemon | Keep a pane on screen after its process exits until it is closed. `"failed"` keeps only panes that exited with a non-zero status (or by a signal). |
 | `history_limit` | integer | `64` | Daemon | Number of exited and removed panes whose output buffers remain readable via CLI. |
-| `tmux_compat` | bool | `true` | Daemon | Exports `TMUX` and `TMUX_PANE` environment variables and injects the `mpx` tmux compatibility shim. |
 | `allow_passthrough` | `true`, `false`, or `"all"` | `true` | TUI | `true` lets terminal passthrough sequences (DCS tmux passthrough, OSC 4/10/11/12/52) from the active pane reach the host terminal. `"all"` lets them from every pane the terminal shows; `false` blocks them. |
 | `restore` | bool | `true` | Daemon | On startup, automatically restore the last saved session layout and resume registered processes, however the previous run ended. `mpx --no-restore` skips it for one start. |
 | `which_key_delay_ms` | integer | `300` | TUI | Milliseconds to wait after pressing the prefix before displaying the which-key HUD popup (`0` displays immediately). |
-| `display_panes_time_ms` | integer | `1000` | TUI | Milliseconds the `display-panes` numbers stay on screen before they go away (`0` keeps them until a key is pressed). Also set with `set-option display-panes-time`. |
-| `scrollback_lines` | integer | `100000` | Daemon | Lines of scrollback each pane keeps for captures (`capture-pane`, `logs --plain`), for panes started after the setting. Also set with `set-option history-limit`. Unlike `history_limit`, which counts exited panes. |
+| `display_panes_time_ms` | integer | `1000` | TUI | Milliseconds the `display-panes` numbers stay on screen before they go away (`0` keeps them until a key is pressed). |
+| `scrollback_lines` | integer | `100000` | Daemon | Lines of scrollback each pane keeps for captures (`capture-pane`, `logs --plain`), for panes started after the setting. Unlike `history_limit`, which counts exited panes. |
 | `automatic_rename` | bool | `true` | Daemon | Name each window after its foreground process. `false` keeps the name it was created with. |
-| `monitor_activity` | bool | `true` | Daemon | Flag background windows that print output (`#` in the window list). Flags are tracked while a terminal is attached; to have them with none attached (scripts reading `#{window_flags}`), run `tmux set -g monitor-activity on` (an explicit `on` keeps the daemon watching all pane output, which costs flood throughput). |
+| `monitor_activity` | bool | `true` | Daemon | Flag background windows that print output (`#` in the window list). Flags are tracked while a terminal is attached. |
 | `monitor_bell` | bool | `true` | Daemon | Flag background windows whose panes ring the bell (`!`); same rule as `monitor_activity`. |
 | `default_terminal` | string | `"xterm-256color"` | Daemon | `TERM` exported to panes started after the setting. |
 | `default_shell` | string (absolute path) | unset, so `$SHELL` | Daemon | Program that a pane started without a command runs. |
 | `default_command` | string | unset | Daemon | Command line run through the default shell by a pane started without a command. |
 | `base_index` | integer | `0` | TUI | Number of the first window (tmux `base-index`). Tabs, `Prefix` digits, `select-window -t` and `#{window_index}` count from it. The daemon numbers windows from 0 internally, and the native `mpx select-window` still takes that internal index. |
-| `pane_base_index` | integer | `0` | Shim | Number of the first pane of a window as `#{pane_index}` shows it (tmux `pane-base-index`). |
+| `pane_base_index` | integer | `0` | TUI | Number of the first pane of a window as `#{pane_index}` shows it (tmux `pane-base-index`). |
 | `mouse` | bool | `true` | TUI | `false` turns the terminal's mouse reporting off and ignores mouse events. |
 | `status` | bool | `true` | TUI | Show the status line. `false` gives its row to the panes; messages and prompts then use the bottom row. |
 | `status_position` | `"top"` or `"bottom"` | `"bottom"` | TUI | Row the status line occupies. |
@@ -114,35 +112,34 @@ fallback = ["nvim", "-S", "Session.vim"]
 | `mode_keys` | `"vi"` or `"emacs"` | `"vi"` | TUI | Copy-mode key table (tmux `mode-keys`); see [KEYBINDINGS.md](KEYBINDINGS.md#emacs-copy-mode-mode-keys-emacs). |
 | `set_clipboard` | bool | `true` | TUI | `false` keeps copy-mode yanks off the system clipboard. They still go to the paste buffers. |
 
-### tmux options (`set-option`)
+### tmux option names
 
-`set-option` (and `set-window-option`/`setw`) changes these for the running session; `set-option -u` restores the config file's value. An invalid value is refused with an error and not stored. Options not listed are stored only. Each row names the file key it shares with the config. Where mpx differs from tmux, the behavior column says so.
+These tmux options have an mpx file key; `mpx import-tmux` maps them. Each row names the file key. Where mpx differs from tmux, the behavior column says so.
 
 | tmux option | mpx behavior | Default |
 |---|---|---|
 | `remain-on-exit on\|off\|failed` | `remain_on_exit`. `failed` keeps only panes that exited non-zero (a signal counts). Decided when a pane exits, so panes already running follow a change. | `off` |
 | `history-limit N` | `scrollback_lines`: scrollback lines per pane for captures, for panes started after the change. The TUI's copy mode keeps mpx's built-in 100000-line limit. The file key `history_limit` is a different setting (exited panes) and is not changed. | `100000` (tmux: `2000`) |
 | `allow-passthrough on\|off\|all` | `allow_passthrough`. `all` covers every pane the terminal shows (the attached window); background windows are not streamed to the terminal, so their passthrough is not forwarded. | `on` (tmux: `off`) |
-| `automatic-rename on\|off` | `automatic_rename`. Session-wide: `setw -t N automatic-rename` changes every window. | `on` |
+| `automatic-rename on\|off` | `automatic_rename`. | `on` |
 | `monitor-activity on\|off` | `monitor_activity`. Background windows get the `#` flag on output, with or without an attached terminal. | `on` |
 | `monitor-bell on\|off` | `monitor_bell`. Background windows get the `!` flag on a bell. | `on` |
 | `monitor-silence N` | Not supported: `0` (off) is accepted, any other value is an error. | `0` |
-| `synchronize-panes on\|off` | Per window (`setw -t N`, else the active window; `-g` also means the active window). Typed keys and paste in the TUI go to every pane of that window. Shown as `#{pane_synchronized}`; `show-options` does not report it, and a restored session starts with it off. | `off` |
 | `default-terminal` | `default_terminal`: `TERM` for panes started after the change. | `xterm-256color` |
 | `default-shell` | `default_shell`: program for panes started with no command. Must be an absolute path. | `$SHELL` |
 | `default-command` | `default_command`: run through the default shell by panes started with no command. Empty means the shell. | empty |
 | `display-panes-time` | `display_panes_time_ms`. | `1000` |
 
-Panes started by `split-window`, `new-window` or `new-session` with no command use the default program. Options that are session-wide apply to all windows, except `synchronize-panes`.
+Panes started by `split-window`, `new-window` or `new-session` with no command use the default program. Options that are session-wide apply to all windows.
 
-### Terminal options (`set-option`)
+### Terminal option names
 
-These tmux options are applied by the terminal UI and reported by `show-options`. `set-option -u` restores the file's value. A value mpx cannot apply is refused with an error and not stored.
+These tmux options are applied by the terminal UI.
 
 | tmux option | mpx behavior | Default |
 |---|---|---|
-| `base-index N` | `base_index`. Digit keys, `select-window -t`, `kill-window -t`, `move-window -t`, `swap-window -t` and `#{window_index}` use it. | `0` |
-| `pane-base-index N` | `pane_base_index` for `#{pane_index}` in the tmux shim. The display-panes numbers are not offset. | `0` |
+| `base-index N` | `base_index`. Digit keys, `select-window -t`, `kill-window -t`, `move-window -t` and `#{window_index}` use it. | `0` |
+| `pane-base-index N` | `pane_base_index` for `#{pane_index}`. The display-panes numbers are not offset. | `0` |
 | `renumber-windows on` | Accepted: mpx always renumbers windows without gaps. `off` is refused with "renumber-windows off is not supported: windows are always renumbered". | `on` (tmux: `off`) |
 | `mouse on\|off` | `mouse`. | `on` |
 | `status on\|off` | `status`. Multi-line counts (`2` to `5`) are refused. | `on` |
@@ -189,6 +186,6 @@ Rules that dictate how tools (AI CLIs, editors, background tasks) are resumed wh
 
 ## Reloading the config
 
-`Prefix r` (or `:reload-config`) re-reads the config file while mpx runs: the file given with `-f`, else `$MPX_CONFIG`, else the default location. The TUI picks up style, `prefix`, `bind` and `which_key_delay_ms` at once. The session's daemon picks up the settings it owns for panes created afterwards and for the next snapshot and restore: `[[resume]]` rules, `restore`, `remain_on_exit`, `history_limit`, `scrollback_lines`, `tmux_compat`, `automatic_rename`, `monitor_activity`, `monitor_bell`, `default_terminal`, `default_shell` and `default_command`. Running panes keep their environment.
+`Prefix r` (or `:reload-config`) re-reads the config file while mpx runs: the file given with `-f`, else `$MPX_CONFIG`, else the default location. The TUI picks up style, `prefix`, `bind` and `which_key_delay_ms` at once. The session's daemon picks up the settings it owns for panes created afterwards and for the next snapshot and restore: `[[resume]]` rules, `restore`, `remain_on_exit`, `history_limit`, `scrollback_lines`, `automatic_rename`, `monitor_activity`, `monitor_bell`, `default_terminal`, `default_shell` and `default_command`. Running panes keep their environment.
 
 A file that does not parse, or a `bind`/`prefix` that does not resolve, is rejected with a message on the status row and nothing changes. A daemon started by an older mpx does not know the request; the UI still reloads and the message says to restart the session.

@@ -1,6 +1,6 @@
 # Architecture & Design
 
-`mpx` is a Rust / Tokio daemon per session, plus thin clients: the TUI, the CLI, and the `tmux` shim. All of them speak the same newline-delimited JSON protocol (`src/protocol.rs`) over a Unix domain socket or Windows Named Pipe.
+`mpx` is a Rust / Tokio daemon per session, plus thin clients: the TUI and the CLI. All of them speak the same newline-delimited JSON protocol (`src/protocol.rs`) over a Unix domain socket or Windows Named Pipe.
 
 One exception carries the bulk of the traffic: a subscriber that asks for it (`Subscribe { binary: true }`, which the TUI does) and a daemon that answers `BinaryStream` switch that connection to length-prefixed binary frames (`src/wire.rs`), where pane output is raw bytes instead of escaped JSON; other events stay JSON inside their frame.
 
@@ -8,7 +8,7 @@ Inside the daemon, state is owned by **actors**: tokio tasks that each own their
 
 ```mermaid
 graph LR
-    C[Clients: TUI / CLI / tmux shim] --> S[Session actor]
+    C[Clients: TUI / CLI] --> S[Session actor]
     S --> P1[Pane actor %0]
     S --> P2[Pane actor %1]
     S --> SN[(snapshot.json)]

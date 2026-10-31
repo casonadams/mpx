@@ -5,7 +5,7 @@
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 [![Documentation](https://img.shields.io/badge/docs-casonadams.github.io%2Fmpx-blue)](https://casonadams.github.io/mpx/)
 
-A modern, ultra-fast terminal multiplexer in Rust: tmux key bindings and a tmux command shim, crash-resilient with automatic session recovery, zero-flicker rendering, and a sleek fuzzy-search command palette.
+A modern, ultra-fast terminal multiplexer in Rust: tmux key bindings and `mpx import-tmux` for your `.tmux.conf`, crash-resilient with automatic session recovery, zero-flicker rendering, and a sleek fuzzy-search command palette.
 
 > **100% Local & Zero Telemetry**: `mpx` is an offline-by-design terminal engine. It contains **zero network calls, zero analytics, zero telemetry, and zero model training**. Commands, keystrokes, and outputs never leave your machine. It operates purely over local Unix domain sockets or Windows Named Pipes.
 
@@ -21,7 +21,6 @@ Traditional multiplexers like `tmux` rely on 30-year-old C architectures (`libev
 graph TD
     subgraph ClientInterfaces [Client & Invocation Interfaces]
         direction LR
-        TMUX["<b>tmux Invocation Shim</b><br/>(split-window, send-keys, capture-pane)"]
         CLI["<b>mpx CLI</b><br/>(run, attach, restore, list)"]
         TUI["<b>Human TUI (60 FPS)</b><br/>• DEC 2026 Synchronized Updates<br/>• 3-Tab Command Palette (Ctrl-Space)<br/>• Vi Copy Mode (100k lines)"]
     end
@@ -157,7 +156,7 @@ fallback = ["nvim", "-S", "Session.vim"]
 ## Documentation
 
 - **[Architecture & Design](docs/ARCHITECTURE.md)**: Tokio async daemon, split tree, dual-buffer engine, and TUI.
-- **[CLI Reference & Automation](docs/CLI.md)**: tmux-style commands, waiting, process runs, the tmux shim (what it supports and what it does not), and `mpx import-tmux` to convert a `.tmux.conf`.
+- **[CLI Reference & Automation](docs/CLI.md)**: tmux-style commands, waiting, process runs, what carries over from tmux and what does not, and `mpx import-tmux` to convert a `.tmux.conf`.
 - **[Keyboard Shortcuts](docs/KEYBINDINGS.md)**: Prefix bindings, `:` command prompt with vim aliases, and Vi copy mode.
 - **[Configuration](docs/CONFIG.md)**: Prefix, key bindings, `remain_on_exit`, and `[[resume]]` rules.
 - **[Installation Guide](docs/INSTALL.md)**: Package managers, static archives, and cross-platform builds.

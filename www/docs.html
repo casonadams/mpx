@@ -39,7 +39,7 @@
   <main class="container docs-content">
     <h1>mpx Documentation</h1>
     <p class="lead" style="color: var(--text-muted);">
-      An ultra-performant, zero-overhead terminal multiplexer engineered in Rust: 100% tmux-compatible, crash-resilient with automatic session recovery, zero-flicker rendering, and a sleek fuzzy command palette.
+      An ultra-performant, zero-overhead terminal multiplexer engineered in Rust: tmux key bindings, crash-resilient with automatic session recovery, zero-flicker rendering, and a sleek fuzzy command palette.
     </p>
 
     <div class="telemetry-banner" style="margin: 0 0 2rem 0;">
@@ -107,7 +107,6 @@
 remain_on_exit = false  # Keep panes open after child process terminates (or "failed")
 history_limit = 64      # Number of dead panes kept in log history
 scrollback_lines = 100000  # Scrollback lines per pane (tmux history-limit)
-tmux_compat = true      # Export TMUX/TMUX_PANE and tmux shim (default: true)
 allow_passthrough = true # Forward DCS tmux and OSC 52 clipboard sequences (or "all")
 restore = true          # Recreate layout and resume processes across restarts
 which_key_delay_ms = 300  # HUD popup delay (0 = instant)
@@ -155,7 +154,6 @@ fallback = ["nvim", "-S", "Session.vim"]</code></pre>
             <tr><td><code>prefix</code></td><td>string</td><td><code>"C-b"</code></td><td>TUI</td><td>Prefix key in tmux notation. Press twice to send literal prefix key to pane.</td></tr>
             <tr><td><code>remain_on_exit</code></td><td><code>true</code>, <code>false</code> or <code>"failed"</code></td><td><code>false</code></td><td>Daemon</td><td>Keep panes open after their child process terminates; <code>"failed"</code> keeps only panes that exited non-zero.</td></tr>
             <tr><td><code>history_limit</code></td><td>integer</td><td><code>64</code></td><td>Daemon</td><td>Number of dead/removed panes retained in log buffer for CLI queries.</td></tr>
-            <tr><td><code>tmux_compat</code></td><td>bool</td><td><code>true</code></td><td>Daemon</td><td>Inject <code>TMUX</code>/<code>TMUX_PANE</code> env and the <code>mpx</code> tmux compatibility shim.</td></tr>
             <tr><td><code>allow_passthrough</code></td><td><code>true</code>, <code>false</code> or <code>"all"</code></td><td><code>true</code></td><td>TUI</td><td>Terminal passthrough sequences (DCS tmux passthrough, OSC 4/10/11/12/52) from the active pane (<code>true</code>), from every pane shown (<code>"all"</code>), or none (<code>false</code>).</td></tr>
             <tr><td><code>scrollback_lines</code></td><td>integer</td><td><code>100000</code></td><td>Daemon</td><td>Lines of scrollback per pane for captures, for panes started afterwards (tmux <code>history-limit</code>).</td></tr>
             <tr><td><code>automatic_rename</code></td><td>bool</td><td><code>true</code></td><td>Daemon</td><td>Name windows after their foreground process; <code>false</code> keeps the creation name.</td></tr>
@@ -168,7 +166,7 @@ fallback = ["nvim", "-S", "Session.vim"]</code></pre>
             <tr><td><code>which_key_delay_ms</code></td><td>integer</td><td><code>300</code></td><td>TUI</td><td>Milliseconds to wait after prefix before showing shortcut HUD popup (0 = instant).</td></tr>
             <tr><td><code>display_panes_time_ms</code></td><td>integer</td><td><code>1000</code></td><td>TUI</td><td>Milliseconds the display-panes numbers stay up (0 = until a key is pressed).</td></tr>
             <tr><td><code>base_index</code></td><td>integer</td><td><code>0</code></td><td>TUI</td><td>Number of the first window (tmux <code>base-index</code>): tabs, Prefix digits and <code>#{window_index}</code>.</td></tr>
-            <tr><td><code>pane_base_index</code></td><td>integer</td><td><code>0</code></td><td>Shim</td><td>Number of the first pane as <code>#{pane_index}</code> shows it (tmux <code>pane-base-index</code>).</td></tr>
+            <tr><td><code>pane_base_index</code></td><td>integer</td><td><code>0</code></td><td>TUI</td><td>Number of the first pane as <code>#{pane_index}</code> shows it (tmux <code>pane-base-index</code>).</td></tr>
             <tr><td><code>mouse</code></td><td>bool</td><td><code>true</code></td><td>TUI</td><td><code>false</code> turns mouse reporting off and ignores mouse events.</td></tr>
             <tr><td><code>status</code></td><td>bool</td><td><code>true</code></td><td>TUI</td><td>Show the status line; <code>false</code> gives its row to the panes.</td></tr>
             <tr><td><code>status_position</code></td><td><code>"top"</code> or <code>"bottom"</code></td><td><code>"bottom"</code></td><td>TUI</td><td>Row of the status line.</td></tr>
