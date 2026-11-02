@@ -184,6 +184,14 @@ Rules that dictate how tools (AI CLIs, editors, background tasks) are resumed wh
 
 `mpx` ships with built-in defaults for `claude`, `omp`, `codex`, `rho`, `antigravity`, `opencode`, and `nvim`. `claude` and `omp` use `id_source`. A `[[resume]]` list in `config.toml` replaces the defaults, so repeat every rule you want to keep.
 
+## Options at run time
+
+`:set-option NAME VALUE` (alias `set`; `-g`, `-w` and `-s` are accepted and ignored) changes an option of the terminal you type it in, with tmux's option names and values. `-u` restores the default, `-q` ignores an unknown name, and `--` ends the flags for a value that starts with `-`. `:show-options [-v] [NAME]` lists the values. A change lasts until `reload-config`, which re-reads the file, and applies at once; a value that does not parse, or a `prefix` that does not resolve, is refused with a message and changes nothing.
+
+Settable: `allow-passthrough`, `base-index`, `display-panes-time`, `display-time`, `mode-keys`, `mouse`, `pane-base-index`, `prefix`, `set-clipboard`, `status`, `status-interval`, `status-justify`, `status-left`, `status-left-length`, `status-position`, `status-right`, `status-right-length`, `which-key-delay`, `window-status-current-format`, `window-status-format`, `window-status-separator`.
+
+Options the daemon reads (`automatic-rename`, `default-command`, `default-shell`, `default-terminal`, `history-limit`, `monitor-activity`, `monitor-bell`, `remain-on-exit`, `restore`) are not settable this way: set them in the file and run `reload-config`.
+
 ## Reloading the config
 
 `Prefix r` (or `:reload-config`) re-reads the config file while mpx runs: the file given with `-f`, else `$MPX_CONFIG`, else the default location. The TUI picks up style, `prefix`, `bind` and `which_key_delay_ms` at once. The session's daemon picks up the settings it owns for panes created afterwards and for the next snapshot and restore: `[[resume]]` rules, `restore`, `remain_on_exit`, `history_limit`, `scrollback_lines`, `automatic_rename`, `monitor_activity`, `monitor_bell`, `default_terminal`, `default_shell` and `default_command`. Running panes keep their environment.

@@ -478,7 +478,6 @@ fn bind_and_unbind_name_the_table_and_the_command_line() {
 #[test]
 fn source_file_without_a_file_reloads_the_config_and_display_message_formats() {
     assert_eq!(ok("source-file"), Command::ReloadConfig, "without a file it reloads the config");
-    assert!(err("set-option -g @theme dark").contains("unknown command"));
     assert_eq!(
         ok("display-message -p hello world"),
         Command::DisplayMessage { format: Some("hello world".into()) }
@@ -545,4 +544,36 @@ fn joined_words_parse_back_to_the_same_words() {
         vec!["send-keys", "a b", "it's", "x;y"],
         vec!["", "plain"],
     ]);
+}
+
+#[test]
+fn set_option_takes_flags_a_name_and_a_value() {
+    assert_eq!(
+        ok("set -g mouse off"),
+        Command::SetOption { name: "mouse".into(), value: Some("off".into()), unset: false, quiet: false }
+    );
+    assert_eq!(
+        ok("setw -gq status-left -- -x"),
+        Command::SetOption { name: "status-left".into(), value: Some("-x".into()), unset: false, quiet: true }
+    );
+    assert_eq!(
+        ok("set-option -u mouse"),
+        Command::SetOption { name: "mouse".into(), value: None, unset: true, quiet: false }
+    );
+    assert!(err("set -g mouse").contains("need a value"));
+    assert!(err("set -u mouse off").contains("too many"));
+    assert!(err("set -g").contains("need an option"));
+}
+
+#[test]
+fn show_options_takes_an_optional_name() {
+    assert_eq!(
+        ok("show-options"),
+        Command::ShowOptions { name: None, value_only: false, quiet: false }
+    );
+    assert_eq!(
+        ok("show -gv mouse"),
+        Command::ShowOptions { name: Some("mouse".into()), value_only: true, quiet: false }
+    );
+    assert!(err("show a b").contains("too many"));
 }

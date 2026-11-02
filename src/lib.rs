@@ -10,6 +10,7 @@ pub mod ipc;
 pub mod keys;
 pub mod layout;
 pub mod node;
+pub mod options;
 pub mod protocol;
 pub mod store;
 pub mod tui;

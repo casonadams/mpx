@@ -88,6 +88,8 @@ Vim-style command line on the status row. Supports tab-completion, history (`Up`
 | `new-window [-n name] [-c dir] [cmd...]` | `new`, `tabnew` | Create window |
 | `rename-session NAME` | `rename` | Rename current session |
 | `reload-config` | `source-file` (without a file) | Re-read the config file into the TUI and the session's daemon |
+| `set-option [-g] [-u] [-q] NAME [VALUE]` | `set`, `set-window-option`, `setw` | Change a UI option of this terminal until the next `reload-config` (names and values in [Options at run time](CONFIG.md#options-at-run-time)) |
+| `show-options [-g] [-v] [-q] [NAME]` | `show`, `show-window-options`, `showw` | List the options, or show one on the status row |
 | `rotate-window [-D]` | `rotatew` | Move each pane to the layout slot before its own (`-D`: after) |
 | `move-window -t INDEX` | `movew` | Move the active window to INDEX |
 | `display-message [-p] [FORMAT]` | `display` | Show the expanded [format](CLI.md#formats) on the status row; without one, describe the current pane |

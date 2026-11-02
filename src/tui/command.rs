@@ -98,6 +98,21 @@ pub enum Command {
     DisplayMessage {
         format: Option<String>,
     },
+    /// `set-option [-gwsqu] name [value]`: sets a TUI option for this client; `-u` restores the
+    /// default, `-q` ignores an unknown option.
+    SetOption {
+        name: String,
+        value: Option<String>,
+        unset: bool,
+        quiet: bool,
+    },
+    /// `show-options [-gwsqv] [name]`: the options and their values in an overlay; with a name and
+    /// `-v`, only the value on the status row.
+    ShowOptions {
+        name: Option<String>,
+        value_only: bool,
+        quiet: bool,
+    },
     /// `next-window -a` / `previous-window -a`: the next window with activity or a bell.
     StepAlert {
         forward: bool,
@@ -245,7 +260,11 @@ pub const COMMAND_NAMES: &[&str] = &[
     "send-keys",
     "send-prefix",
     "session",
+    "set-option",
+    "set-window-option",
     "show-messages",
+    "show-options",
+    "show-window-options",
     "sp",
     "split",
     "split-window",
@@ -458,6 +477,8 @@ fn misc_cmd(name: &str, args: &[String]) -> Option<Result<Command, String>> {
         "show-messages" | "showmsgs" => bare(name, args, Command::ShowMessages),
         "list-buffers" | "lsb" => bare(name, args, Command::ListBuffers),
         "suspend-client" | "suspendc" => bare(name, args, Command::SuspendClient),
+        "set-option" | "set" | "set-window-option" | "setw" => set_option(name, args),
+        "show-options" | "show" | "show-window-options" | "showw" => show_options(name, args),
         "list-keys" | "help" => bare(name, args, Command::OpenHelp),
         "send-prefix" => bare(name, args, Command::SendPrefix),
         "reload-config" => bare(name, args, Command::ReloadConfig),
@@ -515,6 +536,47 @@ fn display_message(name: &str, args: &[String]) -> Result<Command, String> {
     let o = parse_opts(name, args, DISPLAY_MESSAGE)?;
     let format = (!o.rest.is_empty()).then(|| o.rest.join(" "));
     Ok(Command::DisplayMessage { format })
+}
+
+const SET_OPTION: Spec = Spec {
+    bools: &["-g", "-w", "-s", "-q", "-u"],
+    values: &[],
+    stop_at_arg: false,
+};
+const SHOW_OPTIONS: Spec = Spec {
+    bools: &["-g", "-w", "-s", "-q", "-v"],
+    values: &[],
+    stop_at_arg: false,
+};
+
+fn set_option(name: &str, args: &[String]) -> Result<Command, String> {
+    let o = parse_opts(name, args, SET_OPTION)?;
+    let unset = o.has("-u");
+    let (option, value) = match o.rest.as_slice() {
+        [option] if unset => (option, None),
+        [option, value] if !unset => (option, Some(value.clone())),
+        [] => return Err(format!("{name}: need an option")),
+        [_] => return Err(format!("{name}: need a value")),
+        _ => return Err(format!("{name}: too many arguments")),
+    };
+    Ok(Command::SetOption {
+        name: option.clone(),
+        value,
+        unset,
+        quiet: o.has("-q"),
+    })
+}
+
+fn show_options(name: &str, args: &[String]) -> Result<Command, String> {
+    let o = parse_opts(name, args, SHOW_OPTIONS)?;
+    if o.rest.len() > 1 {
+        return Err(format!("{name}: too many arguments"));
+    }
+    Ok(Command::ShowOptions {
+        name: o.rest.first().cloned(),
+        value_only: o.has("-v"),
+        quiet: o.has("-q"),
+    })
 }
 
 fn last_pane(name: &str, args: &[String]) -> Result<Command, String> {

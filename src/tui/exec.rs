@@ -178,6 +178,12 @@ impl App {
             Command::PrevSession => self.step_session(false).await,
             Command::KillServer => self.kill_server().await,
             Command::ReloadConfig => self.reload_config().await,
+            Command::SetOption { name, value, unset, quiet } => {
+                self.set_option(&name, value.as_deref(), unset, quiet).await
+            }
+            Command::ShowOptions { name, value_only, quiet } => {
+                self.show_options(name.as_deref(), value_only, quiet).await
+            }
             Command::Bind { table, key, line } => self.bind_key(table, &key, &line).await,
             Command::Sequence(commands) => Box::pin(self.run_sequence(commands)).await,
             Command::Zoom => self.toggle_zoom().await,
@@ -227,6 +233,42 @@ impl App {
         match daemon {
             Ok(()) => self.say("config reloaded"),
             Err(e) => self.say(format!("config reloaded in the UI only: {e}")),
+        }
+    }
+
+    /// `set-option`: changes this client's option. A value that does not parse, or a prefix the
+    /// keymap cannot resolve, leaves the config unchanged.
+    async fn set_option(&mut self, name: &str, value: Option<&str>, unset: bool, quiet: bool) -> Flow {
+        if quiet && !crate::options::is_known(name) {
+            return Flow::Continue;
+        }
+        let mut config = self.config.clone();
+        let result = match value {
+            Some(value) if !unset => crate::options::set(&mut config, name, value),
+            _ => crate::options::unset(&mut config, name),
+        };
+        if let Err(e) = result.and_then(|()| keymap::resolve(&config).map(|_| ())) {
+            return self.say(format!("set-option: {e}"));
+        }
+        self.config = config;
+        self.apply_bindings().await;
+        Flow::Continue
+    }
+
+    /// `show-options`: every option in an overlay, or one on the status row.
+    async fn show_options(&mut self, name: Option<&str>, value_only: bool, quiet: bool) -> Flow {
+        let Some(name) = name else {
+            let lines = crate::options::list(&self.config)
+                .into_iter()
+                .map(|(name, value)| format!("{name} {value}"))
+                .collect();
+            return self.open_overlay(Overlay::text("options", lines)).await;
+        };
+        match crate::options::get(&self.config, name) {
+            Ok(value) if value_only => self.say(value),
+            Ok(value) => self.say(format!("{name} {value}")),
+            Err(_) if quiet && !crate::options::is_known(name) => Flow::Continue,
+            Err(e) => self.say(format!("show-options: {e}")),
         }
     }
 

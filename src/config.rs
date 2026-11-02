@@ -193,6 +193,15 @@ impl FromStr for StatusPosition {
     }
 }
 
+impl StatusPosition {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Top => "top",
+            Self::Bottom => "bottom",
+        }
+    }
+}
+
 /// Horizontal placement of the window list on the status line (tmux `status-justify`).
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
@@ -218,6 +227,16 @@ impl FromStr for Justify {
     }
 }
 
+impl Justify {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Left => "left",
+            Self::Centre => "centre",
+            Self::Right => "right",
+        }
+    }
+}
+
 /// Copy-mode key table (tmux `mode-keys`).
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
@@ -233,6 +252,15 @@ impl FromStr for ModeKeys {
 
     fn from_str(value: &str) -> Result<Self, String> {
         choice(value, &[(&["vi"], Self::Vi), (&["emacs"], Self::Emacs)])
+    }
+}
+
+impl ModeKeys {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Vi => "vi",
+            Self::Emacs => "emacs",
+        }
     }
 }
 
