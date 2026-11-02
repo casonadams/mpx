@@ -604,3 +604,19 @@ fn pane_and_window_moves_parse_their_flags() {
     assert_eq!(ok("find-window -i vim"), Command::FindWindow { pattern: "vim".into() });
     assert!(err("find-window").contains("need a pattern"));
 }
+
+#[test]
+fn every_completion_name_is_a_command_the_parser_knows() {
+    for name in mpx::tui::command::COMMAND_NAMES {
+        if let Err(e) = parse(name) {
+            assert!(!e.contains("unknown command"), "{name}: {e}");
+        }
+    }
+}
+
+#[test]
+fn completion_offers_the_commands_reached_through_aliases_in_the_default_keys() {
+    for name in ["display-message", "move-window", "rotate-window"] {
+        assert!(mpx::tui::command::COMMAND_NAMES.contains(&name), "{name}");
+    }
+}
