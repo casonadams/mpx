@@ -124,7 +124,7 @@ fn tab_extends_to_common_prefix_of_several_commands() {
         "kill-",
         "kill-pane, kill-server and kill-window share only this"
     );
-    let mut p = typed("swap");
+    let mut p = typed("swap-p");
     p.complete(COMMAND_NAMES);
     assert_eq!(p.text(), "swap-pane ");
 }

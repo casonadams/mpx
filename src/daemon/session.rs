@@ -94,7 +94,7 @@ impl Filter {
     /// Whether `event` goes to this subscriber; `shown` says if a pane is in the active window.
     fn accepts(&self, event: &StreamEvent, shown: impl Fn(&str) -> bool) -> bool {
         match (self, event) {
-            (_, StreamEvent::Layout | StreamEvent::Bindings) => {
+            (_, StreamEvent::Layout | StreamEvent::Bindings | StreamEvent::Respawned { .. }) => {
                 matches!(self, Filter::ActiveWindow { layout: true })
             }
             (Filter::Everything, _) => true,
@@ -387,7 +387,10 @@ impl Session {
             | Request::ListBuffers
             | Request::DeleteBuffer { .. }
             | Request::MoveWindow { .. }
-            | Request::RotateWindow { .. }) => self.state_request(req),
+            | Request::RotateWindow { .. }
+            | Request::JoinPane { .. }
+            | Request::SwapWindow { .. }
+            | Request::Respawn { .. }) => self.state_request(req),
             req => self.target_request(req).await,
         }
     }
@@ -423,8 +426,72 @@ impl Session {
             Request::RotateWindow { down } => {
                 check(self.workspace.rotate_active(down), "No window")
             }
+            Request::JoinPane { src, dst, side_by_side } => self.join_pane(&src, &dst, side_by_side),
+            Request::SwapWindow { a, b } => check(self.workspace.swap_windows(a, b), "No such window"),
+            Request::Respawn { name, kill, cwd, command } => self.respawn(&name, kill, cwd, command),
             other => Response::Error(format!("not a state request: {other:?}")),
         }
+    }
+
+    fn join_pane(&mut self, src: &str, dst: &str, side_by_side: bool) -> Response {
+        let (src, dst) = match (self.target_name(src), self.target_name(dst)) {
+            (Ok(src), Ok(dst)) => (src, dst),
+            (Err(e), _) | (_, Err(e)) => return Response::Error(e),
+        };
+        let dir = if side_by_side {
+            Direction::Horizontal
+        } else {
+            Direction::Vertical
+        };
+        match self.workspace.join_pane(&src, &dst, dir) {
+            Ok(()) => Response::Ok,
+            Err(e) => Response::Error(e),
+        }
+    }
+
+    /// Restarts a pane's process in its place (tmux `respawn-pane`): the pane keeps its name and
+    /// layout slot. An exited pane keeps its id. A running one must be killed first (`kill`), and
+    /// its replacement takes a new id, so the old process's exit cannot end the new one.
+    fn respawn(
+        &mut self,
+        target: &str,
+        kill: bool,
+        cwd: Option<String>,
+        command: Option<Vec<String>>,
+    ) -> Response {
+        let name = match self.target_name(target) {
+            Ok(name) => name,
+            Err(e) => return Response::Error(e),
+        };
+        let Some(entry) = self.nodes.get(&name) else {
+            return Response::Error(format!("can't respawn pane: {name}"));
+        };
+        let (exited, old_id) = (entry.exited, entry.handle.id());
+        if !exited && !kill {
+            return Response::Error(format!("pane %{old_id} still active"));
+        }
+        let mut opts = entry.opts.clone();
+        if let Some(argv) = command.filter(|argv| !argv.is_empty()) {
+            let mut argv = argv.into_iter();
+            opts.command = argv.next().unwrap_or_default();
+            opts.args = argv.collect();
+        }
+        if cwd.is_some() {
+            opts.cwd = cwd;
+        }
+        let id = if exited { old_id } else { self.next_pane_id };
+        let spawn_cwd = opts.cwd.clone().or_else(current_dir);
+        let handle = match self.spawn_pane(&name, id, &opts, spawn_cwd) {
+            Ok(handle) => handle,
+            Err(e) => return Response::Error(e),
+        };
+        if !exited {
+            drop(self.nodes[&name].handle.request_kill());
+            self.next_pane_id += 1;
+        }
+        self.register(name.clone(), handle, opts);
+        self.fanout(&StreamEvent::Respawned { name });
+        Response::Ok
     }
 
     /// Input, screen, sizing and agent requests addressed to one pane.

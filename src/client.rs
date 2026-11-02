@@ -520,6 +520,37 @@ impl Client {
         self.call_ok("MoveWindow", Request::MoveWindow { from, to }).await
     }
 
+    /// Moves pane `src` next to `dst`, splitting it side by side or stacked.
+    pub async fn join_pane(&mut self, src: &str, dst: &str, side_by_side: bool) -> Result<(), String> {
+        let req = Request::JoinPane {
+            src: src.to_string(),
+            dst: dst.to_string(),
+            side_by_side,
+        };
+        self.call_ok("JoinPane", req).await
+    }
+
+    pub async fn swap_window(&mut self, a: usize, b: usize) -> Result<(), String> {
+        self.call_ok("SwapWindow", Request::SwapWindow { a, b }).await
+    }
+
+    /// Restarts a pane's process in place (`respawn-pane`); see `Request::Respawn`.
+    pub async fn respawn(
+        &mut self,
+        name: &str,
+        kill: bool,
+        cwd: Option<String>,
+        command: Option<Vec<String>>,
+    ) -> Result<(), String> {
+        let req = Request::Respawn {
+            name: name.to_string(),
+            kill,
+            cwd,
+            command,
+        };
+        self.call_ok("Respawn", req).await
+    }
+
     /// Recreates the session from its last snapshot.
     pub async fn restore(&mut self) -> Result<(), String> {
         self.call_ok("Restore", Request::Restore).await

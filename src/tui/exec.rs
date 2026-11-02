@@ -184,7 +184,15 @@ impl App {
             Command::ShowOptions { name, value_only, quiet } => {
                 self.show_options(name.as_deref(), value_only, quiet).await
             }
+            Command::JoinPane { src, dst, side_by_side } => {
+                self.join_pane(src, dst, side_by_side).await
+            }
+            Command::SwapWindow { src, dst } => self.swap_window(src, dst).await,
+            Command::RespawnPane { target, kill, cwd, command } => {
+                self.respawn_pane(target, kill, cwd, command).await
+            }
             Command::Bind { table, key, line } => self.bind_key(table, &key, &line).await,
+            Command::FindWindow { pattern } => self.find_window(&pattern).await,
             Command::Sequence(commands) => Box::pin(self.run_sequence(commands)).await,
             Command::Zoom => self.toggle_zoom().await,
             Command::CopyMode(opts) => self.copy_mode_cmd(opts).await,
@@ -317,6 +325,58 @@ impl App {
             return self.say("no active window");
         };
         let result = self.client.move_window(from, to).await;
+        self.settle(result)
+    }
+
+    /// `respawn-pane`: restarts the pane's process (the active pane unless named).
+    async fn respawn_pane(
+        &mut self,
+        target: Option<String>,
+        kill: bool,
+        cwd: Option<String>,
+        command: Vec<String>,
+    ) -> Flow {
+        let name = target.unwrap_or_else(|| self.active_pane.clone());
+        let command = (!command.is_empty()).then_some(command);
+        let result = self.client.respawn(&name, kill, cwd, command).await;
+        self.settle(result)
+    }
+
+    /// `find-window`: the sessions and windows palette with `pattern` typed into its filter.
+    async fn find_window(&mut self, pattern: &str) -> Flow {
+        let view = super::overlay::PaletteView::new(
+            crate::tui::command::PaletteTab::Sessions,
+            self.keymap.help_entries(),
+            &self.session,
+        )
+        .with_query(pattern);
+        self.open_overlay(Overlay::palette(view)).await
+    }
+
+    /// `join-pane`: moves `src` (the marked pane unless named) next to `dst` (the active pane
+    /// unless named).
+    async fn join_pane(&mut self, src: Option<String>, dst: Option<String>, side_by_side: bool) -> Flow {
+        let Some(src) = src.or_else(|| self.layout.marked_pane_global().map(str::to_string)) else {
+            return self.say("no marked pane");
+        };
+        let dst = dst.unwrap_or_else(|| self.active_pane.clone());
+        let result = self.client.join_pane(&src, &dst, side_by_side).await;
+        self.settle(result)
+    }
+
+    /// `swap-window`: exchanges window `src` (the active one unless given) with `dst`, both in the
+    /// numbering `base-index` sets.
+    async fn swap_window(&mut self, src: Option<usize>, dst: usize) -> Flow {
+        let base = self.config.base_index;
+        let slot = |number: usize| number.checked_sub(base);
+        let from = match src {
+            Some(number) => slot(number),
+            None => self.layout.tabs.iter().find(|t| t.is_active).map(|t| t.index),
+        };
+        let (Some(from), Some(to)) = (from, slot(dst)) else {
+            return self.say("can't find window");
+        };
+        let result = self.client.swap_window(from, to).await;
         self.settle(result)
     }
 

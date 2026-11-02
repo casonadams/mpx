@@ -151,6 +151,15 @@ impl PaletteView {
         view
     }
 
+    /// The view with `query` typed into its filter prompt.
+    pub fn with_query(mut self, query: &str) -> Self {
+        for c in query.chars() {
+            self.prompt.insert(c);
+        }
+        self.rebuild_items();
+        self
+    }
+
     pub fn rebuild_items(&mut self) {
         self.cached_items = self.compute_items();
     }

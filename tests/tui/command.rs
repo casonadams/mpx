@@ -577,3 +577,30 @@ fn show_options_takes_an_optional_name() {
     );
     assert!(err("show a b").contains("too many"));
 }
+
+#[test]
+fn pane_and_window_moves_parse_their_flags() {
+    assert_eq!(
+        ok("join-pane -h -s a -t b"),
+        Command::JoinPane { src: Some("a".into()), dst: Some("b".into()), side_by_side: true }
+    );
+    assert_eq!(
+        ok("joinp"),
+        Command::JoinPane { src: None, dst: None, side_by_side: false }
+    );
+    assert_eq!(ok("swap-window -t 2"), Command::SwapWindow { src: None, dst: 2 });
+    assert_eq!(ok("swapw -s 1 -t 3"), Command::SwapWindow { src: Some(1), dst: 3 });
+    assert!(err("swap-window").contains("need -t"));
+    assert!(err("swap-window -t x").contains("invalid window index"));
+    assert_eq!(
+        ok("respawn-pane -k -c /tmp -t p sh -c 'echo hi'"),
+        Command::RespawnPane {
+            target: Some("p".into()),
+            kill: true,
+            cwd: Some("/tmp".into()),
+            command: vec!["sh".into(), "-c".into(), "echo hi".into()],
+        }
+    );
+    assert_eq!(ok("find-window -i vim"), Command::FindWindow { pattern: "vim".into() });
+    assert!(err("find-window").contains("need a pattern"));
+}

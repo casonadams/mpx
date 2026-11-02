@@ -652,6 +652,39 @@ impl Workspace {
         true
     }
 
+    /// Moves pane `src` next to `target`, splitting `target` in direction `dir`, whichever windows
+    /// they live in. A window left without panes goes away.
+    pub fn join_pane(&mut self, src: &str, target: &str, dir: Direction) -> Result<(), String> {
+        if src == target {
+            return Err("Cannot join a pane to itself".to_string());
+        }
+        let from = self
+            .window_of(src)
+            .ok_or_else(|| format!("Node '{src}' not found"))?;
+        if self.window_of(target).is_none() {
+            return Err(format!("Node '{target}' not found"));
+        }
+        self.windows[from].remove(src);
+        let to = self.window_of(target).unwrap_or(from);
+        if !self.windows[to].split_at(Some(target), src.to_string(), dir, None, true) {
+            return Err("Split target not found".to_string());
+        }
+        self.drop_empty_windows();
+        if let Some(idx) = self.window_of(target) {
+            self.set_active(idx);
+        }
+        Ok(())
+    }
+
+    /// Exchanges the positions of two windows; the active and last window stay the same windows.
+    pub fn swap_windows(&mut self, a: usize, b: usize) -> bool {
+        if a == b || a >= self.windows.len() || b >= self.windows.len() {
+            return false;
+        }
+        self.reorder(|windows| windows.swap(a, b));
+        true
+    }
+
     /// Moves the window at `from` to position `to`.
     pub fn move_window(&mut self, from: usize, to: usize) -> bool {
         if from >= self.windows.len() || to >= self.windows.len() {

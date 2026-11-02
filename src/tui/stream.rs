@@ -56,6 +56,10 @@ impl App {
             // Panes created or rearranged from outside (an agent's split, `mpx focus`) show at
             // once, not at the next tick.
             StreamEvent::Spawned { .. } | StreamEvent::Layout => true,
+            StreamEvent::Respawned { name } => {
+                self.forget_screen(&name);
+                true
+            }
             StreamEvent::Bindings => {
                 self.apply_bindings().await;
                 true

@@ -92,6 +92,10 @@ Vim-style command line on the status row. Supports tab-completion, history (`Up`
 | `show-options [-g] [-v] [-q] [NAME]` | `show`, `show-window-options`, `showw` | List the options, or show one on the status row |
 | `rotate-window [-D]` | `rotatew` | Move each pane to the layout slot before its own (`-D`: after) |
 | `move-window -t INDEX` | `movew` | Move the active window to INDEX |
+| `swap-window [-s INDEX] -t INDEX` | `swapw` | Exchange two windows (`-s` defaults to the active one) |
+| `join-pane [-h] [-s PANE] [-t PANE]` | `joinp` | Move PANE (default: the marked pane) next to the target (default: the active pane), stacked or side by side with `-h`; an emptied window goes away |
+| `respawn-pane [-k] [-c DIR] [-t PANE] [CMD...]` | `respawnp` | Restart the pane's process in place; `-k` kills a running one first, otherwise only an exited pane is restarted |
+| `find-window [-iNT] PATTERN` | `findw` | Open the sessions and windows palette filtered by PATTERN (names and titles; content search is not supported) |
 | `display-message [-p] [FORMAT]` | `display` | Show the expanded [format](CLI.md#formats) on the status row; without one, describe the current pane |
 | `rename-window NAME` | `renamew` | Rename active window |
 | `kill-pane [-t TARGET]` | `killp` | Close pane |

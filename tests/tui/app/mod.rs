@@ -6,6 +6,7 @@ mod drawing;
 mod fidelity;
 #[cfg(unix)]
 mod keys;
+mod moves;
 mod overlay_io;
 mod options;
 mod overlay_keys;

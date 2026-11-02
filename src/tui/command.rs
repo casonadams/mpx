@@ -113,6 +113,29 @@ pub enum Command {
         value_only: bool,
         quiet: bool,
     },
+    /// `join-pane [-h] [-s src] [-t dst]`: moves `src` (default: the marked pane) next to `dst`
+    /// (default: the active pane), side by side with `-h`, else stacked.
+    JoinPane {
+        src: Option<String>,
+        dst: Option<String>,
+        side_by_side: bool,
+    },
+    /// `swap-window [-s src] -t dst`: exchanges two windows; `src` defaults to the active one.
+    SwapWindow {
+        src: Option<usize>,
+        dst: usize,
+    },
+    /// `respawn-pane [-k] [-c dir] [-t target] [command...]`: restarts the pane's process.
+    RespawnPane {
+        target: Option<String>,
+        kill: bool,
+        cwd: Option<String>,
+        command: Vec<String>,
+    },
+    /// `find-window [-iNT] pattern`: the sessions and windows palette filtered by `pattern`.
+    FindWindow {
+        pattern: String,
+    },
     /// `next-window -a` / `previous-window -a`: the next window with activity or a bell.
     StepAlert {
         forward: bool,
@@ -226,7 +249,9 @@ pub const COMMAND_NAMES: &[&str] = &[
     "detach",
     "detach-client",
     "display-panes",
+    "find-window",
     "help",
+    "join-pane",
     "kill-pane",
     "kill-server",
     "kill-window",
@@ -254,6 +279,7 @@ pub const COMMAND_NAMES: &[&str] = &[
     "rename-session",
     "rename-window",
     "resize-pane",
+    "respawn-pane",
     "select-layout",
     "select-pane",
     "select-window",
@@ -270,6 +296,7 @@ pub const COMMAND_NAMES: &[&str] = &[
     "split-window",
     "suspend-client",
     "swap-pane",
+    "swap-window",
     "switch-client",
     "tabn",
     "tabnext",
@@ -445,6 +472,9 @@ fn pane_cmd(name: &str, args: &[String]) -> Option<Result<Command, String>> {
         "paste" => paste(name, args),
         "resize-pane" => resize_pane(name, args),
         "swap-pane" => swap_pane(name, args),
+        "join-pane" | "joinp" => join_pane(name, args),
+        "respawn-pane" | "respawnp" => respawn_pane(name, args),
+        "find-window" | "findw" => find_window(name, args),
         "break-pane" => bare(name, args, Command::BreakPane),
         "last-pane" => last_pane(name, args),
         "next-pane" => bare(name, args, Command::NextPane),
@@ -469,6 +499,7 @@ fn misc_cmd(name: &str, args: &[String]) -> Option<Result<Command, String>> {
         ),
         "rotate-window" | "rotatew" => rotate_window(name, args),
         "move-window" | "movew" => move_window(name, args),
+        "swap-window" | "swapw" => swap_window(name, args),
         "display-message" | "display" => display_message(name, args),
         "choose-tree" => choose_tree(name, args),
         "choose-buffer" => bare(name, args, Command::ChooseBuffer),
@@ -530,6 +561,75 @@ fn move_window(name: &str, args: &[String]) -> Result<Command, String> {
         .ok_or_else(|| format!("{name}: need -t <index>"))?;
     let to = parse_index(raw).map_err(|_| format!("{name}: invalid window index '{raw}'"))?;
     Ok(Command::MoveWindow { to })
+}
+
+const JOIN_PANE: Spec = Spec {
+    bools: &["-h", "-v"],
+    values: &["-s", "-t"],
+    stop_at_arg: false,
+};
+const SWAP_WINDOW: Spec = Spec {
+    bools: &[],
+    values: &["-s", "-t"],
+    stop_at_arg: false,
+};
+const RESPAWN_PANE: Spec = Spec {
+    bools: &["-k"],
+    values: &["-c", "-t"],
+    stop_at_arg: true,
+};
+
+fn join_pane(name: &str, args: &[String]) -> Result<Command, String> {
+    let o = parse_opts(name, args, JOIN_PANE)?;
+    o.no_rest(name)?;
+    Ok(Command::JoinPane {
+        src: o.value("-s").map(str::to_string),
+        dst: o.value("-t").map(str::to_string),
+        side_by_side: o.has("-h"),
+    })
+}
+
+fn window_index(name: &str, raw: &str) -> Result<usize, String> {
+    parse_index(raw).map_err(|_| format!("{name}: invalid window index '{raw}'"))
+}
+
+fn swap_window(name: &str, args: &[String]) -> Result<Command, String> {
+    let o = parse_opts(name, args, SWAP_WINDOW)?;
+    o.no_rest(name)?;
+    let dst = o
+        .value("-t")
+        .ok_or_else(|| format!("{name}: need -t <index>"))?;
+    let src = o.value("-s").map(|s| window_index(name, s)).transpose()?;
+    Ok(Command::SwapWindow {
+        src,
+        dst: window_index(name, dst)?,
+    })
+}
+
+fn respawn_pane(name: &str, args: &[String]) -> Result<Command, String> {
+    let o = parse_opts(name, args, RESPAWN_PANE)?;
+    Ok(Command::RespawnPane {
+        target: o.value("-t").map(str::to_string),
+        kill: o.has("-k"),
+        cwd: o.value("-c").map(str::to_string),
+        command: o.rest,
+    })
+}
+
+const FIND_WINDOW: Spec = Spec {
+    bools: &["-i", "-N", "-T"],
+    values: &[],
+    stop_at_arg: false,
+};
+
+fn find_window(name: &str, args: &[String]) -> Result<Command, String> {
+    let o = parse_opts(name, args, FIND_WINDOW)?;
+    if o.rest.is_empty() {
+        return Err(format!("{name}: need a pattern"));
+    }
+    Ok(Command::FindWindow {
+        pattern: o.rest.join(" "),
+    })
 }
 
 fn display_message(name: &str, args: &[String]) -> Result<Command, String> {

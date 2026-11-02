@@ -208,7 +208,7 @@ pub struct WaitOutcome {
 
 /// Version of the client-daemon protocol. Bump it on any change an older peer cannot parse, so
 /// clients refuse an incompatible daemon instead of misreading it.
-pub const PROTOCOL: u32 = 8;
+pub const PROTOCOL: u32 = 9;
 
 fn first_protocol() -> u32 {
     1
@@ -429,6 +429,29 @@ pub enum Request {
     RotateWindow {
         down: bool,
     },
+    /// Moves pane `src` next to `dst`, splitting `dst` side by side or stacked (tmux `join-pane`).
+    JoinPane {
+        src: String,
+        dst: String,
+        side_by_side: bool,
+    },
+    /// Exchanges the positions of two windows (tmux `swap-window`).
+    SwapWindow {
+        a: usize,
+        b: usize,
+    },
+    /// Restarts a pane's process in place (tmux `respawn-pane`): the pane keeps its name and
+    /// layout slot. `kill` stops a running process first. `cwd` and `command` (program, then its
+    /// arguments) replace the pane's own for this and later respawns.
+    Respawn {
+        name: String,
+        #[serde(default)]
+        kill: bool,
+        #[serde(default)]
+        cwd: Option<String>,
+        #[serde(default)]
+        command: Option<Vec<String>>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -481,6 +504,12 @@ pub enum StreamEvent {
     Layout,
     /// The session's runtime key bindings changed: terminals re-read them.
     Bindings,
+    /// A pane's process was replaced under the same name (`respawn-pane`): its output stream
+    /// starts over, so terminals drop the screen they hold. Sent only to subscribers that asked
+    /// for layout events.
+    Respawned {
+        name: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

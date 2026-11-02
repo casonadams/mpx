@@ -9,6 +9,7 @@ mod daemon {
     mod layout;
     mod lifecycle;
     mod logs;
+    mod moves;
     mod pacing;
     mod panes;
     mod plan;
