@@ -411,7 +411,7 @@ fn row_text(cells: &[char], from: usize, to: usize) -> Option<String> {
 
 fn handle_search_key(
     cs: &mut CopyState,
-    mut search: SearchPrompt,
+    search: SearchPrompt,
     key: &KeyEvent,
     grid: Option<&Grid>,
     pane: PaneSize,
@@ -422,72 +422,52 @@ fn handle_search_key(
             cs.search_prompt = None;
             CopyOutcome::Stay
         }
-        (KeyCode::Enter, _) => {
-            let mut query = search.prompt.text();
-            if query.is_empty()
-                && let Some((_, last)) = &cs.last_search
-            {
-                query = last.clone();
-            }
-            if query.is_empty() {
-                cs.search_prompt = None;
-                return CopyOutcome::Stay;
-            }
-            let dir = search.direction;
-            cs.last_search = Some((dir, query.clone()));
-            cs.search_prompt = None;
-            execute_search(cs, &query, dir, grid, pane)
-        }
-        (KeyCode::Char('u'), true) => {
-            search.prompt.clear();
-            cs.search_prompt = Some(search);
-            CopyOutcome::Stay
-        }
-        (KeyCode::Char('w'), true) => {
-            search.prompt.delete_word();
-            cs.search_prompt = Some(search);
-            CopyOutcome::Stay
-        }
-        (KeyCode::Char(c), false) => {
-            search.prompt.insert(c);
-            cs.search_prompt = Some(search);
-            CopyOutcome::Stay
-        }
-        (KeyCode::Backspace, _) => {
-            search.prompt.backspace();
-            cs.search_prompt = Some(search);
-            CopyOutcome::Stay
-        }
-        (KeyCode::Delete, _) => {
-            search.prompt.delete();
-            cs.search_prompt = Some(search);
-            CopyOutcome::Stay
-        }
-        (KeyCode::Left, _) => {
-            search.prompt.left();
-            cs.search_prompt = Some(search);
-            CopyOutcome::Stay
-        }
-        (KeyCode::Right, _) => {
-            search.prompt.right();
-            cs.search_prompt = Some(search);
-            CopyOutcome::Stay
-        }
-        (KeyCode::Home, _) => {
-            search.prompt.home();
-            cs.search_prompt = Some(search);
-            CopyOutcome::Stay
-        }
-        (KeyCode::End, _) => {
-            search.prompt.end();
-            cs.search_prompt = Some(search);
-            CopyOutcome::Stay
-        }
-        _ => {
-            cs.search_prompt = Some(search);
-            CopyOutcome::Stay
-        }
+        (KeyCode::Enter, _) => submit_search(cs, search, grid, pane),
+        (KeyCode::Char('u'), true) => edit_search(cs, search, |p| p.clear()),
+        (KeyCode::Char('w'), true) => edit_search(cs, search, |p| p.delete_word()),
+        (KeyCode::Char(c), false) => edit_search(cs, search, |p| p.insert(c)),
+        (KeyCode::Backspace, _) => edit_search(cs, search, |p| p.backspace()),
+        (KeyCode::Delete, _) => edit_search(cs, search, |p| p.delete()),
+        (KeyCode::Left, _) => edit_search(cs, search, |p| p.left()),
+        (KeyCode::Right, _) => edit_search(cs, search, |p| p.right()),
+        (KeyCode::Home, _) => edit_search(cs, search, |p| p.home()),
+        (KeyCode::End, _) => edit_search(cs, search, |p| p.end()),
+        _ => edit_search(cs, search, |_| {}),
     }
+}
+
+/// Runs the search the prompt holds, or the last search when the prompt is empty.
+fn submit_search(
+    cs: &mut CopyState,
+    search: SearchPrompt,
+    grid: Option<&Grid>,
+    pane: PaneSize,
+) -> CopyOutcome {
+    let mut query = search.prompt.text();
+    if query.is_empty()
+        && let Some((_, last)) = &cs.last_search
+    {
+        query = last.clone();
+    }
+    if query.is_empty() {
+        cs.search_prompt = None;
+        return CopyOutcome::Stay;
+    }
+    let dir = search.direction;
+    cs.last_search = Some((dir, query.clone()));
+    cs.search_prompt = None;
+    execute_search(cs, &query, dir, grid, pane)
+}
+
+/// Applies an edit to the open search prompt, which stays open.
+fn edit_search(
+    cs: &mut CopyState,
+    mut search: SearchPrompt,
+    edit: impl FnOnce(&mut PromptState),
+) -> CopyOutcome {
+    edit(&mut search.prompt);
+    cs.search_prompt = Some(search);
+    CopyOutcome::Stay
 }
 
 fn execute_search(
@@ -794,84 +774,99 @@ pub enum CopyAction {
 /// Parses one copy-mode command: `name` and the arguments that follow it. Commands tmux has that
 /// mpx cannot express (`rectangle-toggle`, the mark commands, ...) are refused by name.
 pub fn parse_copy_command(name: &str, args: &[String]) -> Result<CopyAction, String> {
-    let text = || {
-        let text = args.join(" ");
-        if text.is_empty() {
-            Err(format!("send-keys -X {name}: needs an argument"))
-        } else {
-            Ok(text)
-        }
-    };
+    if let Some(action) = plain_command(name) {
+        return Ok(action);
+    }
     let pipe = (!args.is_empty()).then(|| args.join(" "));
-    let mv = |motion: Motion| CopyAction::Move {
-        motion,
-        cancel_at_bottom: false,
-    };
-    let copy = |what: CopyWhat, cancel: bool, clear: bool| CopyAction::Copy {
-        what,
-        cancel,
-        clear,
-        pipe: None,
-    };
-    let piped = |what: CopyWhat, cancel: bool, clear: bool| CopyAction::Copy {
-        what,
-        cancel,
-        clear,
-        pipe: pipe.clone(),
-    };
-    Ok(match name {
-        "cursor-left" => mv(Motion::Left),
-        "cursor-right" => mv(Motion::Right),
-        "cursor-up" => mv(Motion::Up),
-        "cursor-down" => mv(Motion::Down),
-        "cursor-down-and-cancel" => CopyAction::Move {
-            motion: Motion::Down,
-            cancel_at_bottom: true,
-        },
-        "start-of-line" => mv(Motion::LineStart),
-        "end-of-line" => mv(Motion::LineEnd),
-        "back-to-indentation" => mv(Motion::BackToIndentation),
-        "next-word" => mv(Motion::NextWord { big: false }),
-        "next-space" => mv(Motion::NextWord { big: true }),
-        "previous-word" => mv(Motion::PreviousWord { big: false }),
-        "previous-space" => mv(Motion::PreviousWord { big: true }),
-        "next-word-end" => mv(Motion::NextWordEnd { big: false }),
-        "next-space-end" => mv(Motion::NextWordEnd { big: true }),
-        "forward-four-columns" => mv(Motion::FourForward),
-        "back-four-columns" => mv(Motion::FourBack),
-        "top-line" => mv(Motion::TopLine),
-        "middle-line" => mv(Motion::MiddleLine),
-        "bottom-line" => mv(Motion::BottomLine),
-        "history-top" => mv(Motion::HistoryTop),
-        "history-bottom" => mv(Motion::HistoryBottom),
-        "page-up" => mv(Motion::PageUp),
-        "page-down" => mv(Motion::PageDown),
-        "halfpage-up" => mv(Motion::HalfPageUp),
-        "halfpage-down" => mv(Motion::HalfPageDown),
-        "halfpage-down-and-cancel" => CopyAction::Move {
-            motion: Motion::HalfPageDown,
-            cancel_at_bottom: true,
-        },
-        "scroll-up" => mv(Motion::ScrollUp),
-        "scroll-down" => mv(Motion::ScrollDown),
+    if let Some(action) = copy_command(name, pipe.as_deref()) {
+        return Ok(action);
+    }
+    match name {
         "goto-line" => {
             let raw = args.first().map_or("", String::as_str);
             let line = raw
                 .parse::<usize>()
                 .map_err(|_| format!("send-keys -X goto-line: invalid line '{raw}'"))?;
-            mv(Motion::GotoLine(line))
+            Ok(move_action(Motion::GotoLine(line)))
         }
         "jump-forward" | "jump-backward" | "jump-to-forward" | "jump-to-backward" => {
             let ch = args
                 .first()
                 .and_then(|a| a.chars().next())
                 .ok_or_else(|| format!("send-keys -X {name}: needs a character"))?;
-            mv(Motion::Jump {
+            Ok(move_action(Motion::Jump {
                 forward: name.ends_with("forward"),
                 to: name.starts_with("jump-to"),
                 ch,
-            })
+            }))
         }
+        "search-forward" => Ok(CopyAction::SearchText {
+            direction: SearchDirection::Down,
+            query: required_text(name, args)?,
+        }),
+        "search-backward" => Ok(CopyAction::SearchText {
+            direction: SearchDirection::Up,
+            query: required_text(name, args)?,
+        }),
+        _ => Err(format!("copy-mode command not supported: {name}")),
+    }
+}
+
+/// The command for a motion key.
+fn move_action(motion: Motion) -> CopyAction {
+    CopyAction::Move {
+        motion,
+        cancel_at_bottom: false,
+    }
+}
+
+/// The arguments joined by spaces; a command that needs text fails without them.
+fn required_text(name: &str, args: &[String]) -> Result<String, String> {
+    let text = args.join(" ");
+    if text.is_empty() {
+        Err(format!("send-keys -X {name}: needs an argument"))
+    } else {
+        Ok(text)
+    }
+}
+
+/// The commands that take no argument.
+fn plain_command(name: &str) -> Option<CopyAction> {
+    let action = match name {
+        "cursor-left" => move_action(Motion::Left),
+        "cursor-right" => move_action(Motion::Right),
+        "cursor-up" => move_action(Motion::Up),
+        "cursor-down" => move_action(Motion::Down),
+        "cursor-down-and-cancel" => CopyAction::Move {
+            motion: Motion::Down,
+            cancel_at_bottom: true,
+        },
+        "start-of-line" => move_action(Motion::LineStart),
+        "end-of-line" => move_action(Motion::LineEnd),
+        "back-to-indentation" => move_action(Motion::BackToIndentation),
+        "next-word" => move_action(Motion::NextWord { big: false }),
+        "next-space" => move_action(Motion::NextWord { big: true }),
+        "previous-word" => move_action(Motion::PreviousWord { big: false }),
+        "previous-space" => move_action(Motion::PreviousWord { big: true }),
+        "next-word-end" => move_action(Motion::NextWordEnd { big: false }),
+        "next-space-end" => move_action(Motion::NextWordEnd { big: true }),
+        "forward-four-columns" => move_action(Motion::FourForward),
+        "back-four-columns" => move_action(Motion::FourBack),
+        "top-line" => move_action(Motion::TopLine),
+        "middle-line" => move_action(Motion::MiddleLine),
+        "bottom-line" => move_action(Motion::BottomLine),
+        "history-top" => move_action(Motion::HistoryTop),
+        "history-bottom" => move_action(Motion::HistoryBottom),
+        "page-up" => move_action(Motion::PageUp),
+        "page-down" => move_action(Motion::PageDown),
+        "halfpage-up" => move_action(Motion::HalfPageUp),
+        "halfpage-down" => move_action(Motion::HalfPageDown),
+        "halfpage-down-and-cancel" => CopyAction::Move {
+            motion: Motion::HalfPageDown,
+            cancel_at_bottom: true,
+        },
+        "scroll-up" => move_action(Motion::ScrollUp),
+        "scroll-down" => move_action(Motion::ScrollDown),
         "cancel" => CopyAction::Cancel,
         "clear-selection" => CopyAction::ClearSelection,
         "clear-selection-or-cancel" => CopyAction::ClearSelectionOrCancel,
@@ -882,35 +877,41 @@ pub fn parse_copy_command(name: &str, args: &[String]) -> Result<CopyAction, Str
         "toggle-line-selection" => CopyAction::ToggleLineSelection,
         "other-end" => CopyAction::OtherEnd,
         "rectangle-toggle" => CopyAction::RectangleToggle,
-        "copy-selection" => copy(CopyWhat::Selection, false, true),
-        "copy-selection-no-clear" => copy(CopyWhat::Selection, false, false),
-        "copy-selection-and-cancel" => copy(CopyWhat::Selection, true, true),
-        "copy-selection-or-line-and-cancel" => copy(CopyWhat::SelectionOrLine, true, false),
         "copy-selection-if-any" => CopyAction::CopyIfSelected,
-        "copy-line" => copy(CopyWhat::Line, false, false),
-        "copy-line-and-cancel" => copy(CopyWhat::Line, true, false),
-        "copy-end-of-line" => copy(CopyWhat::EndOfLine, false, false),
-        "copy-end-of-line-and-cancel" => copy(CopyWhat::EndOfLine, true, false),
-        "copy-pipe" => piped(CopyWhat::Selection, false, true),
-        "copy-pipe-no-clear" => piped(CopyWhat::Selection, false, false),
-        "copy-pipe-and-cancel" => piped(CopyWhat::Selection, true, true),
-        "copy-pipe-line" => piped(CopyWhat::Line, false, false),
-        "copy-pipe-line-and-cancel" => piped(CopyWhat::Line, true, false),
-        "copy-pipe-end-of-line" => piped(CopyWhat::EndOfLine, false, false),
-        "copy-pipe-end-of-line-and-cancel" => piped(CopyWhat::EndOfLine, true, false),
-        "search-forward" => CopyAction::SearchText {
-            direction: SearchDirection::Down,
-            query: text()?,
-        },
-        "search-backward" => CopyAction::SearchText {
-            direction: SearchDirection::Up,
-            query: text()?,
-        },
         "search-again" => CopyAction::SearchAgain { reverse: false },
         "search-reverse" => CopyAction::SearchAgain { reverse: true },
         "search-prompt-forward" => CopyAction::SearchPrompt(SearchDirection::Down),
         "search-prompt-backward" => CopyAction::SearchPrompt(SearchDirection::Up),
-        _ => return Err(format!("copy-mode command not supported: {name}")),
+        _ => return None,
+    };
+    Some(action)
+}
+
+/// The `copy-*` and `copy-pipe*` commands. Only the pipe forms take the piped argument.
+fn copy_command(name: &str, pipe: Option<&str>) -> Option<CopyAction> {
+    let (what, cancel, clear) = match name {
+        "copy-selection" | "copy-pipe" => (CopyWhat::Selection, false, true),
+        "copy-selection-no-clear" | "copy-pipe-no-clear" => (CopyWhat::Selection, false, false),
+        "copy-selection-and-cancel" | "copy-pipe-and-cancel" => (CopyWhat::Selection, true, true),
+        "copy-selection-or-line-and-cancel" => (CopyWhat::SelectionOrLine, true, false),
+        "copy-line" | "copy-pipe-line" => (CopyWhat::Line, false, false),
+        "copy-line-and-cancel" | "copy-pipe-line-and-cancel" => (CopyWhat::Line, true, false),
+        "copy-end-of-line" | "copy-pipe-end-of-line" => (CopyWhat::EndOfLine, false, false),
+        "copy-end-of-line-and-cancel" | "copy-pipe-end-of-line-and-cancel" => {
+            (CopyWhat::EndOfLine, true, false)
+        }
+        _ => return None,
+    };
+    let pipe = if name.starts_with("copy-pipe") {
+        pipe.map(str::to_owned)
+    } else {
+        None
+    };
+    Some(CopyAction::Copy {
+        what,
+        cancel,
+        clear,
+        pipe,
     })
 }
 
@@ -957,23 +958,7 @@ pub fn apply_action(
         CopyAction::Move {
             motion,
             cancel_at_bottom,
-        } => {
-            let before = cs.scroll_offset;
-            apply_motion(cs, *motion, grid, pane);
-            let downward = matches!(
-                motion,
-                Motion::Down | Motion::HalfPageDown | Motion::PageDown | Motion::ScrollDown
-            );
-            let at_bottom = cs.scroll_offset == 0 && cs.cursor_y + 1 >= pane.1 as usize;
-            // `copy-mode -e` leaves once the view is back on the live screen.
-            if downward && cs.wheel_exit && before > 0 && cs.scroll_offset == 0 {
-                return CopyOutcome::Exit;
-            }
-            if downward && *cancel_at_bottom && at_bottom {
-                return CopyOutcome::Exit;
-            }
-            CopyOutcome::Stay
-        }
+        } => apply_move(cs, *motion, *cancel_at_bottom, grid, pane),
         CopyAction::Cancel => CopyOutcome::Exit,
         CopyAction::ClearSelection => {
             cs.mode = SelectionKind::None;
@@ -1036,17 +1021,53 @@ pub fn apply_action(
             cs.last_search = Some((*direction, query.clone()));
             execute_search(cs, query, *direction, grid, pane)
         }
-        CopyAction::SearchAgain { reverse } => match cs.last_search.clone() {
-            Some((dir, query)) => {
-                let dir = if *reverse { dir.opposite() } else { dir };
-                execute_search(cs, &query, dir, grid, pane)
-            }
-            None => CopyOutcome::Stay,
-        },
+        CopyAction::SearchAgain { reverse } => search_again(cs, *reverse, grid, pane),
         CopyAction::SearchPrompt(direction) => {
             cs.search_prompt = Some(SearchPrompt::new(*direction));
             CopyOutcome::Stay
         }
+    }
+}
+
+/// Runs a cursor or scroll move. `cancel_at_bottom` leaves copy mode once a downward move reaches
+/// the bottom; a move back onto the live screen leaves it under `copy-mode -e`.
+fn apply_move(
+    cs: &mut CopyState,
+    motion: Motion,
+    cancel_at_bottom: bool,
+    grid: Option<&Grid>,
+    pane: PaneSize,
+) -> CopyOutcome {
+    let before = cs.scroll_offset;
+    apply_motion(cs, motion, grid, pane);
+    let downward = matches!(
+        motion,
+        Motion::Down | Motion::HalfPageDown | Motion::PageDown | Motion::ScrollDown
+    );
+    let at_bottom = cs.scroll_offset == 0 && cs.cursor_y + 1 >= pane.1 as usize;
+    // `copy-mode -e` leaves once the view is back on the live screen.
+    if downward && cs.wheel_exit && before > 0 && cs.scroll_offset == 0 {
+        return CopyOutcome::Exit;
+    }
+    if downward && cancel_at_bottom && at_bottom {
+        return CopyOutcome::Exit;
+    }
+    CopyOutcome::Stay
+}
+
+/// Repeats the last search, in its own direction or the opposite one when `reverse`.
+fn search_again(
+    cs: &mut CopyState,
+    reverse: bool,
+    grid: Option<&Grid>,
+    pane: PaneSize,
+) -> CopyOutcome {
+    match cs.last_search.clone() {
+        Some((dir, query)) => {
+            let dir = if reverse { dir.opposite() } else { dir };
+            execute_search(cs, &query, dir, grid, pane)
+        }
+        None => CopyOutcome::Stay,
     }
 }
 
@@ -1217,16 +1238,21 @@ fn next_word(w: &Cells, mut p: Pos, big: bool) -> Pos {
     p
 }
 
-/// The last character of the next word (vim `e`).
-fn next_word_end(w: &Cells, mut p: Pos, big: bool) -> Pos {
-    let Some(q) = w.next(p) else { return p };
+/// Skips blanks from `p` in direction `step`, then runs to the far end of the word it lands in.
+fn word_run_end(
+    w: &Cells,
+    mut p: Pos,
+    big: bool,
+    step: impl Fn(&Cells, Pos) -> Option<Pos>,
+) -> Pos {
+    let Some(q) = step(w, p) else { return p };
     p = q;
     while w.class(p, big) == CharClass::Blank {
-        let Some(q) = w.next(p) else { return p };
+        let Some(q) = step(w, p) else { return p };
         p = q;
     }
     let class = w.class(p, big);
-    while let Some(q) = w.next(p) {
+    while let Some(q) = step(w, p) {
         if w.class(q, big) != class {
             break;
         }
@@ -1235,22 +1261,14 @@ fn next_word_end(w: &Cells, mut p: Pos, big: bool) -> Pos {
     p
 }
 
+/// The last character of the next word (vim `e`).
+fn next_word_end(w: &Cells, p: Pos, big: bool) -> Pos {
+    word_run_end(w, p, big, |w, p| w.next(p))
+}
+
 /// The start of the previous word (vim `b`).
-fn previous_word(w: &Cells, mut p: Pos, big: bool) -> Pos {
-    let Some(q) = w.prev(p) else { return p };
-    p = q;
-    while w.class(p, big) == CharClass::Blank {
-        let Some(q) = w.prev(p) else { return p };
-        p = q;
-    }
-    let class = w.class(p, big);
-    while let Some(q) = w.prev(p) {
-        if w.class(q, big) != class {
-            break;
-        }
-        p = q;
-    }
-    p
+fn previous_word(w: &Cells, p: Pos, big: bool) -> Pos {
+    word_run_end(w, p, big, |w, p| w.prev(p))
 }
 
 /// Moves the cursor to a word position found by `step`, scrolling only when it is off screen.
@@ -1290,6 +1308,38 @@ fn jump(cs: &mut CopyState, grid: Option<&Grid>, forward: bool, to: bool, ch: ch
     }
 }
 
+/// Moves the view one history line up, while there is history left.
+fn scroll_up_one(cs: &mut CopyState, hist_len: usize) {
+    if cs.scroll_offset < hist_len {
+        cs.scroll_offset += 1;
+    }
+}
+
+/// Moves the view one history line down, towards the live screen.
+fn scroll_down_one(cs: &mut CopyState) {
+    cs.scroll_offset = cs.scroll_offset.saturating_sub(1);
+}
+
+/// Moves the cursor to the first non-blank cell of its line (vim `^`).
+fn back_to_indentation(cs: &mut CopyState, grid: Option<&Grid>) {
+    if let Some(g) = grid {
+        let abs_y = cs.cursor_abs_y(g);
+        cs.cursor_x = g
+            .line_cells(abs_y)
+            .and_then(|cells| cells.iter().position(|c| !c.c.is_whitespace()))
+            .unwrap_or(0);
+    }
+}
+
+/// Moves the cursor to `line` (absolute), scrolling only when it is off screen.
+fn goto_line(cs: &mut CopyState, grid: Option<&Grid>, line: usize, pane_h: usize) {
+    if let Some(g) = grid {
+        let total = g.history_len() + g.rows;
+        let abs_y = line.min(total.saturating_sub(1));
+        cs.scroll_to_match(cs.cursor_x, abs_y, g.history_len(), pane_h);
+    }
+}
+
 fn apply_motion(cs: &mut CopyState, motion: Motion, grid: Option<&Grid>, pane: PaneSize) {
     let (pane_w, pane_h) = (pane.0 as usize, pane.1 as usize);
     let last_col = pane_w.saturating_sub(1);
@@ -1301,28 +1351,20 @@ fn apply_motion(cs: &mut CopyState, motion: Motion, grid: Option<&Grid>, pane: P
         Motion::Up => {
             if cs.cursor_y > 0 {
                 cs.cursor_y -= 1;
-            } else if cs.scroll_offset < hist_len {
-                cs.scroll_offset += 1;
+            } else {
+                scroll_up_one(cs, hist_len);
             }
         }
         Motion::Down => {
             if cs.cursor_y + 1 < pane_h {
                 cs.cursor_y += 1;
-            } else if cs.scroll_offset > 0 {
-                cs.scroll_offset -= 1;
+            } else {
+                scroll_down_one(cs);
             }
         }
         Motion::LineStart => cs.cursor_x = 0,
         Motion::LineEnd => cs.cursor_x = last_col,
-        Motion::BackToIndentation => {
-            if let Some(g) = grid {
-                let abs_y = cs.cursor_abs_y(g);
-                cs.cursor_x = g
-                    .line_cells(abs_y)
-                    .and_then(|cells| cells.iter().position(|c| !c.c.is_whitespace()))
-                    .unwrap_or(0);
-            }
-        }
+        Motion::BackToIndentation => back_to_indentation(cs, grid),
         Motion::NextWord { big } => word_move(cs, grid, pane_h, |w, p| next_word(w, p, big)),
         Motion::PreviousWord { big } => {
             word_move(cs, grid, pane_h, |w, p| previous_word(w, p, big));
@@ -1339,12 +1381,8 @@ fn apply_motion(cs: &mut CopyState, motion: Motion, grid: Option<&Grid>, pane: P
         Motion::PageDown => cs.scroll_offset = cs.scroll_offset.saturating_sub(PAGE),
         Motion::HalfPageUp => cs.scroll_offset = (cs.scroll_offset + half).min(hist_len),
         Motion::HalfPageDown => cs.scroll_offset = cs.scroll_offset.saturating_sub(half),
-        Motion::ScrollUp => {
-            if cs.scroll_offset < hist_len {
-                cs.scroll_offset += 1;
-            }
-        }
-        Motion::ScrollDown => cs.scroll_offset = cs.scroll_offset.saturating_sub(1),
+        Motion::ScrollUp => scroll_up_one(cs, hist_len),
+        Motion::ScrollDown => scroll_down_one(cs),
         Motion::HistoryTop => {
             cs.scroll_offset = hist_len;
             cs.cursor_y = 0;
@@ -1354,13 +1392,7 @@ fn apply_motion(cs: &mut CopyState, motion: Motion, grid: Option<&Grid>, pane: P
             cs.scroll_offset = 0;
             cs.cursor_y = pane_h.saturating_sub(1);
         }
-        Motion::GotoLine(line) => {
-            if let Some(g) = grid {
-                let total = g.history_len() + g.rows;
-                let abs_y = line.min(total.saturating_sub(1));
-                cs.scroll_to_match(cs.cursor_x, abs_y, hist_len, pane_h);
-            }
-        }
+        Motion::GotoLine(line) => goto_line(cs, grid, line, pane_h),
         Motion::Jump { forward, to, ch } => jump(cs, grid, forward, to, ch),
     }
 }

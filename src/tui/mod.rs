@@ -1,5 +1,6 @@
 pub mod app;
 pub mod canvas;
+pub mod color;
 pub mod command;
 pub mod copy;
 pub mod frame;

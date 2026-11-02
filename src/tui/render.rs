@@ -6,6 +6,7 @@ use crossterm::{
 use std::io::{self, Write};
 
 use super::canvas::Canvas;
+pub use super::color::{color_to_rgb, desaturate_color, inactive_color, parse_color};
 use crate::config::BorderStyle;
 use crate::format::WindowFlags;
 use crate::layout::{Divider, WindowTab, geometry::Rect};
@@ -49,24 +50,14 @@ impl SelectionRange {
                 cursor_x,
                 cursor_abs_y,
             } => {
-                let ((sx, sy), (ex, ey)) =
-                    if (*anchor_abs_y, *anchor_x) <= (*cursor_abs_y, *cursor_x) {
-                        ((*anchor_x, *anchor_abs_y), (*cursor_x, *cursor_abs_y))
-                    } else {
-                        ((*cursor_x, *cursor_abs_y), (*anchor_x, *anchor_abs_y))
-                    };
-
-                if abs_y < sy || abs_y > ey {
-                    false
-                } else if sy == ey {
-                    x >= sx && x <= ex
-                } else if abs_y == sy {
-                    x >= sx
-                } else if abs_y == ey {
-                    x <= ex
+                let anchor = (*anchor_abs_y, *anchor_x);
+                let cursor = (*cursor_abs_y, *cursor_x);
+                let ((sy, sx), (ey, ex)) = if anchor <= cursor {
+                    (anchor, cursor)
                 } else {
-                    true
-                }
+                    (cursor, anchor)
+                };
+                abs_y >= sy && abs_y <= ey && (abs_y != sy || x >= sx) && (abs_y != ey || x <= ex)
             }
             Self::Rectangle {
                 anchor_x,
@@ -75,7 +66,10 @@ impl SelectionRange {
                 cursor_abs_y,
             } => {
                 let (x0, x1) = (*anchor_x.min(cursor_x), *anchor_x.max(cursor_x));
-                let (y0, y1) = (*anchor_abs_y.min(cursor_abs_y), *anchor_abs_y.max(cursor_abs_y));
+                let (y0, y1) = (
+                    *anchor_abs_y.min(cursor_abs_y),
+                    *anchor_abs_y.max(cursor_abs_y),
+                );
                 abs_y >= y0 && abs_y <= y1 && x >= x0 && x <= x1
             }
         }
@@ -120,7 +114,12 @@ impl PaneColors {
     /// What a default-colored background becomes in an inactive pane: the configured color, else
     /// the terminal's (or the active template's) default, desaturated.
     pub fn inactive_default_bg(&self) -> Option<VtColor> {
-        inactive_color(None, self.inactive_bg, self.active_bg.or(self.host_bg), self.dim_factor)
+        inactive_color(
+            None,
+            self.inactive_bg,
+            self.active_bg.or(self.host_bg),
+            self.dim_factor,
+        )
     }
 }
 
@@ -422,7 +421,10 @@ impl Compositor {
             vec![super::statusline::Seg::plain(status_left(bar))],
             Vec::new(),
             "",
-            vec![super::statusline::Seg::plain(status_right(bar, &get_current_time()))],
+            vec![super::statusline::Seg::plain(status_right(
+                bar,
+                &get_current_time(),
+            ))],
             crate::config::Justify::Left,
         );
         draw_status_segments(w, &line.segs, bar.y, bar.bg, bar.fg)
@@ -717,8 +719,18 @@ fn cell_content(
         Cell {
             c: cell.c,
             style: CellStyle {
-                fg: inactive_color(cell.style.fg, ctx.inactive_fg, ctx.default_fg, ctx.dim_factor),
-                bg: inactive_color(cell.style.bg, ctx.inactive_bg, ctx.default_bg, ctx.dim_factor),
+                fg: inactive_color(
+                    cell.style.fg,
+                    ctx.inactive_fg,
+                    ctx.default_fg,
+                    ctx.dim_factor,
+                ),
+                bg: inactive_color(
+                    cell.style.bg,
+                    ctx.inactive_bg,
+                    ctx.default_bg,
+                    ctx.dim_factor,
+                ),
                 bold: false,
                 ..cell.style
             },
@@ -749,20 +761,6 @@ pub fn apply_active_style(
     }
 }
 
-/// A cell color in an unfocused pane: desaturated by `factor`. A cell in the default color takes
-/// the configured inactive color, else the terminal's own default desaturated, else stays default.
-pub fn inactive_color(
-    orig: Option<VtColor>,
-    configured: Option<VtColor>,
-    terminal_default: Option<VtColor>,
-    factor: f32,
-) -> Option<VtColor> {
-    match orig {
-        Some(c) => Some(desaturate_color(c, factor)),
-        None => configured.or_else(|| terminal_default.map(|c| desaturate_color(c, factor))),
-    }
-}
-
 /// Black on orange, for badges and copy-mode selection.
 fn highlighted(c: char) -> Cell {
     Cell {
@@ -772,126 +770,6 @@ fn highlighted(c: char) -> Cell {
             bg: Some(VtColor::Rgb(255, 140, 0)),
             ..CellStyle::default()
         },
-    }
-}
-
-pub fn color_to_rgb(color: VtColor) -> (u8, u8, u8) {
-    match color {
-        VtColor::Black => (0, 0, 0),
-        VtColor::Red => (205, 49, 49),
-        VtColor::Green => (13, 188, 121),
-        VtColor::Yellow => (229, 229, 16),
-        VtColor::Blue => (36, 114, 200),
-        VtColor::Magenta => (188, 63, 188),
-        VtColor::Cyan => (17, 168, 205),
-        VtColor::White => (229, 229, 229),
-        VtColor::BrightBlack => (102, 102, 102),
-        VtColor::BrightRed => (241, 76, 76),
-        VtColor::BrightGreen => (35, 209, 139),
-        VtColor::BrightYellow => (245, 245, 67),
-        VtColor::BrightBlue => (59, 142, 234),
-        VtColor::BrightMagenta => (214, 112, 214),
-        VtColor::BrightCyan => (41, 184, 219),
-        VtColor::BrightWhite => (255, 255, 255),
-        VtColor::Indexed(i) => indexed_to_rgb(i),
-        VtColor::Rgb(r, g, b) => (r, g, b),
-    }
-}
-
-fn indexed_to_rgb(i: u8) -> (u8, u8, u8) {
-    if (16..=231).contains(&i) {
-        let idx = i - 16;
-        let b = ((idx % 6) * 51) as u8;
-        let g = (((idx / 6) % 6) * 51) as u8;
-        let r = ((idx / 36) * 51) as u8;
-        (r, g, b)
-    } else if (232..=255).contains(&i) {
-        let gray = (8 + (i - 232) as u16 * 10).min(255) as u8;
-        (gray, gray, gray)
-    } else {
-        match i {
-            0 => (0, 0, 0),
-            1 => (205, 49, 49),
-            2 => (13, 188, 121),
-            3 => (229, 229, 16),
-            4 => (36, 114, 200),
-            5 => (188, 63, 188),
-            6 => (17, 168, 205),
-            7 => (229, 229, 229),
-            8 => (102, 102, 102),
-            9 => (241, 76, 76),
-            10 => (35, 209, 139),
-            11 => (245, 245, 67),
-            12 => (59, 142, 234),
-            13 => (214, 112, 214),
-            14 => (41, 184, 219),
-            _ => (255, 255, 255),
-        }
-    }
-}
-
-fn lerp_rgb(from: (u8, u8, u8), to: (f32, f32, f32), factor: f32) -> VtColor {
-    let factor = factor.clamp(0.0, 1.0);
-    let (r, g, b) = from;
-    let nr = (r as f32 + factor * (to.0 - r as f32)).round().clamp(0.0, 255.0) as u8;
-    let ng = (g as f32 + factor * (to.1 - g as f32)).round().clamp(0.0, 255.0) as u8;
-    let nb = (b as f32 + factor * (to.2 - b as f32)).round().clamp(0.0, 255.0) as u8;
-    VtColor::Rgb(nr, ng, nb)
-}
-
-pub fn desaturate_color(color: VtColor, factor: f32) -> VtColor {
-    let rgb = color_to_rgb(color);
-    let lum = 0.299 * (rgb.0 as f32) + 0.587 * (rgb.1 as f32) + 0.114 * (rgb.2 as f32);
-    lerp_rgb(rgb, (lum, lum, lum), factor)
-}
-
-pub fn parse_color(s: &str) -> Option<VtColor> {
-    let s = s.trim().to_lowercase();
-    if let Some(hex) = s.strip_prefix('#') {
-        return parse_hex_color(hex);
-    }
-    match s.replace('_', "-").as_str() {
-        "black" => Some(VtColor::Black),
-        "red" | "dark-red" => Some(VtColor::Red),
-        "green" | "dark-green" => Some(VtColor::Green),
-        "yellow" | "dark-yellow" => Some(VtColor::Yellow),
-        "blue" | "dark-blue" => Some(VtColor::Blue),
-        "magenta" | "dark-magenta" => Some(VtColor::Magenta),
-        "cyan" | "dark-cyan" => Some(VtColor::Cyan),
-        "white" | "grey" | "gray" => Some(VtColor::White),
-        "bright-black" | "brightblack" | "dark-grey" | "dark-gray" => Some(VtColor::BrightBlack),
-        "bright-red" | "brightred" => Some(VtColor::BrightRed),
-        "bright-green" | "brightgreen" => Some(VtColor::BrightGreen),
-        "bright-yellow" | "brightyellow" => Some(VtColor::BrightYellow),
-        "bright-blue" | "brightblue" => Some(VtColor::BrightBlue),
-        "bright-magenta" | "brightmagenta" => Some(VtColor::BrightMagenta),
-        "bright-cyan" | "brightcyan" => Some(VtColor::BrightCyan),
-        "bright-white" | "brightwhite" => Some(VtColor::BrightWhite),
-        other => {
-            if let Some(num) = other.strip_prefix("color").or_else(|| other.strip_prefix("colour")) {
-                num.parse::<u8>().ok().map(VtColor::Indexed)
-            } else if let Ok(num) = other.parse::<u8>() {
-                Some(VtColor::Indexed(num))
-            } else {
-                None
-            }
-        }
-    }
-}
-
-fn parse_hex_color(hex: &str) -> Option<VtColor> {
-    if hex.len() == 6 {
-        let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
-        let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
-        let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
-        Some(VtColor::Rgb(r, g, b))
-    } else if hex.len() == 3 {
-        let r = u8::from_str_radix(&hex[0..1], 16).ok()? * 17;
-        let g = u8::from_str_radix(&hex[1..2], 16).ok()? * 17;
-        let b = u8::from_str_radix(&hex[2..3], 16).ok()? * 17;
-        Some(VtColor::Rgb(r, g, b))
-    } else {
-        None
     }
 }
 

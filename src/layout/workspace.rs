@@ -574,10 +574,10 @@ impl Workspace {
             return None;
         }
         let panes = self.windows[idx].leaves();
-        if let Some(marked) = &self.marked_pane {
-            if panes.iter().any(|p| p == marked) {
-                self.marked_pane = None;
-            }
+        if let Some(marked) = &self.marked_pane
+            && panes.iter().any(|p| p == marked)
+        {
+            self.marked_pane = None;
         }
         self.windows.remove(idx);
         let shift = |i: usize| if i > idx { i - 1 } else { i };

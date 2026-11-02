@@ -1057,7 +1057,9 @@ impl Session {
             self.restore_window(window);
         }
         if !self.workspace.windows.is_empty() {
-            let _ = self.workspace.select_window(plan.active_window);
+            if !self.workspace.select_window(plan.active_window) {
+                warn!("could not select restored window {}", plan.active_window);
+            }
             self.workspace.last_window = plan.last_window;
         }
         self.restored_ms = Some(now_ms());

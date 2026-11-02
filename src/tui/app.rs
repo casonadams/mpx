@@ -225,18 +225,40 @@ impl App {
         _start: StartView,
         opts: AppOptions,
     ) -> Result<(Self, StreamRx), String> {
+        let keymap = keymap::resolve(&opts.config)?;
+        let mut client = Client::connect(endpoint).await?;
+        let sub_client = Client::connect(endpoint).await?;
+        let started = ensure_running_window(&mut client).await;
+        let (tx, rx) = mpsc::channel(STREAM_QUEUE);
+        let mut app = Self::new(endpoint, session, client, keymap, tx, opts);
+        app.report("new-window", started);
+        app.subscribe(sub_client);
+        app.apply_bindings().await;
+        app.refresh_nodes().await;
+        if let Ok(info) = app.client.info().await
+            && let Some(restored_ms) = info.restored_ms
+        {
+            app.say(restored_notice(restored_ms, local_utc_offset(restored_ms)));
+        }
+        Ok((app, rx))
+    }
+
+    /// The app before it is attached: its state from the given parts and options.
+    fn new(
+        endpoint: &str,
+        session: &str,
+        client: Client,
+        keymap: Keymap,
+        tx: mpsc::Sender<(u64, StreamEvent)>,
+        opts: AppOptions,
+    ) -> Self {
         let AppOptions {
             config,
             config_path,
             socket_dir,
             size,
         } = opts;
-        let keymap = keymap::resolve(&config)?;
-        let mut client = Client::connect(endpoint).await?;
-        let sub_client = Client::connect(endpoint).await?;
-        ensure_running_window(&mut client).await;
-        let (tx, rx) = mpsc::channel(STREAM_QUEUE);
-        let mut app = App {
+        App {
             endpoint: endpoint.to_string(),
             session: session.to_string(),
             client,
@@ -287,16 +309,7 @@ impl App {
             message_log: Vec::new(),
             suspend_requested: false,
             clock: ClockSource::default(),
-        };
-        app.subscribe(sub_client);
-        app.apply_bindings().await;
-        app.refresh_nodes().await;
-        if let Ok(info) = app.client.info().await
-            && let Some(restored_ms) = info.restored_ms
-        {
-            app.say(restored_notice(restored_ms, local_utc_offset(restored_ms)));
         }
-        Ok((app, rx))
     }
 
     /// Replaces the event subscription with one bound to `client`'s session.
@@ -570,7 +583,9 @@ impl App {
     /// Work that follows every input or stream batch: copies made reach the paste buffers.
     async fn after_input(&mut self) {
         for text in std::mem::take(&mut self.yanks) {
-            let _ = self.client.set_buffer(None, &text).await;
+            if let Err(e) = self.client.set_buffer(None, &text).await {
+                self.say(format!("set-buffer: {e}"));
+            }
         }
     }
 
@@ -603,6 +618,13 @@ impl App {
         }
         self.message = Some((text, Instant::now()));
         Flow::Continue
+    }
+
+    /// Shows a failed daemon request on the status row, as `<what>: <error>`.
+    pub fn report<T, E: std::fmt::Display>(&mut self, what: &str, result: Result<T, E>) {
+        if let Err(e) = result {
+            self.say(format!("{what}: {e}"));
+        }
     }
 
     /// The live message, if one was set within the last few seconds.
@@ -685,14 +707,14 @@ impl App {
 }
 
 /// Creates a shell window when the session has no running pane.
-async fn ensure_running_window(client: &mut Client) {
+async fn ensure_running_window(client: &mut Client) -> Result<(), String> {
     let has_running = client
         .list()
         .await
         .map(|nodes| nodes.iter().any(|n| n.is_running()))
         .unwrap_or(false);
     if has_running {
-        return;
+        return Ok(());
     }
     let cwd = std::env::current_dir()
         .ok()
@@ -703,13 +725,14 @@ async fn ensure_running_window(client: &mut Client) {
         cwd,
         ..SpawnOpts::default()
     };
-    let _ = client
+    client
         .new_window(NewWindowOpts {
             name: None,
             spawn,
             focus: true,
         })
-        .await;
+        .await
+        .map(|_| ())
 }
 
 /// When to draw output that arrived at `now`: a frame already scheduled stands; otherwise at once,
@@ -818,85 +841,153 @@ pub async fn run_tui(
     start: StartView,
     opts: AppOptions,
 ) -> Result<(), String> {
-    let guard = TerminalGuard::enter().map_err(|e| format!("Failed to enter raw mode: {e}"))?;
-    let report = super::terminal::query_terminal();
-    let (mut app, mut stream) = App::open(endpoint, session, start, opts).await?;
-    app.canvas.set_lr_margins(report.margins);
-    app.host_colors = super::render::HostColors::from_report(&report);
-    let mut keys = Input {
-        rx: terminal_input(),
-        held: None,
-    };
-    let mut out = BufWriter::with_capacity(64 * 1024, stdout());
-    let mut body = Vec::with_capacity(64 * 1024);
-    let (mut cursor, mut last_cursor) = (Vec::new(), Vec::new());
-    let mut tick = tokio::time::interval(Duration::from_secs(1));
-    let mut mouse_captured = true;
-    let mut redraw = true;
-    loop {
-        if redraw {
-            if !app.prepare_frame().await {
-                return Ok(());
-            }
-            body.clear();
-            cursor.clear();
-            let _ = frame::draw_body(&mut app, &mut body);
-            let _ = frame::place_cursor(&app, &mut cursor);
-            // A frame with no changes that leaves the cursor where it is would only be bytes for
-            // the terminal to parse.
-            if !body.is_empty() || cursor != last_cursor {
-                let _ = frame::send(&mut out, &body, &cursor);
-                std::mem::swap(&mut cursor, &mut last_cursor);
-            }
-            app.drew(Instant::now());
+    let mut tui = Tui::attach(endpoint, session, start, opts).await?;
+    while tui.step().await {}
+    Ok(())
+}
+
+/// The attached TUI: the app, its terminal and the buffers the event loop draws with.
+struct Tui {
+    // Fields drop in declaration order: the output flushes before the terminal guard restores
+    // the screen, so `guard` stays last.
+    out: BufWriter<std::io::Stdout>,
+    body: Vec<u8>,
+    cursor: Vec<u8>,
+    last_cursor: Vec<u8>,
+    tick: tokio::time::Interval,
+    keys: Input,
+    stream: StreamRx,
+    app: App,
+    guard: TerminalGuard,
+    mouse_captured: bool,
+    redraw: bool,
+}
+
+impl Tui {
+    /// Enters the terminal and attaches the app to the session.
+    async fn attach(
+        endpoint: &str,
+        session: &str,
+        start: StartView,
+        opts: AppOptions,
+    ) -> Result<Self, String> {
+        let guard = TerminalGuard::enter().map_err(|e| format!("Failed to enter raw mode: {e}"))?;
+        let report = super::terminal::query_terminal();
+        let (mut app, stream) = App::open(endpoint, session, start, opts).await?;
+        app.canvas.set_lr_margins(report.margins);
+        app.host_colors = super::render::HostColors::from_report(&report);
+        Ok(Self {
+            out: BufWriter::with_capacity(64 * 1024, stdout()),
+            body: Vec::with_capacity(64 * 1024),
+            cursor: Vec::new(),
+            last_cursor: Vec::new(),
+            tick: tokio::time::interval(Duration::from_secs(1)),
+            keys: Input {
+                rx: terminal_input(),
+                held: None,
+            },
+            stream,
+            app,
+            guard,
+            mouse_captured: true,
+            redraw: true,
+        })
+    }
+
+    /// One pass of the event loop: draw if due, wait for a wake-up, handle it. Returns false
+    /// once the loop should end.
+    async fn step(&mut self) -> bool {
+        if self.redraw && !self.draw().await {
+            return false;
         }
-        let popup = app.hud_deadline().filter(|_| !app.hud_visible());
-        let due = earliest([popup, app.frame_due, app.display_deadline()]);
-        let wake = tokio::select! {
-            Some(event) = keys.recv() => Wake::Input(event),
-            item = stream.recv() => Wake::Stream(item),
-            _ = tick.tick() => Wake::Tick,
-            _ = sleep_until_opt(due.map(tokio::time::Instant::from_std)) => Wake::Due,
-        };
+        let wake = self.wait().await;
         let output = matches!(wake, Wake::Stream(_));
         let ticked = matches!(wake, Wake::Tick);
-        let flow = match wake {
-            Wake::Input(event) => app.on_event(event).await,
+        let flow = self.handle(wake).await;
+        let suspended = self.suspend_if_requested();
+        sync_mouse_capture(
+            &mut self.out,
+            self.app.config.mouse,
+            &mut self.mouse_captured,
+        );
+        let forwarded = std::mem::take(&mut self.app.forwarded);
+        self.redraw =
+            needs_redraw(output, forwarded, self.app.frame_due, Instant::now()) || suspended;
+        if ticked
+            && self.app.live_message().is_none()
+            && self.app.frame_due.is_none()
+            && !statusline::status_due(
+                self.app.config.status_interval,
+                self.app.drawn_at,
+                Instant::now(),
+            )
+        {
+            self.redraw = false;
+        }
+        flow != Flow::Quit
+    }
+
+    /// Draws the next frame, sending only what changed. Returns false when nothing is left to show.
+    async fn draw(&mut self) -> bool {
+        if !self.app.prepare_frame().await {
+            return false;
+        }
+        self.body.clear();
+        self.cursor.clear();
+        let _ = frame::draw_body(&mut self.app, &mut self.body);
+        let _ = frame::place_cursor(&self.app, &mut self.cursor);
+        // A frame with no changes that leaves the cursor where it is would only be bytes for
+        // the terminal to parse.
+        if !self.body.is_empty() || self.cursor != self.last_cursor {
+            let _ = frame::send(&mut self.out, &self.body, &self.cursor);
+            std::mem::swap(&mut self.cursor, &mut self.last_cursor);
+        }
+        self.app.drew(Instant::now());
+        true
+    }
+
+    /// Waits for input, stream output, the tick or a delayed element coming due.
+    async fn wait(&mut self) -> Wake {
+        let popup = self.app.hud_deadline().filter(|_| !self.app.hud_visible());
+        let due = earliest([popup, self.app.frame_due, self.app.display_deadline()]);
+        tokio::select! {
+            Some(event) = self.keys.recv() => Wake::Input(event),
+            item = self.stream.recv() => Wake::Stream(item),
+            _ = self.tick.tick() => Wake::Tick,
+            _ = sleep_until_opt(due.map(tokio::time::Instant::from_std)) => Wake::Due,
+        }
+    }
+
+    async fn handle(&mut self, wake: Wake) -> Flow {
+        match wake {
+            Wake::Input(event) => self.app.on_event(event).await,
             Wake::Stream(item) => {
-                let flow = app.on_stream(item, &mut stream).await;
-                flush_passthroughs(&mut out, &mut app.passthroughs);
+                let flow = self.app.on_stream(item, &mut self.stream).await;
+                flush_passthroughs(&mut self.out, &mut self.app.passthroughs);
                 flow
             }
-            Wake::Tick => app.on_tick().await,
+            Wake::Tick => self.app.on_tick().await,
             Wake::Due => {
-                app.expire_panes(Instant::now());
+                self.app.expire_panes(Instant::now());
                 Flow::Continue
             }
-        };
-        let suspended = std::mem::take(&mut app.suspend_requested);
+        }
+    }
+
+    /// Gives the terminal to the shell when `suspend-client` asked for it; returns whether it did.
+    fn suspend_if_requested(&mut self) -> bool {
+        let suspended = std::mem::take(&mut self.app.suspend_requested);
         if suspended {
-            let _ = out.flush();
-            if let Err(e) = guard.suspend() {
-                app.say(format!("suspend-client: {e}"));
+            let _ = self.out.flush();
+            if let Err(e) = self.guard.suspend() {
+                self.app.say(format!("suspend-client: {e}"));
             }
-            app.canvas.invalidate();
-            app.layout.dirty = true;
-            last_cursor.clear();
-            mouse_captured = true;
+            self.app.canvas.invalidate();
+            self.app.layout.dirty = true;
+            self.last_cursor.clear();
+            self.mouse_captured = true;
         }
-        sync_mouse_capture(&mut out, app.config.mouse, &mut mouse_captured);
-        let forwarded = std::mem::take(&mut app.forwarded);
-        redraw = needs_redraw(output, forwarded, app.frame_due, Instant::now()) || suspended;
-        if ticked
-            && app.live_message().is_none()
-            && app.frame_due.is_none()
-            && !statusline::status_due(app.config.status_interval, app.drawn_at, Instant::now())
-        {
-            redraw = false;
-        }
-        if flow == Flow::Quit {
-            return Ok(());
-        }
+        suspended
     }
 }
 

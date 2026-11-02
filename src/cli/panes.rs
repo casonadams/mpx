@@ -100,20 +100,7 @@ pub async fn run(cmd: Commands, r: &Resolved) -> Result<i32, String> {
             env,
             remain,
             argv,
-        } => {
-            let (command, args) =
-                command_and_args(argv).ok_or_else(|| "no command given".to_string())?;
-            let req = RunRequest {
-                name,
-                pty,
-                cwd,
-                env,
-                remain,
-                command,
-                args,
-            };
-            run_node(r, req).await
-        }
+        } => run_command(r, name, pty, cwd, env, remain, argv).await,
         Commands::Logs {
             name,
             follow,
@@ -146,16 +133,7 @@ pub async fn run(cmd: Commands, r: &Resolved) -> Result<i32, String> {
             submit,
             text,
         } => paste(r, target.as_deref(), submit, &text).await,
-        Commands::Kill { name } => {
-            let mut client = ensure_client(r).await?;
-            apply_key(&mut client, r.idempotency_key.as_deref());
-            client
-                .kill(&name)
-                .await
-                .map_err(|e| format!("Kill error: {e}"))?;
-            println!("Node '{name}' terminated");
-            Ok(0)
-        }
+        Commands::Kill { name } => kill_node(r, &name).await,
         Commands::Wait {
             name,
             timeout,
@@ -171,15 +149,7 @@ pub async fn run(cmd: Commands, r: &Resolved) -> Result<i32, String> {
             )
             .await
         }
-        Commands::Screen { name } => {
-            let mut client = ensure_client(r).await?;
-            let screen = client
-                .screen(&name)
-                .await
-                .map_err(|e| format!("Screen error: {e}"))?;
-            print!("{screen}");
-            Ok(0)
-        }
+        Commands::Screen { name } => screen_node(r, &name).await,
         Commands::Split {
             target,
             name,
@@ -207,15 +177,7 @@ pub async fn run(cmd: Commands, r: &Resolved) -> Result<i32, String> {
             };
             split(r, req).await
         }
-        Commands::Focus { name } => {
-            let mut client = ensure_client(r).await?;
-            client
-                .focus(&name)
-                .await
-                .map_err(|e| format!("Focus error: {e}"))?;
-            println!("Focused pane '{name}'");
-            Ok(0)
-        }
+        Commands::Focus { name } => focus_node(r, &name).await,
         Commands::Status { name } => status(r, &name).await,
         Commands::Layout { width, height } => layout(r, width, height).await,
         other => windows::run(other, r).await,
@@ -244,6 +206,59 @@ async fn run_node(r: &Resolved, req: RunRequest) -> Result<i32, String> {
         pid_label(info.pid),
         info.pty
     );
+    Ok(0)
+}
+
+async fn run_command(
+    r: &Resolved,
+    name: Option<String>,
+    pty: bool,
+    cwd: Option<String>,
+    env: Vec<String>,
+    remain: bool,
+    argv: Vec<String>,
+) -> Result<i32, String> {
+    let (command, args) = command_and_args(argv).ok_or_else(|| "no command given".to_string())?;
+    let req = RunRequest {
+        name,
+        pty,
+        cwd,
+        env,
+        remain,
+        command,
+        args,
+    };
+    run_node(r, req).await
+}
+
+async fn kill_node(r: &Resolved, name: &str) -> Result<i32, String> {
+    let mut client = ensure_client(r).await?;
+    apply_key(&mut client, r.idempotency_key.as_deref());
+    client
+        .kill(name)
+        .await
+        .map_err(|e| format!("Kill error: {e}"))?;
+    println!("Node '{name}' terminated");
+    Ok(0)
+}
+
+async fn screen_node(r: &Resolved, name: &str) -> Result<i32, String> {
+    let mut client = ensure_client(r).await?;
+    let screen = client
+        .screen(name)
+        .await
+        .map_err(|e| format!("Screen error: {e}"))?;
+    print!("{screen}");
+    Ok(0)
+}
+
+async fn focus_node(r: &Resolved, name: &str) -> Result<i32, String> {
+    let mut client = ensure_client(r).await?;
+    client
+        .focus(name)
+        .await
+        .map_err(|e| format!("Focus error: {e}"))?;
+    println!("Focused pane '{name}'");
     Ok(0)
 }
 

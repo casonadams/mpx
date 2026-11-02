@@ -57,48 +57,11 @@ pub async fn run(cmd: Commands, r: &Resolved) -> Result<i32, String> {
             };
             new_window(r, req).await
         }
-        Commands::KillWindow { index } => {
-            let mut client = ensure_client(r).await?;
-            apply_key(&mut client, r.idempotency_key.as_deref());
-            client
-                .kill_window(index)
-                .await
-                .map_err(|e| format!("kill-window error: {e}"))?;
-            Ok(0)
-        }
-        Commands::RenameWindow { index, name } => {
-            let mut client = ensure_client(r).await?;
-            apply_key(&mut client, r.idempotency_key.as_deref());
-            client
-                .rename_window(index, &name)
-                .await
-                .map_err(|e| format!("rename-window error: {e}"))?;
-            Ok(0)
-        }
-        Commands::SelectWindow { index } => {
-            let mut client = ensure_client(r).await?;
-            client
-                .select_window(index)
-                .await
-                .map_err(|e| format!("select-window error: {e}"))?;
-            Ok(0)
-        }
-        Commands::LastWindow => {
-            let mut client = ensure_client(r).await?;
-            client
-                .last_window()
-                .await
-                .map_err(|e| format!("last-window error: {e}"))?;
-            Ok(0)
-        }
-        Commands::LastPane => {
-            let mut client = ensure_client(r).await?;
-            client
-                .focus_last()
-                .await
-                .map_err(|e| format!("last-pane error: {e}"))?;
-            Ok(0)
-        }
+        Commands::KillWindow { index } => kill_window(r, index).await,
+        Commands::RenameWindow { index, name } => rename_window(r, index, &name).await,
+        Commands::SelectWindow { index } => select_window(r, index).await,
+        Commands::LastWindow => last_window(r).await,
+        Commands::LastPane => last_pane(r).await,
         Commands::SelectPane {
             target,
             mark,
@@ -107,14 +70,7 @@ pub async fn run(cmd: Commands, r: &Resolved) -> Result<i32, String> {
         Commands::SwapPane { source, target } => {
             swap(r, source.as_deref(), target.as_deref()).await
         }
-        Commands::BreakPane { name } => {
-            let mut client = ensure_client(r).await?;
-            client
-                .break_pane(&name)
-                .await
-                .map_err(|e| format!("break-pane error: {e}"))?;
-            Ok(0)
-        }
+        Commands::BreakPane { name } => break_pane(r, &name).await,
         Commands::SelectLayout { preset, spread } => {
             select_layout(r, preset.as_deref(), spread).await
         }
@@ -139,6 +95,62 @@ pub async fn run(cmd: Commands, r: &Resolved) -> Result<i32, String> {
         }
         _ => Err("command is not routed".to_string()),
     }
+}
+
+async fn kill_window(r: &Resolved, index: Option<usize>) -> Result<i32, String> {
+    let mut client = ensure_client(r).await?;
+    apply_key(&mut client, r.idempotency_key.as_deref());
+    client
+        .kill_window(index)
+        .await
+        .map_err(|e| format!("kill-window error: {e}"))?;
+    Ok(0)
+}
+
+async fn rename_window(r: &Resolved, index: Option<usize>, name: &str) -> Result<i32, String> {
+    let mut client = ensure_client(r).await?;
+    apply_key(&mut client, r.idempotency_key.as_deref());
+    client
+        .rename_window(index, name)
+        .await
+        .map_err(|e| format!("rename-window error: {e}"))?;
+    Ok(0)
+}
+
+async fn select_window(r: &Resolved, index: usize) -> Result<i32, String> {
+    let mut client = ensure_client(r).await?;
+    client
+        .select_window(index)
+        .await
+        .map_err(|e| format!("select-window error: {e}"))?;
+    Ok(0)
+}
+
+async fn last_window(r: &Resolved) -> Result<i32, String> {
+    let mut client = ensure_client(r).await?;
+    client
+        .last_window()
+        .await
+        .map_err(|e| format!("last-window error: {e}"))?;
+    Ok(0)
+}
+
+async fn last_pane(r: &Resolved) -> Result<i32, String> {
+    let mut client = ensure_client(r).await?;
+    client
+        .focus_last()
+        .await
+        .map_err(|e| format!("last-pane error: {e}"))?;
+    Ok(0)
+}
+
+async fn break_pane(r: &Resolved, name: &str) -> Result<i32, String> {
+    let mut client = ensure_client(r).await?;
+    client
+        .break_pane(name)
+        .await
+        .map_err(|e| format!("break-pane error: {e}"))?;
+    Ok(0)
 }
 
 fn shell_command(argv: Vec<String>) -> (String, Vec<String>) {

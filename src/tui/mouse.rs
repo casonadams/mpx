@@ -48,7 +48,8 @@ impl App {
             if modes.mouse_tracking != crate::keys::MouseTracking::None {
                 if name != self.active_pane && matches!(ev.kind, MouseEventKind::Down(_)) {
                     self.park_copy();
-                    let _ = self.client.focus(&name).await;
+                    let focused = self.client.focus(&name).await;
+                    self.report("focus", focused);
                     self.layout.dirty = true;
                     self.active_pane = name.clone();
                     self.active_rect = Some(rect);
@@ -97,11 +98,13 @@ impl App {
                 .map(|(_, _, target)| target.clone());
             match target {
                 Some(super::statusline::Target::Window(idx)) => {
-                    let _ = self.client.select_window(idx).await;
+                    let selected = self.client.select_window(idx).await;
+                    self.report("select-window", selected);
                     self.layout.dirty = true;
                 }
                 Some(super::statusline::Target::Pane(name)) if name != self.active_pane => {
-                    let _ = self.client.focus(&name).await;
+                    let focused = self.client.focus(&name).await;
+                    self.report("focus", focused);
                     self.layout.dirty = true;
                 }
                 _ => {}
@@ -123,7 +126,8 @@ impl App {
         let (x, y) = local_point(rect, col, row);
         if name != self.active_pane {
             self.park_copy();
-            let _ = self.client.focus(&name).await;
+            let focused = self.client.focus(&name).await;
+            self.report("focus", focused);
             self.layout.dirty = true;
             self.active_pane = name.clone();
             self.active_rect = Some(rect);
@@ -196,7 +200,8 @@ impl App {
     async fn drag_border(&mut self, grab: &BorderGrab, col: u16, row: u16) {
         if let Some((pane, side, cells)) = border_move(grab, &self.panes, (col, row)) {
             let viewport = self.pane_viewport();
-            let _ = self.client.resize_split(&pane, side, cells, viewport).await;
+            let resized = self.client.resize_split(&pane, side, cells, viewport).await;
+            self.report("resize-pane", resized);
             self.layout.dirty = true;
         }
     }

@@ -40,105 +40,20 @@ impl VtHandler {
         let mut iter = params.iter();
         while let Some(sub) = iter.next() {
             let code = sub[0];
+            let style = &mut self.grid.current_style;
             match code {
-                0 => self.grid.current_style = CellStyle::default(),
-                1 => self.grid.current_style.bold = true,
-                2 => self.grid.current_style.faint = true,
-                3 => self.grid.current_style.italic = true,
-                4 => self.grid.current_style.underline = sub.get(1) != Some(&0),
-                21 => self.grid.current_style.underline = true,
-                7 => self.grid.current_style.reverse = true,
-                22 => {
-                    self.grid.current_style.bold = false;
-                    self.grid.current_style.faint = false;
-                }
-                23 => self.grid.current_style.italic = false,
-                24 => self.grid.current_style.underline = false,
-                27 => self.grid.current_style.reverse = false,
-                30 => self.grid.current_style.fg = Some(Color::Black),
-                31 => self.grid.current_style.fg = Some(Color::Red),
-                32 => self.grid.current_style.fg = Some(Color::Green),
-                33 => self.grid.current_style.fg = Some(Color::Yellow),
-                34 => self.grid.current_style.fg = Some(Color::Blue),
-                35 => self.grid.current_style.fg = Some(Color::Magenta),
-                36 => self.grid.current_style.fg = Some(Color::Cyan),
-                37 => self.grid.current_style.fg = Some(Color::White),
-                39 => self.grid.current_style.fg = None,
-                40 => self.grid.current_style.bg = Some(Color::Black),
-                41 => self.grid.current_style.bg = Some(Color::Red),
-                42 => self.grid.current_style.bg = Some(Color::Green),
-                43 => self.grid.current_style.bg = Some(Color::Yellow),
-                44 => self.grid.current_style.bg = Some(Color::Blue),
-                45 => self.grid.current_style.bg = Some(Color::Magenta),
-                46 => self.grid.current_style.bg = Some(Color::Cyan),
-                47 => self.grid.current_style.bg = Some(Color::White),
-                49 => self.grid.current_style.bg = None,
-                90 => self.grid.current_style.fg = Some(Color::BrightBlack),
-                91 => self.grid.current_style.fg = Some(Color::BrightRed),
-                92 => self.grid.current_style.fg = Some(Color::BrightGreen),
-                93 => self.grid.current_style.fg = Some(Color::BrightYellow),
-                94 => self.grid.current_style.fg = Some(Color::BrightBlue),
-                95 => self.grid.current_style.fg = Some(Color::BrightMagenta),
-                96 => self.grid.current_style.fg = Some(Color::BrightCyan),
-                97 => self.grid.current_style.fg = Some(Color::BrightWhite),
-                100 => self.grid.current_style.bg = Some(Color::BrightBlack),
-                101 => self.grid.current_style.bg = Some(Color::BrightRed),
-                102 => self.grid.current_style.bg = Some(Color::BrightGreen),
-                103 => self.grid.current_style.bg = Some(Color::BrightYellow),
-                104 => self.grid.current_style.bg = Some(Color::BrightBlue),
-                105 => self.grid.current_style.bg = Some(Color::BrightMagenta),
-                106 => self.grid.current_style.bg = Some(Color::BrightCyan),
-                107 => self.grid.current_style.bg = Some(Color::BrightWhite),
                 38 => {
-                    if sub.len() >= 5 && sub[1] == 2 {
-                        let (r, g, b) = if sub.len() >= 6 {
-                            (sub[3] as u8, sub[4] as u8, sub[5] as u8)
-                        } else {
-                            (sub[2] as u8, sub[3] as u8, sub[4] as u8)
-                        };
-                        self.grid.current_style.fg = Some(Color::Rgb(r, g, b));
-                    } else if sub.len() >= 3 && sub[1] == 5 {
-                        self.grid.current_style.fg = Some(Color::Indexed(sub[2] as u8));
-                    } else if let Some(sub2) = iter.next() {
-                        if sub2[0] == 5 {
-                            if let Some(c) = iter.next() {
-                                self.grid.current_style.fg = Some(Color::Indexed(c[0] as u8));
-                            }
-                        } else if sub2[0] == 2
-                            && let (Some(r), Some(g), Some(b)) =
-                                (iter.next(), iter.next(), iter.next())
-                        {
-                            self.grid.current_style.fg =
-                                Some(Color::Rgb(r[0] as u8, g[0] as u8, b[0] as u8));
-                        }
+                    if let Some(color) = parse_extended_color(sub, &mut iter) {
+                        style.fg = Some(color);
                     }
                 }
                 48 => {
-                    if sub.len() >= 5 && sub[1] == 2 {
-                        let (r, g, b) = if sub.len() >= 6 {
-                            (sub[3] as u8, sub[4] as u8, sub[5] as u8)
-                        } else {
-                            (sub[2] as u8, sub[3] as u8, sub[4] as u8)
-                        };
-                        self.grid.current_style.bg = Some(Color::Rgb(r, g, b));
-                    } else if sub.len() >= 3 && sub[1] == 5 {
-                        self.grid.current_style.bg = Some(Color::Indexed(sub[2] as u8));
-                    } else if let Some(sub2) = iter.next() {
-                        if sub2[0] == 5 {
-                            if let Some(c) = iter.next() {
-                                self.grid.current_style.bg = Some(Color::Indexed(c[0] as u8));
-                            }
-                        } else if sub2[0] == 2
-                            && let (Some(r), Some(g), Some(b)) =
-                                (iter.next(), iter.next(), iter.next())
-                        {
-                            self.grid.current_style.bg =
-                                Some(Color::Rgb(r[0] as u8, g[0] as u8, b[0] as u8));
-                        }
+                    if let Some(color) = parse_extended_color(sub, &mut iter) {
+                        style.bg = Some(color);
                     }
                 }
                 58 => skip_extended_color(sub, &mut iter),
-                _ => {}
+                _ => apply_sgr_code(style, code, sub),
             }
         }
     }
@@ -285,6 +200,108 @@ fn skip_extended_color<'a>(sub: &[u16], iter: &mut impl Iterator<Item = &'a [u16
             }
         }
         _ => {}
+    }
+}
+
+const ANSI_COLORS: [Color; 16] = [
+    Color::Black,
+    Color::Red,
+    Color::Green,
+    Color::Yellow,
+    Color::Blue,
+    Color::Magenta,
+    Color::Cyan,
+    Color::White,
+    Color::BrightBlack,
+    Color::BrightRed,
+    Color::BrightGreen,
+    Color::BrightYellow,
+    Color::BrightBlue,
+    Color::BrightMagenta,
+    Color::BrightCyan,
+    Color::BrightWhite,
+];
+
+/// Applies one SGR code other than the extended colour selectors (38, 48, 58).
+fn apply_sgr_code(style: &mut CellStyle, code: u16, sub: &[u16]) {
+    match code {
+        0 | 22..=24 | 27 => reset_attribute(style, code),
+        1..=4 | 7 | 21 => set_attribute(style, code, sub),
+        30..=37 | 39 | 90..=97 => style.fg = basic_color(code),
+        40..=47 | 49 | 100..=107 => style.bg = basic_color(code),
+        _ => {}
+    }
+}
+
+fn set_attribute(style: &mut CellStyle, code: u16, sub: &[u16]) {
+    match code {
+        1 => style.bold = true,
+        2 => style.faint = true,
+        3 => style.italic = true,
+        4 => style.underline = sub.get(1) != Some(&0),
+        7 => style.reverse = true,
+        21 => style.underline = true,
+        _ => {}
+    }
+}
+
+fn reset_attribute(style: &mut CellStyle, code: u16) {
+    match code {
+        0 => *style = CellStyle::default(),
+        22 => {
+            style.bold = false;
+            style.faint = false;
+        }
+        23 => style.italic = false,
+        24 => style.underline = false,
+        27 => style.reverse = false,
+        _ => {}
+    }
+}
+
+/// Maps the basic and bright colour codes (30-37, 40-47, 90-97, 100-107) to a colour.
+fn basic_color(code: u16) -> Option<Color> {
+    match code {
+        30..=37 => Some(ANSI_COLORS[(code - 30) as usize]),
+        40..=47 => Some(ANSI_COLORS[(code - 40) as usize]),
+        90..=97 => Some(ANSI_COLORS[(code - 82) as usize]),
+        100..=107 => Some(ANSI_COLORS[(code - 92) as usize]),
+        _ => None,
+    }
+}
+
+/// Parses the colour following a 38/48 selector, in colon or semicolon form.
+fn parse_extended_color<'a>(
+    sub: &[u16],
+    iter: &mut impl Iterator<Item = &'a [u16]>,
+) -> Option<Color> {
+    colon_extended_color(sub).or_else(|| semicolon_extended_color(iter))
+}
+
+fn colon_extended_color(sub: &[u16]) -> Option<Color> {
+    if sub.len() >= 5 && sub[1] == 2 {
+        let (r, g, b) = if sub.len() >= 6 {
+            (sub[3] as u8, sub[4] as u8, sub[5] as u8)
+        } else {
+            (sub[2] as u8, sub[3] as u8, sub[4] as u8)
+        };
+        Some(Color::Rgb(r, g, b))
+    } else if sub.len() >= 3 && sub[1] == 5 {
+        Some(Color::Indexed(sub[2] as u8))
+    } else {
+        None
+    }
+}
+
+fn semicolon_extended_color<'a>(iter: &mut impl Iterator<Item = &'a [u16]>) -> Option<Color> {
+    let sub = iter.next()?;
+    match sub[0] {
+        5 => iter.next().map(|c| Color::Indexed(c[0] as u8)),
+        2 => match (iter.next(), iter.next(), iter.next()) {
+            (Some(r), Some(g), Some(b)) => Some(Color::Rgb(r[0] as u8, g[0] as u8, b[0] as u8)),
+            _ => None,
+        },
+        _ => None,
     }
 }
 
@@ -500,16 +517,15 @@ impl Perform for VtHandler {
     }
 
     fn hook(&mut self, _params: &Params, _intermediates: &[u8], _ignore: bool, action: char) {
-        let mut buf = Vec::new();
-        buf.push(action as u8);
+        let buf = vec![action as u8];
         self.dcs_buf = Some(buf);
     }
 
     fn put(&mut self, byte: u8) {
-        if let Some(buf) = &mut self.dcs_buf {
-            if buf.len() < MAX_DCS_LEN {
-                buf.push(byte);
-            }
+        if let Some(buf) = &mut self.dcs_buf
+            && buf.len() < MAX_DCS_LEN
+        {
+            buf.push(byte);
         }
     }
 
