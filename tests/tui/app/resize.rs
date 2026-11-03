@@ -1,9 +1,10 @@
 //! Panes that change height keep their content anchored like a terminal's: a pane whose cursor
-//! sat on its bottom row keeps it there, and the daemon's screen and the app's screen agree.
+//! sat on its bottom row keeps it there, and the daemon's screen, the app's screen and a fresh
+//! attach agree.
 use mpx::config::Config;
 use mpx::layout::Direction;
 
-use super::support::{ECHO, Harness, MAIN, split};
+use super::support::{ECHO, Harness, MAIN, SESSION, split};
 
 fn numbered(prefix: &str, n: usize) -> String {
     (1..=n).map(|i| format!("{prefix} {i:02}\r\n")).collect()
@@ -36,12 +37,15 @@ fn without_trailing_blanks(mut rows: Vec<String>) -> Vec<String> {
     rows
 }
 
-async fn start() -> Harness {
-    let config = Config {
+fn config() -> Config {
+    Config {
         which_key_delay_ms: 0,
         ..Config::default()
-    };
-    Harness::start(config, ECHO).await
+    }
+}
+
+async fn start() -> Harness {
+    Harness::start(config(), ECHO).await
 }
 
 /// Splits the main pane with a pane below it, prints `lines` numbered lines and then `PROMPT$`
@@ -99,4 +103,15 @@ async fn a_pane_whose_cursor_is_above_its_bottom_row_keeps_its_rows_on_top() {
         rows[4..].iter().all(String::is_empty),
         "blank below the prompt\n{rows:#?}"
     );
+}
+
+#[tokio::test]
+async fn a_fresh_attach_after_the_close_shows_what_the_live_pane_shows() {
+    let mut h = start().await;
+    stacked_then_close_below(&mut h, 20).await;
+    let live = pane_rows(&h, MAIN);
+    let Harness { sandbox, .. } = h;
+    let mut fresh = Harness::attach(sandbox, SESSION, config()).await;
+    fresh.frame().await;
+    assert_eq!(pane_rows(&fresh, MAIN), live);
 }

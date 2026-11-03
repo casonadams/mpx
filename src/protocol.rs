@@ -90,6 +90,10 @@ pub struct NodeInfo {
     /// Size (cols, rows) of a terminal pane's PTY (absent from daemons that predate it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size: Option<(u16, u16)>,
+    /// Size (cols, rows) the pane's retained output was replayed from before its last resize, when that
+    /// differs from `size`: a fresh screen replays from it and resizes to `size` (absent from daemons that predate it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resized_from: Option<(u16, u16)>,
     /// Column and row, zero-based, of a terminal pane's screen cursor (absent from daemons that predate it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor: Option<(u16, u16)>,
@@ -127,6 +131,7 @@ impl NodeInfo {
             cursor: None,
             history_size: None,
             size: None,
+            resized_from: None,
             input_off: None,
             marked: None,
         }

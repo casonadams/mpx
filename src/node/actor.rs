@@ -64,6 +64,8 @@ pub struct PaneActor {
     /// Absolute offset up to which output has been decoded and emitted.
     emitted: u64,
     last_output_ms: u64,
+    /// Size the retained output was last replayed from before a resize that changed the grid size.
+    resized_from: Option<(usize, usize)>,
     /// Scrollback lines of the retained output; `None` until next needed after output or a resize.
     history_cache: Option<usize>,
     next_probe: Instant,
@@ -109,6 +111,7 @@ impl PaneActor {
             emitted: 0,
             last_output_ms: started_ms,
             history_cache: None,
+            resized_from: None,
             next_probe: Instant::now(),
             exit: None,
             notify: ctx.notify,
@@ -275,6 +278,7 @@ impl PaneActor {
             // from scrollback are the same at every end.
             let rebuilt = VtScreen::resized_grid(&self.ring.snapshot(), from, to, false);
             *self.screen.grid_mut() = rebuilt;
+            self.resized_from = Some(from);
         }
         self.history_cache = None;
         if let Some(terminal) = &self.terminal {
@@ -346,6 +350,7 @@ impl PaneActor {
             (at.x as u16, at.y as u16)
         });
         let history_size = self.pty.then(|| self.history_size());
+        let resized_from = self.resized_from.map(|(cols, rows)| (cols as u16, rows as u16));
         NodeInfo {
             name: self.name.clone(),
             id: self.id,
@@ -366,6 +371,7 @@ impl PaneActor {
             cursor,
             history_size,
             size,
+            resized_from,
             input_off: None,
             marked: None,
         }

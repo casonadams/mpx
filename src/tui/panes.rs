@@ -171,8 +171,10 @@ pub fn pending_resizes(
 }
 
 /// Rebuilds a pane from its log into a fresh screen of the given size, with scrollback when
-/// `scrollback` is set. Returns the screen and the byte offset its contents end at, which is the
-/// next offset expected from the event stream.
+/// `scrollback` is set. When the daemon's screen was last resized, the log is replayed at the size
+/// it was resized from and resized here, as the daemon did, so a fresh attach shows what the live
+/// pane shows (rows pulled back from history, bottom-anchored content). Returns the screen and the
+/// byte offset its contents end at, which is the next offset expected from the event stream.
 pub async fn load_pane(
     client: &mut Client,
     name: &str,
@@ -180,17 +182,26 @@ pub async fn load_pane(
     scrollback: bool,
 ) -> Option<(VtScreen, u64)> {
     let (logs, next) = client.logs(name, None, false, None).await.ok()?;
+    let info = client.status(name).await.ok();
+    let (cols, rows) = (width as usize, height as usize);
     let mut screen = if scrollback {
-        VtScreen::new(width as usize, height as usize)
+        VtScreen::new(cols, rows)
     } else {
-        VtScreen::live(width as usize, height as usize)
+        VtScreen::live(cols, rows)
     };
-    screen.feed(logs.as_bytes());
+    match info.as_ref().and_then(|info| info.resized_from) {
+        Some((from_cols, from_rows)) => {
+            let from = (from_cols as usize, from_rows as usize);
+            *screen.grid_mut() =
+                VtScreen::resized_grid(logs.as_bytes(), from, (cols, rows), scrollback);
+        }
+        None => screen.feed(logs.as_bytes()),
+    }
     let _ = screen.take_passthroughs();
     // The log holds only recent output: a mode the program set before it (focus events, cursor
     // keys) comes from the daemon's screen, which has seen everything. Asked after the log, so a
     // change in between also arrives on the stream past `next`.
-    if let Ok(Some(modes)) = client.status(name).await.map(|info| info.modes) {
+    if let Some(modes) = info.and_then(|info| info.modes) {
         screen.set_modes(modes);
     }
     Some((screen, next))
