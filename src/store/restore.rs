@@ -4,14 +4,12 @@ use crate::store::{PaneSnapshot, RestorePlan, SessionSnapshot, WindowPlan, Windo
 
 /// Restores PTY panes with their original command or configured resume command in their last cwd;
 /// non-PTY task panes are not restored. Windows left without panes are dropped.
-pub fn plan_restore(
-    snapshot: &SessionSnapshot,
-    rules: &[ResumeRule],
-) -> RestorePlan {
+pub fn plan_restore(snapshot: &SessionSnapshot, rules: &[ResumeRule]) -> RestorePlan {
     let planned: Vec<Option<WindowPlan>> = snapshot
         .windows
         .iter()
-        .map(|window| plan_window(window, rules))
+        .enumerate()
+        .map(|(position, window)| plan_window(window, position, rules))
         .collect();
     RestorePlan {
         active_window: remap_active(snapshot.active_window, &planned),
@@ -44,6 +42,7 @@ fn remap_active(active: usize, planned: &[Option<WindowPlan>]) -> usize {
 
 fn plan_window(
     window: &WindowSnapshot,
+    position: usize,
     rules: &[ResumeRule],
 ) -> Option<WindowPlan> {
     let planned: Vec<(SpawnOpts, Option<String>)> = window
@@ -73,6 +72,7 @@ fn plan_window(
         .filter(|name| leaves.contains(name))
         .or_else(|| leaves.first().cloned());
     Some(WindowPlan {
+        number: window.number.unwrap_or(position),
         name: window.renamed.then(|| window.name.clone()),
         layout,
         focused,
@@ -130,7 +130,11 @@ fn plan_pane(pane: &PaneSnapshot, rules: &[ResumeRule]) -> (SpawnOpts, Option<St
         return (original, None);
     };
 
-    let argv = if let Some(id) = pane.session_id.as_deref().filter(|_| !rule.resume.is_empty()) {
+    let argv = if let Some(id) = pane
+        .session_id
+        .as_deref()
+        .filter(|_| !rule.resume.is_empty())
+    {
         fill(&rule.resume, id)
     } else if !rule.fallback.is_empty() {
         rule.fallback.clone()

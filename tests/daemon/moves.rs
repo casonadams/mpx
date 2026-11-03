@@ -3,9 +3,12 @@ use std::time::Duration;
 
 use mpx::client::Client;
 use mpx::layout::Rect;
-use mpx::protocol::{NewWindowOpts, NodeInfo, SpawnOpts};
+use mpx::protocol::{NodeInfo, SpawnOpts};
 
-use super::support::{connect, exit_code, logs_until, split_right, start, task};
+use super::support::{
+    connect, exit_code, fresh, logs_until, split_right, start, started_with, tab_states, task,
+    three_windows, window,
+};
 
 fn names(layout: &[(String, Rect, bool)]) -> Vec<String> {
     layout.iter().map(|p| p.0.clone()).collect()
@@ -21,24 +24,9 @@ async fn node(client: &mut Client, name: &str) -> NodeInfo {
         .expect("node exists")
 }
 
-fn window(label: &str, pane: &str) -> NewWindowOpts {
-    NewWindowOpts {
-        name: Some(label.to_string()),
-        spawn: task(pane, "cat", &[]),
-        focus: true,
-    }
-}
-
-async fn tabs(client: &mut Client) -> Vec<(String, bool)> {
-    let (_, _, tabs) = client.layout(80, 24).await.unwrap();
-    tabs.into_iter().map(|t| (t.name, t.is_active)).collect()
-}
-
 #[tokio::test]
 async fn respawn_refuses_a_running_pane_unless_it_is_killed() {
-    let daemon = start().await;
-    let mut client = connect(&daemon.endpoint).await;
-    client.spawn(task("p", "cat", &[])).await.unwrap();
+    let (_daemon, mut client) = started_with(task("p", "cat", &[])).await;
 
     let err = client.respawn("p", false, None, None).await.unwrap_err();
     assert!(err.contains("still active"), "{err}");
@@ -100,24 +88,27 @@ async fn respawn_with_kill_replaces_the_process_and_keeps_its_slot() {
 
 #[tokio::test]
 async fn respawn_of_an_unknown_pane_is_an_error() {
-    let daemon = start().await;
-    let mut client = connect(&daemon.endpoint).await;
+    let (_daemon, mut client) = fresh().await;
     assert!(client.respawn("nope", true, None, None).await.is_err());
 }
 
 #[tokio::test]
-async fn swap_window_exchanges_two_windows_and_the_active_one_stays_active() {
+async fn moving_and_swapping_windows_keeps_the_active_window_the_same_window() {
     let daemon = start().await;
     let mut client = connect(&daemon.endpoint).await;
-    for (label, pane) in [("a", "pa"), ("b", "pb"), ("c", "pc")] {
-        client.new_window(window(label, pane)).await.unwrap();
-    }
-    client.select_window(0).await.unwrap();
+    three_windows(&mut client).await;
+
+    client.move_window(0, 2).await.unwrap();
+    assert_eq!(
+        tab_states(&mut client).await,
+        [("b".into(), false), ("c".into(), false), ("a".into(), true)]
+    );
+    assert!(client.move_window(9, 0).await.is_err());
 
     client.swap_window(0, 2).await.unwrap();
     assert_eq!(
-        tabs(&mut client).await,
-        [("c".into(), false), ("b".into(), false), ("a".into(), true)]
+        tab_states(&mut client).await,
+        [("a".into(), true), ("c".into(), false), ("b".into(), false)]
     );
     assert!(client.swap_window(0, 9).await.is_err());
 }

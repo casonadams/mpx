@@ -99,7 +99,10 @@ async fn overlays_open_show_their_text_and_close_on_their_key() {
 async fn commands_and_keys_report_their_outcome_on_the_status_row() {
     let cases = [
         (Opener::Command("clock-mode -t nowhere"), "no pane nowhere"),
-        (Opener::Command("display-message window #{window_index}"), "window 0"),
+        (
+            Opener::Command("display-message window #{window_index}"),
+            "window 0",
+        ),
         (Opener::Prefixed(')'), "no other session"),
     ];
     for (opener, want) in cases {
@@ -226,11 +229,13 @@ fn the_system_clock_reads_a_valid_local_time() {
 #[tokio::test]
 async fn buffer_and_environment_prompt_commands_show_the_daemons_state() {
     let mut h = Harness::start(Config::default(), ECHO).await;
-    h.command("set-buffer -b prompt-made hello-from-prompt").await;
+    h.command("set-buffer -b prompt-made hello-from-prompt")
+        .await;
     h.command("set-environment PROMPT_WORD marigold").await;
     h.frame().await;
 
-    h.command("list-buffers -F #{buffer_name}=#{buffer_size}").await;
+    h.command("list-buffers -F #{buffer_name}=#{buffer_size}")
+        .await;
     let listed = h.frame().await;
     assert!(listed.contains("prompt-made=17"), "{listed}");
     h.key(KeyCode::Esc).await;

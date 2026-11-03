@@ -1,21 +1,24 @@
 //! Draws one frame from app state. Wrapped in a DEC 2026 synchronized update so it lands atomically.
+use super::style::{self, Style, over_colours};
 use std::io::{self, Write};
 
 use super::app::{App, Mode};
 use super::copy::{CopyState, SelectionKind};
 use super::labels::{clock_lines, label, label_rect, pane_numbers};
 use super::panes::PaneRect;
-use super::render::{
-    Compositor, DividerStyle, PaneColors, RenderPaneContext, SelectionRange, hud_rect,
-    parse_color,
-};
 use super::render::draw_status_segments;
+use super::render::{
+    Compositor, DividerStyle, PaneColors, RenderPaneContext, SelectionRange, hud_rect, parse_color,
+};
 use super::status::{exit_badge, node_named};
 use super::status::{local_utc_offset, pane_items};
-use super::statusline::{Item, Line, Seg, Target, compose, parse_styled, status_vars, strftime, truncate};
+use super::statusline::{
+    Item, Line, Seg, Target, compose, parse_styled, status_lists, status_vars, strftime, truncate,
+};
+use crate::config::Justify;
+use crate::format::{Lists, expand_with};
 use crate::layout::geometry::Rect;
 use crate::protocol::NodeInfo;
-use crate::format::expand;
 use crate::vt::Color as VtColor;
 use crate::vt::VtScreen;
 use crate::vt::grid::Grid;
@@ -73,21 +76,7 @@ pub fn draw_body<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
     app.canvas.begin(screen_w, screen_h, covered);
     draw_panes(app, out)?;
     if !app.zoomed() && !app.layout.dividers.is_empty() {
-        let style = DividerStyle {
-            active_color: parse_color(&app.config.style.border_active)
-                .unwrap_or(VtColor::BrightGreen),
-            inactive_color: parse_color(&app.config.style.border_inactive)
-                .unwrap_or(VtColor::BrightBlack),
-            marked_color: parse_color(&app.config.style.border_marked)
-                .unwrap_or(VtColor::BrightMagenta),
-            border_style: app.config.style.border_style,
-            bg: app
-                .config
-                .style
-                .dim_inactive
-                .then(|| PaneColors::new(&app.config.style, app.host_colors).inactive_default_bg())
-                .flatten(),
-        };
+        let style = divider_style(app);
         Compositor::draw_dividers(
             &mut app.canvas,
             out,
@@ -99,6 +88,7 @@ pub fn draw_body<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
     }
     app.canvas.finish(out)?;
     draw_status_row(app, out)?;
+    draw_status_extra(app, out)?;
     match &app.mode {
         Mode::Panes { .. } => draw_pane_numbers(app, out)?,
         Mode::Clock { pane } => draw_clock(app, pane, out)?,
@@ -231,22 +221,109 @@ fn draw_status_row<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
     Ok(())
 }
 
+/// The status rows below the first, each drawing its `status-format` with the active pane's
+/// variables. Drawn on every frame, so a message or overlay that covered a row never leaves it stale.
+fn draw_status_extra<W: Write>(app: &App, out: &mut W) -> io::Result<()> {
+    let first = app.rows.status.unwrap_or(0);
+    let width = usize::from(app.viewport.0);
+    let bg = parse_color(&app.config.style.status_bg);
+    let fg = parse_color(&app.config.style.status_fg);
+    let vars = active_vars(app);
+    let lists = loop_lists(app);
+    let now = crate::node::now_ms();
+    for y in app.rows.extra_status_rows() {
+        let fmt = app
+            .config
+            .status_format
+            .get(usize::from(y - first))
+            .map_or("", String::as_str);
+        let cells = truncate(format_status(fmt, &vars, &lists, now), width);
+        let line = compose(width, cells, Vec::new(), "", Vec::new(), Justify::Left);
+        draw_status_segments(out, &line.segs, y, bg, fg)?;
+    }
+    Ok(())
+}
+
+/// The borders' colours: each pane's border colour and background, the style strings over them.
+fn divider_style(app: &App) -> DividerStyle {
+    let borders = &app.config.style;
+    let active = over_colours(
+        &borders.border_active,
+        "",
+        &borders.pane_active_border_style,
+    )
+    .unwrap_or_default();
+    let inactive =
+        over_colours(&borders.border_inactive, "", &borders.pane_border_style).unwrap_or_default();
+    DividerStyle {
+        active_color: active.fg.unwrap_or(VtColor::BrightGreen),
+        inactive_color: inactive.fg.unwrap_or(VtColor::BrightBlack),
+        marked_color: parse_color(&borders.border_marked).unwrap_or(VtColor::BrightMagenta),
+        border_style: borders.border_style,
+        bg: app
+            .config
+            .style
+            .dim_inactive
+            .then(|| PaneColors::new(&app.config.style, app.host_colors).inactive_default_bg())
+            .flatten(),
+        active_bg: active.bg,
+        inactive_bg: inactive.bg,
+    }
+}
+
 /// Message row or status line: the message row when a prompt, confirmation, copy-mode search or
 /// live message is up, else the status line (nothing when the status line is hidden).
 fn status_row(app: &mut App, out: &mut Vec<u8>) -> io::Result<()> {
     let width = app.viewport.0;
     if let Some(text) = chrome_text(app) {
-        return Compositor::draw_command_line(out, &text, app.rows.prompt, width);
+        let style = chrome_style(app);
+        return Compositor::draw_command_line(out, &text, app.rows.prompt, width, &style);
     }
     let Some(y) = app.rows.status else {
         return Ok(());
     };
-    let bg = parse_color(&app.config.style.status_bg);
-    let fg = parse_color(&app.config.style.status_fg);
-    let line = status_line(app, width as usize);
+    let config = &app.config.style;
+    let row = over_colours(&config.status_fg, &config.status_bg, &config.status_style)
+        .unwrap_or_default();
+    let bg = parse_color(&config.status_bg);
+    let fg = parse_color(&config.status_fg);
+    let mut line = match app
+        .config
+        .status_format
+        .first()
+        .filter(|fmt| !fmt.is_empty())
+    {
+        Some(fmt) => override_line(app, fmt, width as usize),
+        None => status_line(app, width as usize),
+    };
+    for seg in &mut line.segs {
+        seg.style = row.over(&seg.style);
+    }
     draw_status_segments(out, &line.segs, y, bg, fg)?;
     app.status_targets = line.targets;
     Ok(())
+}
+
+/// The main status line when `status-format[0]` is set: that format alone, with no window list.
+fn override_line(app: &App, fmt: &str, width: usize) -> Line {
+    let vars = active_vars(app);
+    let lists = loop_lists(app);
+    let cells = truncate(
+        format_status(fmt, &vars, &lists, crate::node::now_ms()),
+        width,
+    );
+    compose(width, cells, Vec::new(), "", Vec::new(), Justify::Left)
+}
+
+/// The style of the message row: the command style while a prompt, a confirmation or a search
+/// is up, else the message style.
+fn chrome_style(app: &App) -> Style {
+    let spec = match &app.mode {
+        Mode::Prompt(_) | Mode::Confirm(..) => &app.config.style.message_command_style,
+        Mode::Copy(cs) if cs.search_prompt.is_some() => &app.config.style.message_command_style,
+        _ => &app.config.style.message_style,
+    };
+    style::parse(spec).unwrap_or_default()
 }
 
 /// The text of the message row when it replaces the status line.
@@ -269,25 +346,55 @@ fn chrome_text(app: &App) -> Option<String> {
 fn status_line(app: &App, width: usize) -> Line {
     let config = &app.config;
     let zoomed = app.zoomed();
-    let base = config.base_index;
-    let tab = app.layout.tabs.iter().find(|t| t.is_active);
+    let vars = active_vars(app);
+    let lists = loop_lists(app);
+    let now = crate::node::now_ms();
+    let left = truncate(
+        format_status(&config.status_left, &vars, &lists, now),
+        config.status_left_length,
+    );
+    let right = truncate(
+        format_status(&config.status_right, &vars, &lists, now),
+        config.status_right_length,
+    );
+    let (items, separator) = window_items(app, zoomed, &lists);
+    compose(width, left, items, &separator, right, config.status_justify)
+}
+
+/// The variables status formats expand with: the active pane's and the current window's.
+fn active_vars(app: &App) -> crate::format::Vars {
     let focused = app
         .nodes
         .iter()
         .find(|n| n.name == app.active_pane)
         .map(|n| format_view(app, n));
-    let vars = status_vars(&app.session, focused.as_ref(), tab, zoomed, base);
-    let now = crate::node::now_ms();
-    let left = truncate(format_status(&config.status_left, &vars, now), config.status_left_length);
-    let right = truncate(format_status(&config.status_right, &vars, now), config.status_right_length);
-    let (items, separator) = window_items(app, zoomed);
-    compose(width, left, items, &separator, right, config.status_justify)
+    let tab = app.layout.tabs.iter().find(|t| t.is_active);
+    status_vars(
+        &app.session,
+        focused.as_ref(),
+        tab,
+        app.zoomed(),
+        app.config.base_index,
+    )
+}
+
+/// The lists the loop formats iterate over: every window and the panes of the current window.
+fn loop_lists(app: &App) -> Lists {
+    let panes: Vec<crate::format::PaneView> =
+        app.nodes.iter().map(|n| format_view(app, n)).collect();
+    status_lists(
+        &app.session,
+        &app.layout.tabs,
+        &panes,
+        app.zoomed(),
+        app.config.base_index,
+    )
 }
 
 /// A status format expanded, styled by its `#[...]` directives, with strftime applied to its text.
-fn format_status(fmt: &str, vars: &crate::format::Vars, now: u64) -> Vec<Seg> {
+fn format_status(fmt: &str, vars: &crate::format::Vars, lists: &Lists, now: u64) -> Vec<Seg> {
     let offset = local_utc_offset(now);
-    parse_styled(&expand(fmt, vars))
+    parse_styled(&expand_with(fmt, vars, lists))
         .into_iter()
         .map(|seg| Seg {
             text: strftime(&seg.text, now, offset),
@@ -298,9 +405,8 @@ fn format_status(fmt: &str, vars: &crate::format::Vars, now: u64) -> Vec<Seg> {
 
 /// The window list: clickable tabs (mpx's own, or built from `window-status-format`), or pane names
 /// when the session has no windows. Returns the items and the separator between them.
-fn window_items(app: &App, zoomed: bool) -> (Vec<Item>, String) {
+fn window_items(app: &App, zoomed: bool, lists: &Lists) -> (Vec<Item>, String) {
     let config = &app.config;
-    let base = config.base_index;
     if app.layout.tabs.is_empty() {
         let marked = app.layout.marked_pane_global();
         return (pane_items(&app.panes, zoomed, marked), String::new());
@@ -309,25 +415,45 @@ fn window_items(app: &App, zoomed: bool) -> (Vec<Item>, String) {
         .layout
         .tabs
         .iter()
-        .map(|tab| {
+        .zip(&lists.windows)
+        .map(|(tab, vars)| {
             let fmt = if tab.is_active {
                 &config.window_status_current_format
             } else {
                 &config.window_status_format
             };
-            let focused = app
-                .nodes
-                .iter()
-                .find(|n| n.window == Some(tab.index))
-                .map(|n| format_view(app, n));
-            let vars = status_vars(&app.session, focused.as_ref(), Some(tab), zoomed, base);
+            let tab_look = tab_style(&config.style, tab);
             Item {
-                segs: parse_styled(&expand(fmt, &vars)),
+                segs: parse_styled(&expand_with(fmt, vars, lists))
+                    .into_iter()
+                    .map(|seg| Seg {
+                        style: tab_look.over(&seg.style),
+                        ..seg
+                    })
+                    .collect(),
                 target: Some(Target::Window(tab.index)),
             }
         })
         .collect();
     (items, config.window_status_separator.clone())
+}
+
+/// The style of a window tab: `window-status-style`, then those of the tab's last, current,
+/// activity and bell state, each laid over the one before.
+fn tab_style(config: &crate::config::StyleConfig, tab: &crate::layout::WindowTab) -> Style {
+    let layers = [
+        (true, &config.window_status_style),
+        (tab.is_last, &config.window_status_last_style),
+        (tab.is_active, &config.window_status_current_style),
+        (tab.has_activity, &config.window_status_activity_style),
+        (tab.has_bell, &config.window_status_bell_style),
+    ];
+    layers
+        .into_iter()
+        .filter(|(on, _)| *on)
+        .fold(Style::default(), |style, (_, spec)| {
+            style.over(&style::parse(spec).unwrap_or_default())
+        })
 }
 
 /// The format view of `node`, numbered the way `#{window_index}` and `#{pane_index}` show it.
@@ -338,8 +464,7 @@ fn format_view(app: &App, node: &crate::protocol::NodeInfo) -> crate::format::Pa
         .filter(|n| n.window == node.window)
         .position(|n| n.id == node.id)
         .unwrap_or(0);
-    let mut view =
-        crate::format::pane_view(&app.session, slot, node, &app.panes, &app.layout.tabs);
+    let mut view = crate::format::pane_view(&app.session, slot, node, &app.panes, &app.layout.tabs);
     view.in_mode = app.parked_copy.contains_key(&node.name)
         || (matches!(app.mode, Mode::Copy(_)) && node.name == app.active_pane);
     view.window_base = app.config.base_index;
@@ -349,20 +474,7 @@ fn format_view(app: &App, node: &crate::protocol::NodeInfo) -> crate::format::Pa
 
 /// `fmt` expanded the way the status line expands its formats: the active pane's variables.
 pub fn expand_active(app: &App, fmt: &str) -> String {
-    let focused = app
-        .nodes
-        .iter()
-        .find(|n| n.name == app.active_pane)
-        .map(|n| format_view(app, n));
-    let tab = app.layout.tabs.iter().find(|t| t.is_active);
-    let vars = status_vars(
-        &app.session,
-        focused.as_ref(),
-        tab,
-        app.zoomed(),
-        app.config.base_index,
-    );
-    expand(fmt, &vars)
+    expand_with(fmt, &active_vars(app), &loop_lists(app))
 }
 
 /// Places and shows (or hides) the terminal cursor where the frame wants it.

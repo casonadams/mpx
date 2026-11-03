@@ -14,8 +14,9 @@ mod tui {
     mod prompt;
     mod render;
     mod status;
-    mod stream;
-    mod statusline;
     mod status_bytes;
+    mod statusline;
+    mod stream;
+    mod style;
     mod terminal;
 }

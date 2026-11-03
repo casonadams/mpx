@@ -1,8 +1,9 @@
 //! Format expansion (`#{...}`) and the variables panes and sessions provide.
-use mpx::layout::{Rect, WindowTab};
 use mpx::format::{
-    DEFAULT_BUFFER_FORMAT, PaneView, Vars, buffer_sample, buffer_vars, expand, pane_vars, pane_view,
+    DEFAULT_BUFFER_FORMAT, Lists, PaneView, Vars, buffer_sample, buffer_vars, expand, expand_with,
+    pane_vars, pane_view,
 };
+use mpx::layout::{Rect, WindowTab};
 use mpx::protocol::{Buffer, NodeInfo};
 
 fn vars(pairs: &[(&'static str, &str)]) -> Vars {
@@ -276,7 +277,10 @@ fn window_counts_come_from_the_pane_view() {
         session_windows: 2,
         ..Default::default()
     };
-    assert_eq!(expand("#{window_panes}/#{session_windows}", &pane_vars(&p)), "3/2");
+    assert_eq!(
+        expand("#{window_panes}/#{session_windows}", &pane_vars(&p)),
+        "3/2"
+    );
 }
 
 #[test]
@@ -340,11 +344,206 @@ fn the_list_buffers_format_describes_each_buffer() {
         expand(DEFAULT_BUFFER_FORMAT, &vars),
         "buffer0000: 11 bytes: \"hello\\nworld\""
     );
-    assert_eq!(expand("#{buffer_name}=#{buffer_size}", &vars), "buffer0000=11");
+    assert_eq!(
+        expand("#{buffer_name}=#{buffer_size}", &vars),
+        "buffer0000=11"
+    );
 }
 
 #[test]
 fn buffer_samples_keep_fifty_characters_and_escape_control_bytes() {
-    assert_eq!(buffer_sample(&"x".repeat(60)), format!("{}...", "x".repeat(50)));
+    assert_eq!(
+        buffer_sample(&"x".repeat(60)),
+        format!("{}...", "x".repeat(50))
+    );
     assert_eq!(buffer_sample("a\tb\u{7}"), "a\\tb?");
+}
+
+#[test]
+fn match_operator_globs_or_matches_a_regex() {
+    let v = vars(&[("name", "build-42")]);
+    assert_expands(
+        &v,
+        &[
+            ("#{m:build*,#{name}}", "1"),
+            ("#{m:b?ild-4[0-9],#{name}}", "1"),
+            ("#{m:[!b]*,#{name}}", "0"),
+            ("#{m:BUILD*,#{name}}", "0"),
+            ("#{m/i:BUILD*,#{name}}", "1"),
+            ("#{m/r:^build-\\d+$,#{name}}", "1"),
+            ("#{m/r:^deploy,#{name}}", "0"),
+            ("#{m/r:(,#{name}}", "0"),
+        ],
+    );
+}
+
+#[test]
+fn arithmetic_operator_computes_integers_and_floats() {
+    let v = base_vars();
+    assert_expands(
+        &v,
+        &[
+            ("#{e|+:2,3}", "5"),
+            ("#{e|-:2,5}", "-3"),
+            ("#{e|*:4,6}", "24"),
+            ("#{e|/:7,2}", "3"),
+            ("#{e|%:7,2}", "1"),
+            ("#{e|/:7,0}", "0"),
+            ("#{e|m:4,9}", "4"),
+            ("#{e|M:4,9}", "9"),
+            ("#{e|+|f|2:1.5,2.25}", "3.75"),
+            ("#{e|+:#{window_index},1}", "3"),
+        ],
+    );
+}
+
+#[test]
+fn time_operator_prints_local_ctime_layout() {
+    let v = vars(&[("now", "0"), ("bad", "soon")]);
+    let local = expand("#{t:now}", &v);
+    assert_eq!(local.split_whitespace().count(), 5, "{local:?}");
+    assert!(local.ends_with(|c: char| c.is_ascii_digit()), "{local:?}");
+    assert_eq!(expand("#{t:bad}", &v), "");
+}
+
+#[test]
+fn window_flags_and_pane_edges_are_exposed_as_variables() {
+    let tabs = vec![WindowTab {
+        is_active: true,
+        has_activity: true,
+        has_silence: true,
+        has_bell: true,
+        is_last: true,
+        ..tab(0)
+    }];
+    let left = Rect::new(0, 0, 40, 10);
+    let right = Rect::new(40, 0, 40, 10);
+    let rects = vec![
+        ("a".to_string(), left, true),
+        ("b".to_string(), right, false),
+    ];
+    let a = pane_vars(&pane_view("dev", 0, &node("a", 0), &rects, &tabs));
+    assert_expands(
+        &a,
+        &[
+            (
+                "#{window_activity_flag}#{window_bell_flag}#{window_silence_flag}#{window_last_flag}",
+                "1111",
+            ),
+            ("#{window_marked_flag}", "0"),
+            (
+                "#{pane_at_left}#{pane_at_top}#{pane_at_right}#{pane_at_bottom}",
+                "1101",
+            ),
+            ("#{window_flags}", "#!~*-"),
+        ],
+    );
+    let b = pane_vars(&pane_view("dev", 0, &node("b", 0), &rects, &tabs));
+    assert_expands(&b, &[("#{pane_at_left}#{pane_at_right}", "01")]);
+}
+
+#[test]
+fn window_loop_expands_body_once_per_window() {
+    let lists = Lists {
+        windows: vec![
+            vars(&[("window_index", "1"), ("window_name", "shell")]),
+            vars(&[("window_index", "2"), ("window_name", "logs")]),
+        ],
+        ..Lists::default()
+    };
+    assert_eq!(
+        expand_with("#{W:#{window_index}=#{window_name} }", &Vars::new(), &lists),
+        "1=shell 2=logs "
+    );
+}
+
+#[test]
+fn pane_loop_expands_body_once_per_pane() {
+    let lists = Lists {
+        panes: vec![
+            vars(&[("pane_index", "0"), ("pane_active", "1")]),
+            vars(&[("pane_index", "1"), ("pane_active", "0")]),
+        ],
+        ..Lists::default()
+    };
+    assert_eq!(
+        expand_with("#{P:#{pane_index}#{?pane_active,*,}}", &Vars::new(), &lists),
+        "0*1"
+    );
+}
+
+#[test]
+fn session_loop_expands_once_for_the_session() {
+    let lists = Lists {
+        sessions: vec![vars(&[("session_name", "work")])],
+        ..Lists::default()
+    };
+    assert_eq!(
+        expand_with("#{S:#{session_name}}", &Vars::new(), &lists),
+        "work"
+    );
+}
+
+#[test]
+fn loops_over_empty_lists_expand_to_nothing() {
+    assert_eq!(
+        expand(
+            "x#{W:#{window_index}}y#{P:#{pane_index}}z#{S:#{session_name}}",
+            &Vars::new()
+        ),
+        "xyz"
+    );
+}
+
+#[test]
+fn loop_body_may_nest_conditionals_and_escapes() {
+    let lists = Lists {
+        windows: vec![
+            vars(&[("window_active", "1"), ("window_name", "shell")]),
+            vars(&[("window_active", "0"), ("window_name", "logs")]),
+        ],
+        ..Lists::default()
+    };
+    assert_eq!(
+        expand_with(
+            "#{W:#{?window_active,[#{window_name}],#{window_name}}}",
+            &Vars::new(),
+            &lists
+        ),
+        "[shell]logs"
+    );
+    assert_eq!(
+        expand_with("#{W:a#,b#}c}", &Vars::new(), &lists),
+        "a,b}ca,b}c"
+    );
+}
+
+#[test]
+fn cursor_and_history_come_from_the_node_when_it_is_a_terminal() {
+    let mut terminal = node("p", 0);
+    terminal.cursor = Some((3, 1));
+    terminal.history_size = Some(40);
+    let v = pane_vars(&pane_view("dev", 0, &terminal, &[], &[]));
+    assert_expands(&v, &[("#{cursor_x},#{cursor_y},#{history_size}", "3,1,40")]);
+    let task = pane_vars(&pane_view("dev", 0, &node("t", 0), &[], &[]));
+    assert_expands(&task, &[("#{cursor_x}|#{history_size}|", "||")]);
+}
+
+#[test]
+fn pretty_time_shows_the_clock_for_recent_times_and_the_day_for_older_ones() {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let stamp = now.to_string();
+    let v = vars(&[("now", stamp.as_str()), ("old", "1000000000"), ("bad", "x")]);
+    let recent = expand("#{t/p:now}", &v);
+    assert_eq!(recent.len(), 5, "{recent:?}");
+    assert_eq!(recent.as_bytes()[2], b':', "{recent:?}");
+    let older = expand("#{t/p:old}", &v);
+    assert!(
+        older.len() > 5 && older.chars().next().is_some_and(char::is_alphabetic),
+        "{older:?}"
+    );
+    assert_eq!(expand("#{t/p:bad}", &v), "");
 }

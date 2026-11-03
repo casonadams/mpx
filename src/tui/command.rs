@@ -90,10 +90,12 @@ pub enum Command {
     RotateWindow {
         down: bool,
     },
-    /// `move-window -t index`: moves the active window to that index.
+    /// `move-window -t index`: moves the active window to that index (`-r` renumbers instead).
     MoveWindow {
         to: usize,
     },
+    /// `move-window -r`: renumbers the windows 0, 1, ... in order.
+    RenumberWindows,
     /// `display-message [-p] [format]`: the expanded format on the status row; with no format it
     /// describes the current pane.
     DisplayMessage {
@@ -178,6 +180,12 @@ pub enum Command {
     /// `select-layout -E`: spread the panes evenly, keeping their arrangement.
     SpreadLayout,
     Zoom,
+    /// `set-option [-g] synchronize-panes on|off`: typed input goes to every pane of the active
+    /// window (every window with `-g`).
+    SetSynchronize {
+        all: bool,
+        on: bool,
+    },
     /// `copy-mode [-eHMqu] [-t pane]`: enters copy mode, or with `quit` leaves it.
     CopyMode(CopyModeOpts),
     /// `send-keys -X command [args]`: runs one copy-mode command in the copy mode of `target`
@@ -435,7 +443,10 @@ fn bind_key(name: &str, args: &[String]) -> Result<Command, String> {
         return Err(format!("{name}: need a command for key {key}"));
     }
     if table.is_copy() && !is_copy_command(command) {
-        return Err(format!("{name}: {} takes only send-keys -X commands", table.name()));
+        return Err(format!(
+            "{name}: {} takes only send-keys -X commands",
+            table.name()
+        ));
     }
     Ok(Command::Bind {
         table,
@@ -567,7 +578,9 @@ fn misc_cmd(name: &str, args: &[String]) -> Option<Result<Command, String>> {
         "show-messages" | "showmsgs" => bare(name, args, Command::ShowMessages),
         "list-buffers" | "lsb" => list_buffers(name, args),
         "set-buffer" | "setb" => set_buffer(name, args),
-        "show-buffer" | "showb" => named_buffer(name, args, |name| BufferCommand::ShowBuffer { name }),
+        "show-buffer" | "showb" => {
+            named_buffer(name, args, |name| BufferCommand::ShowBuffer { name })
+        }
         "delete-buffer" | "deleteb" => {
             named_buffer(name, args, |name| BufferCommand::DeleteBuffer { name })
         }
@@ -624,11 +637,14 @@ fn rotate_window(name: &str, args: &[String]) -> Result<Command, String> {
 }
 
 fn move_window(name: &str, args: &[String]) -> Result<Command, String> {
-    let o = parse_opts(name, args, KILL_TARGET)?;
+    let o = parse_opts(name, args, MOVE_WINDOW)?;
     o.no_rest(name)?;
+    if o.has("-r") {
+        return Ok(Command::RenumberWindows);
+    }
     let raw = o
         .value("-t")
-        .ok_or_else(|| format!("{name}: need -t <index>"))?;
+        .ok_or_else(|| format!("{name}: need -t <index> or -r"))?;
     let to = parse_index(raw).map_err(|_| format!("{name}: invalid window index '{raw}'"))?;
     Ok(Command::MoveWindow { to })
 }
@@ -709,7 +725,7 @@ fn display_message(name: &str, args: &[String]) -> Result<Command, String> {
 }
 
 const SET_OPTION: Spec = Spec {
-    bools: &["-g", "-w", "-s", "-q", "-u"],
+    bools: &["-g", "-w", "-s", "-p", "-q", "-u"],
     values: &[],
     stop_at_arg: false,
 };
@@ -721,6 +737,14 @@ const SHOW_OPTIONS: Spec = Spec {
 
 fn set_option(name: &str, args: &[String]) -> Result<Command, String> {
     let o = parse_opts(name, args, SET_OPTION)?;
+    if o.has("-p") {
+        return Err(format!("{name}: mpx has no pane options"));
+    }
+    if o.has("-s") {
+        return Err(format!(
+            "{name}: mpx has no server options to set at run time"
+        ));
+    }
     let unset = o.has("-u");
     let (option, value) = match o.rest.as_slice() {
         [option] if unset => (option, None),
@@ -729,6 +753,17 @@ fn set_option(name: &str, args: &[String]) -> Result<Command, String> {
         [_] => return Err(format!("{name}: need a value")),
         _ => return Err(format!("{name}: too many arguments")),
     };
+    if option.as_str() == "synchronize-panes" {
+        let on = match &value {
+            Some(v) => crate::config::parse_switch(v)
+                .map_err(|_| format!("{name}: synchronize-panes takes on or off"))?,
+            None => false,
+        };
+        return Ok(Command::SetSynchronize {
+            all: o.has("-g"),
+            on,
+        });
+    }
     Ok(Command::SetOption {
         name: option.clone(),
         value,
@@ -774,6 +809,12 @@ const NEW_WINDOW: Spec = Spec {
 };
 const KILL_TARGET: Spec = Spec {
     bools: &[],
+    values: &["-t"],
+    stop_at_arg: false,
+};
+
+const MOVE_WINDOW: Spec = Spec {
+    bools: &["-r"],
     values: &["-t"],
     stop_at_arg: false,
 };

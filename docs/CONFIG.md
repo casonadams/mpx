@@ -95,6 +95,7 @@ fallback = ["nvim", "-c", "silent! source Session.vim"]
 | `automatic_rename` | bool | `true` | Daemon | Name each window after its foreground process. `false` keeps the name it was created with. |
 | `monitor_activity` | bool | `true` | Daemon | Flag background windows that print output (`#` in the window list). Flags are tracked while a terminal is attached. |
 | `monitor_bell` | bool | `true` | Daemon | Flag background windows whose panes ring the bell (`!`); same rule as `monitor_activity`. |
+| `monitor_silence` | integer (seconds) | `0` | Daemon | Flag a background window `~` once it has printed nothing for this many seconds (tmux `monitor-silence`); `0` is off. Same rule as `monitor_activity`. |
 | `default_terminal` | string | `"xterm-256color"` | Daemon | `TERM` exported to panes started after the setting. |
 | `default_shell` | string (absolute path) | unset, so `$SHELL` | Daemon | Program that a pane started without a command runs. |
 | `default_command` | string | unset | Daemon | Command line run through the default shell by a pane started without a command. |
@@ -102,6 +103,8 @@ fallback = ["nvim", "-c", "silent! source Session.vim"]
 | `pane_base_index` | integer | `0` | TUI | Number of the first pane of a window as `#{pane_index}` shows it (tmux `pane-base-index`). |
 | `mouse` | bool | `true` | TUI | `false` turns the terminal's mouse reporting off and ignores mouse events. |
 | `status` | bool | `true` | TUI | Show the status line. `false` gives its row to the panes; messages and prompts then use the bottom row. |
+| `status_lines` | integer `1`..`5` | `1` | TUI | Rows the status line takes (tmux `status 2`..`5`). Rows after the first show `status_format`. |
+| `status_format` | list of strings (tmux format) | empty | TUI | `status_format[N]` is drawn on status row N. A non-empty entry 0 replaces the main status line (window list and `status_left`/`status_right` included). |
 | `status_position` | `"top"` or `"bottom"` | `"bottom"` | TUI | Row the status line occupies. |
 | `status_interval` | integer (seconds) | `1` | TUI | Seconds between timed status redraws, which keep the clock current. `0` redraws only on events. |
 | `status_left`, `status_right` | string (tmux format) | `"[#{session_name}] "`, `"#{?pane_in_mode,[copy] ,}\"#{=21:pane_title}\" %H:%M %d-%b-%y"` | TUI | The left and right sides of the status line. Formats expand as in tmux; `#[fg=red,bold]`-style directives and strftime apply. The defaults are tmux's, plus a `[copy]` badge while the pane is in copy mode. |
@@ -111,6 +114,8 @@ fallback = ["nvim", "-c", "silent! source Session.vim"]
 | `display_time_ms` | integer | `3000` | TUI | Milliseconds a message stays on the status row (tmux `display-time`). |
 | `mode_keys` | `"vi"` or `"emacs"` | `"vi"` | TUI | Copy-mode key table (tmux `mode-keys`); see [KEYBINDINGS.md](KEYBINDINGS.md#emacs-copy-mode-mode-keys-emacs). |
 | `set_clipboard` | bool | `true` | TUI | `false` keeps copy-mode yanks off the system clipboard. They still go to the paste buffers. |
+| `synchronize_panes` | bool | `false` | TUI | Windows created afterwards start with `synchronize-panes` on: typed input reaches every running pane of the window. `set-option -w synchronize-panes` changes a window. |
+| `[style]` `status_style`, `message_style`, `message_command_style`, `pane_border_style`, `pane_active_border_style`, `window_status_style`, `window_status_current_style`, `window_status_activity_style`, `window_status_bell_style`, `window_status_last_style` | tmux style strings (see [tmux option names](#terminal-option-names)). | empty (no change) | TUI | A value that is not a valid style fails the file to load. |
 
 ### tmux option names
 
@@ -124,7 +129,7 @@ These tmux options have an mpx file key; `mpx import-tmux` maps them. Each row n
 | `automatic-rename on\|off` | `automatic_rename`. | `on` |
 | `monitor-activity on\|off` | `monitor_activity`. Background windows get the `#` flag on output, with or without an attached terminal. | `on` |
 | `monitor-bell on\|off` | `monitor_bell`. Background windows get the `!` flag on a bell. | `on` |
-| `monitor-silence N` | Not supported: `0` (off) is accepted, any other value is an error. | `0` |
+| `monitor-silence N` | `monitor_silence`: seconds without output after which a background window gets the `~` flag. `0` is off. | `0` |
 | `default-terminal` | `default_terminal`: `TERM` for panes started after the change. | `xterm-256color` |
 | `default-shell` | `default_shell`: program for panes started with no command. Must be an absolute path. | `$SHELL` |
 | `default-command` | `default_command`: run through the default shell by panes started with no command. Empty means the shell. | empty |
@@ -140,18 +145,20 @@ These tmux options are applied by the terminal UI.
 |---|---|---|
 | `base-index N` | `base_index`. Digit keys, `select-window -t`, `kill-window -t`, `move-window -t` and `#{window_index}` use it. | `0` |
 | `pane-base-index N` | `pane_base_index` for `#{pane_index}`. The display-panes numbers are not offset. | `0` |
-| `renumber-windows on` | Accepted: mpx always renumbers windows without gaps. `off` is refused with "renumber-windows off is not supported: windows are always renumbered". | `on` (tmux: `off`) |
+| `renumber-windows on\|off` | `renumber_windows`. `on` (default): closing a window renumbers the windows after it. `off`: windows keep their numbers and a new window takes the lowest free number; `move-window -r` renumbers them. | `on` (tmux: `off`) |
 | `mouse on\|off` | `mouse`. | `on` |
-| `status on\|off` | `status`. Multi-line counts (`2` to `5`) are refused. | `on` |
+| `status on\|off\|2`..`5` | `status`; a count shows that many status rows. `status-format[0]` replaces the main line; rows 1 and up draw `status-format[N]`, expanded with the focused pane's variables. | `on` (one row) |
 | `status-position top\|bottom` | `status_position`. | `bottom` |
 | `status-interval N` | `status_interval`. | `1` |
 | `status-left`, `status-right` | `status_left`, `status_right`. | `[#{session_name}] `, and `"#{=21:pane_title}" %H:%M %d-%b-%y` (mpx adds `#{?pane_in_mode,[copy] ,}` in front) |
 | `status-left-length`, `status-right-length` | `status_left_length`, `status_right_length`. | `10`, `40` |
-| `window-status-format`, `window-status-current-format`, `window-status-separator` | `window_status_format`, `window_status_current_format`, `window_status_separator`. Tab flags follow tmux's order (`#`, `!`, `*`, `Z`, `-`, `M`). | `#I:#W#{window_flags}`, same, ` ` |
+| `window-status-format`, `window-status-current-format`, `window-status-separator` | `window_status_format`, `window_status_current_format`, `window_status_separator`. Tab flags follow tmux's order (`#`, `!`, `~`, `*`, `Z`, `-`, `M`). | `#I:#W#{window_flags}`, same, ` ` |
+| `window-status-style`, `window-status-current-style`, `window-status-activity-style`, `window-status-bell-style`, `window-status-last-style` | `[style] window_status_style`, `window_status_current_style`, `window_status_activity_style`, `window_status_bell_style`, `window_status_last_style`. Each tab takes the styles that apply to it, laid in this order: all tabs, last, current, activity, bell. | none (no change) |
 | `status-justify left\|centre\|right` | `status_justify`. | `left` |
-| `status-style`, `status-bg`, `status-fg` | `[style] status_bg` / `status_fg`. Only `fg=` and `bg=` are accepted; attributes and `default` are refused. | `bg=green,fg=black` (mpx: `dark-green`, `black`) |
-| `pane-border-style fg=...`, `pane-active-border-style fg=...` | `[style] border_inactive` / `border_active`. A `bg=` item is refused. | mpx's border colours |
-| `message-style` | Refused: status messages use the status colours. | n/a |
+| `status-style`, `status-bg`, `status-fg` | `[style] status_style`, laid over `status_bg` / `status_fg`. A tmux style string: `fg=`/`bg=` colours and the attributes `bold`, `dim`, `underscore`, `italics`, `reverse` (with `no` forms), `default` and `none`. Other attributes (`blink`, `hidden`, `strikethrough`, ...) are refused. | `bg=green,fg=black` (mpx: `dark-green`, `black`) |
+| `pane-border-style`, `pane-active-border-style` | `[style] pane_border_style` / `pane_active_border_style`: a style over `border_inactive` / `border_active`. `fg=` sets the border colour and `bg=` the border's background. | mpx's border colours |
+| `message-style`, `message-command-style` | `[style] message_style` / `message_command_style`: the status row's message, and the command prompt, confirmation and search line. | white on black |
+| `synchronize-panes on\|off` | Window option: typed input goes to every running pane of the window. `set-option -g` sets every window. | `off` |
 | `mode-keys vi\|emacs` | `mode_keys`. | `vi` (tmux picks emacs unless `$VISUAL`/`$EDITOR` mentions vi) |
 | `display-time N` | `display_time_ms`. | `3000` (tmux: `750`) |
 | `display-panes-time N` | `display_panes_time_ms`. | `1000` |
@@ -203,14 +210,14 @@ vim.api.nvim_create_autocmd({ "VimLeavePre", "BufWritePost", "FocusLost" }, {
 
 ## Options at run time
 
-`:set-option NAME VALUE` (alias `set`; `-g`, `-w` and `-s` are accepted and ignored) changes an option of the terminal you type it in, with tmux's option names and values. `-u` restores the default, `-q` ignores an unknown name, and `--` ends the flags for a value that starts with `-`. `:show-options [-v] [NAME]` lists the values. A change lasts until `reload-config`, which re-reads the file, and applies at once; a value that does not parse, or a `prefix` that does not resolve, is refused with a message and changes nothing.
+`:set-option NAME VALUE` (alias `set`) changes an option of the terminal you type it in, with tmux's option names and values. Scope flags: `-w` and `-g` are the same for every option except `synchronize-panes` (a window option: `-w`, the default, changes the active window, `-g` every window); `-p` (pane options) and `-s` (server options) are refused, since mpx has neither kind at run time. `-u` restores the default, `-q` ignores an unknown name, and `--` ends the flags for a value that starts with `-`. `:show-options [-v] [NAME]` lists the values. A change lasts until `reload-config`, which re-reads the file, and applies at once; a value that does not parse, or a `prefix` that does not resolve, is refused with a message and changes nothing.
 
-Settable: `allow-passthrough`, `base-index`, `display-panes-time`, `display-time`, `mode-keys`, `mouse`, `pane-base-index`, `prefix`, `set-clipboard`, `status`, `status-interval`, `status-justify`, `status-left`, `status-left-length`, `status-position`, `status-right`, `status-right-length`, `which-key-delay`, `window-status-current-format`, `window-status-format`, `window-status-separator`.
+Settable: `allow-passthrough`, `base-index`, `display-panes-time`, `display-time`, `message-command-style`, `message-style`, `mode-keys`, `mouse`, `pane-active-border-style`, `pane-base-index`, `pane-border-style`, `prefix`, `set-clipboard`, `status`, `status-interval`, `status-justify`, `status-left`, `status-left-length`, `status-position`, `status-right`, `status-right-length`, `status-style`, `which-key-delay`, `window-status-activity-style`, `window-status-bell-style`, `window-status-current-format`, `window-status-current-style`, `window-status-format`, `window-status-last-style`, `window-status-separator`, `window-status-style`. `synchronize-panes` is a window option (see below).
 
-Options the daemon reads (`automatic-rename`, `default-command`, `default-shell`, `default-terminal`, `history-limit`, `monitor-activity`, `monitor-bell`, `remain-on-exit`, `restore`) are not settable this way: set them in the file and run `reload-config`.
+Options the daemon reads (`automatic-rename`, `default-command`, `default-shell`, `default-terminal`, `history-limit`, `monitor-activity`, `monitor-bell`, `monitor-silence`, `remain-on-exit`, `restore`) are not settable this way: set them in the file and run `reload-config`.
 
 ## Reloading the config
 
-`Prefix r` (or `:reload-config`) re-reads the config file while mpx runs: the file given with `-f`, else `$MPX_CONFIG`, else the default location. The TUI picks up style, `prefix`, `bind` and `which_key_delay_ms` at once. The session's daemon picks up the settings it owns for panes created afterwards and for the next snapshot and restore: `[[resume]]` rules, `restore`, `remain_on_exit`, `history_limit`, `scrollback_lines`, `automatic_rename`, `monitor_activity`, `monitor_bell`, `default_terminal`, `default_shell` and `default_command`. Running panes keep their environment.
+`Prefix r` (or `:reload-config`) re-reads the config file while mpx runs: the file given with `-f`, else `$MPX_CONFIG`, else the default location. The TUI picks up style, `prefix`, `bind` and `which_key_delay_ms` at once. The session's daemon picks up the settings it owns for panes created afterwards and for the next snapshot and restore: `[[resume]]` rules, `restore`, `remain_on_exit`, `history_limit`, `scrollback_lines`, `automatic_rename`, `monitor_activity`, `monitor_bell`, `monitor_silence`, `default_terminal`, `default_shell` and `default_command`. Running panes keep their environment.
 
 A file that does not parse, or a `bind`/`prefix` that does not resolve, is rejected with a message on the status row and nothing changes. A daemon started by an older mpx does not know the request; the UI still reloads and the message says to restart the session.

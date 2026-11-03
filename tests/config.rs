@@ -8,6 +8,17 @@ fn partial_file_keeps_defaults_for_missing_keys() {
 }
 
 #[test]
+fn status_lines_and_status_format_parse_and_validate_the_row_count() {
+    let cfg =
+        Config::parse("status_lines = 3\nstatus_format = [\"\", \"#{session_name}\"]\n").unwrap();
+    assert_eq!(cfg.status_lines, 3);
+    assert_eq!(cfg.status_format[1], "#{session_name}");
+    assert_eq!(Config::default().status_lines, 1);
+    assert!(Config::parse("status_lines = 0\n").is_err());
+    assert!(Config::parse("status_lines = 6\n").is_err());
+}
+
+#[test]
 fn unknown_keys_are_rejected() {
     assert!(Config::parse("prefx = \"C-a\"").is_err());
 }
@@ -35,6 +46,9 @@ fallback = ["codex", "resume", "--last"]
 
 #[test]
 fn parse_style_dim_factor() {
+    let defaults = Config::parse("").unwrap();
+    assert!(!defaults.style.dim_inactive);
+    assert_eq!(defaults.style.dim_factor, 0.5);
     let text = "[style]\ndim_inactive = true\ndim_factor = 0.05\n";
     let cfg = Config::parse(text).unwrap();
     assert!(cfg.style.dim_inactive);
@@ -95,10 +109,15 @@ fn file_keys_accept_the_old_switches_and_the_new_words() {
     let mode = |text: &str| Config::parse(text).map(|c| c.remain_on_exit);
     assert_eq!(mode("remain_on_exit = true"), Ok(RemainOnExit::On));
     assert_eq!(mode("remain_on_exit = false"), Ok(RemainOnExit::Off));
-    assert_eq!(mode("remain_on_exit = \"failed\""), Ok(RemainOnExit::Failed));
+    assert_eq!(
+        mode("remain_on_exit = \"failed\""),
+        Ok(RemainOnExit::Failed)
+    );
     assert!(mode("remain_on_exit = \"maybe\"").is_err());
     assert_eq!(
-        Config::parse("allow_passthrough = \"all\"").unwrap().allow_passthrough,
+        Config::parse("allow_passthrough = \"all\"")
+            .unwrap()
+            .allow_passthrough,
         Passthrough::All
     );
 }
@@ -125,7 +144,10 @@ fn defaults_are_tmux_status_formats() {
         "#{?pane_in_mode,[copy] ,}\"#{=21:pane_title}\" %H:%M %d-%b-%y"
     );
     assert_eq!(config.window_status_format, "#I:#W#{window_flags}");
-    assert_eq!(config.window_status_current_format, config.window_status_format);
+    assert_eq!(
+        config.window_status_current_format,
+        config.window_status_format
+    );
     assert_eq!(config.window_status_separator, " ");
     assert_eq!(config.display_time_ms, 3000);
 }
@@ -146,8 +168,9 @@ fn ui_options_read_from_the_config_file() {
 }
 
 #[test]
-fn inactive_panes_are_not_dimmed_unless_asked() {
-    let cfg = Config::parse("").unwrap();
-    assert!(!cfg.style.dim_inactive);
-    assert_eq!(cfg.style.dim_factor, 0.5);
+fn a_style_string_that_is_not_a_tmux_style_fails_the_load() {
+    let err = Config::parse("[style]\nwindow_status_bell_style = \"blink\"\n").unwrap_err();
+    assert!(err.contains("style.window_status_bell_style"), "{err}");
+    let ok = Config::parse("[style]\nwindow_status_bell_style = \"fg=red,bold\"\n").unwrap();
+    assert_eq!(ok.style.window_status_bell_style, "fg=red,bold");
 }

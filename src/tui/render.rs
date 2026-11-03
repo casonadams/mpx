@@ -152,9 +152,10 @@ impl HostColors {
         match parts.next() {
             Some("4") => {
                 while let (Some(index), Some(spec)) = (parts.next(), parts.next()) {
-                    if let (Ok(index), Some((r, g, b))) =
-                        (index.parse::<usize>(), super::terminal::parse_color_spec(spec))
-                    {
+                    if let (Ok(index), Some((r, g, b))) = (
+                        index.parse::<usize>(),
+                        super::terminal::parse_color_spec(spec),
+                    ) {
                         self.palette.set(index, (r, g, b));
                     }
                 }
@@ -262,6 +263,10 @@ pub struct DividerStyle {
     /// Background of the border cells: the inactive panes' default background, so a border
     /// beside an inactive pane does not show the terminal's own.
     pub bg: Option<VtColor>,
+    /// Background from `pane-border-style` for inactive panes' borders, else `bg`.
+    pub inactive_bg: Option<VtColor>,
+    /// Background from `pane-active-border-style` for the active pane's borders, else `bg`.
+    pub active_bg: Option<VtColor>,
 }
 
 impl Default for DividerStyle {
@@ -272,17 +277,19 @@ impl Default for DividerStyle {
             marked_color: VtColor::BrightMagenta,
             border_style: BorderStyle::Single,
             bg: None,
+            inactive_bg: None,
+            active_bg: None,
         }
     }
 }
 
-fn divider_color(
+fn divider_paint(
     x: u16,
     y: u16,
     active: Option<Rect>,
     marked: Option<Rect>,
     style: DividerStyle,
-) -> VtColor {
+) -> (VtColor, Option<VtColor>) {
     let touches = |r: Rect| {
         let is_left = x + 1 == r.x && y + 1 >= r.y && y <= r.y + r.height;
         let is_right = x == r.x + r.width && y + 1 >= r.y && y <= r.y + r.height;
@@ -293,14 +300,14 @@ fn divider_color(
     if let Some(m) = marked
         && touches(m)
     {
-        return style.marked_color;
+        return (style.marked_color, None);
     }
     if let Some(a) = active
         && touches(a)
     {
-        return style.active_color;
+        return (style.active_color, style.active_bg);
     }
-    style.inactive_color
+    (style.inactive_color, style.inactive_bg)
 }
 
 fn divider_cell(
@@ -311,11 +318,12 @@ fn divider_cell(
     marked: Option<Rect>,
     style: DividerStyle,
 ) -> Cell {
+    let (fg, own_bg) = divider_paint(x, y, active, marked, style);
     Cell {
         c: get_divider_char(div, x, y, all, style.border_style),
         style: CellStyle {
-            fg: Some(divider_color(x, y, active, marked, style)),
-            bg: style.bg,
+            fg: Some(fg),
+            bg: own_bg.or(style.bg),
             ..CellStyle::default()
         },
     }
@@ -489,24 +497,26 @@ impl Compositor {
         );
         draw_status_segments(w, &line.segs, bar.y, bar.bg, bar.fg)
     }
-    /// Renders a one-line command row (`:` prompt, confirmation question or message) across the status row.
+    /// Renders a one-line command row (`:` prompt, confirmation question or message) across the
+    /// status row, drawn in `style` over white on black.
     pub fn draw_command_line<W: Write>(
         w: &mut W,
         text: &str,
         y: u16,
         width: u16,
+        style: &super::style::Style,
     ) -> io::Result<()> {
         let line: String = text.chars().take(width as usize).collect();
         let pad = (width as usize).saturating_sub(line.chars().count());
-        queue!(
+        queue!(w, MoveTo(0, y))?;
+        write_status_run(
             w,
-            MoveTo(0, y),
-            SetBackgroundColor(Color::Black),
-            SetForegroundColor(Color::White),
-            Print(line),
-            Print(" ".repeat(pad)),
-            ResetColor
-        )
+            style,
+            VtColor::White,
+            VtColor::Black,
+            &format!("{line}{}", " ".repeat(pad)),
+        )?;
+        write!(w, "\x1b[0m")
     }
     /// Floating popup listing the prefix shortcuts, anchored bottom-right above the status row.
     pub fn draw_shortcut_hud<W: Write>(w: &mut W, screen_w: u16, screen_h: u16) -> io::Result<()> {
@@ -602,6 +612,9 @@ pub fn tab_text(tab: &WindowTab, zoomed: bool, base: usize) -> String {
         }
         if tab.has_bell {
             flags.push('!');
+        }
+        if tab.has_silence {
+            flags.push('~');
         }
         if tab.has_activity {
             flags.push('#');
@@ -780,13 +793,17 @@ fn cell_content(
             c: cell.c,
             style: CellStyle {
                 fg: inactive_color(
-                    cell.style.fg.map(|c| from_terminal_palette(c, &ctx.palette)),
+                    cell.style
+                        .fg
+                        .map(|c| from_terminal_palette(c, &ctx.palette)),
                     ctx.inactive_fg,
                     ctx.default_fg,
                     ctx.dim_factor,
                 ),
                 bg: inactive_color(
-                    cell.style.bg.map(|c| from_terminal_palette(c, &ctx.palette)),
+                    cell.style
+                        .bg
+                        .map(|c| from_terminal_palette(c, &ctx.palette)),
                     ctx.inactive_bg,
                     ctx.default_bg,
                     ctx.dim_factor,
@@ -891,7 +908,7 @@ pub fn draw_status_segments<W: Write>(
 
 fn write_status_run<W: Write>(
     w: &mut W,
-    style: &super::statusline::Style,
+    style: &super::style::Style,
     fg: VtColor,
     bg: VtColor,
     text: &str,
@@ -907,6 +924,9 @@ fn write_status_run<W: Write>(
     }
     if style.underscore {
         write!(w, "\x1b[4m")?;
+    }
+    if style.italics {
+        write!(w, "\x1b[3m")?;
     }
     write!(w, "{text}")
 }

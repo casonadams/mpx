@@ -10,7 +10,7 @@ use mpx::layout::Rect;
 use mpx::tui::app::ClockSource;
 use mpx::tui::labels::{label, label_rect, pane_numbers};
 
-use super::support::{ECHO, Harness, MAIN, split};
+use super::support::{ECHO, Harness, MAIN, SIZE, split};
 
 /// Whether the cell at (`x`, `y`) lies inside `area`.
 fn inside(area: Rect, x: u16, y: u16) -> bool {
@@ -44,7 +44,10 @@ pub(super) async fn check_masked(h: &mut Harness, step: &str, masked: &[Rect]) {
                     h.terminal.snapshot()
                 );
                 if focused {
-                    assert_eq!(got.style, want.style, "{step}: pane {name} style at ({x},{y})");
+                    assert_eq!(
+                        got.style, want.style,
+                        "{step}: pane {name} style at ({x},{y})"
+                    );
                 }
             }
         }
@@ -63,7 +66,11 @@ fn number_areas(h: &Harness) -> Vec<Rect> {
     for (number, name) in pane_numbers(&h.app.panes, &h.app.nodes) {
         let found = h.app.panes.iter().find(|(pane, ..)| *pane == name);
         let Some(&(_, area, _)) = found else { continue };
-        let block = label(&number.to_string(), area.width as usize, area.height as usize);
+        let block = label(
+            &number.to_string(),
+            area.width as usize,
+            area.height as usize,
+        );
         areas.push(label_rect(area, &block));
     }
     areas
@@ -113,7 +120,12 @@ async fn frames_keep_the_terminal_identical_to_the_panes() {
     h.emit(MAIN, VIM_LIKE, "VIM-DONE").await;
     check(&mut h, "vim-style redraw on the alternate screen").await;
 
-    h.emit(MAIN, "\x1b[2J\x1b[Hcleared\x1b[5;5HCLEAR-DONE", "CLEAR-DONE").await;
+    h.emit(
+        MAIN,
+        "\x1b[2J\x1b[Hcleared\x1b[5;5HCLEAR-DONE",
+        "CLEAR-DONE",
+    )
+    .await;
     check(&mut h, "full clear").await;
 
     h.emit(MAIN, "\x1b[?1049lALT-OFF", "ALT-OFF").await;
@@ -145,9 +157,9 @@ async fn frames_keep_the_terminal_identical_to_the_panes() {
     h.key(KeyCode::Esc).await;
     check(&mut h, "command prompt cancelled").await;
 
-    h.emit(MAIN, "\x1b[H\x1b[2Jfinal\r\nFINAL-DONE", "FINAL-DONE").await;
+    h.emit(MAIN, "\x1b[H\x1b[2Jfinal\r\nFINAL-DONE", "FINAL-DONE")
+        .await;
     check(&mut h, "redraw after overlays").await;
-
 
     h.prefixed_char('?').await;
     h.frame().await;
@@ -166,7 +178,10 @@ async fn frames_keep_the_terminal_identical_to_the_panes() {
     check(&mut h, "unzoomed after scrolling").await;
 
     // Zoom set on the daemon by another client: the terminal follows it, scrolling included.
-    h.probe.zoom(None, None).await.expect("zoom from another client");
+    h.probe
+        .zoom(None, None)
+        .await
+        .expect("zoom from another client");
     check(&mut h, "zoomed by another client").await;
     let scrolled = format!("{}DAEMON-ZOOM-DONE", numbered_lines("daemon", 12));
     h.emit(MAIN, &scrolled, "DAEMON-ZOOM-DONE").await;
@@ -218,4 +233,29 @@ async fn pane_overlays_cover_only_their_own_cells() {
     check_masked(&mut h, "clock fills the active pane", &[clock]).await;
     h.key(KeyCode::Char('x')).await;
     check(&mut h, "clock dismissed").await;
+}
+
+#[tokio::test]
+async fn two_status_lines_keep_each_pane_identical_to_its_screen() {
+    let config = Config {
+        which_key_delay_ms: 0,
+        status_lines: 2,
+        status_format: vec![String::new(), "second #{session_name}".to_string()],
+        ..Config::default()
+    };
+    let mut h = Harness::start(config, ECHO).await;
+    h.app.canvas.set_lr_margins(true);
+    check(&mut h, "attach with two status lines").await;
+    assert_eq!(h.app.rows.status_h, 2);
+    let drawn = h.frame().await;
+    let second = drawn
+        .lines()
+        .nth(usize::from(SIZE.1) - 1)
+        .unwrap_or_default();
+    assert!(second.contains("second test"), "{second:?}");
+
+    split(&mut h.probe, MAIN, "side", Direction::Horizontal).await;
+    check(&mut h, "after split above two status lines").await;
+    h.emit("side", "side text", "side text").await;
+    check(&mut h, "two panes above two status lines").await;
 }

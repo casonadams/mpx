@@ -1,5 +1,5 @@
-use mpx::tui::command::{BufferCommand, EnvCommand};
 use mpx::protocol::{LayoutPreset, Side};
+use mpx::tui::command::{BufferCommand, EnvCommand};
 use mpx::tui::command::{Command, CopyModeOpts, PromptSpec, parse, split_words};
 use mpx::tui::keymap::Table;
 use mpx::tui::prompt::PromptKind;
@@ -166,10 +166,7 @@ fn select_pane_by_target_or_direction() {
         ok("select-pane -D"),
         Command::SelectPaneDir { side: Side::Down }
     );
-    assert_eq!(
-        ok("select-pane -m"),
-        Command::MarkPane { target: None }
-    );
+    assert_eq!(ok("select-pane -m"), Command::MarkPane { target: None });
     assert_eq!(
         ok("select-pane -t build -m"),
         Command::MarkPane {
@@ -308,7 +305,9 @@ fn detach_quit_and_prompts() {
 #[test]
 fn command_prompt_reads_its_prompts_initial_texts_template_and_flags() {
     assert_eq!(
-        ok("command-prompt -1 -N -F -T window-target -p index,name -I 2,x \"select-window -t ':%%'\""),
+        ok(
+            "command-prompt -1 -N -F -T window-target -p index,name -I 2,x \"select-window -t ':%%'\""
+        ),
         Command::CommandPrompt(PromptSpec {
             prompts: vec!["index".into(), "name".into()],
             initial: vec!["2".into(), "x".into()],
@@ -377,18 +376,25 @@ fn rename_window_accepts_the_end_of_options_marker() {
 fn select_window_by_name_resolves_against_the_window_tabs() {
     assert_eq!(
         ok("select-window -t ':logs'"),
-        Command::SelectWindowNamed { name: "logs".into() }
+        Command::SelectWindowNamed {
+            name: "logs".into()
+        }
     );
     assert_eq!(
         ok("select-window -t logs"),
-        Command::SelectWindowNamed { name: "logs".into() }
+        Command::SelectWindowNamed {
+            name: "logs".into()
+        }
     );
 }
 
 #[test]
 fn next_and_previous_window_with_a_step_to_an_alert() {
     assert_eq!(ok("next-window -a"), Command::StepAlert { forward: true });
-    assert_eq!(ok("previous-window -a"), Command::StepAlert { forward: false });
+    assert_eq!(
+        ok("previous-window -a"),
+        Command::StepAlert { forward: false }
+    );
 }
 
 #[test]
@@ -433,12 +439,21 @@ fn semicolons_chain_commands_and_escaped_ones_are_literal() {
     match ok("split-window -h ; select-layout tiled") {
         Command::Sequence(parts) => {
             assert_eq!(parts.len(), 2);
-            assert!(matches!(parts[0], Command::SplitWindow { side_by_side: true, .. }));
+            assert!(matches!(
+                parts[0],
+                Command::SplitWindow {
+                    side_by_side: true,
+                    ..
+                }
+            ));
             assert!(matches!(parts[1], Command::SelectLayout { .. }));
         }
         other => panic!("{other:?}"),
     }
-    assert!(matches!(ok("kill-pane;"), Command::KillPane { .. }), "a trailing ; adds nothing");
+    assert!(
+        matches!(ok("kill-pane;"), Command::KillPane { .. }),
+        "a trailing ; adds nothing"
+    );
     assert!(err("split-window ; nosuchcommand").contains("unknown command"));
     assert!(matches!(
         ok("rename-window 'a;b'"),
@@ -450,19 +465,35 @@ fn semicolons_chain_commands_and_escaped_ones_are_literal() {
 fn bind_and_unbind_name_the_table_and_the_command_line() {
     assert_eq!(
         ok("bind-key x kill-pane"),
-        Command::Bind { table: Table::Prefix, key: "x".into(), line: "kill-pane".into() }
+        Command::Bind {
+            table: Table::Prefix,
+            key: "x".into(),
+            line: "kill-pane".into()
+        }
     );
     assert_eq!(
         ok("bind -n M-h select-pane -L"),
-        Command::Bind { table: Table::Root, key: "M-h".into(), line: "select-pane -L".into() }
+        Command::Bind {
+            table: Table::Root,
+            key: "M-h".into(),
+            line: "select-pane -L".into()
+        }
     );
     assert_eq!(
         ok("bind -T root F5 split-window -h \\; select-pane -R"),
-        Command::Bind { table: Table::Root, key: "F5".into(), line: "split-window -h ; select-pane -R".into() }
+        Command::Bind {
+            table: Table::Root,
+            key: "F5".into(),
+            line: "split-window -h ; select-pane -R".into()
+        }
     );
     assert_eq!(
         ok("unbind-key -n M-h"),
-        Command::Bind { table: Table::Root, key: "M-h".into(), line: String::new() }
+        Command::Bind {
+            table: Table::Root,
+            key: "M-h".into(),
+            line: String::new()
+        }
     );
     assert_eq!(
         ok("bind -T copy-mode-vi v send-keys -X begin-selection"),
@@ -478,12 +509,21 @@ fn bind_and_unbind_name_the_table_and_the_command_line() {
 
 #[test]
 fn source_file_without_a_file_reloads_the_config_and_display_message_formats() {
-    assert_eq!(ok("source-file"), Command::ReloadConfig, "without a file it reloads the config");
+    assert_eq!(
+        ok("source-file"),
+        Command::ReloadConfig,
+        "without a file it reloads the config"
+    );
     assert_eq!(
         ok("display-message -p hello world"),
-        Command::DisplayMessage { format: Some("hello world".into()) }
+        Command::DisplayMessage {
+            format: Some("hello world".into())
+        }
     );
-    assert_eq!(ok("display-message"), Command::DisplayMessage { format: None });
+    assert_eq!(
+        ok("display-message"),
+        Command::DisplayMessage { format: None }
+    );
 }
 
 #[test]
@@ -510,7 +550,10 @@ fn display_panes_takes_an_optional_duration() {
 
 #[test]
 fn clock_mode_takes_an_optional_target() {
-    assert!(matches!(ok("clock-mode"), Command::ClockMode { target: None }));
+    assert!(matches!(
+        ok("clock-mode"),
+        Command::ClockMode { target: None }
+    ));
     assert!(matches!(
         ok("clock-mode -t work"),
         Command::ClockMode { target: Some(t) } if t == "work"
@@ -522,8 +565,14 @@ fn buffer_and_message_commands_parse_bare() {
     assert!(matches!(ok("show-messages"), Command::ShowMessages));
     assert!(matches!(ok("showmsgs"), Command::ShowMessages));
     assert!(matches!(ok("choose-buffer"), Command::ChooseBuffer));
-    assert!(matches!(ok("list-buffers"), Command::Buffer(BufferCommand::ListBuffers { format: None })));
-    assert!(matches!(ok("lsb"), Command::Buffer(BufferCommand::ListBuffers { format: None })));
+    assert!(matches!(
+        ok("list-buffers"),
+        Command::Buffer(BufferCommand::ListBuffers { format: None })
+    ));
+    assert!(matches!(
+        ok("lsb"),
+        Command::Buffer(BufferCommand::ListBuffers { format: None })
+    ));
     assert!(matches!(ok("suspend-client"), Command::SuspendClient));
     assert!(matches!(ok("suspendc"), Command::SuspendClient));
 }
@@ -545,25 +594,40 @@ fn joined_words_parse_back_to_the_same_words() {
         .collect();
     let line = mpx::cmdline::join_words(&words);
     let back = mpx::cmdline::split_commands(&line).unwrap();
-    assert_eq!(back, [
-        vec!["send-keys", "a b", "it's", "x;y"],
-        vec!["", "plain"],
-    ]);
+    assert_eq!(
+        back,
+        [vec!["send-keys", "a b", "it's", "x;y"], vec!["", "plain"],]
+    );
 }
 
 #[test]
 fn set_option_takes_flags_a_name_and_a_value() {
     assert_eq!(
         ok("set -g mouse off"),
-        Command::SetOption { name: "mouse".into(), value: Some("off".into()), unset: false, quiet: false }
+        Command::SetOption {
+            name: "mouse".into(),
+            value: Some("off".into()),
+            unset: false,
+            quiet: false
+        }
     );
     assert_eq!(
         ok("setw -gq status-left -- -x"),
-        Command::SetOption { name: "status-left".into(), value: Some("-x".into()), unset: false, quiet: true }
+        Command::SetOption {
+            name: "status-left".into(),
+            value: Some("-x".into()),
+            unset: false,
+            quiet: true
+        }
     );
     assert_eq!(
         ok("set-option -u mouse"),
-        Command::SetOption { name: "mouse".into(), value: None, unset: true, quiet: false }
+        Command::SetOption {
+            name: "mouse".into(),
+            value: None,
+            unset: true,
+            quiet: false
+        }
     );
     assert!(err("set -g mouse").contains("need a value"));
     assert!(err("set -u mouse off").contains("too many"));
@@ -574,11 +638,19 @@ fn set_option_takes_flags_a_name_and_a_value() {
 fn show_options_takes_an_optional_name() {
     assert_eq!(
         ok("show-options"),
-        Command::ShowOptions { name: None, value_only: false, quiet: false }
+        Command::ShowOptions {
+            name: None,
+            value_only: false,
+            quiet: false
+        }
     );
     assert_eq!(
         ok("show -gv mouse"),
-        Command::ShowOptions { name: Some("mouse".into()), value_only: true, quiet: false }
+        Command::ShowOptions {
+            name: Some("mouse".into()),
+            value_only: true,
+            quiet: false
+        }
     );
     assert!(err("show a b").contains("too many"));
 }
@@ -587,14 +659,31 @@ fn show_options_takes_an_optional_name() {
 fn pane_and_window_moves_parse_their_flags() {
     assert_eq!(
         ok("join-pane -h -s a -t b"),
-        Command::JoinPane { src: Some("a".into()), dst: Some("b".into()), side_by_side: true }
+        Command::JoinPane {
+            src: Some("a".into()),
+            dst: Some("b".into()),
+            side_by_side: true
+        }
     );
     assert_eq!(
         ok("joinp"),
-        Command::JoinPane { src: None, dst: None, side_by_side: false }
+        Command::JoinPane {
+            src: None,
+            dst: None,
+            side_by_side: false
+        }
     );
-    assert_eq!(ok("swap-window -t 2"), Command::SwapWindow { src: None, dst: 2 });
-    assert_eq!(ok("swapw -s 1 -t 3"), Command::SwapWindow { src: Some(1), dst: 3 });
+    assert_eq!(
+        ok("swap-window -t 2"),
+        Command::SwapWindow { src: None, dst: 2 }
+    );
+    assert_eq!(
+        ok("swapw -s 1 -t 3"),
+        Command::SwapWindow {
+            src: Some(1),
+            dst: 3
+        }
+    );
     assert!(err("swap-window").contains("need -t"));
     assert!(err("swap-window -t x").contains("invalid window index"));
     assert_eq!(
@@ -606,7 +695,12 @@ fn pane_and_window_moves_parse_their_flags() {
             command: vec!["sh".into(), "-c".into(), "echo hi".into()],
         }
     );
-    assert_eq!(ok("find-window -i vim"), Command::FindWindow { pattern: "vim".into() });
+    assert_eq!(
+        ok("find-window -i vim"),
+        Command::FindWindow {
+            pattern: "vim".into()
+        }
+    );
     assert!(err("find-window").contains("need a pattern"));
 }
 
@@ -671,7 +765,10 @@ fn buffer_file_and_paste_commands_parse_their_operands() {
         buffer_of("showb -b x"),
         BufferCommand::ShowBuffer { name: Some(n) } if n == "x"
     ));
-    assert!(matches!(buffer_of("deleteb"), BufferCommand::DeleteBuffer { name: None }));
+    assert!(matches!(
+        buffer_of("deleteb"),
+        BufferCommand::DeleteBuffer { name: None }
+    ));
     match buffer_of("paste-buffer -d -p -r -s , -b k -t %1") {
         BufferCommand::PasteBuffer { opts } => assert_eq!(
             opts,
@@ -715,16 +812,25 @@ fn capture_pane_and_environment_commands_parse() {
     ));
     assert!(matches!(
         env_of("set-environment -u FOO"),
-        EnvCommand::SetEnvironment { change: mpx::protocol::EnvChange::Unset, .. }
+        EnvCommand::SetEnvironment {
+            change: mpx::protocol::EnvChange::Unset,
+            ..
+        }
     ));
     assert!(matches!(
         env_of("set-environment -r FOO"),
-        EnvCommand::SetEnvironment { change: mpx::protocol::EnvChange::Remove, .. }
+        EnvCommand::SetEnvironment {
+            change: mpx::protocol::EnvChange::Remove,
+            ..
+        }
     ));
     assert!(err("set-environment -u FOO bar").contains("take no value"));
     assert!(err("set-environment FOO").contains("no value given for FOO"));
     assert!(err("set-environment -t other FOO x").contains("not supported at the prompt"));
-    assert!(matches!(env_of("showenv"), EnvCommand::ShowEnvironment { name: None }));
+    assert!(matches!(
+        env_of("showenv"),
+        EnvCommand::ShowEnvironment { name: None }
+    ));
     assert!(matches!(
         env_of("show-environment FOO"),
         EnvCommand::ShowEnvironment { name: Some(n) } if n == "FOO"

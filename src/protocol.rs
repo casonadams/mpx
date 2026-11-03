@@ -90,6 +90,12 @@ pub struct NodeInfo {
     /// Size (cols, rows) of a terminal pane's PTY (absent from daemons that predate it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size: Option<(u16, u16)>,
+    /// Column and row, zero-based, of a terminal pane's screen cursor (absent from daemons that predate it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<(u16, u16)>,
+    /// Scrollback lines a terminal pane's captures can reach (tmux `history_size`; absent from daemons that predate it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_size: Option<usize>,
     /// Whether this pane is the marked pane in the session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub marked: Option<bool>,
@@ -115,6 +121,8 @@ impl NodeInfo {
             last_output_ms: 0,
             window: None,
             modes: None,
+            cursor: None,
+            history_size: None,
             size: None,
             marked: None,
         }
@@ -249,7 +257,7 @@ pub struct WaitOutcome {
 
 /// Version of the client-daemon protocol. Bump it on any change an older peer cannot parse, so
 /// clients refuse an incompatible daemon instead of misreading it.
-pub const PROTOCOL: u32 = 10;
+pub const PROTOCOL: u32 = 11;
 
 fn first_protocol() -> u32 {
     1
@@ -286,6 +294,36 @@ pub enum Request {
         key: String,
         request: Box<Request>,
     },
+    /// Streams events. With `name` and `since`, output from byte offset `since` is replayed first,
+    /// with no gap before live output.
+    Subscribe {
+        name: Option<String>,
+        #[serde(default)]
+        since: Option<u64>,
+        /// Ask for events as binary frames (`wire`); a daemon that agrees answers `BinaryStream`.
+        #[serde(default)]
+        binary: bool,
+        /// Of pane output, send only the active window's: what a TUI shows. Other events still
+        /// come for every pane.
+        #[serde(default)]
+        active_window: bool,
+        /// With `active_window`: also send `Layout` whenever windows or panes are rearranged.
+        #[serde(default)]
+        layout: bool,
+    },
+    /// Node (pane process) requests.
+    Node(NodeRequest),
+    /// Layout of panes and windows, focus and marks.
+    Pane(PaneRequest),
+    Window(WindowRequest),
+    Buffer(BufferRequest),
+    Session(SessionRequest),
+}
+
+/// Requests about one node's process and its input and output.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "method", content = "params")]
+pub enum NodeRequest {
     Spawn(SpawnOpts),
     List,
     /// Read output. `since` is an absolute byte offset returned as `next` by a previous call.
@@ -325,31 +363,45 @@ pub enum Request {
         condition: WaitCondition,
         timeout_ms: Option<u64>,
     },
-    /// Streams events. With `name` and `since`, output from byte offset `since` is replayed first,
-    /// with no gap before live output.
-    Subscribe {
-        name: Option<String>,
-        #[serde(default)]
-        since: Option<u64>,
-        /// Ask for events as binary frames (`wire`); a daemon that agrees answers `BinaryStream`.
-        #[serde(default)]
-        binary: bool,
-        /// Of pane output, send only the active window's: what a TUI shows. Other events still
-        /// come for every pane.
-        #[serde(default)]
-        active_window: bool,
-        /// With `active_window`: also send `Layout` whenever windows or panes are rearranged.
-        #[serde(default)]
-        layout: bool,
-    },
     Screen {
         name: String,
     },
-    Split(SplitOpts),
-    Layout {
-        width: u16,
-        height: u16,
+    Status {
+        name: String,
     },
+    Cwd {
+        name: String,
+    },
+    /// Captures a pane's screen and history as text (`capture-pane`).
+    Capture {
+        name: String,
+        spec: CaptureSpec,
+    },
+    /// Resize the PTY of a pane (client viewport change).
+    Resize {
+        name: String,
+        cols: u16,
+        rows: u16,
+    },
+    /// Restarts a pane's process in place (tmux `respawn-pane`): the pane keeps its name and
+    /// layout slot. `kill` stops a running process first. `cwd` and `command` (program, then its
+    /// arguments) replace the pane's own for this and later respawns.
+    Respawn {
+        name: String,
+        #[serde(default)]
+        kill: bool,
+        #[serde(default)]
+        cwd: Option<String>,
+        #[serde(default)]
+        command: Option<Vec<String>>,
+    },
+}
+
+/// Requests that arrange panes within and across windows.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "method", content = "params")]
+pub enum PaneRequest {
+    Split(SplitOpts),
     FocusNext,
     /// `keep_zoom` (tmux `-Z`) leaves a zoomed window zoomed; otherwise focusing another pane
     /// unzooms it.
@@ -362,11 +414,13 @@ pub enum Request {
         #[serde(default)]
         keep_zoom: bool,
     },
-    /// Resize the PTY of a pane (client viewport change).
-    ResizePane {
-        name: String,
-        cols: u16,
-        rows: u16,
+    /// Zooms or unzooms the window of pane `pane` (the active pane when `None`), focusing that
+    /// pane first (tmux `resize-pane -Z`). `on` sets the state; `None` toggles it.
+    Zoom {
+        #[serde(default)]
+        pane: Option<String>,
+        #[serde(default)]
+        on: Option<bool>,
     },
     /// Move the split border of a pane by `cells` towards `side` (tmux resize-pane -L/-R/-U/-D).
     ResizeSplit {
@@ -385,14 +439,6 @@ pub enum Request {
         #[serde(default)]
         keep_zoom: bool,
     },
-    /// Zooms or unzooms the window of pane `pane` (the active pane when `None`), focusing that
-    /// pane first (tmux `resize-pane -Z`). `on` sets the state; `None` toggles it.
-    Zoom {
-        #[serde(default)]
-        pane: Option<String>,
-        #[serde(default)]
-        on: Option<bool>,
-    },
     /// Mark or unmark a pane. If `name` is None, targets the currently active pane.
     /// If `clear` is true (-M), clears the marked pane unconditionally.
     MarkPane {
@@ -404,34 +450,101 @@ pub enum Request {
     BreakPane {
         name: String,
     },
+    /// Moves pane `src` next to `dst`, splitting `dst` side by side or stacked (tmux `join-pane`).
+    Join {
+        src: String,
+        dst: String,
+        side_by_side: bool,
+    },
     SelectLayout {
         /// `None` cycles to the next preset.
         preset: Option<LayoutPreset>,
     },
     /// Spreads the active window's panes evenly, keeping their arrangement (`select-layout -E`).
     SpreadLayout,
-    NewWindow(NewWindowOpts),
-    NextWindow,
-    PrevWindow,
-    LastWindow,
-    SelectWindow {
+    /// Turns `synchronize-panes` on or off for window `window` (the active window when `None`);
+    /// `on` None toggles it.
+    Synchronize {
+        #[serde(default)]
+        window: Option<usize>,
+        #[serde(default)]
+        on: Option<bool>,
+    },
+}
+
+/// Requests about the session's windows: creating, selecting, renaming, reordering and killing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "method", content = "params")]
+pub enum WindowRequest {
+    New(NewWindowOpts),
+    Next,
+    Prev,
+    Last,
+    Select {
         index: usize,
     },
     /// `index: None` targets the active window.
-    RenameWindow {
+    Rename {
         index: Option<usize>,
         name: String,
     },
-    KillWindow {
+    Kill {
         index: Option<usize>,
     },
-    GetCwd {
-        name: String,
+    Move {
+        from: usize,
+        to: usize,
     },
-    Status {
-        name: String,
+    /// Renumbers the windows 0, 1, ... in order whatever `renumber-windows` says (tmux `move-window -r`).
+    Renumber,
+    /// Rotates the panes of the active window through its layout slots (tmux `rotate-window`).
+    /// The default moves every pane to the slot before it (the first pane goes last); `down`
+    /// moves every pane to the slot after it. Pane names move, slots and focus stay.
+    Rotate {
+        down: bool,
     },
-    RenameSession {
+    /// Exchanges the numbers of two windows (tmux `swap-window`).
+    Swap {
+        a: usize,
+        b: usize,
+    },
+}
+
+/// Requests about paste buffers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "method", content = "params")]
+pub enum BufferRequest {
+    /// Adds a paste buffer: `name` replaces the buffer of that name, else a new `bufferNNNN` one.
+    /// With `append` (`set-buffer -a`), `data` is added to the end of the named buffer (the newest
+    /// one when unnamed), or starts a buffer when there is none.
+    Set {
+        name: Option<String>,
+        data: String,
+        #[serde(default)]
+        append: bool,
+    },
+    /// The named paste buffer, or the most recent one.
+    Get {
+        name: Option<String>,
+    },
+    List,
+    Delete {
+        name: Option<String>,
+    },
+    /// Renames a buffer (`set-buffer -n`); `name` None is the newest buffer.
+    Rename {
+        name: Option<String>,
+        to: String,
+    },
+    /// Pastes a buffer into a pane (`paste-buffer`).
+    Paste(PasteBufferOpts),
+}
+
+/// Requests about the session itself: its name, config, key bindings, environment and size.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "method", content = "params")]
+pub enum SessionRequest {
+    Rename {
         name: String,
     },
     /// Reload the daemon's config from `path`, or the defaults when there is none.
@@ -447,35 +560,6 @@ pub enum Request {
     },
     /// All runtime key bindings, sorted by name.
     GetBindings,
-    /// Adds a paste buffer: `name` replaces the buffer of that name, else a new `bufferNNNN` one.
-    /// With `append` (`set-buffer -a`), `data` is added to the end of the named buffer (the newest
-    /// one when unnamed), or starts a buffer when there is none.
-    SetBuffer {
-        name: Option<String>,
-        data: String,
-        #[serde(default)]
-        append: bool,
-    },
-    /// The named paste buffer, or the most recent one.
-    GetBuffer {
-        name: Option<String>,
-    },
-    ListBuffers,
-    DeleteBuffer {
-        name: Option<String>,
-    },
-    /// Renames a buffer (`set-buffer -n`); `name` None is the newest buffer.
-    RenameBuffer {
-        name: Option<String>,
-        to: String,
-    },
-    /// Pastes a buffer into a pane (`paste-buffer`).
-    PasteBuffer(PasteBufferOpts),
-    /// Captures a pane's screen and history as text (`capture-pane`).
-    CapturePane {
-        name: String,
-        spec: CaptureSpec,
-    },
     /// Sets, removes or unsets one variable of the session environment (`set-environment`).
     SetEnvironment {
         name: String,
@@ -485,38 +569,10 @@ pub enum Request {
     ShowEnvironment {
         name: Option<String>,
     },
-    MoveWindow {
-        from: usize,
-        to: usize,
-    },
-    /// Rotates the panes of the active window through its layout slots (tmux `rotate-window`).
-    /// The default moves every pane to the slot before it (the first pane goes last); `down`
-    /// moves every pane to the slot after it. Pane names move, slots and focus stay.
-    RotateWindow {
-        down: bool,
-    },
-    /// Moves pane `src` next to `dst`, splitting `dst` side by side or stacked (tmux `join-pane`).
-    JoinPane {
-        src: String,
-        dst: String,
-        side_by_side: bool,
-    },
-    /// Exchanges the positions of two windows (tmux `swap-window`).
-    SwapWindow {
-        a: usize,
-        b: usize,
-    },
-    /// Restarts a pane's process in place (tmux `respawn-pane`): the pane keeps its name and
-    /// layout slot. `kill` stops a running process first. `cwd` and `command` (program, then its
-    /// arguments) replace the pane's own for this and later respawns.
-    Respawn {
-        name: String,
-        #[serde(default)]
-        kill: bool,
-        #[serde(default)]
-        cwd: Option<String>,
-        #[serde(default)]
-        command: Option<Vec<String>>,
+    /// Resizes the session's viewport to `width` by `height` cells.
+    Layout {
+        width: u16,
+        height: u16,
     },
 }
 

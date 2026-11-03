@@ -71,7 +71,11 @@ impl Stores {
 
     /// The first unused `bufferNNNN` name, as tmux numbers automatic buffers.
     fn auto_name(&mut self) -> String {
-        while self.buffers.iter().any(|b| b.name == format!("buffer{:04}", self.next_buffer)) {
+        while self
+            .buffers
+            .iter()
+            .any(|b| b.name == format!("buffer{:04}", self.next_buffer))
+        {
             self.next_buffer += 1;
         }
         self.next_buffer += 1;

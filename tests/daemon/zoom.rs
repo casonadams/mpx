@@ -1,6 +1,6 @@
 //! Zoom is the daemon's per-window flag: toggled by requests, followed by every terminal through
 //! the layout it reports, and cleared by the changes that move focus or rearrange the layout.
-use super::support::{TestDaemon, split_right, started_with, task};
+use super::support::{TestDaemon, split_right, started_with, tabs, task};
 use mpx::client::Client;
 use mpx::layout::WindowTab;
 use mpx::protocol::NewWindowOpts;
@@ -16,10 +16,6 @@ async fn two_panes() -> (TestDaemon, Client) {
 async fn screen(client: &mut Client) -> (Option<String>, Vec<WindowTab>) {
     let (rects, _, tabs) = client.layout(80, 24).await.unwrap();
     (rects.into_iter().find(|p| p.2).map(|p| p.0), tabs)
-}
-
-async fn tabs(client: &mut Client) -> Vec<WindowTab> {
-    screen(client).await.1
 }
 
 async fn focused(client: &mut Client) -> Option<String> {

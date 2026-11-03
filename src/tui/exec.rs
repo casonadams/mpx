@@ -11,9 +11,9 @@ use super::session::{pick, split_target};
 use crate::config::Config;
 use crate::format::{buffer_vars, expand};
 use crate::ipc;
-use crate::vt::capture::CaptureSpec;
 use crate::layout::Direction;
 use crate::protocol::{LayoutPreset, NewWindowOpts, PasteBufferOpts, Side, SpawnOpts, SplitOpts};
+use crate::vt::capture::CaptureSpec;
 use std::collections::VecDeque;
 use std::io::Write;
 use std::process::Stdio;
@@ -35,8 +35,7 @@ enum Simple {
 }
 
 /// What `display-message` shows without a format.
-const DEFAULT_DISPLAY_MESSAGE: &str =
-    "[#{session_name}] #{window_index}:#{window_name}, current pane #{pane_index} - (#{pane_title})";
+const DEFAULT_DISPLAY_MESSAGE: &str = "[#{session_name}] #{window_index}:#{window_name}, current pane #{pane_index} - (#{pane_title})";
 
 /// Commands that destroy something interactively need a `y` first.
 fn needs_confirm(cmd: &Command) -> Option<String> {
@@ -104,7 +103,9 @@ impl App {
             } => self.split_window(side_by_side, argv, cwd, detach).await,
             Command::NewWindow { name, argv, cwd } => self.new_window(name, argv, cwd).await,
             Command::KillPane { target } => self.kill_pane(target).await,
-            Command::KillWindow { index } => match index.map(|i| i.checked_sub(self.config.base_index)) {
+            Command::KillWindow { index } => match index
+                .map(|i| i.checked_sub(self.config.base_index))
+            {
                 None => self.simple(Simple::KillWindow(None)).await,
                 Some(Some(daemon)) => self.simple(Simple::KillWindow(Some(daemon))).await,
                 Some(None) => self.say(format!("can't find window: {}", index.unwrap_or_default())),
@@ -114,19 +115,17 @@ impl App {
                 Some(daemon) => self.simple(Simple::SelectWindow(daemon)).await,
                 None => self.say(format!("can't find window: {index}")),
             },
-            Command::SelectWindowNamed { name } => {
-                let found = self.layout.tabs.iter().find(|t| t.name == name).map(|t| t.index);
-                match found {
-                    Some(index) => self.simple(Simple::SelectWindow(index)).await,
-                    None => self.say(format!("can't find window: {name}")),
-                }
-            }
+            Command::SelectWindowNamed { name } => self.select_window_named(name).await,
             Command::StepAlert { forward } => self.step_alert(forward).await,
             Command::RotateWindow { down } => {
                 let result = self.client.rotate_window(down).await;
                 self.settle(result)
             }
             Command::MoveWindow { to } => self.move_window(to).await,
+            Command::RenumberWindows => {
+                let result = self.client.renumber_windows().await;
+                self.settle(result)
+            }
             Command::DisplayMessage { format } => {
                 let format = format.as_deref().unwrap_or(DEFAULT_DISPLAY_MESSAGE);
                 let text = super::frame::expand_active(self, format);
@@ -180,32 +179,37 @@ impl App {
             Command::PrevSession => self.step_session(false).await,
             Command::KillServer => self.kill_server().await,
             Command::ReloadConfig => self.reload_config().await,
-            Command::SetOption { name, value, unset, quiet } => {
-                self.set_option(&name, value.as_deref(), unset, quiet).await
-            }
-            Command::ShowOptions { name, value_only, quiet } => {
-                self.show_options(name.as_deref(), value_only, quiet).await
-            }
-            Command::JoinPane { src, dst, side_by_side } => {
-                self.join_pane(src, dst, side_by_side).await
-            }
+            Command::SetOption {
+                name,
+                value,
+                unset,
+                quiet,
+            } => self.set_option(&name, value.as_deref(), unset, quiet).await,
+            Command::ShowOptions {
+                name,
+                value_only,
+                quiet,
+            } => self.show_options(name.as_deref(), value_only, quiet).await,
+            Command::JoinPane {
+                src,
+                dst,
+                side_by_side,
+            } => self.join_pane(src, dst, side_by_side).await,
             Command::SwapWindow { src, dst } => self.swap_window(src, dst).await,
-            Command::RespawnPane { target, kill, cwd, command } => {
-                self.respawn_pane(target, kill, cwd, command).await
-            }
+            Command::RespawnPane {
+                target,
+                kill,
+                cwd,
+                command,
+            } => self.respawn_pane(target, kill, cwd, command).await,
             Command::Bind { table, key, line } => self.bind_key(table, &key, &line).await,
             Command::FindWindow { pattern } => self.find_window(&pattern).await,
             Command::Sequence(commands) => Box::pin(self.run_sequence(commands)).await,
             Command::Zoom => self.toggle_zoom().await,
+            Command::SetSynchronize { all, on } => self.set_synchronize(all, on).await,
             Command::CopyMode(opts) => self.copy_mode_cmd(opts).await,
             Command::Detach => Flow::Quit,
-            Command::RenameSession { name } => {
-                let result = self.client.rename_session(&name).await;
-                if result.is_ok() {
-                    self.session = name;
-                }
-                self.settle(result)
-            }
+            Command::RenameSession { name } => self.rename_session_cmd(name).await,
             Command::OpenTree => self.open_overlay(Overlay::tree()).await,
             Command::OpenHelp => self.open_help().await,
             Command::OpenPalette { tab } => self.open_palette(tab).await,
@@ -225,6 +229,29 @@ impl App {
         }
     }
 
+    /// `select-window -t name`: selects the window with that name, or reports it missing.
+    async fn select_window_named(&mut self, name: String) -> Flow {
+        let found = self
+            .layout
+            .tabs
+            .iter()
+            .find(|t| t.name == name)
+            .map(|t| t.index);
+        match found {
+            Some(index) => self.simple(Simple::SelectWindow(index)).await,
+            None => self.say(format!("can't find window: {name}")),
+        }
+    }
+
+    /// `rename-session`: renames the session, keeping the local name only on success.
+    async fn rename_session_cmd(&mut self, name: String) -> Flow {
+        let result = self.client.rename_session(&name).await;
+        if result.is_ok() {
+            self.session = name;
+        }
+        self.settle(result)
+    }
+
     async fn buffer_command(&mut self, cmd: BufferCommand) -> Flow {
         match cmd {
             BufferCommand::ListBuffers { format } => self.list_buffers(format).await,
@@ -240,11 +267,9 @@ impl App {
                 self.settle(result)
             }
             BufferCommand::LoadBuffer { name, path } => self.load_buffer(name, &path).await,
-            BufferCommand::SaveBuffer {
-                name,
-                append,
-                path,
-            } => self.save_buffer(name, append, &path).await,
+            BufferCommand::SaveBuffer { name, append, path } => {
+                self.save_buffer(name, append, &path).await
+            }
             BufferCommand::PasteBuffer { opts } => self.paste_buffer(opts).await,
             BufferCommand::CapturePane {
                 target,
@@ -289,7 +314,13 @@ impl App {
 
     /// `set-option`: changes this client's option. A value that does not parse, or a prefix the
     /// keymap cannot resolve, leaves the config unchanged.
-    async fn set_option(&mut self, name: &str, value: Option<&str>, unset: bool, quiet: bool) -> Flow {
+    async fn set_option(
+        &mut self,
+        name: &str,
+        value: Option<&str>,
+        unset: bool,
+        quiet: bool,
+    ) -> Flow {
         if quiet && !crate::options::is_known(name) {
             return Flow::Continue;
         }
@@ -308,8 +339,24 @@ impl App {
 
     /// `show-options`: every option in an overlay, or one on the status row.
     async fn show_options(&mut self, name: Option<&str>, value_only: bool, quiet: bool) -> Flow {
+        let synchronize = self
+            .layout
+            .tabs
+            .iter()
+            .any(|t| t.is_active && t.synchronized);
+        let synchronize = if synchronize { "on" } else { "off" };
+        if name == Some("synchronize-panes") {
+            return if value_only {
+                self.say(synchronize)
+            } else {
+                self.say(format!("synchronize-panes {synchronize}"))
+            };
+        }
         let Some(name) = name else {
-            let lines = crate::options::list(&self.config)
+            let mut options = crate::options::list(&self.config);
+            options.push(("synchronize-panes", synchronize.to_string()));
+            options.sort_by_key(|(name, _)| *name);
+            let lines = options
                 .into_iter()
                 .map(|(name, value)| format!("{name} {value}"))
                 .collect();
@@ -364,7 +411,13 @@ impl App {
         let Some(to) = to.checked_sub(self.config.base_index) else {
             return self.say(format!("can't find window: {to}"));
         };
-        let Some(from) = self.layout.tabs.iter().find(|t| t.is_active).map(|t| t.index) else {
+        let Some(from) = self
+            .layout
+            .tabs
+            .iter()
+            .find(|t| t.is_active)
+            .map(|t| t.index)
+        else {
             return self.say("no active window");
         };
         let result = self.client.move_window(from, to).await;
@@ -398,7 +451,12 @@ impl App {
 
     /// `join-pane`: moves `src` (the marked pane unless named) next to `dst` (the active pane
     /// unless named).
-    async fn join_pane(&mut self, src: Option<String>, dst: Option<String>, side_by_side: bool) -> Flow {
+    async fn join_pane(
+        &mut self,
+        src: Option<String>,
+        dst: Option<String>,
+        side_by_side: bool,
+    ) -> Flow {
         let Some(src) = src.or_else(|| self.layout.marked_pane_global().map(str::to_string)) else {
             return self.say("no marked pane");
         };
@@ -414,7 +472,12 @@ impl App {
         let slot = |number: usize| number.checked_sub(base);
         let from = match src {
             Some(number) => slot(number),
-            None => self.layout.tabs.iter().find(|t| t.is_active).map(|t| t.index),
+            None => self
+                .layout
+                .tabs
+                .iter()
+                .find(|t| t.is_active)
+                .map(|t| t.index),
         };
         let (Some(from), Some(to)) = (from, slot(dst)) else {
             return self.say("can't find window");
@@ -429,12 +492,21 @@ impl App {
         let count = tabs.len();
         let current = tabs.iter().position(|t| t.is_active).unwrap_or(0);
         let alert = (1..count)
-            .map(|step| if forward { (current + step) % count } else { (current + count - step) % count })
-            .find(|&i| tabs[i].has_activity || tabs[i].has_bell)
+            .map(|step| {
+                if forward {
+                    (current + step) % count
+                } else {
+                    (current + count - step) % count
+                }
+            })
+            .find(|&i| tabs[i].has_activity || tabs[i].has_bell || tabs[i].has_silence)
             .map(|i| tabs[i].index);
         match alert {
             Some(index) => self.simple(Simple::SelectWindow(index)).await,
-            None => self.say(format!("no {} window with an alert", if forward { "next" } else { "previous" })),
+            None => self.say(format!(
+                "no {} window with an alert",
+                if forward { "next" } else { "previous" }
+            )),
         }
     }
 
@@ -567,7 +639,10 @@ impl App {
         if temp.is_some() {
             return self.say("paste-buffer: the pane must be in this session");
         }
-        let result = self.client.paste_buffer(PasteBufferOpts { pane, ..opts }).await;
+        let result = self
+            .client
+            .paste_buffer(PasteBufferOpts { pane, ..opts })
+            .await;
         self.settle(result)
     }
 
@@ -583,15 +658,23 @@ impl App {
             Ok(found) => found,
             Err(e) => return self.say(e),
         };
-        let text = match pick(&mut temp, &mut self.client).capture_pane(&pane, spec).await {
+        let text = match pick(&mut temp, &mut self.client)
+            .capture_pane(&pane, spec)
+            .await
+        {
             Ok(text) => text,
             Err(e) => return self.say(e),
         };
         if print {
             let lines = text.lines().map(str::to_string).collect();
-            return self.open_overlay(Overlay::text("capture-pane", lines)).await;
+            return self
+                .open_overlay(Overlay::text("capture-pane", lines))
+                .await;
         }
-        let result = self.client.set_buffer(buffer.as_deref(), &text, false).await;
+        let result = self
+            .client
+            .set_buffer(buffer.as_deref(), &text, false)
+            .await;
         self.settle(result)
     }
 
@@ -625,11 +708,8 @@ impl App {
 
     async fn open_palette(&mut self, tab: Option<crate::tui::command::PaletteTab>) -> Flow {
         let entries = self.keymap.help_entries();
-        let view = super::overlay::PaletteView::new(
-            tab.unwrap_or_default(),
-            entries,
-            &self.session,
-        );
+        let view =
+            super::overlay::PaletteView::new(tab.unwrap_or_default(), entries, &self.session);
         self.open_overlay(Overlay::palette(view)).await
     }
 
@@ -871,6 +951,25 @@ impl App {
     /// `resize-pane -Z`: the daemon zooms or unzooms the active window.
     async fn toggle_zoom(&mut self) -> Flow {
         let result = self.client.zoom(None, None).await;
+        self.settle(result)
+    }
+
+    /// `set-option [-g] synchronize-panes`: the active window, or every window with `-g`.
+    async fn set_synchronize(&mut self, all: bool, on: bool) -> Flow {
+        let windows: Vec<usize> = self
+            .layout
+            .tabs
+            .iter()
+            .filter(|t| all || t.is_active)
+            .map(|t| t.index)
+            .collect();
+        let mut result = Ok(());
+        for window in windows {
+            result = self.client.synchronize(Some(window), Some(on)).await;
+            if result.is_err() {
+                break;
+            }
+        }
         self.settle(result)
     }
 

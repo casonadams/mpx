@@ -3,9 +3,7 @@ use mpx::layout::{Rect, Workspace};
 use mpx::protocol::{LayoutPreset, Side};
 
 fn main_tab_ws() -> Workspace {
-    let mut ws = Workspace::new("main".to_string());
-    ws.add_or_split("pane1".to_string(), Direction::Horizontal);
-    ws
+    super::tab_with(&["pane1"])
 }
 
 fn widths(ws: &Workspace) -> Vec<(String, u16, bool)> {
@@ -288,19 +286,14 @@ fn removing_a_pane_drops_empty_windows() {
 
 #[test]
 fn pane_count_spans_windows() {
-    let mut ws = main_tab_ws();
-    ws.add_or_split("pane2".to_string(), Direction::Horizontal);
-    ws.new_window("second".into(), "s".into());
+    let mut ws = super::two_windows();
+    ws.add_or_split("pane3".to_string(), Direction::Horizontal);
     assert_eq!(ws.pane_count(), 3);
 }
 
 /// Three panes side by side, `c` focused: slot order `a b c`.
 fn three_ws() -> Workspace {
-    let mut ws = Workspace::new("main".to_string());
-    ws.add_or_split("a".to_string(), Direction::Horizontal);
-    ws.add_or_split("b".to_string(), Direction::Horizontal);
-    ws.add_or_split("c".to_string(), Direction::Horizontal);
-    ws
+    super::tab_with(&["a", "b", "c"])
 }
 
 fn slot_names(ws: &Workspace) -> Vec<String> {

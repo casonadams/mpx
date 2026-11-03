@@ -1,10 +1,11 @@
 mod daemon {
     mod basics;
-    mod config_policy;
-    mod env;
     mod capture;
-    mod exit_drain;
+    mod config_policy;
+    mod cursor;
+    mod env;
     mod environment;
+    mod exit_drain;
     mod idempotency;
     mod idempotent;
     mod input;
@@ -16,6 +17,7 @@ mod daemon {
     mod panes;
     mod plan;
     mod prompt;
+    mod renumber;
     mod rotate;
     mod snapshot;
     mod state;

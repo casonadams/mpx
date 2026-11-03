@@ -5,12 +5,13 @@ use tokio_util::codec::{Framed, FramedParts, LengthDelimitedCodec, LinesCodec};
 use crate::ipc::{IpcStream, connect_stream};
 use crate::layout::{Divider, Rect, WindowTab};
 use crate::protocol::{
-    Buffer, DaemonMessage, EnvChange, EnvEntry, LayoutPreset, NewWindowOpts, NodeInfo, PROTOCOL,
-    PasteBufferOpts, Request, Response, SessionInfo, Side, SpawnOpts, SplitOpts, StreamEvent,
-    WaitCondition, WaitOutcome,
+    Buffer, BufferRequest, DaemonMessage, EnvChange, EnvEntry, LayoutPreset, NewWindowOpts,
+    NodeInfo, NodeRequest, PROTOCOL, PaneRequest, PasteBufferOpts, Request, Response, SessionInfo,
+    SessionRequest, Side, SpawnOpts, SplitOpts, StreamEvent, WaitCondition, WaitOutcome,
+    WindowRequest,
 };
-use crate::wire;
 use crate::vt::capture::CaptureSpec;
+use crate::wire;
 
 const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 const SHUTDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
@@ -22,7 +23,6 @@ pub struct Client {
     /// Idempotency key applied to the next request only.
     pending_key: Option<String>,
 }
-
 
 /// What answered on a session socket.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -164,15 +164,20 @@ impl Client {
     }
 
     pub async fn shutdown(&mut self) -> Result<(), String> {
-        let _ = tokio::time::timeout(SHUTDOWN_TIMEOUT, self.call_ok("Shutdown", Request::Shutdown)).await;
+        let _ = tokio::time::timeout(
+            SHUTDOWN_TIMEOUT,
+            self.call_ok("Shutdown", Request::Shutdown),
+        )
+        .await;
         Ok(())
     }
     pub async fn spawn(&mut self, opts: SpawnOpts) -> Result<NodeInfo, String> {
-        self.call_node("Spawn", Request::Spawn(opts)).await
+        self.call_node("Spawn", Request::Node(NodeRequest::Spawn(opts)))
+            .await
     }
 
     pub async fn list(&mut self) -> Result<Vec<NodeInfo>, String> {
-        match self.call(Request::List).await? {
+        match self.call(Request::Node(NodeRequest::List)).await? {
             Response::NodeList(list) => Ok(list),
             other => Err(unexpected("List", other)),
         }
@@ -186,12 +191,12 @@ impl Client {
         plain: bool,
         since: Option<u64>,
     ) -> Result<(String, u64), String> {
-        let req = Request::Logs {
+        let req = Request::Node(NodeRequest::Logs {
             name: name.to_string(),
             tail,
             plain,
             since,
-        };
+        });
         match self.call(req).await? {
             Response::LogChunk { data, next } => Ok((data, next)),
             other => Err(unexpected("Logs", other)),
@@ -199,10 +204,10 @@ impl Client {
     }
 
     pub async fn send_input(&mut self, name: &str, data: &str) -> Result<(), String> {
-        let req = Request::Send {
+        let req = Request::Node(NodeRequest::Send {
             name: name.to_string(),
             data: data.to_string(),
-        };
+        });
         self.call_ok("Send", req).await
     }
 
@@ -212,29 +217,29 @@ impl Client {
         keys: Vec<String>,
         literal: bool,
     ) -> Result<(), String> {
-        let req = Request::SendKeys {
+        let req = Request::Node(NodeRequest::SendKeys {
             name: name.to_string(),
             keys,
             literal,
-        };
+        });
         self.call_ok("SendKeys", req).await
     }
 
     pub async fn paste(&mut self, name: &str, text: &str, submit: bool) -> Result<(), String> {
-        let req = Request::Paste {
+        let req = Request::Node(NodeRequest::Paste {
             name: name.to_string(),
             text: text.to_string(),
             submit,
-        };
+        });
         self.call_ok("Paste", req).await
     }
 
     pub async fn kill(&mut self, name: &str) -> Result<(), String> {
         self.call_ok(
             "Kill",
-            Request::Kill {
+            Request::Node(NodeRequest::Kill {
                 name: name.to_string(),
-            },
+            }),
         )
         .await
     }
@@ -245,11 +250,11 @@ impl Client {
         condition: WaitCondition,
         timeout_ms: Option<u64>,
     ) -> Result<WaitOutcome, String> {
-        let req = Request::Wait {
+        let req = Request::Node(NodeRequest::Wait {
             name: name.to_string(),
             condition,
             timeout_ms,
-        };
+        });
         match self.call(req).await? {
             Response::WaitResult(outcome) => Ok(outcome),
             other => Err(unexpected("Wait", other)),
@@ -258,9 +263,9 @@ impl Client {
 
     pub async fn screen(&mut self, name: &str) -> Result<String, String> {
         match self
-            .call(Request::Screen {
+            .call(Request::Node(NodeRequest::Screen {
                 name: name.to_string(),
-            })
+            }))
             .await?
         {
             Response::Screen(text) => Ok(text),
@@ -269,25 +274,30 @@ impl Client {
     }
 
     pub async fn split(&mut self, opts: SplitOpts) -> Result<NodeInfo, String> {
-        self.call_node("Split", Request::Split(opts)).await
+        self.call_node("Split", Request::Pane(PaneRequest::Split(opts)))
+            .await
     }
 
     pub async fn layout(&mut self, width: u16, height: u16) -> Result<LayoutTuple, String> {
-        match self.call(Request::Layout { width, height }).await? {
+        match self
+            .call(Request::Session(SessionRequest::Layout { width, height }))
+            .await?
+        {
             Response::Layout(rects, dividers, tabs) => Ok((rects, dividers, tabs)),
             other => Err(unexpected("Layout", other)),
         }
     }
 
     pub async fn new_window(&mut self, opts: NewWindowOpts) -> Result<NodeInfo, String> {
-        self.call_node("NewWindow", Request::NewWindow(opts)).await
+        self.call_node("NewWindow", Request::Window(WindowRequest::New(opts)))
+            .await
     }
 
     pub async fn get_cwd(&mut self, name: &str) -> Result<Option<String>, String> {
         match self
-            .call(Request::GetCwd {
+            .call(Request::Node(NodeRequest::Cwd {
                 name: name.to_string(),
-            })
+            }))
             .await?
         {
             Response::Cwd(cwd) => Ok(cwd),
@@ -296,37 +306,44 @@ impl Client {
     }
 
     pub async fn next_window(&mut self) -> Result<(), String> {
-        self.call_ok("NextWindow", Request::NextWindow).await
-    }
-
-    pub async fn prev_window(&mut self) -> Result<(), String> {
-        self.call_ok("PrevWindow", Request::PrevWindow).await
-    }
-
-    pub async fn last_window(&mut self) -> Result<(), String> {
-        self.call_ok("LastWindow", Request::LastWindow).await
-    }
-
-    pub async fn select_window(&mut self, index: usize) -> Result<(), String> {
-        self.call_ok("SelectWindow", Request::SelectWindow { index })
+        self.call_ok("NextWindow", Request::Window(WindowRequest::Next))
             .await
     }
 
+    pub async fn prev_window(&mut self) -> Result<(), String> {
+        self.call_ok("PrevWindow", Request::Window(WindowRequest::Prev))
+            .await
+    }
+
+    pub async fn last_window(&mut self) -> Result<(), String> {
+        self.call_ok("LastWindow", Request::Window(WindowRequest::Last))
+            .await
+    }
+
+    pub async fn select_window(&mut self, index: usize) -> Result<(), String> {
+        self.call_ok(
+            "SelectWindow",
+            Request::Window(WindowRequest::Select { index }),
+        )
+        .await
+    }
+
     pub async fn rename_window(&mut self, index: Option<usize>, name: &str) -> Result<(), String> {
-        let req = Request::RenameWindow {
+        let req = Request::Window(WindowRequest::Rename {
             index,
             name: name.to_string(),
-        };
+        });
         self.call_ok("RenameWindow", req).await
     }
 
     pub async fn kill_window(&mut self, index: Option<usize>) -> Result<(), String> {
-        self.call_ok("KillWindow", Request::KillWindow { index })
+        self.call_ok("KillWindow", Request::Window(WindowRequest::Kill { index }))
             .await
     }
 
     pub async fn next_pane(&mut self) -> Result<(), String> {
-        self.call_ok("FocusNext", Request::FocusNext).await
+        self.call_ok("FocusNext", Request::Pane(PaneRequest::FocusNext))
+            .await
     }
 
     pub async fn focus_last(&mut self) -> Result<(), String> {
@@ -335,8 +352,11 @@ impl Client {
 
     /// `keep_zoom` (tmux `last-pane -Z`) leaves a zoomed window zoomed.
     pub async fn focus_last_with(&mut self, keep_zoom: bool) -> Result<(), String> {
-        self.call_ok("FocusLast", Request::FocusLast { keep_zoom })
-            .await
+        self.call_ok(
+            "FocusLast",
+            Request::Pane(PaneRequest::FocusLast { keep_zoom }),
+        )
+        .await
     }
 
     pub async fn focus(&mut self, name: &str) -> Result<(), String> {
@@ -347,39 +367,53 @@ impl Client {
     pub async fn focus_with(&mut self, name: &str, keep_zoom: bool) -> Result<(), String> {
         self.call_ok(
             "Focus",
-            Request::Focus {
+            Request::Pane(PaneRequest::Focus {
                 name: name.to_string(),
                 keep_zoom,
-            },
+            }),
         )
         .await
     }
 
     /// Zooms or unzooms the window of `pane` (the active pane when `None`); `on` None toggles.
     pub async fn zoom(&mut self, pane: Option<&str>, on: Option<bool>) -> Result<(), String> {
-        let req = Request::Zoom {
+        let req = Request::Pane(PaneRequest::Zoom {
             pane: pane.map(str::to_string),
             on,
-        };
+        });
         self.call_ok("Zoom", req).await
+    }
+
+    /// Turns `synchronize-panes` on or off for window `window` (the active window when `None`);
+    /// `on` None toggles it.
+    pub async fn synchronize(
+        &mut self,
+        window: Option<usize>,
+        on: Option<bool>,
+    ) -> Result<(), String> {
+        self.call_ok(
+            "Synchronize",
+            Request::Pane(PaneRequest::Synchronize { window, on }),
+        )
+        .await
     }
 
     pub async fn status(&mut self, name: &str) -> Result<NodeInfo, String> {
         self.call_node(
             "Status",
-            Request::Status {
+            Request::Node(NodeRequest::Status {
                 name: name.to_string(),
-            },
+            }),
         )
         .await
     }
 
     pub async fn resize_pane(&mut self, name: &str, cols: u16, rows: u16) -> Result<(), String> {
-        let req = Request::ResizePane {
+        let req = Request::Node(NodeRequest::Resize {
             name: name.to_string(),
             cols,
             rows,
-        };
+        });
         self.call_ok("ResizePane", req).await
     }
 
@@ -390,13 +424,13 @@ impl Client {
         cells: u16,
         viewport: (u16, u16),
     ) -> Result<(), String> {
-        let req = Request::ResizeSplit {
+        let req = Request::Pane(PaneRequest::ResizeSplit {
             name: name.to_string(),
             side,
             cells,
             width: viewport.0,
             height: viewport.1,
-        };
+        });
         self.call_ok("ResizeSplit", req).await
     }
 
@@ -419,53 +453,60 @@ impl Client {
         b: Option<&str>,
         keep_zoom: bool,
     ) -> Result<(), String> {
-        let req = Request::SwapPane {
+        let req = Request::Pane(PaneRequest::SwapPane {
             a: a.map(str::to_string),
             b: b.map(str::to_string),
             keep_zoom,
-        };
+        });
         self.call_ok("SwapPane", req).await
     }
 
     pub async fn mark_pane(&mut self, name: Option<&str>, clear: bool) -> Result<(), String> {
-        let req = Request::MarkPane {
+        let req = Request::Pane(PaneRequest::MarkPane {
             name: name.map(str::to_string),
             clear,
-        };
+        });
         self.call_ok("MarkPane", req).await
     }
 
     pub async fn break_pane(&mut self, name: &str) -> Result<(), String> {
         self.call_ok(
             "BreakPane",
-            Request::BreakPane {
+            Request::Pane(PaneRequest::BreakPane {
                 name: name.to_string(),
-            },
+            }),
         )
         .await
     }
 
     pub async fn spread_layout(&mut self) -> Result<(), String> {
-        self.call_ok("SpreadLayout", Request::SpreadLayout).await
+        self.call_ok("SpreadLayout", Request::Pane(PaneRequest::SpreadLayout))
+            .await
     }
 
     pub async fn select_layout(&mut self, preset: Option<LayoutPreset>) -> Result<(), String> {
-        self.call_ok("SelectLayout", Request::SelectLayout { preset })
-            .await
+        self.call_ok(
+            "SelectLayout",
+            Request::Pane(PaneRequest::SelectLayout { preset }),
+        )
+        .await
     }
 
     /// Rotates the active window's panes through its layout slots (`rotate-window`).
     pub async fn rotate_window(&mut self, down: bool) -> Result<(), String> {
-        self.call_ok("RotateWindow", Request::RotateWindow { down })
-            .await
+        self.call_ok(
+            "RotateWindow",
+            Request::Window(WindowRequest::Rotate { down }),
+        )
+        .await
     }
 
     pub async fn rename_session(&mut self, name: &str) -> Result<(), String> {
         self.call_ok(
             "RenameSession",
-            Request::RenameSession {
+            Request::Session(SessionRequest::Rename {
                 name: name.to_string(),
-            },
+            }),
         )
         .await
     }
@@ -473,21 +514,28 @@ impl Client {
     /// Makes the daemon re-read its config from `path` (the defaults when `None`).
     pub async fn reload_config(&mut self, path: Option<&std::path::Path>) -> Result<(), String> {
         let path = path.map(|p| p.to_string_lossy().into_owned());
-        self.call_ok("ReloadConfig", Request::ReloadConfig { path }).await
+        self.call_ok(
+            "ReloadConfig",
+            Request::Session(SessionRequest::ReloadConfig { path }),
+        )
+        .await
     }
 
-    /// Sets (or with `None` forgets) a runtime key binding; see `Request::SetBinding`.
+    /// Sets (or with `None` forgets) a runtime key binding; see `Request::Session(SessionRequest::SetBinding)`.
     pub async fn set_binding(&mut self, name: &str, line: Option<&str>) -> Result<(), String> {
-        let req = Request::SetBinding {
+        let req = Request::Session(SessionRequest::SetBinding {
             name: name.to_string(),
             line: line.map(str::to_string),
-        };
+        });
         self.call_ok("SetBinding", req).await
     }
 
     /// The runtime key bindings, sorted by name.
     pub async fn get_bindings(&mut self) -> Result<Vec<(String, String)>, String> {
-        match self.call(Request::GetBindings).await? {
+        match self
+            .call(Request::Session(SessionRequest::GetBindings))
+            .await?
+        {
             Response::Bindings(bindings) => Ok(bindings),
             other => Err(unexpected("GetBindings", other)),
         }
@@ -501,14 +549,22 @@ impl Client {
         append: bool,
     ) -> Result<(), String> {
         let name = name.map(str::to_string);
-        self.call_ok("SetBuffer", Request::SetBuffer { name, data: data.to_string(), append }).await
+        self.call_ok(
+            "SetBuffer",
+            Request::Buffer(BufferRequest::Set {
+                name,
+                data: data.to_string(),
+                append,
+            }),
+        )
+        .await
     }
 
     /// The named paste buffer, or the most recent one.
     pub async fn get_buffer(&mut self, name: Option<&str>) -> Result<Buffer, String> {
-        let req = Request::GetBuffer {
+        let req = Request::Buffer(BufferRequest::Get {
             name: name.map(str::to_string),
-        };
+        });
         match self.call(req).await? {
             Response::Buffer(buffer) => Ok(buffer),
             other => Err(unexpected("GetBuffer", other)),
@@ -517,35 +573,43 @@ impl Client {
 
     /// Paste buffers, newest first.
     pub async fn list_buffers(&mut self) -> Result<Vec<Buffer>, String> {
-        match self.call(Request::ListBuffers).await? {
+        match self.call(Request::Buffer(BufferRequest::List)).await? {
             Response::Buffers(buffers) => Ok(buffers),
             other => Err(unexpected("ListBuffers", other)),
         }
     }
 
     pub async fn delete_buffer(&mut self, name: Option<&str>) -> Result<(), String> {
-        let req = Request::DeleteBuffer {
+        let req = Request::Buffer(BufferRequest::Delete {
             name: name.map(str::to_string),
-        };
+        });
         self.call_ok("DeleteBuffer", req).await
     }
 
     /// Renames a buffer (`set-buffer -n`); `name` None is the newest buffer.
     pub async fn rename_buffer(&mut self, name: Option<&str>, to: &str) -> Result<(), String> {
         let name = name.map(str::to_string);
-        self.call_ok("RenameBuffer", Request::RenameBuffer { name, to: to.to_string() }).await
+        self.call_ok(
+            "RenameBuffer",
+            Request::Buffer(BufferRequest::Rename {
+                name,
+                to: to.to_string(),
+            }),
+        )
+        .await
     }
 
     pub async fn paste_buffer(&mut self, opts: PasteBufferOpts) -> Result<(), String> {
-        self.call_ok("PasteBuffer", Request::PasteBuffer(opts)).await
+        self.call_ok("PasteBuffer", Request::Buffer(BufferRequest::Paste(opts)))
+            .await
     }
 
     /// Text of a pane's history and screen, as `capture-pane` reads it.
     pub async fn capture_pane(&mut self, name: &str, spec: CaptureSpec) -> Result<String, String> {
-        let req = Request::CapturePane {
+        let req = Request::Node(NodeRequest::Capture {
             name: name.to_string(),
             spec,
-        };
+        });
         self.call_as("CapturePane", req, |resp| match resp {
             Response::Capture(text) => Some(text),
             _ => None,
@@ -554,18 +618,18 @@ impl Client {
     }
 
     pub async fn set_environment(&mut self, name: &str, change: EnvChange) -> Result<(), String> {
-        let req = Request::SetEnvironment {
+        let req = Request::Session(SessionRequest::SetEnvironment {
             name: name.to_string(),
             change,
-        };
+        });
         self.call_ok("SetEnvironment", req).await
     }
 
     /// The session environment, or only the variable `name`.
     pub async fn show_environment(&mut self, name: Option<&str>) -> Result<Vec<EnvEntry>, String> {
-        let req = Request::ShowEnvironment {
+        let req = Request::Session(SessionRequest::ShowEnvironment {
             name: name.map(str::to_string),
-        };
+        });
         self.call_as("ShowEnvironment", req, |resp| match resp {
             Response::Environment(entries) => Some(entries),
             _ => None,
@@ -574,24 +638,40 @@ impl Client {
     }
 
     pub async fn move_window(&mut self, from: usize, to: usize) -> Result<(), String> {
-        self.call_ok("MoveWindow", Request::MoveWindow { from, to }).await
+        self.call_ok(
+            "MoveWindow",
+            Request::Window(WindowRequest::Move { from, to }),
+        )
+        .await
+    }
+
+    /// Renumbers the windows 0, 1, ... in order (tmux `move-window -r`).
+    pub async fn renumber_windows(&mut self) -> Result<(), String> {
+        self.call_ok("RenumberWindows", Request::Window(WindowRequest::Renumber))
+            .await
     }
 
     /// Moves pane `src` next to `dst`, splitting it side by side or stacked.
-    pub async fn join_pane(&mut self, src: &str, dst: &str, side_by_side: bool) -> Result<(), String> {
-        let req = Request::JoinPane {
+    pub async fn join_pane(
+        &mut self,
+        src: &str,
+        dst: &str,
+        side_by_side: bool,
+    ) -> Result<(), String> {
+        let req = Request::Pane(PaneRequest::Join {
             src: src.to_string(),
             dst: dst.to_string(),
             side_by_side,
-        };
+        });
         self.call_ok("JoinPane", req).await
     }
 
     pub async fn swap_window(&mut self, a: usize, b: usize) -> Result<(), String> {
-        self.call_ok("SwapWindow", Request::SwapWindow { a, b }).await
+        self.call_ok("SwapWindow", Request::Window(WindowRequest::Swap { a, b }))
+            .await
     }
 
-    /// Restarts a pane's process in place (`respawn-pane`); see `Request::Respawn`.
+    /// Restarts a pane's process in place (`respawn-pane`); see `Request::Node(NodeRequest::Respawn)`.
     pub async fn respawn(
         &mut self,
         name: &str,
@@ -599,12 +679,12 @@ impl Client {
         cwd: Option<String>,
         command: Option<Vec<String>>,
     ) -> Result<(), String> {
-        let req = Request::Respawn {
+        let req = Request::Node(NodeRequest::Respawn {
             name: name.to_string(),
             kill,
             cwd,
             command,
-        };
+        });
         self.call_ok("Respawn", req).await
     }
 
@@ -631,8 +711,7 @@ impl Client {
             active_window: false,
             layout: false,
         };
-        self.stream(req, handler)
-            .await
+        self.stream(req, handler).await
     }
 
     /// Like `stream_logs`, but hands each event, wrapped by `wrap`, to `tx` and waits while it is

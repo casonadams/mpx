@@ -15,22 +15,22 @@ use super::idempotency::{Claim, IdemCache};
 use super::plan::{self, PaneIdentity};
 use super::snapshot::{PaneRecord, build_snapshot};
 use super::stores::{Stores, no_buffer};
-use crate::node::sleep_until_opt;
 use crate::config::Config;
 use crate::keys::{TermModes, encode_key_names, wrap_paste};
-use crate::protocol::{EnvEntry, PasteBufferOpts};
-use crate::vt::capture::CaptureSpec;
-use crate::layout::{Direction, Workspace};
+use crate::layout::{Direction, Workspace, window_not_found};
 use crate::node::pacing::Pacing;
 use crate::node::pane::{self, InputBuild, Notifier, PaneCtx, PaneHandle, PaneNotice, TermView};
 use crate::node::process::basename;
 use crate::node::sink::Sink;
+use crate::node::sleep_until_opt;
 use crate::node::{SpawnSpec, now_ms};
 use crate::protocol::{
-    NewWindowOpts, NodeInfo, PaneId, Request, Response,
-    SessionInfo, SpawnOpts, SplitOpts, StreamEvent,
+    BufferRequest, NewWindowOpts, NodeInfo, NodeRequest, PaneId, PaneRequest, Request, Response,
+    SessionInfo, SessionRequest, SpawnOpts, SplitOpts, StreamEvent, WindowRequest,
 };
+use crate::protocol::{EnvEntry, PasteBufferOpts};
 use crate::store::{SessionSnapshot, SnapshotStore, WindowPlan, plan_restore};
+use crate::vt::capture::CaptureSpec;
 
 pub(super) type Reply<T> = oneshot::Sender<T>;
 
@@ -89,7 +89,9 @@ pub(super) enum Filter {
     Everything,
     /// What a TUI shows: output of the active window's panes, every other pane event, and
     /// `Layout` events when `layout` is set.
-    ActiveWindow { layout: bool },
+    ActiveWindow {
+        layout: bool,
+    },
 }
 
 impl Filter {
@@ -161,6 +163,7 @@ pub(super) enum Placement {
 enum Next {
     Msg(SessionMsg),
     Save,
+    Silence,
     Closed,
 }
 
@@ -204,6 +207,9 @@ pub(super) async fn run(boot: Boot, mut rx: mpsc::UnboundedReceiver<SessionMsg>)
     let notifier: Notifier = Arc::new(move |notice| {
         let _ = tx.send(SessionMsg::Notice(notice));
     });
+    let mut workspace = Workspace::new(session.clone());
+    workspace.set_renumber_windows(config.renumber_windows);
+    workspace.set_synchronize_new(config.synchronize_panes);
     let mut session = Session {
         session: session.clone(),
         endpoint,
@@ -211,7 +217,7 @@ pub(super) async fn run(boot: Boot, mut rx: mpsc::UnboundedReceiver<SessionMsg>)
         created_ms: now_ms(),
         restored_ms: None,
         notifier,
-        workspace: Workspace::new(session),
+        workspace,
         nodes: HashMap::new(),
         history: VecDeque::new(),
         next_pane_id: 0,
@@ -232,6 +238,7 @@ pub(super) async fn run(boot: Boot, mut rx: mpsc::UnboundedReceiver<SessionMsg>)
         let next = tokio::select! {
             msg = rx.recv() => msg.map_or(Next::Closed, Next::Msg),
             () = sleep_until_opt(session.save_due) => Next::Save,
+            () = sleep_until_opt(session.silence_due()) => Next::Silence,
         };
         match next {
             Next::Msg(msg) => session.handle(msg).await,
@@ -239,6 +246,7 @@ pub(super) async fn run(boot: Boot, mut rx: mpsc::UnboundedReceiver<SessionMsg>)
                 session.save_due = None;
                 session.save(false).await;
             }
+            Next::Silence => session.expire_silence(),
             Next::Closed => break,
         }
     }
@@ -303,6 +311,26 @@ impl Session {
         }
     }
 
+    /// When the next background window goes quiet, if `monitor-silence` is on.
+    fn silence_due(&self) -> Option<tokio::time::Instant> {
+        let secs = self.config.monitor_silence;
+        if secs == 0 {
+            return None;
+        }
+        self.workspace
+            .next_silence(secs)
+            .map(tokio::time::Instant::from_std)
+    }
+
+    fn expire_silence(&mut self) {
+        if self
+            .workspace
+            .expire_silence(self.config.monitor_silence, std::time::Instant::now())
+        {
+            self.fanout(&StreamEvent::Layout);
+        }
+    }
+
     fn notice(&mut self, notice: PaneNotice) {
         match notice {
             PaneNotice::Event(event) => {
@@ -313,6 +341,7 @@ impl Session {
                     if self.config.monitor_activity {
                         self.workspace.mark_activity(name);
                     }
+                    self.workspace.note_output(name, std::time::Instant::now());
                 }
                 self.fanout(&event);
             }
@@ -338,9 +367,7 @@ impl Session {
     /// Sends `event` to every subscriber it reaches; returns how many subscribers accepted it.
     fn fanout(&mut self, event: &StreamEvent) -> usize {
         let workspace = &self.workspace;
-        let shown = |name: &str| {
-            workspace.active_window().is_some_and(|w| w.contains(name))
-        };
+        let shown = |name: &str| workspace.active_window().is_some_and(|w| w.contains(name));
         let mut accepted = 0;
         self.filters.retain_mut(|(filter, sink)| {
             if filter.accepts(event, shown) {
@@ -360,21 +387,57 @@ impl Session {
             Request::Ping => Response::Pong,
             Request::Info => Response::Session(self.session_info()),
             Request::Restore => self.restore(),
-            Request::Spawn(opts) => node_reply(self.add_node(opts, Placement::Spawn).await),
-            Request::List => Response::NodeList(self.list().await),
-            Request::Split(opts) => self.split(opts).await,
-            Request::NewWindow(opts) => self.new_window(opts).await,
-            Request::Layout { width, height } => self.layout(width, height).await,
-            Request::Status { name } => node_reply(self.status(&name).await),
-            Request::RenameSession { name } => {
+            Request::Node(req) => self.node_request(req).await,
+            Request::Pane(req) => self.pane_request(req).await,
+            Request::Window(req) => self.window_request(req).await,
+            Request::Buffer(req) => self.buffer_request(req).await,
+            Request::Session(req) => self.session_request(req).await,
+            Request::Shutdown | Request::Idempotent { .. } | Request::Subscribe { .. } => {
+                Response::Error("Request is handled by the connection".to_string())
+            }
+        }
+    }
+
+    /// Paste buffers.
+    async fn buffer_request(&mut self, req: BufferRequest) -> Response {
+        match req {
+            BufferRequest::Set { name, data, append } => {
+                self.stores.set_buffer(name, data, append);
+                Response::Ok
+            }
+            BufferRequest::Get { name } => match self.stores.buffer(name.as_deref()) {
+                Some(buffer) => Response::Buffer(buffer.clone()),
+                None => Response::Error(no_buffer(name.as_deref())),
+            },
+            BufferRequest::List => Response::Buffers(self.stores.buffers()),
+            BufferRequest::Delete { name } => {
+                if self.stores.delete_buffer(name.as_deref()) {
+                    Response::Ok
+                } else {
+                    Response::Error(no_buffer(name.as_deref()))
+                }
+            }
+            BufferRequest::Rename { name, to } => {
+                unit(self.stores.rename_buffer(name.as_deref(), to))
+            }
+            BufferRequest::Paste(opts) => self.paste_buffer(opts).await,
+        }
+    }
+
+    /// The session's own state: name, config, key bindings, environment and size.
+    async fn session_request(&mut self, req: SessionRequest) -> Response {
+        match req {
+            SessionRequest::Rename { name } => {
                 self.session = name.clone();
                 self.workspace.name = name;
                 self.schedule_save();
                 Response::Ok
             }
-            Request::ReloadConfig { path } => {
+            SessionRequest::ReloadConfig { path } => {
                 match Config::load_at(path.as_deref().map(std::path::Path::new)) {
                     Ok(config) => {
+                        self.workspace.set_renumber_windows(config.renumber_windows);
+                        self.workspace.set_synchronize_new(config.synchronize_panes);
                         self.config = config;
                         self.sync_relay();
                         Response::Ok
@@ -382,68 +445,19 @@ impl Session {
                     Err(e) => Response::Error(e),
                 }
             }
-            req @ (Request::SetBinding { .. }
-            | Request::GetBindings
-            | Request::SetBuffer { .. }
-            | Request::GetBuffer { .. }
-            | Request::ListBuffers
-            | Request::DeleteBuffer { .. }
-            | Request::RenameBuffer { .. }
-            | Request::SetEnvironment { .. }
-            | Request::ShowEnvironment { .. }
-            | Request::MoveWindow { .. }
-            | Request::RotateWindow { .. }
-            | Request::JoinPane { .. }
-            | Request::SwapWindow { .. }
-            | Request::Respawn { .. }) => self.state_request(req),
-            req => self.target_request(req).await,
-        }
-    }
-
-    /// Requests on the session's own state: runtime key bindings, paste buffers and window moves.
-    fn state_request(&mut self, req: Request) -> Response {
-        match req {
-            Request::SetBinding { name, line } => {
+            SessionRequest::SetBinding { name, line } => {
                 self.stores.set_binding(name, line);
                 self.fanout(&StreamEvent::Bindings);
                 Response::Ok
             }
-            Request::GetBindings => Response::Bindings(self.stores.bindings()),
-            Request::SetBuffer { name, data, append } => {
-                self.stores.set_buffer(name, data, append);
-                Response::Ok
-            }
-            Request::GetBuffer { name } => match self.stores.buffer(name.as_deref()) {
-                Some(buffer) => Response::Buffer(buffer.clone()),
-                None => Response::Error(no_buffer(name.as_deref())),
-            },
-            Request::ListBuffers => Response::Buffers(self.stores.buffers()),
-            Request::DeleteBuffer { name } => {
-                if self.stores.delete_buffer(name.as_deref()) {
-                    Response::Ok
-                } else {
-                    Response::Error(no_buffer(name.as_deref()))
-                }
-            }
-            Request::RenameBuffer { name, to } => {
-                unit(self.stores.rename_buffer(name.as_deref(), to))
-            }
-            Request::SetEnvironment { name, change } => {
+            SessionRequest::GetBindings => Response::Bindings(self.stores.bindings()),
+            SessionRequest::SetEnvironment { name, change } => {
                 unit(self.stores.set_environment(name, change))
             }
-            Request::ShowEnvironment { name } => {
+            SessionRequest::ShowEnvironment { name } => {
                 show_environment(self.stores.environment(), name.as_deref())
             }
-            Request::MoveWindow { from, to } => {
-                check(self.workspace.move_window(from, to), "No such window")
-            }
-            Request::RotateWindow { down } => {
-                check(self.workspace.rotate_active(down), "No window")
-            }
-            Request::JoinPane { src, dst, side_by_side } => self.join_pane(&src, &dst, side_by_side),
-            Request::SwapWindow { a, b } => check(self.workspace.swap_windows(a, b), "No such window"),
-            Request::Respawn { name, kill, cwd, command } => self.respawn(&name, kill, cwd, command),
-            other => Response::Error(format!("not a state request: {other:?}")),
+            SessionRequest::Layout { width, height } => self.layout(width, height).await,
         }
     }
 
@@ -508,14 +522,17 @@ impl Session {
         Response::Ok
     }
 
-    /// Input, screen, sizing and agent requests addressed to one pane.
-    async fn target_request(&mut self, req: Request) -> Response {
+    /// Node requests: spawning, listing, input, screen, sizing, cwd, respawn and status.
+    async fn node_request(&mut self, req: NodeRequest) -> Response {
         match req {
-            Request::Send { name, data } => unit(
+            NodeRequest::Spawn(opts) => node_reply(self.add_node(opts, Placement::Spawn).await),
+            NodeRequest::List => Response::NodeList(self.list().await),
+            NodeRequest::Status { name } => node_reply(self.status(&name).await),
+            NodeRequest::Send { name, data } => unit(
                 self.send(&name, Box::new(move |_: &TermView| data.into_bytes()))
                     .await,
             ),
-            Request::SendKeys {
+            NodeRequest::SendKeys {
                 name,
                 keys,
                 literal,
@@ -526,47 +543,55 @@ impl Session {
                 )
                 .await,
             ),
-            Request::Paste { name, text, submit } => unit(
+            NodeRequest::Paste { name, text, submit } => unit(
                 self.send(
                     &name,
                     Box::new(move |view: &TermView| paste_bytes(&text, submit, view)),
                 )
                 .await,
             ),
-            Request::Screen { name } => reply(self.screen(&name).await, Response::Screen),
-            Request::CapturePane { name, spec } => {
+            NodeRequest::Screen { name } => reply(self.screen(&name).await, Response::Screen),
+            NodeRequest::Capture { name, spec } => {
                 reply(self.capture(&name, spec).await, Response::Capture)
             }
-            Request::PasteBuffer(opts) => self.paste_buffer(opts).await,
-            Request::ResizePane { name, cols, rows } => unit(self.resize(&name, cols, rows).await),
-            Request::GetCwd { name } => reply(self.cwd(&name).await, Response::Cwd),
-            req => self.workspace_request(req),
+            NodeRequest::Resize { name, cols, rows } => unit(self.resize(&name, cols, rows).await),
+            NodeRequest::Cwd { name } => reply(self.cwd(&name).await, Response::Cwd),
+            NodeRequest::Respawn {
+                name,
+                kill,
+                cwd,
+                command,
+            } => self.respawn(&name, kill, cwd, command),
+            NodeRequest::Logs { .. } | NodeRequest::Kill { .. } | NodeRequest::Wait { .. } => {
+                Response::Error("Request is handled by the connection".to_string())
+            }
         }
     }
 
-    /// Layout and window operations. Requests that belong to the connection never reach here.
-    fn workspace_request(&mut self, req: Request) -> Response {
+    /// Pane layout: splitting, focus, zoom, marks, joins and layout presets.
+    async fn pane_request(&mut self, req: PaneRequest) -> Response {
         match req {
-            Request::FocusNext => {
+            PaneRequest::Split(opts) => self.split(opts).await,
+            PaneRequest::FocusNext => {
                 self.workspace.focus_next();
                 Response::Ok
             }
-            Request::FocusLast { keep_zoom } => check(
+            PaneRequest::FocusLast { keep_zoom } => check(
                 self.workspace.focus_last_with(keep_zoom),
                 "No previous pane",
             ),
-            Request::Focus { name, keep_zoom } => match self.target_name(&name) {
+            PaneRequest::Focus { name, keep_zoom } => match self.target_name(&name) {
                 Ok(n) => {
                     let ok = self.workspace.focus_with(&n, keep_zoom);
                     check(ok, &not_found(&n))
                 }
                 Err(e) => Response::Error(e),
             },
-            Request::Zoom { pane, on } => match self.zoom(pane, on) {
+            PaneRequest::Zoom { pane, on } => match self.zoom(pane, on) {
                 Ok(()) => Response::Ok,
                 Err(e) => Response::Error(e),
             },
-            Request::ResizeSplit {
+            PaneRequest::ResizeSplit {
                 name,
                 side,
                 cells,
@@ -579,23 +604,34 @@ impl Session {
                 ),
                 Err(e) => Response::Error(e),
             },
-            Request::SwapPane { a, b, keep_zoom } => self.swap_pane_req(a, b, keep_zoom),
-            Request::MarkPane { name, clear } => self.mark_pane_req(name, clear),
-            Request::BreakPane { name } => match self.target_name(&name) {
+            PaneRequest::SwapPane { a, b, keep_zoom } => self.swap_pane_req(a, b, keep_zoom),
+            PaneRequest::MarkPane { name, clear } => self.mark_pane_req(name, clear),
+            PaneRequest::BreakPane { name } => match self.target_name(&name) {
                 Ok(n) => check(self.workspace.break_pane(&n), "Pane is alone in its window"),
                 Err(e) => Response::Error(e),
             },
-            Request::SelectLayout { preset } => {
+            PaneRequest::Join {
+                src,
+                dst,
+                side_by_side,
+            } => self.join_pane(&src, &dst, side_by_side),
+            PaneRequest::SelectLayout { preset } => {
                 check(self.workspace.select_layout(preset), "No window")
             }
-            Request::SpreadLayout => check(self.workspace.spread_layout(), "No window"),
-            _ => self.window_request(req),
+            PaneRequest::SpreadLayout => check(self.workspace.spread_layout(), "No window"),
+            PaneRequest::Synchronize { window, on } => self
+                .workspace
+                .synchronize(window, on)
+                .map_or_else(Response::Error, |()| Response::Ok),
         }
     }
 
     fn swap_pane_req(&mut self, a: Option<String>, b: Option<String>, keep_zoom: bool) -> Response {
         let marked = self.workspace.marked_pane.clone();
-        let active = self.workspace.active_window().and_then(|w| w.focused.clone());
+        let active = self
+            .workspace
+            .active_window()
+            .and_then(|w| w.focused.clone());
         let src = match a {
             Some(s) => match self.target_name(&s) {
                 Ok(t) => t,
@@ -653,7 +689,11 @@ impl Session {
                 Ok(t) => t,
                 Err(e) => return Response::Error(e),
             },
-            None => match self.workspace.active_window().and_then(|w| w.focused.clone()) {
+            None => match self
+                .workspace
+                .active_window()
+                .and_then(|w| w.focused.clone())
+            {
                 Some(f) => f,
                 None => return Response::Error("No active pane to mark".to_string()),
             },
@@ -662,30 +702,50 @@ impl Session {
         Response::Ok
     }
 
-    /// Window navigation and naming.
-    fn window_request(&mut self, req: Request) -> Response {
+    /// Window navigation, naming, moving and reordering.
+    async fn window_request(&mut self, req: WindowRequest) -> Response {
         match req {
-            Request::NextWindow => {
+            WindowRequest::New(opts) => self.new_window(opts).await,
+            WindowRequest::Next => {
                 self.workspace.next_window();
                 Response::Ok
             }
-            Request::PrevWindow => {
+            WindowRequest::Prev => {
                 self.workspace.prev_window();
                 Response::Ok
             }
-            Request::LastWindow => check(self.workspace.last_window_switch(), "No last window"),
-            Request::SelectWindow { index } => check(
+            WindowRequest::Last => check(self.workspace.last_window_switch(), "No last window"),
+            WindowRequest::Select { index } => check(
                 self.workspace.select_window(index),
-                "Window index out of bounds",
+                &window_not_found(index),
             ),
-            Request::RenameWindow { index, name } => {
-                let idx = index.unwrap_or(self.workspace.active_idx);
-                check(
-                    self.workspace.rename_window(idx, name),
-                    "Window index out of bounds",
-                )
+            WindowRequest::Rename { index, name } => {
+                match index.or_else(|| self.workspace.active_number()) {
+                    Some(number) => check(
+                        self.workspace.rename_window(number, name),
+                        &window_not_found(number),
+                    ),
+                    None => Response::Error("No window".to_string()),
+                }
             }
-            _ => Response::Error("Request is handled by the connection".to_string()),
+            WindowRequest::Move { from, to } => self
+                .workspace
+                .move_window(from, to)
+                .map_or_else(Response::Error, |()| Response::Ok),
+            WindowRequest::Renumber => {
+                self.workspace.compact_numbers();
+                Response::Ok
+            }
+            WindowRequest::Rotate { down } => {
+                check(self.workspace.rotate_active(down), "No window")
+            }
+            WindowRequest::Swap { a, b } => self
+                .workspace
+                .swap_windows(a, b)
+                .map_or_else(Response::Error, |()| Response::Ok),
+            WindowRequest::Kill { .. } => {
+                Response::Error("Request is handled by the connection".to_string())
+            }
         }
     }
 
@@ -736,7 +796,7 @@ impl Session {
     async fn info_of(&self, name: &str, full: bool) -> Result<NodeInfo, String> {
         let handle = self.handle_of(name)?;
         let mut info = handle.info(full).await?;
-        info.window = self.workspace.window_of(name);
+        info.window = self.workspace.number_of(name);
         info.marked = Some(self.workspace.marked_pane.as_deref() == Some(name));
         Ok(info)
     }
@@ -748,12 +808,9 @@ impl Session {
 
     async fn list(&self) -> Vec<NodeInfo> {
         let mut infos = Vec::new();
-        for entry in self
-            .nodes
-            .values()
-        {
+        for entry in self.nodes.values() {
             if let Ok(mut info) = entry.handle.info(true).await {
-                info.window = self.workspace.window_of(entry.handle.name());
+                info.window = self.workspace.number_of(entry.handle.name());
                 info.marked =
                     Some(self.workspace.marked_pane.as_deref() == Some(entry.handle.name()));
                 infos.push(info);
@@ -794,7 +851,11 @@ impl Session {
         } = opts;
         let data = buffer.data;
         let build: InputBuild = Box::new(move |view: &TermView| {
-            let modes = if view.pty { view.modes } else { TermModes::default() };
+            let modes = if view.pty {
+                view.modes
+            } else {
+                TermModes::default()
+            };
             crate::keys::paste_buffer_bytes(
                 &data,
                 separator.as_deref(),
@@ -825,7 +886,6 @@ impl Session {
     async fn resize(&self, name: &str, cols: u16, rows: u16) -> Result<(), String> {
         self.handle_of(name)?.resize(cols, rows).await
     }
-
 
     async fn split(&mut self, opts: SplitOpts) -> Response {
         let SplitOpts {
@@ -870,8 +930,13 @@ impl Session {
         if !self.config.automatic_rename {
             return;
         }
-        for idx in 0..self.workspace.windows.len() {
-            let focused = self.workspace.windows[idx].focused.clone();
+        let windows: Vec<(usize, Option<String>)> = self
+            .workspace
+            .windows
+            .iter()
+            .map(|w| (w.number, w.focused.clone()))
+            .collect();
+        for (number, focused) in windows {
             let handle = focused
                 .and_then(|f| self.nodes.get(&f))
                 .map(|e| e.handle.clone());
@@ -879,7 +944,7 @@ impl Session {
                 Some(handle) => handle.label().await.ok().flatten(),
                 None => None,
             };
-            self.workspace.set_auto_name(idx, label);
+            self.workspace.set_auto_name(number, label);
         }
     }
 
@@ -938,11 +1003,11 @@ impl Session {
                 focus,
                 named,
             } => {
-                self.workspace
-                    .new_window_with_focus(label.clone(), name.to_string(), focus);
+                let number =
+                    self.workspace
+                        .new_window_with_focus(label.clone(), name.to_string(), focus);
                 if named {
-                    let idx = self.workspace.windows.len() - 1;
-                    self.workspace.rename_window(idx, label);
+                    self.workspace.rename_window(number, label);
                 }
                 Ok(())
             }
@@ -950,7 +1015,11 @@ impl Session {
     }
 
     /// Starts a pane and places it in the layout.
-    async fn add_node(&mut self, mut opts: SpawnOpts, place: Placement) -> Result<NodeInfo, String> {
+    async fn add_node(
+        &mut self,
+        mut opts: SpawnOpts,
+        place: Placement,
+    ) -> Result<NodeInfo, String> {
         self.resolve_command(&mut opts);
         let id = self.next_pane_id;
         let name = plan::spawn_name(&opts.name, &opts.command, id);
@@ -1133,11 +1202,13 @@ impl Session {
     }
 
     fn kill_window(&mut self, index: Option<usize>) -> Result<Vec<oneshot::Receiver<()>>, String> {
-        let idx = index.unwrap_or(self.workspace.active_idx);
+        let number = index
+            .or_else(|| self.workspace.active_number())
+            .ok_or_else(|| "No window".to_string())?;
         let panes = self
             .workspace
-            .kill_window(idx)
-            .ok_or_else(|| "Window index out of bounds".to_string())?;
+            .kill_window(number)
+            .ok_or_else(|| window_not_found(number))?;
         Ok(panes.iter().filter_map(|p| self.kill_entry(p)).collect())
     }
 
@@ -1181,12 +1252,19 @@ impl Session {
     fn restore_snapshot(&mut self, snapshot: &SessionSnapshot) {
         self.stores.restore_environment(&snapshot.environment);
         let plan = plan_restore(snapshot, &self.config.resume);
-        for window in plan.windows {
-            self.restore_window(window);
-        }
+        let numbers: Vec<usize> = plan
+            .windows
+            .into_iter()
+            .filter_map(|window| self.restore_window(window))
+            .collect();
         if !self.workspace.windows.is_empty() {
-            if !self.workspace.select_window(plan.active_window) {
-                warn!("could not select restored window {}", plan.active_window);
+            match numbers.get(plan.active_window) {
+                Some(&number) => {
+                    if !self.workspace.select_window(number) {
+                        warn!("could not select restored window {number}");
+                    }
+                }
+                None => warn!("could not select restored window {}", plan.active_window),
             }
             self.workspace.last_window = plan.last_window;
         }
@@ -1194,8 +1272,9 @@ impl Session {
         self.schedule_save();
     }
 
-    /// Spawns the window's panes, then installs it with the surviving part of its layout.
-    fn restore_window(&mut self, window: WindowPlan) {
+    /// Spawns the window's panes, then installs it with the surviving part of its layout. Returns the
+    /// installed window's number, or None when no pane of it survived.
+    fn restore_window(&mut self, window: WindowPlan) -> Option<usize> {
         let mut root = Some(window.layout);
         for opts in &window.panes {
             match self.spawn_restored(opts) {
@@ -1210,10 +1289,12 @@ impl Session {
                 }
             }
         }
-        let Some(root) = root else { return };
+        let root = root?;
         let label = root.all_leaves().into_iter().next().unwrap_or_default();
-        self.workspace
-            .install_window(label, window.name, root, window.focused);
+        Some(
+            self.workspace
+                .install_window(window.number, label, window.name, root, window.focused),
+        )
     }
 
     /// Types `line` into pane `name`; the terminal queues it until the shell reads it.
@@ -1299,15 +1380,18 @@ fn resolve_resume(
 ) -> (Option<String>, Option<String>) {
     for rule in rules {
         let matches = rule.name.eq_ignore_ascii_case(lookup_name)
-            || rule.detect.iter().any(|d| d.eq_ignore_ascii_case(lookup_name));
+            || rule
+                .detect
+                .iter()
+                .any(|d| d.eq_ignore_ascii_case(lookup_name));
         if matches {
             let from_files = rule.id_source.zip(home).and_then(|(source, home)| {
                 let pid = info.and_then(|i| i.foreground_pid);
                 let tty = info.and_then(|i| i.tty.as_deref());
                 crate::store::lookup_session_id(source, home, pid, tty)
             });
-            let session_id = from_files
-                .or_else(|| rule.env_id.as_ref().and_then(|v| std::env::var(v).ok()));
+            let session_id =
+                from_files.or_else(|| rule.env_id.as_ref().and_then(|v| std::env::var(v).ok()));
             return (Some(rule.name.clone()), session_id);
         }
     }
@@ -1319,26 +1403,32 @@ fn is_read_only(req: &Request) -> bool {
         req,
         Request::Ping
             | Request::Info
-            | Request::List
-            | Request::Logs { .. }
-            | Request::Screen { .. }
-            | Request::Layout { .. }
-            | Request::Status { .. }
-            | Request::GetCwd { .. }
-            | Request::Send { .. }
-            | Request::SendKeys { .. }
-            | Request::Paste { .. }
-            | Request::ResizePane { .. }
-            | Request::SetBinding { .. }
-            | Request::GetBindings
-            | Request::SetBuffer { .. }
-            | Request::GetBuffer { .. }
-            | Request::ListBuffers
-            | Request::DeleteBuffer { .. }
-            | Request::RenameBuffer { .. }
-            | Request::PasteBuffer(..)
-            | Request::CapturePane { .. }
-            | Request::ShowEnvironment { .. }
+            | Request::Node(
+                NodeRequest::List
+                    | NodeRequest::Logs { .. }
+                    | NodeRequest::Screen { .. }
+                    | NodeRequest::Status { .. }
+                    | NodeRequest::Cwd { .. }
+                    | NodeRequest::Send { .. }
+                    | NodeRequest::SendKeys { .. }
+                    | NodeRequest::Paste { .. }
+                    | NodeRequest::Resize { .. }
+                    | NodeRequest::Capture { .. }
+            )
+            | Request::Buffer(
+                BufferRequest::Set { .. }
+                    | BufferRequest::Get { .. }
+                    | BufferRequest::List
+                    | BufferRequest::Delete { .. }
+                    | BufferRequest::Rename { .. }
+                    | BufferRequest::Paste(..)
+            )
+            | Request::Session(
+                SessionRequest::SetBinding { .. }
+                    | SessionRequest::GetBindings
+                    | SessionRequest::ShowEnvironment { .. }
+                    | SessionRequest::Layout { .. }
+            )
     )
 }
 

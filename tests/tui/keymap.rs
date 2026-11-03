@@ -26,11 +26,7 @@ fn command_of(keymap: &mpx::tui::keymap::Keymap, ev: &KeyEvent) -> Option<Comman
     command_in(keymap, Table::Prefix, ev)
 }
 
-fn command_in(
-    keymap: &mpx::tui::keymap::Keymap,
-    table: Table,
-    ev: &KeyEvent,
-) -> Option<Command> {
+fn command_in(keymap: &mpx::tui::keymap::Keymap, table: Table, ev: &KeyEvent) -> Option<Command> {
     let binding = keymap.lookup(table, ev)?;
     Some(binding.command.clone())
 }
@@ -189,21 +185,26 @@ fn invalid_prefix_is_rejected() {
     assert!(resolve(&config).is_err());
 }
 
-
 #[test]
 fn alt_j_and_alt_k_reach_pane_unintercepted() {
     let keymap = default_keymap();
     let root = |c| command_in(&keymap, Table::Root, &alt(c));
     assert_eq!(root('j'), None, "alt-j reaches the pane");
     assert_eq!(root('k'), None, "alt-k reaches the pane");
-    assert_eq!(command_in(&keymap, Table::Root, &key('j')), None, "plain j reaches the pane");
+    assert_eq!(
+        command_in(&keymap, Table::Root, &key('j')),
+        None,
+        "plain j reaches the pane"
+    );
     assert_eq!(command_of(&keymap, &alt('j')), None, "not a prefix binding");
 }
 
 #[test]
 fn config_bind_root_rebinds_and_an_empty_command_unbinds() {
     let mut config = Config::default();
-    config.bind_root.insert("M-n".to_string(), "next-window".to_string());
+    config
+        .bind_root
+        .insert("M-n".to_string(), "next-window".to_string());
     config.bind.insert(".".to_string(), " ".to_string());
     let keymap = resolve(&config).unwrap();
     assert_eq!(
@@ -225,28 +226,53 @@ fn option_j_and_option_k_pass_through_unintercepted() {
 #[test]
 fn runtime_bind_adds_replaces_and_removes_keys_in_either_table() {
     let mut keymap = default_keymap();
-    assert!(matches!(command_of(&keymap, &key('x')), Some(Command::KillPane { .. })));
+    assert!(matches!(
+        command_of(&keymap, &key('x')),
+        Some(Command::KillPane { .. })
+    ));
 
     keymap.bind(Table::Prefix, "x", "kill-window").unwrap();
-    assert!(matches!(command_of(&keymap, &key('x')), Some(Command::KillWindow { .. })));
+    assert!(matches!(
+        command_of(&keymap, &key('x')),
+        Some(Command::KillWindow { .. })
+    ));
     keymap.bind(Table::Prefix, "x", "").unwrap();
-    assert!(command_of(&keymap, &key('x')).is_none(), "an empty line unbinds");
+    assert!(
+        command_of(&keymap, &key('x')).is_none(),
+        "an empty line unbinds"
+    );
 
     keymap.bind(Table::Root, "M-h", "select-pane -L").unwrap();
     assert!(command_in(&keymap, Table::Root, &alt('h')).is_some());
-    assert!(command_of(&keymap, &alt('h')).is_none(), "the prefix table is separate");
+    assert!(
+        command_of(&keymap, &alt('h')).is_none(),
+        "the prefix table is separate"
+    );
 
-    keymap.bind(Table::Prefix, "F5", "split-window ; select-layout tiled").unwrap();
+    keymap
+        .bind(Table::Prefix, "F5", "split-window ; select-layout tiled")
+        .unwrap();
     let rows = keymap.entries();
-    assert!(rows.iter().any(|(table, k, line)| *table == Table::Prefix && k == "F5" && line.contains("select-layout")));
+    assert!(rows.iter().any(|(table, k, line)| *table == Table::Prefix
+        && k == "F5"
+        && line.contains("select-layout")));
 }
 
 #[test]
 fn runtime_bind_refuses_bad_keys_commands_and_the_prefix_key() {
     let mut keymap = default_keymap();
-    assert!(keymap.bind(Table::Prefix, "NoSuchKey", "kill-pane").is_err());
+    assert!(
+        keymap
+            .bind(Table::Prefix, "NoSuchKey", "kill-pane")
+            .is_err()
+    );
     assert!(keymap.bind(Table::Prefix, "y", "nosuchcommand").is_err());
-    assert!(keymap.bind(Table::Prefix, "C-b", "kill-pane").unwrap_err().contains("prefix"));
+    assert!(
+        keymap
+            .bind(Table::Prefix, "C-b", "kill-pane")
+            .unwrap_err()
+            .contains("prefix")
+    );
     assert_eq!(keymap, default_keymap(), "failed binds change nothing");
 }
 
@@ -256,32 +282,90 @@ fn runtime_bind_refuses_bad_keys_commands_and_the_prefix_key() {
 fn tmux_default_prefix_keys_are_bound_to_their_tmux_commands() {
     let keymap = default_keymap();
     let bound = |ev: KeyEvent| command_of(&keymap, &ev);
-    let named = |code: KeyCode, mods: KeyModifiers| KeyEvent::new(code, mods);
-    let ctrl_code = |code| named(code, KeyModifiers::CONTROL);
-    let alt_code = |code| named(code, KeyModifiers::ALT);
 
-    assert!(matches!(bound(ctrl('o')), Some(Command::RotateWindow { down: false })));
-    assert!(matches!(bound(alt('o')), Some(Command::RotateWindow { down: true })));
+    assert!(matches!(
+        bound(ctrl('o')),
+        Some(Command::RotateWindow { down: false })
+    ));
+    assert!(matches!(
+        bound(alt('o')),
+        Some(Command::RotateWindow { down: true })
+    ));
     assert!(matches!(bound(ctrl('z')), Some(Command::SuspendClient)));
-    assert!(matches!(bound(key('q')), Some(Command::DisplayPanes { .. })), "q shows pane numbers, d detaches");
+    assert!(
+        matches!(bound(key('q')), Some(Command::DisplayPanes { .. })),
+        "q shows pane numbers, d detaches"
+    );
     assert!(matches!(bound(key('d')), Some(Command::Detach)));
     assert!(matches!(bound(key('t')), Some(Command::ClockMode { .. })));
     assert!(matches!(bound(key('~')), Some(Command::ShowMessages)));
-    assert!(matches!(bound(key('#')), Some(Command::Buffer(mpx::tui::command::BufferCommand::ListBuffers { format: None }))));
+    assert!(matches!(
+        bound(key('#')),
+        Some(Command::Buffer(
+            mpx::tui::command::BufferCommand::ListBuffers { format: None }
+        ))
+    ));
     assert!(matches!(bound(key('=')), Some(Command::ChooseBuffer)));
     assert!(matches!(bound(key('E')), Some(Command::SpreadLayout)));
-    assert!(matches!(bound(key('i')), Some(Command::DisplayMessage { format: None })));
-    assert!(matches!(bound(named(KeyCode::PageUp, KeyModifiers::NONE)), Some(Command::CopyMode(o)) if o.page_up));
-    assert!(matches!(bound(ctrl_code(KeyCode::Up)), Some(Command::ResizePane { side: Side::Up, cells: 1 })));
-    assert!(matches!(bound(alt_code(KeyCode::Right)), Some(Command::ResizePane { side: Side::Right, cells: 5 })));
-    assert!(matches!(bound(alt('1')), Some(Command::SelectLayout { preset: Some(_) })));
-    assert!(matches!(bound(alt('7')), Some(Command::SelectLayout { preset: Some(_) })));
-    assert!(matches!(bound(alt('n')), Some(Command::StepAlert { forward: true })));
-    // The vim motions stay where they are.
+    assert!(matches!(
+        bound(key('i')),
+        Some(Command::DisplayMessage { format: None })
+    ));
+    assert!(
+        matches!(bound(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE)), Some(Command::CopyMode(o)) if o.page_up)
+    );
+}
+
+#[test]
+fn tmux_default_resize_and_layout_keys_are_bound() {
+    let keymap = default_keymap();
+    let bound = |ev: KeyEvent| command_of(&keymap, &ev);
+    let ctrl_code = |code| KeyEvent::new(code, KeyModifiers::CONTROL);
+    let alt_code = |code| KeyEvent::new(code, KeyModifiers::ALT);
+
+    assert!(matches!(
+        bound(ctrl_code(KeyCode::Up)),
+        Some(Command::ResizePane {
+            side: Side::Up,
+            cells: 1
+        })
+    ));
+    assert!(matches!(
+        bound(alt_code(KeyCode::Right)),
+        Some(Command::ResizePane {
+            side: Side::Right,
+            cells: 5
+        })
+    ));
+    assert!(matches!(
+        bound(alt('1')),
+        Some(Command::SelectLayout { preset: Some(_) })
+    ));
+    assert!(matches!(
+        bound(alt('7')),
+        Some(Command::SelectLayout { preset: Some(_) })
+    ));
+    assert!(matches!(
+        bound(alt('n')),
+        Some(Command::StepAlert { forward: true })
+    ));
+}
+
+#[test]
+fn vim_motion_keys_stay_bound_to_pane_navigation_and_resize() {
+    let keymap = default_keymap();
+    let bound = |ev: KeyEvent| command_of(&keymap, &ev);
+
     for c in ['h', 'j', 'k', 'l'] {
-        assert!(matches!(bound(key(c)), Some(Command::SelectPaneDir { .. })), "{c}");
+        assert!(
+            matches!(bound(key(c)), Some(Command::SelectPaneDir { .. })),
+            "{c}"
+        );
     }
     for c in ['H', 'J', 'K', 'L'] {
-        assert!(matches!(bound(key(c)), Some(Command::ResizePane { .. })), "{c}");
+        assert!(
+            matches!(bound(key(c)), Some(Command::ResizePane { .. })),
+            "{c}"
+        );
     }
 }

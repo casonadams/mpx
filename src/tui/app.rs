@@ -15,14 +15,14 @@ use super::overlay::Overlay;
 use super::panes::{BorderGrab, LayoutCache, PaneRect, resized_elsewhere, sync_dims};
 use super::prompt::PromptRun;
 use super::render::copy_to_clipboard;
-use super::statusline::{self, Rows, Target};
 use super::status::{local_utc_offset, restored_notice, time_of_day};
+use super::statusline::{self, Rows, Target};
 use super::terminal::TerminalGuard;
 use crate::client::Client;
 use crate::config::{Config, StatusPosition};
-use crate::node::sleep_until_opt;
 use crate::keys::TermModes;
 use crate::layout::geometry::Rect;
+use crate::node::sleep_until_opt;
 use crate::protocol::{NewWindowOpts, NodeInfo, SpawnOpts, StreamEvent};
 use crate::vt::VtScreen;
 
@@ -283,7 +283,7 @@ impl App {
             expected: HashMap::new(),
             layout: LayoutCache::new(),
             viewport: (80, 23),
-            rows: statusline::rows(24, true, false),
+            rows: statusline::rows(24, 1, false),
             status_targets: Vec::new(),
             drawn_at: None,
             panes: Vec::new(),
@@ -337,9 +337,14 @@ impl App {
         let (w, h) = self
             .fixed_size
             .unwrap_or_else(|| crossterm::terminal::size().unwrap_or((80, 24)));
+        let status_lines = if self.config.status {
+            self.config.status_lines
+        } else {
+            0
+        };
         let rows = statusline::rows(
             h,
-            self.config.status,
+            status_lines,
             self.config.status_position == StatusPosition::Top,
         );
         if rows != self.rows {
@@ -347,7 +352,11 @@ impl App {
             self.canvas.invalidate();
         }
         self.viewport = (w, rows.pane_h);
-        if !self.layout.sync(&mut self.client, (0, rows.pane_top), (w, rows.pane_h)).await {
+        if !self
+            .layout
+            .sync(&mut self.client, (0, rows.pane_top), (w, rows.pane_h))
+            .await
+        {
             return false;
         }
         let focused = self
@@ -379,7 +388,10 @@ impl App {
         self.active_rect = self.panes.iter().find(|(.., f)| *f).map(|(_, r, _)| *r);
         let marked_name = self.layout.marked_pane();
         self.marked_rect = marked_name.and_then(|m| {
-            self.panes.iter().find(|(name, ..)| name == m).map(|(_, r, _)| *r)
+            self.panes
+                .iter()
+                .find(|(name, ..)| name == m)
+                .map(|(_, r, _)| *r)
         });
         self.refresh_newly_shown(&shown_before).await;
         if self.focus_pane.as_deref() != Some(self.active_pane.as_str()) {
@@ -744,7 +756,11 @@ async fn ensure_running_window(client: &mut Client) -> Result<(), String> {
 /// unless the budget is spent: `window_start` is the oldest of the last `FRAMES_PER_BUDGET` output
 /// frames when that many were drawn. No settle delay: events that arrived together are already one
 /// batch, and timers are too coarse (whole milliseconds) to wait for less than that.
-pub fn next_frame(window_start: Option<Instant>, now: Instant, pending: Option<Instant>) -> Instant {
+pub fn next_frame(
+    window_start: Option<Instant>,
+    now: Instant,
+    pending: Option<Instant>,
+) -> Instant {
     if let Some(due) = pending {
         return due;
     }
@@ -757,8 +773,12 @@ pub fn next_frame(window_start: Option<Instant>, now: Instant, pending: Option<I
 /// The last of a run of mouse drags already queued after `first`, and the first queued event that
 /// is not part of the run, to handle next. A fast drag sends many motions; only the latest
 /// position matters.
-pub fn latest_drag(first: Event, mut queued: impl FnMut() -> Option<Event>) -> (Event, Option<Event>) {
-    let is_drag = |ev: &Event| matches!(ev, Event::Mouse(m) if matches!(m.kind, MouseEventKind::Drag(_)));
+pub fn latest_drag(
+    first: Event,
+    mut queued: impl FnMut() -> Option<Event>,
+) -> (Event, Option<Event>) {
+    let is_drag =
+        |ev: &Event| matches!(ev, Event::Mouse(m) if matches!(m.kind, MouseEventKind::Drag(_)));
     if !is_drag(&first) {
         return (first, None);
     }
@@ -784,7 +804,12 @@ fn drain_into(rx: &mut StreamRx, batch: &mut Vec<(u64, StreamEvent)>) -> bool {
 /// Whether to draw after a wake-up. Pane output waits for its frame unless that frame is already
 /// due (drawn now rather than through a timer, which would add up to a millisecond); a key that
 /// only went to a pane changes nothing until the pane answers; anything else shows at once.
-pub fn needs_redraw(output: bool, forwarded: bool, frame_due: Option<Instant>, now: Instant) -> bool {
+pub fn needs_redraw(
+    output: bool,
+    forwarded: bool,
+    frame_due: Option<Instant>,
+    now: Instant,
+) -> bool {
     let due = frame_due.is_some_and(|at| at <= now);
     due || !(output || forwarded)
 }

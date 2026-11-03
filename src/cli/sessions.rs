@@ -4,9 +4,9 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use super::panes;
 use super::buffers;
 use super::environment;
+use super::panes;
 use super::render;
 use super::resolve::{
     DEFAULT_SESSION, LEGACY_DEFAULT_SESSION, Resolved, load_config, nested_attach_refused,
@@ -16,9 +16,9 @@ use super::{Cli, Commands};
 use crate::client::{Client, Handshake};
 use crate::config::home_dir;
 use crate::daemon::run_daemon;
+use crate::import_tmux::convert;
 use crate::ipc;
 use crate::store;
-use crate::import_tmux::convert;
 use crate::tui::app::AppOptions;
 use crate::tui::status::{clock_hms, local_utc_offset};
 use crate::tui::{StartView, run_tui};
@@ -64,11 +64,7 @@ fn env_var(key: &str) -> Option<String> {
 fn adopt_legacy_state(r: &Resolved) {
     let legacy_socket = ipc::endpoint_in(&r.socket_dir, LEGACY_DEFAULT_SESSION);
     if r.session == DEFAULT_SESSION && !std::path::Path::new(&legacy_socket).exists() {
-        store::adopt_legacy_dir(
-            &store::state_dir(),
-            LEGACY_DEFAULT_SESSION,
-            DEFAULT_SESSION,
-        );
+        store::adopt_legacy_dir(&store::state_dir(), LEGACY_DEFAULT_SESSION, DEFAULT_SESSION);
     }
 }
 

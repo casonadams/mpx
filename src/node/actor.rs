@@ -10,13 +10,14 @@ use tokio::time::Instant;
 use super::pacing::Inflight;
 use super::pane::{
     InputBuild, LogQuery, Notifier, PaneCtx, PaneMsg, PaneNotice, Reply, TermView, render_logs,
+    replay_history_len,
 };
 use super::process::{self, foreground_name as fg_name};
 use super::pty::PtyTerminal;
 use super::sink::Sink;
+use super::sleep_until_opt;
 use super::waits::{self, Cond, Observed};
 use super::{Process, SpawnSpec, now_ms};
-use super::sleep_until_opt;
 use crate::buffer::{RingBuffer, Utf8Stream, strip_ansi};
 use crate::protocol::{NodeInfo, NodeState, PaneId, StreamEvent, WaitOutcome};
 use crate::vt::VtScreen;
@@ -63,6 +64,8 @@ pub struct PaneActor {
     /// Absolute offset up to which output has been decoded and emitted.
     emitted: u64,
     last_output_ms: u64,
+    /// Scrollback lines of the retained output; `None` until next needed after output or a resize.
+    history_cache: Option<usize>,
     next_probe: Instant,
     /// `None` while running, `Some(code)` once exited.
     exit: Option<Option<i32>>,
@@ -105,6 +108,7 @@ impl PaneActor {
             utf8: Utf8Stream::default(),
             emitted: 0,
             last_output_ms: started_ms,
+            history_cache: None,
             next_probe: Instant::now(),
             exit: None,
             notify: ctx.notify,
@@ -186,6 +190,7 @@ impl PaneActor {
         let _ = self.screen.take_passthroughs();
         self.ring.write(bytes);
         self.last_output_ms = now_ms();
+        self.history_cache = None;
         self.emit_text(bytes);
         if Instant::now() >= self.next_probe {
             self.probe();
@@ -263,6 +268,7 @@ impl PaneActor {
 
     fn resize(&mut self, cols: u16, rows: u16) -> Result<(), String> {
         self.screen.grid_mut().resize(cols as usize, rows as usize);
+        self.history_cache = None;
         if let Some(terminal) = &self.terminal {
             terminal.resize(cols, rows);
         }
@@ -305,7 +311,7 @@ impl PaneActor {
         capture_text(replay.grid(), spec)
     }
 
-    fn info(&self, full: bool) -> NodeInfo {
+    fn info(&mut self, full: bool) -> NodeInfo {
         let (state, exit_code) = match self.exit {
             Some(code) => (NodeState::Exited, code),
             None => (NodeState::Running, None),
@@ -321,9 +327,17 @@ impl PaneActor {
             (None, None, None, None)
         };
         let modes = self.pty.then(|| self.screen.modes());
-        let size = self
-            .pty
-            .then(|| (self.screen.grid().cols as u16, self.screen.grid().rows as u16));
+        let size = self.pty.then(|| {
+            (
+                self.screen.grid().cols as u16,
+                self.screen.grid().rows as u16,
+            )
+        });
+        let cursor = self.pty.then(|| {
+            let at = self.screen.grid().cursor;
+            (at.x as u16, at.y as u16)
+        });
+        let history_size = self.pty.then(|| self.history_size());
         NodeInfo {
             name: self.name.clone(),
             id: self.id,
@@ -341,9 +355,27 @@ impl PaneActor {
             last_output_ms: self.last_output_ms,
             window: None,
             modes,
+            cursor,
+            history_size,
             size,
             marked: None,
         }
+    }
+
+    /// Scrollback lines a terminal's captures reach. Replayed from the retained output on first
+    /// use after output or a resize, then cached until the next one.
+    fn history_size(&mut self) -> usize {
+        if let Some(lines) = self.history_cache {
+            return lines;
+        }
+        let grid = self.screen.grid();
+        let lines = replay_history_len(
+            &self.ring.snapshot(),
+            (grid.cols, grid.rows),
+            self.scrollback,
+        );
+        self.history_cache = Some(lines);
+        lines
     }
     fn cwd(&self) -> Option<String> {
         self.fg_pid()
@@ -420,11 +452,7 @@ impl PaneActor {
     }
 
     fn next_wake(&self) -> Option<Instant> {
-        let mut due = self
-            .waiters
-            .iter()
-            .filter_map(|w| w.deadline)
-            .min();
+        let mut due = self.waiters.iter().filter_map(|w| w.deadline).min();
         for w in &self.waiters {
             if let Some(t_ms) = w.cond.idle_due(self.last_output_ms) {
                 due = soonest(due, Some(instant_at(t_ms)));
@@ -453,7 +481,6 @@ impl PaneActor {
             .and_then(|t| t.foreground_pid())
             .or(self.pid)
     }
-
 
     fn emit(&mut self, event: StreamEvent) {
         self.subs.retain_mut(|sink| sink.push(event.clone()));

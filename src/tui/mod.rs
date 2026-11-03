@@ -11,8 +11,9 @@ pub mod overlay;
 pub mod panes;
 pub mod prompt;
 pub mod render;
-pub mod stream;
 pub mod statusline;
+pub mod stream;
+pub mod style;
 pub mod terminal;
 
 mod exec;

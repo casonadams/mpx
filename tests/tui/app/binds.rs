@@ -17,7 +17,7 @@ fn bound(h: &Harness, c: char) -> Option<Command> {
 #[tokio::test]
 async fn a_binding_set_by_another_client_arrives_as_an_event_and_survives_a_reload() {
     let mut h = Harness::idle().await;
-    assert!(matches!(bound(&h, 'y'), None));
+    assert!(bound(&h, 'y').is_none());
 
     h.probe
         .set_binding("prefix:y", Some("kill-window"))

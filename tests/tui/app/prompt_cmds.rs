@@ -36,7 +36,8 @@ async fn rename_prompt_acts_on_the_daemon() {
 async fn send_keys_prompt_acts_on_the_daemon() {
     let mut h = start().await;
     h.frame().await;
-    h.command_then_output("send-keys hello Enter", MAIN, "hello\r").await;
+    h.command_then_output("send-keys hello Enter", MAIN, "hello\r")
+        .await;
     assert!(h.mode_is_normal());
 }
 
@@ -60,7 +61,8 @@ async fn paste_prompts_write_text_into_the_target_pane() {
     h.command("paste -t main hello world").await;
     wait_for(&mut h.probe, MAIN, "hello world").await;
     h.command("set-buffer -b pb typed-into-main").await;
-    h.command_then_output("paste-buffer -b pb -t main", MAIN, "typed-into-main").await;
+    h.command_then_output("paste-buffer -b pb -t main", MAIN, "typed-into-main")
+        .await;
 }
 
 #[tokio::test]
@@ -207,7 +209,8 @@ async fn run_and_show(h: &mut Harness, line: &str) -> String {
 async fn capture_pane_prompt_stores_or_prints_the_named_pane() {
     let mut h = start().await;
     h.frame().await;
-    h.command_then_output("paste -t main typed-into-main", MAIN, "typed-into-main").await;
+    h.command_then_output("paste -t main typed-into-main", MAIN, "typed-into-main")
+        .await;
 
     h.command("capture-pane -b snap -t main").await;
     let stored = run_and_show(&mut h, "show-buffer -b snap").await;

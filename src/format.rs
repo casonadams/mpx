@@ -8,6 +8,15 @@ use crate::protocol::{Buffer, NodeInfo};
 /// Format variables available to `#{name}` references.
 pub type Vars = BTreeMap<&'static str, String>;
 
+/// The lists the loop formats `#{W:...}`, `#{P:...}` and `#{S:...}` iterate over: one entry of
+/// variables per window, pane and session.
+#[derive(Debug, Clone, Default)]
+pub struct Lists {
+    pub windows: Vec<Vars>,
+    pub panes: Vec<Vars>,
+    pub sessions: Vec<Vars>,
+}
+
 /// tmux version reported by `#{version}`.
 const TMUX_VERSION: &str = "3.4";
 
@@ -48,6 +57,16 @@ pub struct PaneView {
     pub window_marked: bool,
     /// The window is zoomed (tmux `window_zoomed_flag`).
     pub window_zoomed: bool,
+    /// The window has been quiet for `monitor-silence` seconds (tmux `window_silence_flag`).
+    pub window_silence: bool,
+    /// The window's panes all receive typed input (`synchronize-panes`).
+    pub synchronized: bool,
+    /// The pane touches the left, top, right and bottom edge of the window (`pane_at_*`).
+    pub edges: [bool; 4],
+    /// Cursor column and row of the pane's screen (`cursor_x`, `cursor_y`); `None` for a pane without a terminal.
+    pub cursor: Option<(u16, u16)>,
+    /// Scrollback lines the pane's captures reach (`history_size`); `None` for a pane without a terminal.
+    pub history_size: Option<usize>,
     /// Number of panes in this pane's window.
     pub window_panes: usize,
     /// Number of windows in the session.
@@ -62,10 +81,15 @@ pub struct PaneView {
 ///
 /// Unknown variables expand to empty. Malformed input (an unclosed `#{`) is left as text.
 pub fn expand(fmt: &str, vars: &Vars) -> String {
-    expand_text(fmt, vars, 0)
+    expand_with(fmt, vars, &Lists::default())
 }
 
-fn expand_text(text: &str, vars: &Vars, depth: usize) -> String {
+/// [`expand`] with the lists the loop formats `#{W:...}`, `#{P:...}` and `#{S:...}` iterate over.
+pub fn expand_with(fmt: &str, vars: &Vars, lists: &Lists) -> String {
+    expand_text(fmt, vars, lists, 0)
+}
+
+fn expand_text(text: &str, vars: &Vars, lists: &Lists, depth: usize) -> String {
     if depth > MAX_DEPTH {
         return String::new();
     }
@@ -77,7 +101,7 @@ fn expand_text(text: &str, vars: &Vars, depth: usize) -> String {
         match rest.chars().next() {
             Some('{') => match close_brace(&rest[1..]) {
                 Some(end) => {
-                    out.push_str(&eval(&rest[1..1 + end], vars, depth + 1));
+                    out.push_str(&eval(&rest[1..1 + end], vars, lists, depth + 1));
                     rest = &rest[2 + end..];
                 }
                 None => {
@@ -169,53 +193,68 @@ fn split_args(s: &str) -> Vec<&str> {
 }
 
 /// Evaluates the body of one `#{...}` (without the braces).
-fn eval(body: &str, vars: &Vars, depth: usize) -> String {
+fn eval(body: &str, vars: &Vars, lists: &Lists, depth: usize) -> String {
     if let Some(cond) = body.strip_prefix('?') {
-        return conditional(&split_args(cond), vars, depth);
+        return conditional(&split_args(cond), vars, lists, depth);
     }
     if let Some(spec) = body.strip_prefix("s/") {
-        return substitute(spec, vars, depth);
+        return substitute(spec, vars, lists, depth);
     }
     let Some((op, arg)) = body.split_once(':') else {
         return lookup(vars, body).to_string();
     };
     match op {
         "==" | "!=" | "<" | ">" | "<=" | ">=" | "&&" | "||" | "!" => {
-            compare(op, &split_args(arg), vars, depth)
+            compare(op, &split_args(arg), vars, lists, depth)
         }
-        "b" => basename(&resolve(arg, vars, depth)),
-        "d" => dirname(&resolve(arg, vars, depth)),
-        "n" => resolve(arg, vars, depth).chars().count().to_string(),
-        "q" => shell_quote(&resolve(arg, vars, depth)),
-        "E" => expand_text(&resolve(arg, vars, depth), vars, depth + 1),
+        "b" => basename(&resolve(arg, vars, lists, depth)),
+        "d" => dirname(&resolve(arg, vars, lists, depth)),
+        "n" => resolve(arg, vars, lists, depth).chars().count().to_string(),
+        "q" => shell_quote(&resolve(arg, vars, lists, depth)),
+        "E" => expand_text(&resolve(arg, vars, lists, depth), vars, lists, depth + 1),
         "l" => unescape(arg),
+        "m" | "m/i" | "m/r" | "m/ri" => matching(op, &split_args(arg), vars, lists, depth),
+        "t" => local_time(&resolve(arg, vars, lists, depth)),
+        "t/p" => pretty_time(&resolve(arg, vars, lists, depth)),
+        "W" => each(&lists.windows, arg, lists, depth),
+        "P" => each(&lists.panes, arg, lists, depth),
+        "S" => each(&lists.sessions, arg, lists, depth),
+        _ if op.starts_with("e|") => arithmetic(op, &split_args(arg), vars, lists, depth),
         _ => match op.strip_prefix('=').and_then(|n| n.parse::<i64>().ok()) {
-            Some(n) => truncate(&resolve(arg, vars, depth), n),
+            Some(n) => truncate(&resolve(arg, vars, lists, depth), n),
             None => lookup(vars, body).to_string(),
         },
     }
 }
 
+/// Expands `body` once per entry of `items`, each with only that entry's variables in scope.
+fn each(items: &[Vars], body: &str, lists: &Lists, depth: usize) -> String {
+    items
+        .iter()
+        .map(|item| expand_text(body, item, lists, depth))
+        .collect()
+}
+
 /// `#{?c1,v1,c2,v2,...,else}`: the first value whose condition is true, else the trailing value.
-fn conditional(args: &[&str], vars: &Vars, depth: usize) -> String {
+fn conditional(args: &[&str], vars: &Vars, lists: &Lists, depth: usize) -> String {
     let mut rest = args;
     while let [cond, then, tail @ ..] = rest {
-        if truthy(&resolve(cond, vars, depth)) {
-            return expand_text(then, vars, depth);
+        if truthy(&resolve(cond, vars, lists, depth)) {
+            return expand_text(then, vars, lists, depth);
         }
         rest = tail;
     }
     match rest {
-        [otherwise] => expand_text(otherwise, vars, depth),
+        [otherwise] => expand_text(otherwise, vars, lists, depth),
         _ => String::new(),
     }
 }
 
 /// Comparison and boolean operators; yields `1` or `0`. Comparisons are numeric when both sides parse as integers.
-fn compare(op: &str, args: &[&str], vars: &Vars, depth: usize) -> String {
+fn compare(op: &str, args: &[&str], vars: &Vars, lists: &Lists, depth: usize) -> String {
     let value = |i: usize| {
         args.get(i)
-            .map_or_else(String::new, |a| expand_text(a, vars, depth))
+            .map_or_else(String::new, |a| expand_text(a, vars, lists, depth))
     };
     let (a, b) = (value(0), value(1));
     let order = || match (a.parse::<i64>(), b.parse::<i64>()) {
@@ -238,7 +277,7 @@ fn compare(op: &str, args: &[&str], vars: &Vars, depth: usize) -> String {
 
 /// `s/pat/rep/flags:var`: replaces every match of `pat` (a regex; invalid patterns match literally).
 /// Flag `i` ignores case. Neither pattern nor replacement may contain `/`.
-fn substitute(spec: &str, vars: &Vars, depth: usize) -> String {
+fn substitute(spec: &str, vars: &Vars, lists: &Lists, depth: usize) -> String {
     let Some((pat, rest)) = spec.split_once('/') else {
         return String::new();
     };
@@ -248,7 +287,7 @@ fn substitute(spec: &str, vars: &Vars, depth: usize) -> String {
     let Some((flags, arg)) = rest.split_once(':') else {
         return String::new();
     };
-    let value = resolve(arg, vars, depth);
+    let value = resolve(arg, vars, lists, depth);
     let ignore_case = flags.contains('i');
     let re = RegexBuilder::new(pat)
         .case_insensitive(ignore_case)
@@ -265,9 +304,9 @@ fn substitute(spec: &str, vars: &Vars, depth: usize) -> String {
 }
 
 /// Value of a variable name, or the expansion of a nested format. Unknown names are empty.
-fn resolve(s: &str, vars: &Vars, depth: usize) -> String {
+fn resolve(s: &str, vars: &Vars, lists: &Lists, depth: usize) -> String {
     if s.contains('#') {
-        expand_text(s, vars, depth)
+        expand_text(s, vars, lists, depth)
     } else {
         lookup(vars, s).to_string()
     }
@@ -296,6 +335,203 @@ fn truncate(s: &str, n: i64) -> String {
     } else {
         s.chars().skip(len - keep).collect()
     }
+}
+
+/// `#{m:pat,str}` matches a shell glob, `#{m/r:...}` a regex; `i` in the operator ignores case.
+/// Expands to `1` on a match and `0` otherwise, as tmux does.
+fn matching(op: &str, args: &[&str], vars: &Vars, lists: &Lists, depth: usize) -> String {
+    let value = |i: usize| {
+        args.get(i)
+            .map_or_else(String::new, |a| expand_text(a, vars, lists, depth))
+    };
+    let (pattern, text) = (value(0), value(1));
+    let ignore_case = op.ends_with('i');
+    let on = if op.contains('r') {
+        RegexBuilder::new(&pattern)
+            .case_insensitive(ignore_case)
+            .build()
+            .is_ok_and(|re| re.is_match(&text))
+    } else {
+        let fold = |s: &str| -> Vec<char> {
+            s.chars()
+                .map(|c| {
+                    if ignore_case {
+                        c.to_ascii_lowercase()
+                    } else {
+                        c
+                    }
+                })
+                .collect()
+        };
+        glob_at(&fold(&pattern), &fold(&text))
+    };
+    flag(on)
+}
+
+/// Glob match of `p` against `t`: `*`, `?` and `[...]` (a leading `!` or `^` negates the class).
+fn glob_at(p: &[char], t: &[char]) -> bool {
+    match p.split_first() {
+        None => t.is_empty(),
+        Some(('*', rest)) => (0..=t.len()).any(|i| glob_at(rest, &t[i..])),
+        Some(('?', rest)) => !t.is_empty() && glob_at(rest, &t[1..]),
+        Some(('[', rest)) => match rest.iter().position(|&c| c == ']') {
+            Some(end) => {
+                t.first().is_some_and(|&c| class_matches(&rest[..end], c))
+                    && glob_at(&rest[end + 1..], &t[1..])
+            }
+            None => t.first() == Some(&'[') && glob_at(rest, &t[1..]),
+        },
+        Some((c, rest)) => t.first() == Some(c) && glob_at(rest, &t[1..]),
+    }
+}
+
+fn class_matches(class: &[char], c: char) -> bool {
+    let (negate, mut body) = match class.first() {
+        Some('!' | '^') => (true, &class[1..]),
+        _ => (false, class),
+    };
+    let mut hit = false;
+    while let Some(&lo) = body.first() {
+        if body.len() >= 3 && body[1] == '-' {
+            hit |= (lo..=body[2]).contains(&c);
+            body = &body[3..];
+        } else {
+            hit |= lo == c;
+            body = &body[1..];
+        }
+    }
+    hit != negate
+}
+
+/// `#{e|op:a,b}`: integer arithmetic with `+ - * / % m M` (`/` and `%` by zero give 0). With
+/// `|f|N` the operands are floats printed with `N` decimals.
+fn arithmetic(op: &str, args: &[&str], vars: &Vars, lists: &Lists, depth: usize) -> String {
+    let parts: Vec<&str> = op.split('|').collect();
+    let Some(sym) = parts.get(1).copied() else {
+        return String::new();
+    };
+    let value = |i: usize| {
+        args.get(i)
+            .map_or_else(String::new, |a| expand_text(a, vars, lists, depth))
+    };
+    let (a, b) = (value(0), value(1));
+    if parts.get(2) == Some(&"f") {
+        let decimals = parts.get(3).and_then(|n| n.parse().ok()).unwrap_or(2);
+        let (x, y) = (
+            a.trim().parse().unwrap_or(0.0),
+            b.trim().parse().unwrap_or(0.0),
+        );
+        let r: f64 = match sym {
+            "+" => x + y,
+            "-" => x - y,
+            "*" => x * y,
+            "/" if y != 0.0 => x / y,
+            "%" if y != 0.0 => x % y,
+            "/" | "%" => 0.0,
+            "m" => x.min(y),
+            "M" => x.max(y),
+            _ => return String::new(),
+        };
+        return format!("{r:.decimals$}");
+    }
+    let (x, y) = (
+        a.trim().parse::<i64>().unwrap_or(0),
+        b.trim().parse::<i64>().unwrap_or(0),
+    );
+    let r = match sym {
+        "+" => x.saturating_add(y),
+        "-" => x.saturating_sub(y),
+        "*" => x.saturating_mul(y),
+        "/" => x.checked_div(y).unwrap_or(0),
+        "%" => x.checked_rem(y).unwrap_or(0),
+        "m" => x.min(y),
+        "M" => x.max(y),
+        _ => return String::new(),
+    };
+    r.to_string()
+}
+
+const WEEKDAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const MONTHS: [&str; 12] = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+/// The local broken-down time of Unix time `secs`; `None` when it cannot be converted.
+#[cfg(unix)]
+fn local_tm(secs: libc::time_t) -> Option<libc::tm> {
+    // SAFETY: `tm` is a plain C struct of integers, valid when zeroed; `localtime_r` fills it.
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    // SAFETY: both pointers refer to live locals; `localtime_r` only writes into `tm`.
+    let ok = !unsafe { libc::localtime_r(&secs, &mut tm) }.is_null();
+    ok.then_some(tm)
+}
+
+#[cfg(unix)]
+fn weekday(tm: &libc::tm) -> &'static str {
+    WEEKDAYS
+        .get(usize::try_from(tm.tm_wday).unwrap_or(7))
+        .copied()
+        .unwrap_or("")
+}
+
+#[cfg(unix)]
+fn month(tm: &libc::tm) -> &'static str {
+    MONTHS
+        .get(usize::try_from(tm.tm_mon).unwrap_or(12))
+        .copied()
+        .unwrap_or("")
+}
+
+/// `#{t:var}`: the Unix time in `var` as local time, `Thu Nov  2 10:00:00 2026` (ctime layout).
+/// Empty when `var` is not a number or the time cannot be converted.
+#[cfg(unix)]
+fn local_time(value: &str) -> String {
+    let Some(tm) = value.trim().parse().ok().and_then(local_tm) else {
+        return String::new();
+    };
+    format!(
+        "{} {} {:>2} {:02}:{:02}:{:02} {}",
+        weekday(&tm),
+        month(&tm),
+        tm.tm_mday,
+        tm.tm_hour,
+        tm.tm_min,
+        tm.tm_sec,
+        tm.tm_year + 1900
+    )
+}
+
+/// `#{t/p:var}`: how long ago the Unix time in `var` was. Within a day it is `HH:MM`, within a
+/// week `Wed14:05`, and older `Wed02Nov`, in local time. Empty when `var` is not a number.
+#[cfg(unix)]
+fn pretty_time(value: &str) -> String {
+    let Ok(secs) = value.trim().parse::<libc::time_t>() else {
+        return String::new();
+    };
+    let Some(tm) = local_tm(secs) else {
+        return String::new();
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| libc::time_t::try_from(d.as_secs()).unwrap_or(0));
+    let age = now - secs;
+    if age < 86_400 {
+        format!("{:02}:{:02}", tm.tm_hour, tm.tm_min)
+    } else if age < 7 * 86_400 {
+        format!("{}{:02}:{:02}", weekday(&tm), tm.tm_hour, tm.tm_min)
+    } else {
+        format!("{}{:02}{}", weekday(&tm), tm.tm_mday, month(&tm))
+    }
+}
+
+#[cfg(not(unix))]
+fn local_time(_value: &str) -> String {
+    String::new()
+}
+
+#[cfg(not(unix))]
+fn pretty_time(_value: &str) -> String {
+    String::new()
 }
 
 fn basename(v: &str) -> String {
@@ -384,6 +620,17 @@ fn shared_vars(vars: &mut Vars, session: &str) {
     vars.insert("version", TMUX_VERSION.to_string());
 }
 
+/// Cursor position and scrollback size of a pane with a terminal; absent for any other pane.
+fn terminal_vars(p: &PaneView, vars: &mut Vars) {
+    if let Some((x, y)) = p.cursor {
+        vars.insert("cursor_x", x.to_string());
+        vars.insert("cursor_y", y.to_string());
+    }
+    if let Some(lines) = p.history_size {
+        vars.insert("history_size", lines.to_string());
+    }
+}
+
 pub fn pane_vars(p: &PaneView) -> Vars {
     let mut vars = Vars::new();
     vars.insert("pane_id", format!("%{}", p.id));
@@ -426,6 +673,17 @@ pub fn pane_vars(p: &PaneView) -> Vars {
     vars.insert("window_panes", p.window_panes.to_string());
     vars.insert("window_flags", window_flags(p));
     vars.insert("window_zoomed_flag", flag(p.window_zoomed));
+    vars.insert("window_activity_flag", flag(p.window_activity));
+    vars.insert("window_bell_flag", flag(p.window_bell));
+    vars.insert("window_silence_flag", flag(p.window_silence));
+    vars.insert("window_last_flag", flag(p.window_last));
+    vars.insert("window_marked_flag", flag(p.window_marked));
+    vars.insert("pane_synchronized", flag(p.synchronized));
+    vars.insert("pane_at_left", flag(p.edges[0]));
+    vars.insert("pane_at_top", flag(p.edges[1]));
+    vars.insert("pane_at_right", flag(p.edges[2]));
+    vars.insert("pane_at_bottom", flag(p.edges[3]));
+    terminal_vars(p, &mut vars);
     shared_vars(&mut vars, &p.session);
     vars
 }
@@ -435,6 +693,7 @@ pub fn pane_vars(p: &PaneView) -> Vars {
 pub(crate) struct WindowFlags {
     pub(crate) activity: bool,
     pub(crate) bell: bool,
+    pub(crate) silence: bool,
     pub(crate) current: bool,
     pub(crate) zoomed: bool,
     pub(crate) last: bool,
@@ -450,6 +709,9 @@ impl WindowFlags {
         }
         if self.bell {
             flags.push('!');
+        }
+        if self.silence {
+            flags.push('~');
         }
         if self.current {
             flags.push('*');
@@ -473,6 +735,7 @@ impl WindowFlags {
             activity,
             bell,
             current,
+            silence: tab.has_silence,
             zoomed: current && zoomed,
             last: tab.is_last,
             marked: tab.has_marked,
@@ -486,6 +749,7 @@ impl From<&PaneView> for WindowFlags {
             activity: p.window_activity,
             bell: p.window_bell,
             current: p.window_active,
+            silence: p.window_silence,
             zoomed: p.window_zoomed,
             last: p.window_last,
             marked: p.window_marked,
@@ -505,51 +769,57 @@ pub fn pane_view(
     rects: &[(String, Rect, bool)],
     tabs: &[WindowTab],
 ) -> PaneView {
-        let window = node.window.unwrap_or(0);
-        let (width, height, active, rect) = rects
-            .iter()
-            .find(|(n, _, _)| n == &node.name)
-            .map(|(_, r, f)| (r.width, r.height, *f, Some(*r)))
-            .unwrap_or((0, 0, false, None));
-        let marked = node.marked.unwrap_or(false);
-        let marked_set = tabs.iter().any(|t| t.has_marked) || marked;
-        let tab = tabs.iter().find(|t| t.index == window);
-        PaneView {
-            session: session.to_string(),
-            id: node.id,
-            index,
-            pid: node.pid,
-            title: node.title.clone().unwrap_or_default(),
-            command: node
-                .foreground
-                .clone()
-                .unwrap_or_else(|| node.command.clone()),
-            path: node.cwd.clone().unwrap_or_default(),
-            width,
-            height,
-            active: tab.map_or(active, |t| t.focused.as_deref() == Some(node.name.as_str())),
-            dead: !node.is_running(),
-            marked,
-            marked_set,
-            in_mode: false,
-            window,
-            window_name: tab.map(|t| t.name.clone()).unwrap_or_default(),
-            start_command: node.command.clone(),
-            tty: node
-                .tty
-                .as_ref()
-                .map(|t| format!("/dev/{t}"))
-                .unwrap_or_default(),
-            rect,
-            window_active: tab.is_some_and(|t| t.is_active),
-            window_last: tab.is_some_and(|t| t.is_last),
-            window_activity: tab.is_some_and(|t| t.has_activity),
-            window_bell: tab.is_some_and(|t| t.has_bell),
-            window_marked: tab.is_some_and(|t| t.has_marked),
-            window_zoomed: tab.is_some_and(|t| t.zoomed),
-            session_windows: tabs.len(),
-            ..Default::default()
-        }
+    let window = node.window.unwrap_or(0);
+    let (width, height, active, rect) = rects
+        .iter()
+        .find(|(n, _, _)| n == &node.name)
+        .map(|(_, r, f)| (r.width, r.height, *f, Some(*r)))
+        .unwrap_or((0, 0, false, None));
+    let marked = node.marked.unwrap_or(false);
+    let marked_set = tabs.iter().any(|t| t.has_marked) || marked;
+    let tab = tabs.iter().find(|t| t.index == window);
+    let edges = at_edges(rect, rects);
+    PaneView {
+        session: session.to_string(),
+        id: node.id,
+        index,
+        pid: node.pid,
+        title: node.title.clone().unwrap_or_default(),
+        command: node
+            .foreground
+            .clone()
+            .unwrap_or_else(|| node.command.clone()),
+        path: node.cwd.clone().unwrap_or_default(),
+        width,
+        height,
+        active: tab.map_or(active, |t| t.focused.as_deref() == Some(node.name.as_str())),
+        dead: !node.is_running(),
+        marked,
+        marked_set,
+        in_mode: false,
+        window,
+        window_name: tab.map(|t| t.name.clone()).unwrap_or_default(),
+        start_command: node.command.clone(),
+        tty: node
+            .tty
+            .as_ref()
+            .map(|t| format!("/dev/{t}"))
+            .unwrap_or_default(),
+        rect,
+        window_active: tab.is_some_and(|t| t.is_active),
+        window_last: tab.is_some_and(|t| t.is_last),
+        window_activity: tab.is_some_and(|t| t.has_activity),
+        window_bell: tab.is_some_and(|t| t.has_bell),
+        window_marked: tab.is_some_and(|t| t.has_marked),
+        window_zoomed: tab.is_some_and(|t| t.zoomed),
+        window_silence: tab.is_some_and(|t| t.has_silence),
+        synchronized: tab.is_some_and(|t| t.synchronized),
+        edges,
+        cursor: node.cursor,
+        history_size: node.history_size,
+        session_windows: tabs.len(),
+        ..Default::default()
+    }
 }
 
 /// The `list-buffers -F` default: `name: N bytes: "sample"`.
@@ -583,4 +853,29 @@ pub fn buffer_sample(data: &str) -> String {
         }
     }
     out
+}
+
+/// Whether `rect` touches the left, top, right and bottom edges of the laid-out panes.
+fn at_edges(rect: Option<Rect>, rects: &[(String, Rect, bool)]) -> [bool; 4] {
+    let Some(r) = rect else {
+        return [false; 4];
+    };
+    let left = rects.iter().map(|(_, q, _)| q.x).min().unwrap_or(r.x);
+    let top = rects.iter().map(|(_, q, _)| q.y).min().unwrap_or(r.y);
+    let right = rects
+        .iter()
+        .map(|(_, q, _)| q.x.saturating_add(q.width))
+        .max()
+        .unwrap_or(0);
+    let bottom = rects
+        .iter()
+        .map(|(_, q, _)| q.y.saturating_add(q.height))
+        .max()
+        .unwrap_or(0);
+    [
+        r.x == left,
+        r.y == top,
+        r.x.saturating_add(r.width) == right,
+        r.y.saturating_add(r.height) == bottom,
+    ]
 }

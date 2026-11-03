@@ -310,7 +310,14 @@ impl Grid {
     /// Returns the text of line `abs_line` (history or live screen), trailing blanks trimmed.
     pub fn line_text(&self, abs_line: usize) -> Option<String> {
         let cells = self.line_cells(abs_line)?;
-        Some(cells.iter().map(|c| c.c).collect::<String>().trim_end().to_string())
+        Some(
+            cells
+                .iter()
+                .map(|c| c.c)
+                .collect::<String>()
+                .trim_end()
+                .to_string(),
+        )
     }
 
     pub fn put_char(&mut self, c: char) {

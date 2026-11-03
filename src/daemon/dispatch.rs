@@ -7,7 +7,7 @@ use super::idempotency::Claim;
 use super::session::{SessionMsg, reply};
 use super::{DaemonState, KILL_GRACE};
 use crate::node::pane::LogQuery;
-use crate::protocol::{Request, Response};
+use crate::protocol::{NodeRequest, Request, Response, WindowRequest};
 
 pub(super) async fn dispatch(state: &Arc<DaemonState>, req: Request) -> Response {
     match req {
@@ -69,19 +69,19 @@ impl Drop for IdemTicket {
 pub(super) async fn execute(state: &Arc<DaemonState>, req: Request) -> Response {
     match req {
         Request::Shutdown => shutdown(state).await,
-        Request::Kill { name } => kill(state, &name).await,
-        Request::KillWindow { index } => kill_window(state, index).await,
-        Request::Wait {
+        Request::Node(NodeRequest::Kill { name }) => kill(state, &name).await,
+        Request::Window(WindowRequest::Kill { index }) => kill_window(state, index).await,
+        Request::Node(NodeRequest::Wait {
             name,
             condition,
             timeout_ms,
-        } => wait(state, &name, condition, timeout_ms).await,
-        Request::Logs {
+        }) => wait(state, &name, condition, timeout_ms).await,
+        Request::Node(NodeRequest::Logs {
             name,
             tail,
             plain,
             since,
-        } => logs(state, &name, LogQuery { tail, plain, since }).await,
+        }) => logs(state, &name, LogQuery { tail, plain, since }).await,
         Request::Subscribe { .. } => {
             Response::Error("subscriptions require a streaming connection".to_string())
         }

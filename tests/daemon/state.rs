@@ -2,7 +2,7 @@
 use std::time::Duration;
 
 use super::support::{connect, logs_until, start, task};
-use mpx::protocol::{NewWindowOpts, PasteBufferOpts, StreamEvent};
+use mpx::protocol::{PasteBufferOpts, StreamEvent};
 
 #[tokio::test]
 async fn bindings_are_stored_by_name_removed_when_forgotten_and_announced_to_terminals() {
@@ -104,42 +104,15 @@ async fn only_the_newest_fifty_buffers_are_kept() {
     let daemon = start().await;
     let mut client = connect(&daemon.endpoint).await;
     for i in 0..55 {
-        client.set_buffer(None, &i.to_string(), false).await.unwrap();
+        client
+            .set_buffer(None, &i.to_string(), false)
+            .await
+            .unwrap();
     }
     let buffers = client.list_buffers().await.unwrap();
     assert_eq!(buffers.len(), 50);
     assert_eq!(buffers[0].data, "54");
     assert_eq!(buffers[49].data, "5");
-}
-
-fn window(label: &str, pane: &str) -> NewWindowOpts {
-    NewWindowOpts {
-        name: Some(label.to_string()),
-        spawn: task(pane, "cat", &[]),
-        focus: true,
-    }
-}
-
-async fn tabs(client: &mut mpx::client::Client) -> Vec<(String, bool)> {
-    let (_, _, tabs) = client.layout(80, 24).await.unwrap();
-    tabs.into_iter().map(|t| (t.name, t.is_active)).collect()
-}
-
-#[tokio::test]
-async fn moving_a_window_keeps_the_active_window_the_same_window() {
-    let daemon = start().await;
-    let mut client = connect(&daemon.endpoint).await;
-    for (label, pane) in [("a", "pa"), ("b", "pb"), ("c", "pc")] {
-        client.new_window(window(label, pane)).await.unwrap();
-    }
-    client.select_window(0).await.unwrap();
-
-    client.move_window(0, 2).await.unwrap();
-    assert_eq!(
-        tabs(&mut client).await,
-        [("b".into(), false), ("c".into(), false), ("a".into(), true)]
-    );
-    assert!(client.move_window(9, 0).await.is_err());
 }
 
 #[tokio::test]
@@ -149,14 +122,23 @@ async fn set_buffer_appends_renames_and_names_new_buffers_past_taken_names() {
     client.set_buffer(Some("a"), "one", false).await.unwrap();
     client.set_buffer(Some("a"), "two", true).await.unwrap();
     client.set_buffer(None, "three", true).await.unwrap();
-    assert_eq!(client.get_buffer(Some("a")).await.unwrap().data, "onetwothree");
+    assert_eq!(
+        client.get_buffer(Some("a")).await.unwrap().data,
+        "onetwothree"
+    );
 
     client.rename_buffer(Some("a"), "b").await.unwrap();
     assert!(client.get_buffer(Some("a")).await.is_err());
-    assert_eq!(client.get_buffer(Some("b")).await.unwrap().data, "onetwothree");
+    assert_eq!(
+        client.get_buffer(Some("b")).await.unwrap().data,
+        "onetwothree"
+    );
     assert!(client.rename_buffer(Some("missing"), "x").await.is_err());
 
-    client.set_buffer(Some("buffer0000"), "taken", false).await.unwrap();
+    client
+        .set_buffer(Some("buffer0000"), "taken", false)
+        .await
+        .unwrap();
     client.set_buffer(None, "auto", false).await.unwrap();
     assert_eq!(client.get_buffer(None).await.unwrap().name, "buffer0001");
     let clash = client.rename_buffer(Some("buffer0001"), "b").await;
@@ -168,7 +150,10 @@ async fn paste_buffer_pastes_into_a_pane_and_deletes_the_buffer_with_d() {
     let daemon = start().await;
     let mut client = connect(&daemon.endpoint).await;
     client.spawn(task("t", "cat", &[])).await.unwrap();
-    client.set_buffer(Some("k"), "hi\nthere\n", false).await.unwrap();
+    client
+        .set_buffer(Some("k"), "hi\nthere\n", false)
+        .await
+        .unwrap();
     let paste = |name: &str| PasteBufferOpts {
         name: Some(name.to_string()),
         pane: "t".to_string(),

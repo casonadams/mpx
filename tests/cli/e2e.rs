@@ -72,7 +72,11 @@ impl Session {
     fn spawn_pty(&self, name: &str, body: &str) {
         let script = format!("echo {READY}; {body}");
         let _ = self.run(&["run", "-n", name, "--pty", "sh", "-c", script.as_str()]);
-        assert_eq!(self.wait_for_match(name, READY), 0, "{name} never printed {READY}");
+        assert_eq!(
+            self.wait_for_match(name, READY),
+            0,
+            "{name} never printed {READY}"
+        );
     }
 
     fn wait_for_match(&self, name: &str, needle: &str) -> i32 {
@@ -135,7 +139,10 @@ fn has_session_follows_the_daemon_lifecycle() {
 
 #[test]
 fn wait_returns_the_child_exit_code() {
-    assert_eq!(wait_exit("wx", "quick", &["sh", "-c", "exit 7"], &["wait", "quick"]), 7);
+    assert_eq!(
+        wait_exit("wx", "quick", &["sh", "-c", "exit 7"], &["wait", "quick"]),
+        7
+    );
 }
 
 #[test]
@@ -154,7 +161,10 @@ fn wait_for_a_screen_match_exits_zero() {
 #[test]
 fn paste_round_trips_through_a_pty_program() {
     let s = cat_session("pp", "cat");
-    assert_eq!(s.code(&["paste", "-t", "cat", "--submit", "round-trip-token"]), 0);
+    assert_eq!(
+        s.code(&["paste", "-t", "cat", "--submit", "round-trip-token"]),
+        0
+    );
     assert_eq!(s.wait_for_match("cat", "round-trip-token"), 0);
 }
 
@@ -195,7 +205,10 @@ fn attach_refuses_nested_use_inside_a_pane() {
 /// does not capture from an in-process call.
 #[test]
 fn unknown_flag_is_a_usage_error() {
-    let out = Command::new(BIN).arg("--no-such-flag").output().expect("spawn");
+    let out = Command::new(BIN)
+        .arg("--no-such-flag")
+        .output()
+        .expect("spawn");
     assert_fails(&out, 2, "unexpected argument '--no-such-flag'");
 }
 
@@ -283,7 +296,10 @@ fn an_auto_started_daemon_leads_its_own_session_so_terminal_hangups_spare_it() {
     let pid = sessions[0]["pid"].as_i64().expect("daemon pid") as libc::pid_t;
     // SAFETY: getsid only reads the session id of a process.
     let session = unsafe { libc::getsid(pid) };
-    assert_eq!(session, pid, "the daemon must not share the spawning terminal's session");
+    assert_eq!(
+        session, pid,
+        "the daemon must not share the spawning terminal's session"
+    );
 }
 
 #[test]
@@ -293,7 +309,10 @@ fn buffers_move_between_captures_files_and_panes() {
     assert_eq!(s.wait_for_match("shell", "captured-token"), 0);
 
     assert_eq!(s.code(&["capture-pane", "-t", "shell", "-b", "snap"]), 0);
-    assert!(s.stdout(&["show-buffer", "-b", "snap"]).contains("captured-token"));
+    assert!(
+        s.stdout(&["show-buffer", "-b", "snap"])
+            .contains("captured-token")
+    );
     let printed = s.stdout(&["capture-pane", "-p", "-t", "shell", "-S", "-", "-E", "-"]);
     assert!(printed.contains("captured-token\n"), "{printed}");
 
@@ -302,17 +321,26 @@ fn buffers_move_between_captures_files_and_panes() {
     assert_eq!(s.wait_for_match("shell", "paste-me-token"), 0);
 
     let names = s.stdout(&["list-buffers", "-F", "#{buffer_name}"]);
-    assert!(names.lines().any(|l| l == "mine") && names.lines().any(|l| l == "snap"), "{names}");
+    assert!(
+        names.lines().any(|l| l == "mine") && names.lines().any(|l| l == "snap"),
+        "{names}"
+    );
 
     let file = s.runtime.join("buffer.txt");
     let file_arg = file.to_string_lossy().into_owned();
     assert_eq!(s.code(&["save-buffer", "-b", "mine", file_arg.as_str()]), 0);
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "paste-me-token");
-    assert_eq!(s.code(&["load-buffer", "-b", "loaded", file_arg.as_str()]), 0);
+    assert_eq!(
+        s.code(&["load-buffer", "-b", "loaded", file_arg.as_str()]),
+        0
+    );
     assert_eq!(s.stdout(&["show-buffer", "-b", "loaded"]), "paste-me-token");
 
     assert_eq!(s.code(&["set-buffer", "-b", "loaded", "-n", "renamed"]), 0);
-    assert_eq!(s.stdout(&["show-buffer", "-b", "renamed"]), "paste-me-token");
+    assert_eq!(
+        s.stdout(&["show-buffer", "-b", "renamed"]),
+        "paste-me-token"
+    );
     assert_eq!(s.code(&["delete-buffer", "-b", "mine"]), 0);
     assert_ne!(s.code(&["show-buffer", "-b", "mine"]), 0);
 }
@@ -322,8 +350,14 @@ fn environment_set_on_the_command_line_reaches_the_next_pane() {
     let s = Session::new("sv");
     assert_eq!(s.code(&["set-environment", "MPX_E2E_WORD", "marigold"]), 0);
     assert_eq!(s.code(&["setenv", "-r", "HOME"]), 0);
-    assert_eq!(s.stdout(&["show-environment"]), "-HOME\nMPX_E2E_WORD=marigold\n");
-    assert_eq!(s.stdout(&["showenv", "MPX_E2E_WORD"]), "MPX_E2E_WORD=marigold\n");
+    assert_eq!(
+        s.stdout(&["show-environment"]),
+        "-HOME\nMPX_E2E_WORD=marigold\n"
+    );
+    assert_eq!(
+        s.stdout(&["showenv", "MPX_E2E_WORD"]),
+        "MPX_E2E_WORD=marigold\n"
+    );
 
     s.spawn("env-pane", &["sh", "-c", "echo value=$MPX_E2E_WORD"]);
     assert_eq!(s.wait_for_match("env-pane", "value=marigold"), 0);

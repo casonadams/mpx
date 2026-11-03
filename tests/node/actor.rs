@@ -80,10 +80,7 @@ fn output(bytes: &[u8]) -> PaneMsg {
     PaneMsg::Output(bytes.to_vec())
 }
 
-fn subscribe(
-    p: &mut Pane,
-    since: Option<u64>,
-) -> tokio::sync::mpsc::Receiver<StreamEvent> {
+fn subscribe(p: &mut Pane, since: Option<u64>) -> tokio::sync::mpsc::Receiver<StreamEvent> {
     let (sink, rx) = Sink::channel(None);
     let (reply, ack) = oneshot::channel();
     p.actor.handle(PaneMsg::Subscribe { since, sink, reply });
@@ -97,7 +94,14 @@ fn wait_msg(
 ) -> (PaneMsg, oneshot::Receiver<WaitOutcome>) {
     let (reply, rx) = oneshot::channel();
     let cond = Cond::from_condition(cond).expect("valid condition");
-    (PaneMsg::Wait { cond, timeout, reply }, rx)
+    (
+        PaneMsg::Wait {
+            cond,
+            timeout,
+            reply,
+        },
+        rx,
+    )
 }
 
 fn outputs(rx: &mut tokio::sync::mpsc::Receiver<StreamEvent>) -> Vec<(String, u64, u64)> {

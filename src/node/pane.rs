@@ -84,11 +84,25 @@ fn history_text(
 /// Retained output replayed into a fresh screen of `size` (cols, rows), as plain text with
 /// scrollback of at most `scrollback` lines. The live screen keeps none, so scrolled-off rows cost
 /// nothing at output rates; rendering them is paid only when a plain read asks for them.
-pub fn replay_text(output: &[u8], size: (usize, usize), tail: Option<usize>, scrollback: usize) -> String {
+pub fn replay_text(
+    output: &[u8],
+    size: (usize, usize),
+    tail: Option<usize>,
+    scrollback: usize,
+) -> String {
+    replay(output, size, scrollback).scrollback_text(tail)
+}
+
+/// Scrollback lines `replay_text` would reach for the same input, as tmux `history_size`.
+pub fn replay_history_len(output: &[u8], size: (usize, usize), scrollback: usize) -> usize {
+    replay(output, size, scrollback).grid().history_len()
+}
+
+fn replay(output: &[u8], size: (usize, usize), scrollback: usize) -> VtScreen {
     let mut screen = VtScreen::new(size.0, size.1);
     screen.grid_mut().set_history_limit(scrollback);
     screen.feed(output);
-    screen.scrollback_text(tail)
+    screen
 }
 
 /// Messages to a pane actor.

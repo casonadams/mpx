@@ -32,6 +32,8 @@ pub struct Config {
     pub monitor_activity: bool,
     /// Flag windows that rang the bell (tmux `monitor-bell`).
     pub monitor_bell: bool,
+    /// Seconds without output after which a background window is flagged `~` (tmux `monitor-silence`); 0 is off.
+    pub monitor_silence: u64,
     /// TERM exported to panes (tmux `default-terminal`).
     pub default_terminal: String,
     /// Program run by a pane started without a command (tmux `default-shell`); unset uses `$SHELL`.
@@ -47,12 +49,25 @@ pub struct Config {
     /// Window number of the first window (tmux `base-index`). The daemon numbers windows from 0; the
     /// TUI translates.
     pub base_index: usize,
+    /// Whether closing a window renumbers the windows after it (tmux `renumber-windows`). Off keeps
+    /// each window's number, leaving a gap.
+    pub renumber_windows: bool,
+    /// Whether windows start with their panes synchronized, so typed input reaches every pane of the window (tmux `synchronize-panes`); `set-option -w` changes a window afterwards.
+    pub synchronize_panes: bool,
     /// Pane number of the first pane of a window (tmux `pane-base-index`), as `#{pane_index}` shows it.
     pub pane_base_index: usize,
     /// Mouse input (tmux `mouse`). Off: the terminal's mouse reporting is turned off and mpx ignores mouse events.
     pub mouse: bool,
     /// Whether the status line is shown (tmux `status`). Off: the status row belongs to the panes.
     pub status: bool,
+    /// Number of status rows (tmux `status 2..5`), 1 to 5. Row 0 is the status line; rows 1 and up
+    /// draw `status_format`.
+    #[serde(deserialize_with = "status_lines_in_range")]
+    pub status_lines: usize,
+    /// Formats of the status rows by tmux index: `status-format[i]` draws row `i`. A non-empty
+    /// entry 0 replaces the main status line (window list and `status_left`/`status_right` included).
+    /// Entries past the row count are ignored.
+    pub status_format: Vec<String>,
     /// Row the status line occupies (tmux `status-position`).
     pub status_position: StatusPosition,
     /// Seconds between timed status redraws (tmux `status-interval`); 0 redraws only on events.
@@ -103,6 +118,26 @@ pub struct StyleConfig {
     pub status_bg: String,
     /// Status bar foreground color name or hex.
     pub status_fg: String,
+    /// Style over `status_bg` and `status_fg` for the status line (tmux `status-style`).
+    pub status_style: String,
+    /// Style of a message on the status row (tmux `message-style`).
+    pub message_style: String,
+    /// Style of the command prompt on the status row (tmux `message-command-style`).
+    pub message_command_style: String,
+    /// Style over `border_inactive` for the borders of inactive panes (tmux `pane-border-style`).
+    pub pane_border_style: String,
+    /// Style over `border_active` for the borders of the active pane (tmux `pane-active-border-style`).
+    pub pane_active_border_style: String,
+    /// Style of every window tab (tmux `window-status-style`).
+    pub window_status_style: String,
+    /// Style of the current window's tab (tmux `window-status-current-style`).
+    pub window_status_current_style: String,
+    /// Style of tabs with output (tmux `window-status-activity-style`).
+    pub window_status_activity_style: String,
+    /// Style of tabs that rang the bell (tmux `window-status-bell-style`).
+    pub window_status_bell_style: String,
+    /// Style of the last window's tab (tmux `window-status-last-style`).
+    pub window_status_last_style: String,
     /// Dim the colors of inactive panes when multiple are visible.
     pub dim_inactive: bool,
     /// How far inactive panes are dimmed (0.0 = untouched, 1.0 = black).
@@ -141,6 +176,34 @@ pub enum BorderStyle {
     Ascii,
 }
 
+impl StyleConfig {
+    /// Every style string must read as a tmux style, so a bad value is an error at load.
+    pub fn check(&self) -> Result<(), String> {
+        let styles = [
+            ("status_style", &self.status_style),
+            ("message_style", &self.message_style),
+            ("message_command_style", &self.message_command_style),
+            ("pane_border_style", &self.pane_border_style),
+            ("pane_active_border_style", &self.pane_active_border_style),
+            ("window_status_style", &self.window_status_style),
+            (
+                "window_status_current_style",
+                &self.window_status_current_style,
+            ),
+            (
+                "window_status_activity_style",
+                &self.window_status_activity_style,
+            ),
+            ("window_status_bell_style", &self.window_status_bell_style),
+            ("window_status_last_style", &self.window_status_last_style),
+        ];
+        for (key, value) in styles {
+            crate::tui::style::parse(value).map_err(|e| format!("style.{key}: {e}"))?;
+        }
+        Ok(())
+    }
+}
+
 impl Default for StyleConfig {
     fn default() -> Self {
         Self {
@@ -150,6 +213,16 @@ impl Default for StyleConfig {
             border_style: BorderStyle::Single,
             status_bg: "dark-green".to_string(),
             status_fg: "black".to_string(),
+            status_style: String::new(),
+            message_style: String::new(),
+            message_command_style: String::new(),
+            pane_border_style: String::new(),
+            pane_active_border_style: String::new(),
+            window_status_style: String::new(),
+            window_status_current_style: String::new(),
+            window_status_activity_style: String::new(),
+            window_status_bell_style: String::new(),
+            window_status_last_style: String::new(),
             dim_inactive: false,
             dim_factor: 0.5,
             active: ActiveStyle::default(),
@@ -275,62 +348,72 @@ impl ModeKeys {
 pub fn default_resume_rules() -> Vec<ResumeRule> {
     vec![
         ResumeRule {
-            name: "claude".into(),
-            detect: vec!["claude".into()],
-            resume: vec!["claude".into(), "--resume".into(), "{id}".into()],
-            fallback: vec!["claude".into(), "--continue".into()],
             env_id: Some("CLAUDE_SESSION_ID".into()),
             id_source: Some(IdSource::Claude),
+            ..rule(
+                "claude",
+                &["claude"],
+                &["claude", "--resume", "{id}"],
+                &["claude", "--continue"],
+            )
         },
         ResumeRule {
-            name: "omp".into(),
-            detect: vec!["omp".into()],
-            resume: vec!["omp".into(), "--resume".into(), "{id}".into()],
-            fallback: vec!["omp".into(), "--continue".into()],
             env_id: Some("OMP_SESSION_ID".into()),
             id_source: Some(IdSource::Omp),
+            ..rule(
+                "omp",
+                &["omp"],
+                &["omp", "--resume", "{id}"],
+                &["omp", "--continue"],
+            )
         },
-        ResumeRule {
-            name: "codex".into(),
-            detect: vec!["codex".into()],
-            resume: vec!["codex".into(), "resume".into(), "{id}".into()],
-            fallback: vec!["codex".into(), "resume".into(), "--last".into()],
-            env_id: None,
-            id_source: None,
-        },
-        ResumeRule {
-            name: "rho".into(),
-            detect: vec!["rho".into()],
-            resume: vec!["rho".into(), "--resume".into(), "{id}".into()],
-            fallback: vec!["rho".into(), "--resume".into()],
-            env_id: None,
-            id_source: None,
-        },
-        ResumeRule {
-            name: "antigravity".into(),
-            detect: vec!["antigravity".into(), "agy".into()],
-            resume: vec!["agy".into(), "--conversation".into(), "{id}".into()],
-            fallback: vec!["agy".into(), "--continue".into()],
-            env_id: None,
-            id_source: None,
-        },
-        ResumeRule {
-            name: "opencode".into(),
-            detect: vec!["opencode".into()],
-            resume: vec!["opencode".into(), "--session".into(), "{id}".into()],
-            fallback: vec!["opencode".into()],
-            env_id: None,
-            id_source: None,
-        },
-        ResumeRule {
-            name: "nvim".into(),
-            detect: vec!["nvim".into()],
-            resume: Vec::new(),
-            fallback: vec!["nvim".into(), "-c".into(), "silent! source Session.vim".into()],
-            env_id: None,
-            id_source: None,
-        },
+        rule(
+            "codex",
+            &["codex"],
+            &["codex", "resume", "{id}"],
+            &["codex", "resume", "--last"],
+        ),
+        rule(
+            "rho",
+            &["rho"],
+            &["rho", "--resume", "{id}"],
+            &["rho", "--resume"],
+        ),
+        rule(
+            "antigravity",
+            &["antigravity", "agy"],
+            &["agy", "--conversation", "{id}"],
+            &["agy", "--continue"],
+        ),
+        rule(
+            "opencode",
+            &["opencode"],
+            &["opencode", "--session", "{id}"],
+            &["opencode"],
+        ),
+        rule(
+            "nvim",
+            &["nvim"],
+            &[],
+            &["nvim", "-c", "silent! source Session.vim"],
+        ),
     ]
+}
+
+/// Rule with no env var or id source; callers override those via struct update.
+fn rule(name: &str, detect: &[&str], resume: &[&str], fallback: &[&str]) -> ResumeRule {
+    ResumeRule {
+        name: name.into(),
+        detect: words(detect),
+        resume: words(resume),
+        fallback: words(fallback),
+        env_id: None,
+        id_source: None,
+    }
+}
+
+fn words(items: &[&str]) -> Vec<String> {
+    items.iter().map(|s| (*s).into()).collect()
 }
 
 impl Default for Config {
@@ -344,6 +427,7 @@ impl Default for Config {
             automatic_rename: true,
             monitor_activity: true,
             monitor_bell: true,
+            monitor_silence: 0,
             default_terminal: "xterm-256color".to_string(),
             default_shell: None,
             default_command: None,
@@ -351,9 +435,13 @@ impl Default for Config {
             which_key_delay_ms: 300,
             display_panes_time_ms: 1000,
             base_index: 0,
+            renumber_windows: true,
+            synchronize_panes: false,
             pane_base_index: 0,
             mouse: true,
             status: true,
+            status_lines: 1,
+            status_format: Vec::new(),
             status_position: StatusPosition::Bottom,
             status_interval: 1,
             status_left: DEFAULT_STATUS_LEFT.to_string(),
@@ -391,7 +479,9 @@ impl Config {
     }
 
     pub fn parse(text: &str) -> Result<Config, String> {
-        toml::from_str(text).map_err(|e| e.to_string())
+        let config: Config = toml::from_str(text).map_err(|e| e.to_string())?;
+        config.style.check()?;
+        Ok(config)
     }
 
     /// Config from the default location (`Config::path`). Missing file yields defaults; a malformed
@@ -438,6 +528,37 @@ pub fn parse_switch(value: &str) -> Result<bool, String> {
         "on" | "yes" | "true" | "1" => Ok(true),
         "off" | "no" | "false" | "0" => Ok(false),
         other => Err(format!("expected on or off, got '{other}'")),
+    }
+}
+
+/// Most status rows tmux allows (`status 5`).
+pub const MAX_STATUS_LINES: usize = 5;
+
+fn status_lines_in_range<'de, D: serde::Deserializer<'de>>(de: D) -> Result<usize, D::Error> {
+    let lines = usize::deserialize(de)?;
+    if (1..=MAX_STATUS_LINES).contains(&lines) {
+        Ok(lines)
+    } else {
+        Err(serde::de::Error::custom(format!(
+            "status_lines must be 1 to {MAX_STATUS_LINES}, got {lines}"
+        )))
+    }
+}
+
+/// A tmux `status` value: `off` gives `None`; `on` gives one line, and a count 2 to 5 gives that
+/// many status lines.
+pub fn parse_status(value: &str) -> Result<Option<usize>, String> {
+    let text = value.trim();
+    if let Ok(lines) = text.parse::<usize>()
+        && (2..=MAX_STATUS_LINES).contains(&lines)
+    {
+        return Ok(Some(lines));
+    }
+    match parse_switch(text) {
+        Ok(on) => Ok(on.then_some(1)),
+        Err(_) => Err(format!(
+            "expected on, off, or 2 to {MAX_STATUS_LINES} lines, got '{value}'"
+        )),
     }
 }
 

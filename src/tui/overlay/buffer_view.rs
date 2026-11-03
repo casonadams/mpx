@@ -4,8 +4,8 @@ use std::io::{self, Write};
 
 use crossterm::event::{KeyCode, KeyEvent};
 
-use crate::layout::Rect;
 use crate::format::{DEFAULT_BUFFER_FORMAT, buffer_vars, expand};
+use crate::layout::Rect;
 use crate::protocol::Buffer;
 use crate::tui::command::Command;
 use crate::tui::overlay::nav::{Filter, ListState, route_list_key};
@@ -38,7 +38,8 @@ impl BufferView {
 
     /// Buffers that pass the filter, in the daemon's order (newest first).
     pub fn visible(&self) -> Vec<&Buffer> {
-        self.filter.visible(&self.buffers, |b| [b.name.as_str(), b.data.as_str()])
+        self.filter
+            .visible(&self.buffers, |b| [b.name.as_str(), b.data.as_str()])
     }
 
     fn highlighted(&self) -> Option<Buffer> {

@@ -6,8 +6,8 @@ use mpx::client::Client;
 use mpx::config::Config;
 use mpx::daemon::{DaemonState, handle_client};
 use mpx::ipc::IpcListener;
-use mpx::layout::Direction;
-use mpx::protocol::{SpawnOpts, SplitOpts, WaitCondition};
+use mpx::layout::{Direction, WindowTab};
+use mpx::protocol::{NewWindowOpts, SpawnOpts, SplitOpts, WaitCondition};
 
 pub const SESSION: &str = "test";
 
@@ -88,6 +88,33 @@ pub async fn fresh() -> (TestDaemon, Client) {
     let daemon = start().await;
     let client = connect(&daemon.endpoint).await;
     (daemon, client)
+}
+
+/// The window tabs of the session, in window order (one layout request).
+pub async fn tabs(client: &mut Client) -> Vec<WindowTab> {
+    client.layout(80, 24).await.unwrap().2
+}
+
+/// Each window tab as `(name, is_active)`, in window order.
+pub async fn tab_states(client: &mut Client) -> Vec<(String, bool)> {
+    tabs(client).await.into_iter().map(|t| (t.name, t.is_active)).collect()
+}
+
+/// A window named `label` whose only pane `pane` runs `cat`.
+pub fn window(label: &str, pane: &str) -> NewWindowOpts {
+    NewWindowOpts {
+        name: Some(label.to_string()),
+        spawn: task(pane, "cat", &[]),
+        focus: true,
+    }
+}
+
+/// Opens windows `a`, `b` and `c` and focuses the first.
+pub async fn three_windows(client: &mut Client) {
+    for (label, pane) in [("a", "pa"), ("b", "pb"), ("c", "pc")] {
+        client.new_window(window(label, pane)).await.unwrap();
+    }
+    client.select_window(0).await.unwrap();
 }
 
 /// A focused `cat` pane `name` split off `target`, side by side.

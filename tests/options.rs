@@ -30,7 +30,10 @@ fn a_bad_value_names_the_option_and_changes_nothing() {
 #[test]
 fn unknown_and_daemon_options_are_told_apart() {
     let mut c = Config::default();
-    assert_eq!(options::set(&mut c, "no-such", "1").unwrap_err(), "unknown option: no-such");
+    assert_eq!(
+        options::set(&mut c, "no-such", "1").unwrap_err(),
+        "unknown option: no-such"
+    );
     let err = options::set(&mut c, "remain-on-exit", "on").unwrap_err();
     assert!(err.contains("reload-config"), "{err}");
     assert!(options::is_known("remain-on-exit") && options::is_known("mouse"));
@@ -58,4 +61,24 @@ fn get_and_list_print_values_as_tmux_does() {
     assert_eq!(options::get(&c, "prefix").unwrap(), "C-b");
     let names: Vec<_> = options::list(&c).into_iter().map(|(n, _)| n).collect();
     assert!(names.windows(2).all(|w| w[0] < w[1]), "sorted: {names:?}");
+}
+
+#[test]
+fn status_takes_on_off_or_a_line_count() {
+    let mut c = Config::default();
+    options::set(&mut c, "status", "2").unwrap();
+    assert_eq!((c.status, c.status_lines), (true, 2));
+    assert_eq!(options::get(&c, "status").unwrap(), "2");
+    options::set(&mut c, "status", "on").unwrap();
+    assert_eq!((c.status, c.status_lines), (true, 1));
+    assert_eq!(options::get(&c, "status").unwrap(), "on");
+    options::set(&mut c, "status", "5").unwrap();
+    options::set(&mut c, "status", "off").unwrap();
+    assert!(!c.status);
+    assert_eq!(c.status_lines, 5, "off keeps the line count");
+    assert_eq!(options::get(&c, "status").unwrap(), "off");
+    assert!(options::set(&mut c, "status", "6").is_err());
+    assert!(!c.status, "a bad value leaves the option unchanged");
+    options::unset(&mut c, "status").unwrap();
+    assert_eq!((c.status, c.status_lines), (true, 1));
 }

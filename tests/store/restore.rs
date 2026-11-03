@@ -2,8 +2,8 @@ use mpx::config::ResumeRule;
 use mpx::layout::tree::{Direction, LayoutNode};
 use mpx::protocol::SpawnOpts;
 use mpx::store::{
-    PaneSnapshot, RestorePlan, SNAPSHOT_VERSION, SessionSnapshot, WindowPlan,
-    WindowSnapshot, plan_restore,
+    PaneSnapshot, RestorePlan, SNAPSHOT_VERSION, SessionSnapshot, WindowPlan, WindowSnapshot,
+    plan_restore,
 };
 
 fn strings(items: &[&str]) -> Vec<String> {
@@ -69,6 +69,7 @@ fn window(
     panes: Vec<PaneSnapshot>,
 ) -> WindowSnapshot {
     WindowSnapshot {
+        number: None,
         name: name.into(),
         renamed,
         layout,
@@ -198,7 +199,12 @@ fn agent_with_unknown_harness_keeps_its_original_command() {
 #[test]
 fn task_pane_is_pruned_from_the_layout() {
     let win = restore_window(
-        window("main", false, split("live", "dead"), vec![shell("live"), task("dead")]),
+        window(
+            "main",
+            false,
+            split("live", "dead"),
+            vec![shell("live"), task("dead")],
+        ),
         &[],
     );
     assert_eq!(win.panes.len(), 1);
@@ -216,7 +222,12 @@ fn window_with_only_task_panes_is_dropped() {
 
 #[test]
 fn focus_falls_back_to_first_remaining_pane_when_focused_was_pruned() {
-    let win = window("main", false, split("kept", "gone"), vec![shell("kept"), task("gone")]);
+    let win = window(
+        "main",
+        false,
+        split("kept", "gone"),
+        vec![shell("kept"), task("gone")],
+    );
     let win = restore_window(focused(win, "gone"), &[]);
     assert_eq!(win.focused, Some("kept".into()));
 }
@@ -286,11 +297,17 @@ fn typed_resume_commands_quote_what_a_shell_would_split() {
         ..shell("sh")
     };
     let win = restore_window(single("main", pane), &[rule]);
-    assert_eq!(win.startup_input["sh"], "claude --name 'it'\\''s a test' 'a b'\r");
+    assert_eq!(
+        win.startup_input["sh"],
+        "claude --name 'it'\\''s a test' 'a b'\r"
+    );
 }
 
 #[test]
 fn a_pane_whose_own_process_is_the_tool_is_respawned_as_the_resumed_tool() {
-    let win = restore_window(single("main", tool_pane("claude", "claude", Some("abc"))), &[claude()]);
+    let win = restore_window(
+        single("main", tool_pane("claude", "claude", Some("abc"))),
+        &[claude()],
+    );
     assert!(win.startup_input.is_empty());
 }

@@ -2,9 +2,7 @@
 //! gathers the pane facts (live cwd, process) and the clock.
 use crate::layout::Workspace;
 use crate::protocol::SpawnOpts;
-use crate::store::{
-    PaneSnapshot, SNAPSHOT_VERSION, SessionSnapshot, WindowSnapshot,
-};
+use crate::store::{PaneSnapshot, SNAPSHOT_VERSION, SessionSnapshot, WindowSnapshot};
 
 /// What the snapshot knows about one pane in the layout.
 #[derive(Debug, Clone)]
@@ -54,6 +52,7 @@ pub fn build_snapshot(
             last_window = Some(windows.len());
         }
         windows.push(WindowSnapshot {
+            number: Some(win.number),
             name: win.name.clone(),
             renamed: win.renamed,
             layout,

@@ -47,6 +47,10 @@ pub struct SessionSnapshot {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WindowSnapshot {
+    /// The window's number when saved. Snapshots from before numbers were kept have none; their
+    /// windows load with their position.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub number: Option<usize>,
     pub name: String,
     /// The user renamed the window (no automatic naming).
     pub renamed: bool,
@@ -87,6 +91,8 @@ pub struct RestorePlan {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct WindowPlan {
+    /// The number the window is restored under (see `WindowSnapshot::number`).
+    pub number: usize,
     /// Sticky name for renamed windows; `None` keeps automatic naming.
     pub name: Option<String>,
     /// Layout over the pane names in `panes` (panes that are not restored are pruned from it).
@@ -98,4 +104,3 @@ pub struct WindowPlan {
     /// a shell resumes this way, so quitting it leaves the shell, as it did before.
     pub startup_input: std::collections::BTreeMap<String, String>,
 }
-

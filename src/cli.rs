@@ -2,13 +2,13 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
+mod buffers;
+mod environment;
 mod panes;
 pub mod render;
 mod resolve;
 mod sessions;
 mod windows;
-mod buffers;
-mod environment;
 pub use buffers::{capture_line, capture_spec};
 
 pub use resolve::{
