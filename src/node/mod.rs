@@ -37,6 +37,8 @@ pub struct SpawnSpec {
     pub cwd: Option<String>,
     /// Extra environment, applied after the terminal defaults.
     pub env: Vec<(String, String)>,
+    /// Inherited variables the child must not see; applied before `env`, so `env` wins.
+    pub env_remove: Vec<String>,
     /// TERM exported to the child (tmux `default-terminal`).
     pub term: String,
     /// Scrollback lines a pane keeps for captures (tmux `history-limit`).

@@ -54,11 +54,13 @@ async fn select_pane_prompt_focuses_the_named_pane() {
 }
 
 #[tokio::test]
-async fn paste_prompt_writes_text_into_the_target_pane() {
+async fn paste_prompts_write_text_into_the_target_pane() {
     let mut h = start().await;
     h.frame().await;
     h.command("paste -t main hello world").await;
     wait_for(&mut h.probe, MAIN, "hello world").await;
+    h.command("set-buffer -b pb typed-into-main").await;
+    h.command_then_output("paste-buffer -b pb -t main", MAIN, "typed-into-main").await;
 }
 
 #[tokio::test]
@@ -192,4 +194,26 @@ async fn confirm_before_runs_its_command_only_on_y() {
     h.command(line).await;
     h.key(KeyCode::Char('y')).await;
     assert_eq!(h.windows().await, ["gone"]);
+}
+
+/// Runs `line` at the prompt, draws a frame and returns the text it shows.
+async fn run_and_show(h: &mut Harness, line: &str) -> String {
+    h.command(line).await;
+    h.frame().await
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn capture_pane_prompt_stores_or_prints_the_named_pane() {
+    let mut h = start().await;
+    h.frame().await;
+    h.command_then_output("paste -t main typed-into-main", MAIN, "typed-into-main").await;
+
+    h.command("capture-pane -b snap -t main").await;
+    let stored = run_and_show(&mut h, "show-buffer -b snap").await;
+    assert!(stored.contains("typed-into-main"), "{stored}");
+    h.key(KeyCode::Esc).await;
+
+    let printed = run_and_show(&mut h, "capture-pane -p -t main").await;
+    assert!(printed.contains("typed-into-main"), "{printed}");
 }

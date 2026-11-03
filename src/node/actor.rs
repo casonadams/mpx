@@ -20,6 +20,7 @@ use super::sleep_until_opt;
 use crate::buffer::{RingBuffer, Utf8Stream, strip_ansi};
 use crate::protocol::{NodeInfo, NodeState, PaneId, StreamEvent, WaitOutcome};
 use crate::vt::VtScreen;
+use crate::vt::capture::{CaptureSpec, capture_text};
 
 const PROBE_EVERY: Duration = Duration::from_millis(250);
 const EXITED: &str = "Node has exited";
@@ -151,6 +152,9 @@ impl PaneActor {
             PaneMsg::Logs { query, reply } => self.logs(query, reply),
             PaneMsg::Screen { reply } => {
                 let _ = reply.send(self.screen.snapshot());
+            }
+            PaneMsg::Capture { spec, reply } => {
+                let _ = reply.send(self.capture(&spec));
             }
             PaneMsg::Cwd { reply } => {
                 let _ = reply.send(self.cwd());
@@ -289,6 +293,16 @@ impl PaneActor {
     fn logs(&self, query: LogQuery, reply: Reply<(String, u64)>) {
         let screen = self.pty.then_some(&self.screen);
         let _ = reply.send(render_logs(&self.ring, screen, &query, self.scrollback));
+    }
+
+    /// The retained output replayed at the pane's size, as the history and screen `capture-pane`
+    /// reads from.
+    fn capture(&self, spec: &CaptureSpec) -> String {
+        let grid = self.screen.grid();
+        let mut replay = VtScreen::new(grid.cols, grid.rows);
+        replay.grid_mut().set_history_limit(self.scrollback);
+        replay.feed(&self.ring.snapshot());
+        capture_text(replay.grid(), spec)
     }
 
     fn info(&self, full: bool) -> NodeInfo {

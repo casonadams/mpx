@@ -14,10 +14,12 @@ use tracing::warn;
 use super::idempotency::{Claim, IdemCache};
 use super::plan::{self, PaneIdentity};
 use super::snapshot::{PaneRecord, build_snapshot};
-use super::stores::Stores;
+use super::stores::{Stores, no_buffer};
 use crate::node::sleep_until_opt;
 use crate::config::Config;
 use crate::keys::{TermModes, encode_key_names, wrap_paste};
+use crate::protocol::{EnvEntry, PasteBufferOpts};
+use crate::vt::capture::CaptureSpec;
 use crate::layout::{Direction, Workspace};
 use crate::node::pacing::Pacing;
 use crate::node::pane::{self, InputBuild, Notifier, PaneCtx, PaneHandle, PaneNotice, TermView};
@@ -386,6 +388,9 @@ impl Session {
             | Request::GetBuffer { .. }
             | Request::ListBuffers
             | Request::DeleteBuffer { .. }
+            | Request::RenameBuffer { .. }
+            | Request::SetEnvironment { .. }
+            | Request::ShowEnvironment { .. }
             | Request::MoveWindow { .. }
             | Request::RotateWindow { .. }
             | Request::JoinPane { .. }
@@ -404,8 +409,8 @@ impl Session {
                 Response::Ok
             }
             Request::GetBindings => Response::Bindings(self.stores.bindings()),
-            Request::SetBuffer { name, data } => {
-                self.stores.push_buffer(name, data);
+            Request::SetBuffer { name, data, append } => {
+                self.stores.set_buffer(name, data, append);
                 Response::Ok
             }
             Request::GetBuffer { name } => match self.stores.buffer(name.as_deref()) {
@@ -419,6 +424,15 @@ impl Session {
                 } else {
                     Response::Error(no_buffer(name.as_deref()))
                 }
+            }
+            Request::RenameBuffer { name, to } => {
+                unit(self.stores.rename_buffer(name.as_deref(), to))
+            }
+            Request::SetEnvironment { name, change } => {
+                unit(self.stores.set_environment(name, change))
+            }
+            Request::ShowEnvironment { name } => {
+                show_environment(self.stores.environment(), name.as_deref())
             }
             Request::MoveWindow { from, to } => {
                 check(self.workspace.move_window(from, to), "No such window")
@@ -520,6 +534,10 @@ impl Session {
                 .await,
             ),
             Request::Screen { name } => reply(self.screen(&name).await, Response::Screen),
+            Request::CapturePane { name, spec } => {
+                reply(self.capture(&name, spec).await, Response::Capture)
+            }
+            Request::PasteBuffer(opts) => self.paste_buffer(opts).await,
             Request::ResizePane { name, cols, rows } => unit(self.resize(&name, cols, rows).await),
             Request::GetCwd { name } => reply(self.cwd(&name).await, Response::Cwd),
             req => self.workspace_request(req),
@@ -757,6 +775,45 @@ impl Session {
         self.handle_of(name)?.screen().await
     }
 
+    async fn capture(&self, name: &str, spec: CaptureSpec) -> Result<String, String> {
+        self.handle_of(name)?.capture(spec).await
+    }
+
+    /// `paste-buffer`: pastes the buffer into the pane; `-d` then deletes it.
+    async fn paste_buffer(&mut self, opts: PasteBufferOpts) -> Response {
+        let Some(buffer) = self.stores.buffer(opts.name.as_deref()).cloned() else {
+            return Response::Error(no_buffer(opts.name.as_deref()));
+        };
+        let PasteBufferOpts {
+            pane,
+            delete,
+            bracketed,
+            raw,
+            separator,
+            ..
+        } = opts;
+        let data = buffer.data;
+        let build: InputBuild = Box::new(move |view: &TermView| {
+            let modes = if view.pty { view.modes } else { TermModes::default() };
+            crate::keys::paste_buffer_bytes(
+                &data,
+                separator.as_deref(),
+                raw || !view.pty,
+                bracketed && view.pty,
+                &modes,
+            )
+        });
+        match self.send(&pane, build).await {
+            Ok(()) => {
+                if delete {
+                    self.stores.delete_buffer(Some(&buffer.name));
+                }
+                Response::Ok
+            }
+            Err(e) => Response::Error(e),
+        }
+    }
+
     async fn send(&self, name: &str, build: InputBuild) -> Result<(), String> {
         self.handle_of(name)?.input(build).await
     }
@@ -945,7 +1002,9 @@ impl Session {
             name,
             id,
         };
-        let env = self.pane_env(&identity, &opts.env);
+        let (mut extra, env_remove) = self.stores.spawn_environment();
+        extra.extend(opts.env.iter().cloned());
+        let env = self.pane_env(&identity, &extra);
         let spec = SpawnSpec {
             name: name.to_string(),
             id,
@@ -953,6 +1012,7 @@ impl Session {
             args: opts.args.clone(),
             cwd,
             env,
+            env_remove,
             term: self.config.default_terminal.clone(),
             scrollback: self.config.scrollback_lines,
         };
@@ -1119,6 +1179,7 @@ impl Session {
     }
 
     fn restore_snapshot(&mut self, snapshot: &SessionSnapshot) {
+        self.stores.restore_environment(&snapshot.environment);
         let plan = plan_restore(snapshot, &self.config.resume);
         for window in plan.windows {
             self.restore_window(window);
@@ -1223,7 +1284,10 @@ impl Session {
                 });
             }
         }
-        build_snapshot(&self.session, now_ms(), clean, &self.workspace, &records)
+        let mut snapshot =
+            build_snapshot(&self.session, now_ms(), clean, &self.workspace, &records);
+        snapshot.environment = self.stores.environment();
+        snapshot
     }
 }
 
@@ -1271,18 +1335,15 @@ fn is_read_only(req: &Request) -> bool {
             | Request::GetBuffer { .. }
             | Request::ListBuffers
             | Request::DeleteBuffer { .. }
+            | Request::RenameBuffer { .. }
+            | Request::PasteBuffer(..)
+            | Request::CapturePane { .. }
+            | Request::ShowEnvironment { .. }
     )
 }
 
 pub(super) fn not_found(name: &str) -> String {
     format!("Node '{}' not found", name)
-}
-
-fn no_buffer(name: Option<&str>) -> String {
-    match name {
-        Some(name) => format!("no buffer {name}"),
-        None => "no buffers".to_string(),
-    }
 }
 
 fn current_dir() -> Option<String> {
@@ -1339,4 +1400,14 @@ fn paste_bytes(text: &str, submit: bool, view: &TermView) -> Vec<u8> {
         bytes.push(if view.pty { b'\r' } else { b'\n' });
     }
     bytes
+}
+
+fn show_environment(entries: Vec<EnvEntry>, name: Option<&str>) -> Response {
+    match name {
+        None => Response::Environment(entries),
+        Some(name) => match entries.into_iter().find(|e| e.name == name) {
+            Some(entry) => Response::Environment(vec![entry]),
+            None => Response::Error(format!("unknown variable: {name}")),
+        },
+    }
 }

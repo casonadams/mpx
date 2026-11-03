@@ -7,6 +7,9 @@ pub mod render;
 mod resolve;
 mod sessions;
 mod windows;
+mod buffers;
+mod environment;
+pub use buffers::{capture_line, capture_spec};
 
 pub use resolve::{
     DEFAULT_SESSION, LEGACY_DEFAULT_SESSION, Resolved, nested_attach_refused, next_free_session,
@@ -498,4 +501,12 @@ pub enum Commands {
 
         name: String,
     },
+
+    /// Paste buffers and `capture-pane`
+    #[command(flatten)]
+    Buffers(buffers::BufferCommands),
+
+    /// The session environment: set-environment and show-environment
+    #[command(flatten)]
+    Environment(environment::EnvCommands),
 }

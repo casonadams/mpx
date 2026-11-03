@@ -285,3 +285,49 @@ fn an_auto_started_daemon_leads_its_own_session_so_terminal_hangups_spare_it() {
     let session = unsafe { libc::getsid(pid) };
     assert_eq!(session, pid, "the daemon must not share the spawning terminal's session");
 }
+
+#[test]
+fn buffers_move_between_captures_files_and_panes() {
+    let s = Session::new("bf");
+    s.spawn_pty("shell", "printf 'captured-token\\n'; exec cat");
+    assert_eq!(s.wait_for_match("shell", "captured-token"), 0);
+
+    assert_eq!(s.code(&["capture-pane", "-t", "shell", "-b", "snap"]), 0);
+    assert!(s.stdout(&["show-buffer", "-b", "snap"]).contains("captured-token"));
+    let printed = s.stdout(&["capture-pane", "-p", "-t", "shell", "-S", "-", "-E", "-"]);
+    assert!(printed.contains("captured-token\n"), "{printed}");
+
+    assert_eq!(s.code(&["set-buffer", "-b", "mine", "paste-me-token"]), 0);
+    assert_eq!(s.code(&["paste-buffer", "-b", "mine", "-t", "shell"]), 0);
+    assert_eq!(s.wait_for_match("shell", "paste-me-token"), 0);
+
+    let names = s.stdout(&["list-buffers", "-F", "#{buffer_name}"]);
+    assert!(names.lines().any(|l| l == "mine") && names.lines().any(|l| l == "snap"), "{names}");
+
+    let file = s.runtime.join("buffer.txt");
+    let file_arg = file.to_string_lossy().into_owned();
+    assert_eq!(s.code(&["save-buffer", "-b", "mine", file_arg.as_str()]), 0);
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "paste-me-token");
+    assert_eq!(s.code(&["load-buffer", "-b", "loaded", file_arg.as_str()]), 0);
+    assert_eq!(s.stdout(&["show-buffer", "-b", "loaded"]), "paste-me-token");
+
+    assert_eq!(s.code(&["set-buffer", "-b", "loaded", "-n", "renamed"]), 0);
+    assert_eq!(s.stdout(&["show-buffer", "-b", "renamed"]), "paste-me-token");
+    assert_eq!(s.code(&["delete-buffer", "-b", "mine"]), 0);
+    assert_ne!(s.code(&["show-buffer", "-b", "mine"]), 0);
+}
+
+#[test]
+fn environment_set_on_the_command_line_reaches_the_next_pane() {
+    let s = Session::new("sv");
+    assert_eq!(s.code(&["set-environment", "MPX_E2E_WORD", "marigold"]), 0);
+    assert_eq!(s.code(&["setenv", "-r", "HOME"]), 0);
+    assert_eq!(s.stdout(&["show-environment"]), "-HOME\nMPX_E2E_WORD=marigold\n");
+    assert_eq!(s.stdout(&["showenv", "MPX_E2E_WORD"]), "MPX_E2E_WORD=marigold\n");
+
+    s.spawn("env-pane", &["sh", "-c", "echo value=$MPX_E2E_WORD"]);
+    assert_eq!(s.wait_for_match("env-pane", "value=marigold"), 0);
+
+    assert_eq!(s.code(&["set-environment", "-u", "MPX_E2E_WORD"]), 0);
+    assert_eq!(s.stdout(&["show-environment"]), "-HOME\n");
+}

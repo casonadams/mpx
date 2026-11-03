@@ -69,6 +69,7 @@ pub fn build_snapshot(
         active_window: active_window.unwrap_or(0),
         last_window,
         windows,
+        environment: Vec::new(),
     }
 }
 

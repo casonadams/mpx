@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 use crate::layout::tree::LayoutNode;
-use crate::protocol::SpawnOpts;
+use crate::protocol::{EnvEntry, SpawnOpts};
 
 mod files;
 mod restore;
@@ -40,6 +40,9 @@ pub struct SessionSnapshot {
     #[serde(default)]
     pub last_window: Option<usize>,
     pub windows: Vec<WindowSnapshot>,
+    /// The session environment (`set-environment`), restored before the windows start.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub environment: Vec<EnvEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

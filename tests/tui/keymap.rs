@@ -267,7 +267,7 @@ fn tmux_default_prefix_keys_are_bound_to_their_tmux_commands() {
     assert!(matches!(bound(key('d')), Some(Command::Detach)));
     assert!(matches!(bound(key('t')), Some(Command::ClockMode { .. })));
     assert!(matches!(bound(key('~')), Some(Command::ShowMessages)));
-    assert!(matches!(bound(key('#')), Some(Command::ListBuffers)));
+    assert!(matches!(bound(key('#')), Some(Command::Buffer(mpx::tui::command::BufferCommand::ListBuffers { format: None }))));
     assert!(matches!(bound(key('=')), Some(Command::ChooseBuffer)));
     assert!(matches!(bound(key('E')), Some(Command::SpreadLayout)));
     assert!(matches!(bound(key('i')), Some(Command::DisplayMessage { format: None })));

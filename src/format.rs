@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use regex::{NoExpand, RegexBuilder};
 
 use crate::layout::{Rect, WindowTab};
-use crate::protocol::NodeInfo;
+use crate::protocol::{Buffer, NodeInfo};
 
 /// Format variables available to `#{name}` references.
 pub type Vars = BTreeMap<&'static str, String>;
@@ -550,4 +550,37 @@ pub fn pane_view(
             session_windows: tabs.len(),
             ..Default::default()
         }
+}
+
+/// The `list-buffers -F` default: `name: N bytes: "sample"`.
+pub const DEFAULT_BUFFER_FORMAT: &str =
+    "#{buffer_name}: #{buffer_size} bytes: \"#{buffer_sample}\"";
+
+/// Variables of one paste buffer, for `list-buffers -F`.
+pub fn buffer_vars(buffer: &Buffer) -> Vars {
+    Vars::from([
+        ("buffer_name", buffer.name.clone()),
+        ("buffer_size", buffer.data.len().to_string()),
+        ("buffer_sample", buffer_sample(&buffer.data)),
+    ])
+}
+
+/// The first 50 characters of a buffer, control characters shown as escapes.
+pub fn buffer_sample(data: &str) -> String {
+    const SAMPLE_CHARS: usize = 50;
+    let mut out = String::new();
+    for (i, c) in data.chars().enumerate() {
+        if i == SAMPLE_CHARS {
+            out.push_str("...");
+            break;
+        }
+        match c {
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => out.push('?'),
+            c => out.push(c),
+        }
+    }
+    out
 }

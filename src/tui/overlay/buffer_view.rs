@@ -5,6 +5,7 @@ use std::io::{self, Write};
 use crossterm::event::{KeyCode, KeyEvent};
 
 use crate::layout::Rect;
+use crate::format::{DEFAULT_BUFFER_FORMAT, buffer_vars, expand};
 use crate::protocol::Buffer;
 use crate::tui::command::Command;
 use crate::tui::overlay::nav::{Filter, ListState, route_list_key};
@@ -12,35 +13,10 @@ use crate::tui::overlay::widgets::{self, Chrome, ListPanel, Span, Tone, printabl
 use crate::tui::overlay::{OverlayAction, OverlayCtx};
 
 const HINTS: &str = "j/k move  Enter paste  d delete  / filter  q close";
-const SAMPLE_CHARS: usize = 50;
-
-/// The first characters of a buffer, control characters shown as escapes.
-fn buffer_sample(data: &str) -> String {
-    let mut out = String::new();
-    for (i, c) in data.chars().enumerate() {
-        if i == SAMPLE_CHARS {
-            out.push_str("...");
-            break;
-        }
-        match c {
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if c.is_control() => out.push('?'),
-            c => out.push(c),
-        }
-    }
-    out
-}
 
 /// `name: N bytes: "sample"`, the line `list-buffers` shows for a buffer.
 pub fn buffer_summary(buffer: &Buffer) -> String {
-    format!(
-        "{}: {} bytes: \"{}\"",
-        buffer.name,
-        buffer.data.len(),
-        buffer_sample(&buffer.data)
-    )
+    expand(DEFAULT_BUFFER_FORMAT, &buffer_vars(buffer))
 }
 
 #[derive(Default)]

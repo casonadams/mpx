@@ -15,6 +15,7 @@ fn spawn_task(name: &str, command: &str) -> (PaneHandle, mpsc::UnboundedReceiver
         args: Vec::new(),
         cwd: None,
         env: Vec::new(),
+        env_remove: Vec::new(),
         term: "xterm-256color".to_string(),
         scrollback: 100_000,
     };

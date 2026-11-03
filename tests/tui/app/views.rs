@@ -150,7 +150,7 @@ async fn the_message_log_keeps_the_last_hundred_messages() {
 async fn list_buffers_shows_each_buffer_with_its_size_and_sample() {
     let mut h = Harness::start(Config::default(), ECHO).await;
     h.probe
-        .set_buffer(Some("alpha"), "hello\nworld")
+        .set_buffer(Some("alpha"), "hello\nworld", false)
         .await
         .expect("set buffer");
     h.frame().await;
@@ -168,11 +168,11 @@ async fn list_buffers_shows_each_buffer_with_its_size_and_sample() {
 async fn choose_buffer_pastes_the_highlighted_buffer_and_deletes_on_d() {
     let mut h = Harness::start(Config::default(), ECHO).await;
     h.probe
-        .set_buffer(Some("older"), "old text")
+        .set_buffer(Some("older"), "old text", false)
         .await
         .expect("set buffer");
     h.probe
-        .set_buffer(Some("newer"), "fresh text")
+        .set_buffer(Some("newer"), "fresh text", false)
         .await
         .expect("set buffer");
     h.frame().await;
@@ -221,4 +221,24 @@ async fn suspend_client_asks_the_event_loop_to_stop_the_process() {
 fn the_system_clock_reads_a_valid_local_time() {
     let (hour, minute) = ClockSource::System.hour_minute();
     assert!(hour < 24 && minute < 60, "{hour}:{minute}");
+}
+
+#[tokio::test]
+async fn buffer_and_environment_prompt_commands_show_the_daemons_state() {
+    let mut h = Harness::start(Config::default(), ECHO).await;
+    h.command("set-buffer -b prompt-made hello-from-prompt").await;
+    h.command("set-environment PROMPT_WORD marigold").await;
+    h.frame().await;
+
+    h.command("list-buffers -F #{buffer_name}=#{buffer_size}").await;
+    let listed = h.frame().await;
+    assert!(listed.contains("prompt-made=17"), "{listed}");
+    h.key(KeyCode::Esc).await;
+    h.command("show-buffer -b prompt-made").await;
+    let shown = h.frame().await;
+    assert!(shown.contains("hello-from-prompt"), "{shown}");
+    h.key(KeyCode::Esc).await;
+    h.command("show-environment PROMPT_WORD").await;
+    let env = h.frame().await;
+    assert!(env.contains("PROMPT_WORD=marigold"), "{env}");
 }

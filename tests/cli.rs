@@ -1,4 +1,5 @@
 mod cli {
+    mod buffers;
     mod definition;
     #[cfg(unix)]
     mod e2e;

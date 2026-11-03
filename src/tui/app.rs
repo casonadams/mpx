@@ -588,7 +588,7 @@ impl App {
     /// Work that follows every input or stream batch: copies made reach the paste buffers.
     async fn after_input(&mut self) {
         for text in std::mem::take(&mut self.yanks) {
-            if let Err(e) = self.client.set_buffer(None, &text).await {
+            if let Err(e) = self.client.set_buffer(None, &text, false).await {
                 self.say(format!("set-buffer: {e}"));
             }
         }

@@ -1,6 +1,6 @@
 //! Command execution: maps each `Command` onto daemon requests and TUI state.
 use super::app::{App, Flow, Mode};
-use super::command::{Command, CopyModeOpts, PromptSpec};
+use super::command::{BufferCommand, Command, CopyModeOpts, EnvCommand, PromptSpec};
 use super::copy::{CopyAction, CopyOutcome, CopyState, Motion, apply_action};
 use super::keymap;
 use super::overlay::{Overlay, OverlayCtx, buffer_summary};
@@ -9,9 +9,11 @@ use super::prompt::{PromptRun, Question};
 use super::session::neighbor_session;
 use super::session::{pick, split_target};
 use crate::config::Config;
+use crate::format::{buffer_vars, expand};
 use crate::ipc;
+use crate::vt::capture::CaptureSpec;
 use crate::layout::Direction;
-use crate::protocol::{LayoutPreset, NewWindowOpts, Side, SpawnOpts, SplitOpts};
+use crate::protocol::{LayoutPreset, NewWindowOpts, PasteBufferOpts, Side, SpawnOpts, SplitOpts};
 use std::collections::VecDeque;
 use std::io::Write;
 use std::process::Stdio;
@@ -215,10 +217,51 @@ impl App {
                 let lines = self.message_log.clone();
                 self.open_overlay(Overlay::text("messages", lines)).await
             }
-            Command::ListBuffers => self.list_buffers().await,
+            Command::Buffer(cmd) => self.buffer_command(cmd).await,
+            Command::Environment(cmd) => self.environment_command(cmd).await,
             Command::ChooseBuffer => self.open_overlay(Overlay::buffers()).await,
             Command::SuspendClient => self.suspend_client(),
             other => self.say(format!("unhandled command: {other:?}")),
+        }
+    }
+
+    async fn buffer_command(&mut self, cmd: BufferCommand) -> Flow {
+        match cmd {
+            BufferCommand::ListBuffers { format } => self.list_buffers(format).await,
+            BufferCommand::SetBuffer {
+                name,
+                append,
+                rename,
+                data,
+            } => self.set_buffer(name, append, rename, data).await,
+            BufferCommand::ShowBuffer { name } => self.show_buffer(name).await,
+            BufferCommand::DeleteBuffer { name } => {
+                let result = self.client.delete_buffer(name.as_deref()).await;
+                self.settle(result)
+            }
+            BufferCommand::LoadBuffer { name, path } => self.load_buffer(name, &path).await,
+            BufferCommand::SaveBuffer {
+                name,
+                append,
+                path,
+            } => self.save_buffer(name, append, &path).await,
+            BufferCommand::PasteBuffer { opts } => self.paste_buffer(opts).await,
+            BufferCommand::CapturePane {
+                target,
+                print,
+                buffer,
+                spec,
+            } => self.capture_pane(target, print, buffer, spec).await,
+        }
+    }
+
+    async fn environment_command(&mut self, cmd: EnvCommand) -> Flow {
+        match cmd {
+            EnvCommand::SetEnvironment { name, change } => {
+                let result = self.client.set_environment(&name, change).await;
+                self.settle(result)
+            }
+            EnvCommand::ShowEnvironment { name } => self.show_environment(name).await,
         }
     }
 
@@ -436,12 +479,134 @@ impl App {
         }
     }
 
-    /// `list-buffers`: one line per paste buffer, newest first.
-    async fn list_buffers(&mut self) -> Flow {
+    /// `list-buffers`: one line per paste buffer, newest first, each rendered by `format`.
+    async fn list_buffers(&mut self, format: Option<String>) -> Flow {
         match self.client.list_buffers().await {
             Ok(buffers) => {
-                let lines = buffers.iter().map(buffer_summary).collect();
+                let lines = match format {
+                    Some(format) => buffers
+                        .iter()
+                        .map(|buffer| expand(&format, &buffer_vars(buffer)))
+                        .collect(),
+                    None => buffers.iter().map(buffer_summary).collect(),
+                };
                 self.open_overlay(Overlay::text("list-buffers", lines))
+                    .await
+            }
+            Err(e) => self.say(e),
+        }
+    }
+
+    /// `show-buffer`: the text of a paste buffer, in an overlay.
+    async fn show_buffer(&mut self, name: Option<String>) -> Flow {
+        match self.client.get_buffer(name.as_deref()).await {
+            Ok(buffer) => {
+                let lines = buffer.data.lines().map(str::to_string).collect();
+                self.open_overlay(Overlay::text("show-buffer", lines)).await
+            }
+            Err(e) => self.say(e),
+        }
+    }
+
+    /// `set-buffer`: stores `data`, appending with `append`, or renames the buffer to `rename`.
+    async fn set_buffer(
+        &mut self,
+        name: Option<String>,
+        append: bool,
+        rename: Option<String>,
+        data: Option<String>,
+    ) -> Flow {
+        let result = match (rename, data) {
+            (Some(to), None) => self.client.rename_buffer(name.as_deref(), &to).await,
+            (Some(_), Some(_)) => Err("set-buffer: -n takes no data".to_string()),
+            (None, Some(data)) => self.client.set_buffer(name.as_deref(), &data, append).await,
+            (None, None) => Err("set-buffer: no data given".to_string()),
+        };
+        self.settle(result)
+    }
+
+    /// `load-buffer`: a file's contents become a paste buffer.
+    async fn load_buffer(&mut self, name: Option<String>, path: &str) -> Flow {
+        let data = match std::fs::read_to_string(path) {
+            Ok(data) => data,
+            Err(e) => return self.say(format!("load-buffer: {path}: {e}")),
+        };
+        let result = self.client.set_buffer(name.as_deref(), &data, false).await;
+        self.settle(result)
+    }
+
+    /// `save-buffer`: a paste buffer is written to a file.
+    async fn save_buffer(&mut self, name: Option<String>, append: bool, path: &str) -> Flow {
+        if path == "-" {
+            return self.say("save-buffer: - (stdout) works only from the command line");
+        }
+        let buffer = match self.client.get_buffer(name.as_deref()).await {
+            Ok(buffer) => buffer,
+            Err(e) => return self.say(format!("save-buffer: {e}")),
+        };
+        let written = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .append(append)
+            .truncate(!append)
+            .open(path)
+            .and_then(|mut file| file.write_all(buffer.data.as_bytes()));
+        match written {
+            Ok(()) => self.say(format!("saved {} to {path}", buffer.name)),
+            Err(e) => self.say(format!("save-buffer: {path}: {e}")),
+        }
+    }
+
+    /// `paste-buffer`: the buffer goes into the pane, which must be in this session.
+    async fn paste_buffer(&mut self, opts: PasteBufferOpts) -> Flow {
+        let target = (!opts.pane.is_empty()).then(|| opts.pane.clone());
+        let (temp, pane) = match self.resolve_target(target.as_deref()).await {
+            Ok(found) => found,
+            Err(e) => return self.say(e),
+        };
+        if temp.is_some() {
+            return self.say("paste-buffer: the pane must be in this session");
+        }
+        let result = self.client.paste_buffer(PasteBufferOpts { pane, ..opts }).await;
+        self.settle(result)
+    }
+
+    /// `capture-pane`: the pane's text, in an overlay with `-p`, else stored in a paste buffer.
+    async fn capture_pane(
+        &mut self,
+        target: Option<String>,
+        print: bool,
+        buffer: Option<String>,
+        spec: CaptureSpec,
+    ) -> Flow {
+        let (mut temp, pane) = match self.resolve_target(target.as_deref()).await {
+            Ok(found) => found,
+            Err(e) => return self.say(e),
+        };
+        let text = match pick(&mut temp, &mut self.client).capture_pane(&pane, spec).await {
+            Ok(text) => text,
+            Err(e) => return self.say(e),
+        };
+        if print {
+            let lines = text.lines().map(str::to_string).collect();
+            return self.open_overlay(Overlay::text("capture-pane", lines)).await;
+        }
+        let result = self.client.set_buffer(buffer.as_deref(), &text, false).await;
+        self.settle(result)
+    }
+
+    /// `show-environment`: the session environment, or one variable, in an overlay.
+    async fn show_environment(&mut self, name: Option<String>) -> Flow {
+        match self.client.show_environment(name.as_deref()).await {
+            Ok(entries) => {
+                let lines = entries
+                    .into_iter()
+                    .map(|entry| match entry.value {
+                        Some(value) => format!("{}={value}", entry.name),
+                        None => format!("-{}", entry.name),
+                    })
+                    .collect();
+                self.open_overlay(Overlay::text("show-environment", lines))
                     .await
             }
             Err(e) => self.say(e),

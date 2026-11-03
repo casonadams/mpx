@@ -2,7 +2,9 @@ mod daemon {
     mod basics;
     mod config_policy;
     mod env;
+    mod capture;
     mod exit_drain;
+    mod environment;
     mod idempotency;
     mod idempotent;
     mod input;

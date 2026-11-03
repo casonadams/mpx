@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use super::panes;
+use super::buffers;
+use super::environment;
 use super::render;
 use super::resolve::{
     DEFAULT_SESSION, LEGACY_DEFAULT_SESSION, Resolved, load_config, nested_attach_refused,
@@ -119,6 +121,8 @@ async fn dispatch(command: Commands, r: Resolved) -> Result<i32, String> {
         }
         Commands::Restore => restore(&r).await,
         Commands::ImportTmux { file } => import_tmux(file.as_deref()),
+        Commands::Buffers(cmd) => buffers::run(cmd, &r).await,
+        Commands::Environment(cmd) => environment::run(cmd, &r).await,
         other => panes::run(other, &r).await,
     }
 }
@@ -162,6 +166,17 @@ pub async fn ensure_client(r: &Resolved) -> Result<Client, String> {
         "Could not connect to mpx daemon at '{}'",
         r.endpoint
     ))
+}
+
+/// Runs `call` on a client connected for the session. A failed call is reported as `cmd: error`;
+/// a failure to connect is reported as is.
+pub async fn daemon_call<T>(
+    r: &Resolved,
+    cmd: &str,
+    call: impl AsyncFnOnce(&mut Client) -> Result<T, String>,
+) -> Result<T, String> {
+    let mut client = ensure_client(r).await?;
+    call(&mut client).await.map_err(|e| format!("{cmd}: {e}"))
 }
 
 /// Connects to a running daemon without starting one.
@@ -401,7 +416,7 @@ async fn restore(r: &Resolved) -> Result<i32, String> {
     Ok(0)
 }
 
-fn target_resolved(current: &Resolved, target: &str) -> Resolved {
+pub(super) fn target_resolved(current: &Resolved, target: &str) -> Resolved {
     let endpoint = if target == current.session {
         current.endpoint.clone()
     } else {

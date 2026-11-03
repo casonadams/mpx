@@ -1,7 +1,9 @@
 //! Format expansion (`#{...}`) and the variables panes and sessions provide.
 use mpx::layout::{Rect, WindowTab};
-use mpx::protocol::NodeInfo;
-use mpx::format::{PaneView, Vars, expand, pane_vars, pane_view};
+use mpx::format::{
+    DEFAULT_BUFFER_FORMAT, PaneView, Vars, buffer_sample, buffer_vars, expand, pane_vars, pane_view,
+};
+use mpx::protocol::{Buffer, NodeInfo};
 
 fn vars(pairs: &[(&'static str, &str)]) -> Vars {
     pairs.iter().map(|(k, v)| (*k, v.to_string())).collect()
@@ -325,4 +327,24 @@ fn pane_active_is_each_windows_focused_pane() {
     );
     assert_eq!(active("q", 1), "1");
     assert_eq!(active("x", 1), "0");
+}
+
+#[test]
+fn the_list_buffers_format_describes_each_buffer() {
+    let buffer = Buffer {
+        name: "buffer0000".into(),
+        data: "hello\nworld".into(),
+    };
+    let vars = buffer_vars(&buffer);
+    assert_eq!(
+        expand(DEFAULT_BUFFER_FORMAT, &vars),
+        "buffer0000: 11 bytes: \"hello\\nworld\""
+    );
+    assert_eq!(expand("#{buffer_name}=#{buffer_size}", &vars), "buffer0000=11");
+}
+
+#[test]
+fn buffer_samples_keep_fifty_characters_and_escape_control_bytes() {
+    assert_eq!(buffer_sample(&"x".repeat(60)), format!("{}...", "x".repeat(50)));
+    assert_eq!(buffer_sample("a\tb\u{7}"), "a\\tb?");
 }

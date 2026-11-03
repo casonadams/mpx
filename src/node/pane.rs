@@ -16,6 +16,7 @@ use crate::buffer::{RingBuffer, strip_ansi};
 use crate::keys::TermModes;
 use crate::protocol::{NodeInfo, PaneId, StreamEvent, WaitCondition, WaitOutcome};
 use crate::vt::VtScreen;
+use crate::vt::capture::CaptureSpec;
 
 pub type Reply<T> = oneshot::Sender<T>;
 
@@ -108,6 +109,10 @@ pub enum PaneMsg {
         reply: Reply<(String, u64)>,
     },
     Screen {
+        reply: Reply<String>,
+    },
+    Capture {
+        spec: CaptureSpec,
         reply: Reply<String>,
     },
     Cwd {
@@ -221,6 +226,10 @@ impl PaneHandle {
 
     pub async fn screen(&self) -> Result<String, String> {
         self.ask(|reply| PaneMsg::Screen { reply }).await
+    }
+
+    pub async fn capture(&self, spec: CaptureSpec) -> Result<String, String> {
+        self.ask(|reply| PaneMsg::Capture { spec, reply }).await
     }
 
     pub async fn cwd(&self) -> Result<Option<String>, String> {

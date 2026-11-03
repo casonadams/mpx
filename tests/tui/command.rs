@@ -1,3 +1,4 @@
+use mpx::tui::command::{BufferCommand, EnvCommand};
 use mpx::protocol::{LayoutPreset, Side};
 use mpx::tui::command::{Command, CopyModeOpts, PromptSpec, parse, split_words};
 use mpx::tui::keymap::Table;
@@ -521,15 +522,19 @@ fn buffer_and_message_commands_parse_bare() {
     assert!(matches!(ok("show-messages"), Command::ShowMessages));
     assert!(matches!(ok("showmsgs"), Command::ShowMessages));
     assert!(matches!(ok("choose-buffer"), Command::ChooseBuffer));
-    assert!(matches!(ok("list-buffers"), Command::ListBuffers));
-    assert!(matches!(ok("lsb"), Command::ListBuffers));
+    assert!(matches!(ok("list-buffers"), Command::Buffer(BufferCommand::ListBuffers { format: None })));
+    assert!(matches!(ok("lsb"), Command::Buffer(BufferCommand::ListBuffers { format: None })));
     assert!(matches!(ok("suspend-client"), Command::SuspendClient));
     assert!(matches!(ok("suspendc"), Command::SuspendClient));
 }
 
 #[test]
-fn list_buffers_takes_no_arguments() {
-    assert!(err("list-buffers -F #{buffer_name}").contains("takes no arguments"));
+fn list_buffers_takes_a_format_and_nothing_else() {
+    assert!(matches!(
+        buffer_of("list-buffers -F #{buffer_name}"),
+        BufferCommand::ListBuffers { format: Some(f) } if f == "#{buffer_name}"
+    ));
+    assert!(err("list-buffers extra").contains("unexpected argument"));
 }
 
 #[test]
@@ -619,4 +624,109 @@ fn completion_offers_the_commands_reached_through_aliases_in_the_default_keys() 
     for name in ["display-message", "move-window", "rotate-window"] {
         assert!(mpx::tui::command::COMMAND_NAMES.contains(&name), "{name}");
     }
+}
+
+fn buffer_of(line: &str) -> BufferCommand {
+    match ok(line) {
+        Command::Buffer(cmd) => cmd,
+        other => panic!("{other:?}"),
+    }
+}
+
+fn env_of(line: &str) -> EnvCommand {
+    match ok(line) {
+        Command::Environment(cmd) => cmd,
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn set_buffer_takes_flags_then_data_or_a_rename() {
+    assert!(matches!(
+        buffer_of("set-buffer -b keep -a one two"),
+        BufferCommand::SetBuffer { name: Some(n), append: true, rename: None, data: Some(d) }
+            if n == "keep" && d == "one two"
+    ));
+    assert!(matches!(
+        buffer_of("set-buffer -b old -n new"),
+        BufferCommand::SetBuffer { name: Some(n), rename: Some(r), data: None, .. }
+            if n == "old" && r == "new"
+    ));
+    assert!(err("set-buffer").contains("no data given"));
+    assert!(err("set-buffer -n new data").contains("-n takes no data"));
+}
+
+#[test]
+fn buffer_file_and_paste_commands_parse_their_operands() {
+    assert!(matches!(
+        buffer_of("load-buffer /tmp/x"),
+        BufferCommand::LoadBuffer { name: None, path } if path == "/tmp/x"
+    ));
+    assert!(err("load-buffer").contains("need a path"));
+    assert!(matches!(
+        buffer_of("save-buffer -a -b k out.txt"),
+        BufferCommand::SaveBuffer { name: Some(n), append: true, path } if n == "k" && path == "out.txt"
+    ));
+    assert!(matches!(
+        buffer_of("showb -b x"),
+        BufferCommand::ShowBuffer { name: Some(n) } if n == "x"
+    ));
+    assert!(matches!(buffer_of("deleteb"), BufferCommand::DeleteBuffer { name: None }));
+    match buffer_of("paste-buffer -d -p -r -s , -b k -t %1") {
+        BufferCommand::PasteBuffer { opts } => assert_eq!(
+            opts,
+            mpx::protocol::PasteBufferOpts {
+                name: Some("k".into()),
+                pane: "%1".into(),
+                delete: true,
+                bracketed: true,
+                raw: true,
+                separator: Some(",".into()),
+            }
+        ),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn capture_pane_and_environment_commands_parse() {
+    match buffer_of("capture-pane -p -e -S -2 -E -") {
+        BufferCommand::CapturePane {
+            target: None,
+            print: true,
+            buffer: None,
+            spec,
+        } => assert_eq!(
+            spec,
+            mpx::vt::capture::CaptureSpec {
+                start: Some(mpx::vt::capture::CaptureLine::Line(-2)),
+                end: Some(mpx::vt::capture::CaptureLine::Last),
+                escapes: true,
+                join: false,
+            }
+        ),
+        other => panic!("{other:?}"),
+    }
+    assert!(err("capture-pane -S x").contains("invalid line"));
+    assert!(matches!(
+        env_of("setenv FOO bar baz"),
+        EnvCommand::SetEnvironment { name, change: mpx::protocol::EnvChange::Set(v) }
+            if name == "FOO" && v == "bar baz"
+    ));
+    assert!(matches!(
+        env_of("set-environment -u FOO"),
+        EnvCommand::SetEnvironment { change: mpx::protocol::EnvChange::Unset, .. }
+    ));
+    assert!(matches!(
+        env_of("set-environment -r FOO"),
+        EnvCommand::SetEnvironment { change: mpx::protocol::EnvChange::Remove, .. }
+    ));
+    assert!(err("set-environment -u FOO bar").contains("take no value"));
+    assert!(err("set-environment FOO").contains("no value given for FOO"));
+    assert!(err("set-environment -t other FOO x").contains("not supported at the prompt"));
+    assert!(matches!(env_of("showenv"), EnvCommand::ShowEnvironment { name: None }));
+    assert!(matches!(
+        env_of("show-environment FOO"),
+        EnvCommand::ShowEnvironment { name: Some(n) } if n == "FOO"
+    ));
 }

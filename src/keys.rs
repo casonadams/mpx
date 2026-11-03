@@ -238,7 +238,32 @@ pub fn wrap_paste(text: &str, modes: &TermModes) -> Vec<u8> {
     if !modes.bracketed_paste {
         return text.into_bytes();
     }
-    let body = strip_paste_end(&text);
+    bracket(&text)
+}
+
+/// Bytes that paste a paste buffer. Line feeds become `separator` when given, else carriage
+/// returns, which `raw` keeps as they are. Bracketed when `bracketed` is set or the program
+/// enabled bracketed paste.
+pub fn paste_buffer_bytes(
+    text: &str,
+    separator: Option<&str>,
+    raw: bool,
+    bracketed: bool,
+    modes: &TermModes,
+) -> Vec<u8> {
+    let body = match separator {
+        Some(separator) => text.replace("\r\n", "\n").replace('\n', separator),
+        None if raw => text.to_string(),
+        None => text.replace("\r\n", "\r").replace('\n', "\r"),
+    };
+    if !(bracketed || modes.bracketed_paste) {
+        return body.into_bytes();
+    }
+    bracket(&body)
+}
+
+fn bracket(text: &str) -> Vec<u8> {
+    let body = strip_paste_end(text);
     let mut out = Vec::with_capacity(body.len() + 12);
     out.extend_from_slice(b"\x1b[200~");
     out.extend_from_slice(body.as_bytes());

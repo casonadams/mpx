@@ -5,11 +5,12 @@ use tokio_util::codec::{Framed, FramedParts, LengthDelimitedCodec, LinesCodec};
 use crate::ipc::{IpcStream, connect_stream};
 use crate::layout::{Divider, Rect, WindowTab};
 use crate::protocol::{
-    Buffer, DaemonMessage, LayoutPreset, NewWindowOpts, NodeInfo, PROTOCOL,
-    Request, Response, SessionInfo, Side, SpawnOpts, SplitOpts, StreamEvent,
+    Buffer, DaemonMessage, EnvChange, EnvEntry, LayoutPreset, NewWindowOpts, NodeInfo, PROTOCOL,
+    PasteBufferOpts, Request, Response, SessionInfo, Side, SpawnOpts, SplitOpts, StreamEvent,
     WaitCondition, WaitOutcome,
 };
 use crate::wire;
+use crate::vt::capture::CaptureSpec;
 
 const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 const SHUTDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
@@ -99,6 +100,17 @@ impl Client {
             Response::Node(info) => Ok(info),
             other => Err(unexpected(op, other)),
         }
+    }
+
+    /// Sends `req` and takes the payload of its response with `take`; another response is an error.
+    async fn call_as<T>(
+        &mut self,
+        op: &str,
+        req: Request,
+        take: fn(Response) -> Option<T>,
+    ) -> Result<T, String> {
+        let response = self.call(req).await?;
+        take(response).ok_or_else(|| format!("unexpected response to {op}"))
     }
 
     pub async fn ping(&mut self) -> Result<(), String> {
@@ -481,13 +493,15 @@ impl Client {
         }
     }
 
-    /// Pushes a paste buffer; `name` replaces the buffer of that name.
-    pub async fn set_buffer(&mut self, name: Option<&str>, data: &str) -> Result<(), String> {
-        let req = Request::SetBuffer {
-            name: name.map(str::to_string),
-            data: data.to_string(),
-        };
-        self.call_ok("SetBuffer", req).await
+    /// Pushes a paste buffer; `name` replaces the buffer of that name, `append` adds to it instead.
+    pub async fn set_buffer(
+        &mut self,
+        name: Option<&str>,
+        data: &str,
+        append: bool,
+    ) -> Result<(), String> {
+        let name = name.map(str::to_string);
+        self.call_ok("SetBuffer", Request::SetBuffer { name, data: data.to_string(), append }).await
     }
 
     /// The named paste buffer, or the most recent one.
@@ -514,6 +528,49 @@ impl Client {
             name: name.map(str::to_string),
         };
         self.call_ok("DeleteBuffer", req).await
+    }
+
+    /// Renames a buffer (`set-buffer -n`); `name` None is the newest buffer.
+    pub async fn rename_buffer(&mut self, name: Option<&str>, to: &str) -> Result<(), String> {
+        let name = name.map(str::to_string);
+        self.call_ok("RenameBuffer", Request::RenameBuffer { name, to: to.to_string() }).await
+    }
+
+    pub async fn paste_buffer(&mut self, opts: PasteBufferOpts) -> Result<(), String> {
+        self.call_ok("PasteBuffer", Request::PasteBuffer(opts)).await
+    }
+
+    /// Text of a pane's history and screen, as `capture-pane` reads it.
+    pub async fn capture_pane(&mut self, name: &str, spec: CaptureSpec) -> Result<String, String> {
+        let req = Request::CapturePane {
+            name: name.to_string(),
+            spec,
+        };
+        self.call_as("CapturePane", req, |resp| match resp {
+            Response::Capture(text) => Some(text),
+            _ => None,
+        })
+        .await
+    }
+
+    pub async fn set_environment(&mut self, name: &str, change: EnvChange) -> Result<(), String> {
+        let req = Request::SetEnvironment {
+            name: name.to_string(),
+            change,
+        };
+        self.call_ok("SetEnvironment", req).await
+    }
+
+    /// The session environment, or only the variable `name`.
+    pub async fn show_environment(&mut self, name: Option<&str>) -> Result<Vec<EnvEntry>, String> {
+        let req = Request::ShowEnvironment {
+            name: name.map(str::to_string),
+        };
+        self.call_as("ShowEnvironment", req, |resp| match resp {
+            Response::Environment(entries) => Some(entries),
+            _ => None,
+        })
+        .await
     }
 
     pub async fn move_window(&mut self, from: usize, to: usize) -> Result<(), String> {

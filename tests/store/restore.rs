@@ -111,6 +111,7 @@ fn restore(
         active_window,
         last_window: None,
         windows,
+        environment: Vec::new(),
     };
     plan_restore(&snapshot, rules)
 }

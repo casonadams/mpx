@@ -1,4 +1,5 @@
 use mpx::layout::tree::{Direction, LayoutNode};
+use mpx::protocol::EnvEntry;
 use mpx::store::{
     PaneSnapshot, SNAPSHOT_VERSION, SessionSnapshot, SnapshotStore, WindowSnapshot,
     decode_snapshot, encode_snapshot,
@@ -46,6 +47,10 @@ fn sample() -> SessionSnapshot {
                     session_id: Some("abc".into()),
                 },
             ],
+        }],
+        environment: vec![EnvEntry {
+            name: "TZ".into(),
+            value: Some("UTC".into()),
         }],
     }
 }

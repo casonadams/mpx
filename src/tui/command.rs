@@ -3,7 +3,8 @@
 use super::copy::CopyAction;
 use super::keymap::Table;
 use super::prompt::PromptKind;
-use crate::protocol::{LayoutPreset, Side};
+use crate::protocol::{EnvChange, LayoutPreset, PasteBufferOpts, Side};
+use crate::vt::capture::CaptureSpec;
 
 /// The options of `copy-mode`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -227,18 +228,65 @@ pub enum Command {
     },
     /// `show-messages`: the status-row messages of this session, oldest first.
     ShowMessages,
-    /// `list-buffers`: the paste buffers, one line each, in an overlay.
-    ListBuffers,
     /// `choose-buffer`: the paste buffers, newest first; Enter pastes, `d` deletes.
     ChooseBuffer,
+    /// Paste buffers, capture and the buffer files: see `BufferCommand`.
+    Buffer(BufferCommand),
+    /// `set-environment` and `show-environment`: see `EnvCommand`.
+    Environment(EnvCommand),
     /// `suspend-client`: stop the process as Ctrl-Z does; the TUI resumes on SIGCONT.
     SuspendClient,
+}
+
+/// The paste-buffer and capture commands. They act on the daemon's buffers, which the CLI shares.
+#[derive(Debug, Clone, PartialEq)]
+pub enum BufferCommand {
+    /// `list-buffers [-F format]`: the paste buffers, one line each, in an overlay.
+    ListBuffers { format: Option<String> },
+    /// `set-buffer [-a] [-b name] [-n new] [data]`: stores or renames a paste buffer.
+    SetBuffer {
+        name: Option<String>,
+        append: bool,
+        rename: Option<String>,
+        data: Option<String>,
+    },
+    /// `show-buffer [-b name]`: the text of a paste buffer, in an overlay.
+    ShowBuffer { name: Option<String> },
+    /// `delete-buffer [-b name]`.
+    DeleteBuffer { name: Option<String> },
+    /// `load-buffer [-b name] path`: a file becomes a paste buffer.
+    LoadBuffer { name: Option<String>, path: String },
+    /// `save-buffer [-a] [-b name] path`: a paste buffer is written to a file.
+    SaveBuffer {
+        name: Option<String>,
+        append: bool,
+        path: String,
+    },
+    /// `paste-buffer [-d] [-p] [-r] [-s sep] [-b name] [-t pane]`.
+    PasteBuffer { opts: PasteBufferOpts },
+    /// `capture-pane [-p] [-e] [-J] [-S line] [-E line] [-b name] [-t pane]`.
+    CapturePane {
+        target: Option<String>,
+        print: bool,
+        buffer: Option<String>,
+        spec: CaptureSpec,
+    },
+}
+
+/// The session environment commands.
+#[derive(Debug, Clone, PartialEq)]
+pub enum EnvCommand {
+    /// `set-environment [-g] [-u] [-r] name [value]`: a variable of the session environment.
+    SetEnvironment { name: String, change: EnvChange },
+    /// `show-environment [-g] [name]`: the session environment, in an overlay.
+    ShowEnvironment { name: Option<String> },
 }
 
 /// Command names and aliases accepted by `parse`; used for `:` completion.
 pub const COMMAND_NAMES: &[&str] = &[
     "bind-key",
     "break-pane",
+    "capture-pane",
     "choose-buffer",
     "choose-tree",
     "clock-mode",
@@ -246,6 +294,7 @@ pub const COMMAND_NAMES: &[&str] = &[
     "command-prompt",
     "confirm-before",
     "copy-mode",
+    "delete-buffer",
     "detach",
     "detach-client",
     "display-message",
@@ -260,6 +309,7 @@ pub const COMMAND_NAMES: &[&str] = &[
     "last-window",
     "list-buffers",
     "list-keys",
+    "load-buffer",
     "mark-pane",
     "move-window",
     "new",
@@ -270,6 +320,7 @@ pub const COMMAND_NAMES: &[&str] = &[
     "next-window",
     "palette",
     "paste",
+    "paste-buffer",
     "prev-session",
     "prev-window",
     "previous-window",
@@ -283,14 +334,19 @@ pub const COMMAND_NAMES: &[&str] = &[
     "resize-pane",
     "respawn-pane",
     "rotate-window",
+    "save-buffer",
     "select-layout",
     "select-pane",
     "select-window",
     "send-keys",
     "send-prefix",
     "session",
+    "set-buffer",
+    "set-environment",
     "set-option",
     "set-window-option",
+    "show-buffer",
+    "show-environment",
     "show-messages",
     "show-options",
     "show-window-options",
@@ -509,7 +565,18 @@ fn misc_cmd(name: &str, args: &[String]) -> Option<Result<Command, String>> {
         "display-panes" | "displayp" => display_panes(name, args),
         "clock-mode" => clock_mode(name, args),
         "show-messages" | "showmsgs" => bare(name, args, Command::ShowMessages),
-        "list-buffers" | "lsb" => bare(name, args, Command::ListBuffers),
+        "list-buffers" | "lsb" => list_buffers(name, args),
+        "set-buffer" | "setb" => set_buffer(name, args),
+        "show-buffer" | "showb" => named_buffer(name, args, |name| BufferCommand::ShowBuffer { name }),
+        "delete-buffer" | "deleteb" => {
+            named_buffer(name, args, |name| BufferCommand::DeleteBuffer { name })
+        }
+        "load-buffer" | "loadb" => load_buffer(name, args),
+        "save-buffer" | "saveb" => save_buffer(name, args),
+        "paste-buffer" | "pasteb" => paste_buffer(name, args),
+        "capture-pane" | "capturep" => capture_pane(name, args),
+        "set-environment" | "setenv" => set_environment(name, args),
+        "show-environment" | "showenv" => show_environment(name, args),
         "suspend-client" | "suspendc" => bare(name, args, Command::SuspendClient),
         "set-option" | "set" | "set-window-option" | "setw" => set_option(name, args),
         "show-options" | "show" | "show-window-options" | "showw" => show_options(name, args),
@@ -1192,4 +1259,209 @@ fn choose_tree(name: &str, args: &[String]) -> Result<Command, String> {
     let o = parse_opts(name, args, CHOOSE_TREE)?;
     o.no_rest(name)?;
     Ok(Command::OpenTree)
+}
+
+const SET_BUFFER: Spec = Spec {
+    bools: &["-a"],
+    values: &["-b", "-n"],
+    stop_at_arg: true,
+};
+const BUFFER_OF: Spec = Spec {
+    bools: &[],
+    values: &["-b"],
+    stop_at_arg: false,
+};
+const SAVE_BUFFER: Spec = Spec {
+    bools: &["-a"],
+    values: &["-b"],
+    stop_at_arg: false,
+};
+const PASTE_BUFFER: Spec = Spec {
+    bools: &["-d", "-p", "-r"],
+    values: &["-b", "-s", "-t"],
+    stop_at_arg: false,
+};
+const LIST_BUFFERS: Spec = Spec {
+    bools: &[],
+    values: &["-F"],
+    stop_at_arg: false,
+};
+const CAPTURE_PANE: Spec = Spec {
+    bools: &["-p", "-e", "-J"],
+    values: &["-t", "-S", "-E", "-b"],
+    stop_at_arg: false,
+};
+const SET_ENVIRONMENT: Spec = Spec {
+    bools: &["-g", "-u", "-r"],
+    values: &["-t"],
+    stop_at_arg: true,
+};
+const SHOW_ENVIRONMENT: Spec = Spec {
+    bools: &["-g"],
+    values: &["-t"],
+    stop_at_arg: false,
+};
+
+/// Whether a buffer command takes operands after its options.
+enum Operands {
+    /// Any word left after the options is an error, reported before the command is built.
+    None,
+    /// The builder reads the operands itself (`o.rest`).
+    Any,
+}
+
+/// Parses the options of a paste-buffer command with `spec`, then builds the command from them.
+fn buffer_cmd(
+    name: &str,
+    args: &[String],
+    spec: Spec,
+    operands: Operands,
+    build: impl FnOnce(&str, &Opts) -> Result<BufferCommand, String>,
+) -> Result<Command, String> {
+    let o = parse_opts(name, args, spec)?;
+    if matches!(operands, Operands::None) {
+        o.no_rest(name)?;
+    }
+    build(name, &o).map(Command::Buffer)
+}
+
+/// Parses the options of an environment command with `spec`, then builds the command from them.
+fn env_cmd(
+    name: &str,
+    args: &[String],
+    spec: Spec,
+    build: impl FnOnce(&str, &Opts) -> Result<EnvCommand, String>,
+) -> Result<Command, String> {
+    let o = parse_opts(name, args, spec)?;
+    build(name, &o).map(Command::Environment)
+}
+
+fn list_buffers(name: &str, args: &[String]) -> Result<Command, String> {
+    buffer_cmd(name, args, LIST_BUFFERS, Operands::None, |_, o| {
+        Ok(BufferCommand::ListBuffers {
+            format: o.value("-F").map(str::to_string),
+        })
+    })
+}
+
+fn set_buffer(name: &str, args: &[String]) -> Result<Command, String> {
+    buffer_cmd(name, args, SET_BUFFER, Operands::Any, |name, o| {
+        let rename = o.value("-n").map(str::to_string);
+        let data = (!o.rest.is_empty()).then(|| o.rest.join(" "));
+        match (rename.is_some(), data.is_some()) {
+            (true, true) => Err(format!("{name}: -n takes no data")),
+            (false, false) => Err(format!("{name}: no data given")),
+            _ => Ok(BufferCommand::SetBuffer {
+                name: o.value("-b").map(str::to_string),
+                append: o.has("-a"),
+                rename,
+                data,
+            }),
+        }
+    })
+}
+
+/// `show-buffer` and `delete-buffer`: an optional `-b name` and no operands.
+fn named_buffer(
+    name: &str,
+    args: &[String],
+    make: fn(Option<String>) -> BufferCommand,
+) -> Result<Command, String> {
+    buffer_cmd(name, args, BUFFER_OF, Operands::None, |_, o| {
+        Ok(make(o.value("-b").map(str::to_string)))
+    })
+}
+
+/// The one path operand of `load-buffer` and `save-buffer`.
+fn single_path(name: &str, o: &Opts) -> Result<String, String> {
+    match o.rest.as_slice() {
+        [path] => Ok(path.clone()),
+        [] => Err(format!("{name}: need a path")),
+        _ => Err(format!("{name}: too many arguments")),
+    }
+}
+
+fn load_buffer(name: &str, args: &[String]) -> Result<Command, String> {
+    buffer_cmd(name, args, BUFFER_OF, Operands::Any, |name, o| {
+        let path = single_path(name, o)?;
+        Ok(BufferCommand::LoadBuffer {
+            name: o.value("-b").map(str::to_string),
+            path,
+        })
+    })
+}
+
+fn save_buffer(name: &str, args: &[String]) -> Result<Command, String> {
+    buffer_cmd(name, args, SAVE_BUFFER, Operands::Any, |name, o| {
+        let path = single_path(name, o)?;
+        Ok(BufferCommand::SaveBuffer {
+            name: o.value("-b").map(str::to_string),
+            append: o.has("-a"),
+            path,
+        })
+    })
+}
+
+fn paste_buffer(name: &str, args: &[String]) -> Result<Command, String> {
+    buffer_cmd(name, args, PASTE_BUFFER, Operands::None, |_, o| {
+        Ok(BufferCommand::PasteBuffer {
+            opts: PasteBufferOpts {
+                name: o.value("-b").map(str::to_string),
+                pane: o.value("-t").unwrap_or_default().to_string(),
+                delete: o.has("-d"),
+                bracketed: o.has("-p"),
+                raw: o.has("-r"),
+                separator: o.value("-s").map(str::to_string),
+            },
+        })
+    })
+}
+
+fn capture_pane(name: &str, args: &[String]) -> Result<Command, String> {
+    buffer_cmd(name, args, CAPTURE_PANE, Operands::None, |_, o| {
+        Ok(BufferCommand::CapturePane {
+            target: o.value("-t").map(str::to_string),
+            print: o.has("-p"),
+            buffer: o.value("-b").map(str::to_string),
+            spec: crate::cli::capture_spec(o.value("-S"), o.value("-E"), o.has("-e"), o.has("-J"))?,
+        })
+    })
+}
+
+fn set_environment(name: &str, args: &[String]) -> Result<Command, String> {
+    env_cmd(name, args, SET_ENVIRONMENT, |name, o| {
+        if o.value("-t").is_some() {
+            return Err(format!("{name}: -t is not supported at the prompt"));
+        }
+        let (var, value) = match o.rest.split_first() {
+            Some((var, [])) => (var.clone(), None),
+            Some((var, rest)) => (var.clone(), Some(rest.join(" "))),
+            None => return Err(format!("{name}: need a variable name")),
+        };
+        let change = match (o.has("-u"), o.has("-r"), value) {
+            (true, true, _) => return Err(format!("{name}: -u and -r conflict")),
+            (true, false, None) => EnvChange::Unset,
+            (false, true, None) => EnvChange::Remove,
+            (true, false, Some(_)) | (false, true, Some(_)) => {
+                return Err(format!("{name}: -u and -r take no value"));
+            }
+            (false, false, Some(value)) => EnvChange::Set(value),
+            (false, false, None) => return Err(format!("{name}: no value given for {var}")),
+        };
+        Ok(EnvCommand::SetEnvironment { name: var, change })
+    })
+}
+
+fn show_environment(name: &str, args: &[String]) -> Result<Command, String> {
+    env_cmd(name, args, SHOW_ENVIRONMENT, |name, o| {
+        if o.value("-t").is_some() {
+            return Err(format!("{name}: -t is not supported at the prompt"));
+        }
+        let var = match o.rest.as_slice() {
+            [] => None,
+            [var] => Some(var.clone()),
+            _ => return Err(format!("{name}: too many arguments")),
+        };
+        Ok(EnvCommand::ShowEnvironment { name: var })
+    })
 }

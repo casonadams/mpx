@@ -31,6 +31,9 @@ impl TaskNode {
         command.env("COLORTERM", "truecolor");
         command.env_remove("TERM_SESSION_ID");
         command.env("SHELL_SESSIONS_DISABLE", "1");
+        for key in &spec.env_remove {
+            command.env_remove(key);
+        }
         command.envs(spec.env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
         command.stdin(std::process::Stdio::piped());
         command.stdout(std::process::Stdio::piped());

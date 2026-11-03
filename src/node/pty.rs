@@ -106,6 +106,9 @@ impl PtyNode {
         cmd.env("COLORTERM", "truecolor");
         cmd.env_remove("TERM_SESSION_ID");
         cmd.env("SHELL_SESSIONS_DISABLE", "1");
+        for key in &spec.env_remove {
+            cmd.env_remove(key);
+        }
         for (key, value) in &spec.env {
             cmd.env(key, value);
         }
