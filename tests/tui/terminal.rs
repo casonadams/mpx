@@ -66,7 +66,7 @@ fn entering_the_tui_switches_screens_and_leaving_hands_the_shell_its_own_back() 
 
 #[test]
 fn the_attach_query_asks_for_every_palette_color_before_the_da1_that_ends_it() {
-    let query = String::from_utf8(attach_query()).unwrap();
+    let query = String::from_utf8(attach_query(true)).unwrap();
     for index in 0..256 {
         assert!(query.contains(&format!("\x1b]4;{index};?\x1b\\")), "color {index}");
     }
@@ -82,4 +82,10 @@ fn palette_answers_are_matched_by_index_not_by_prefix() {
     assert_eq!(report.palette.get(0), None);
     assert_eq!(palette_reply(reply, 11), None);
     assert_eq!(report.fg, None, "an OSC 4 answer for color 10 is not the default foreground");
+}
+
+#[test]
+fn without_dimming_the_attach_query_asks_only_about_margins() {
+    let query = String::from_utf8(attach_query(false)).unwrap();
+    assert_eq!(query, "\x1b[?69$p\x1b[c");
 }

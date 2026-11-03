@@ -186,12 +186,16 @@ pub fn report_from(reply: &[u8]) -> TerminalReport {
     }
 }
 
-/// What attach sends: the default colors, the 256 palette colors, then the margins mode and the
-/// DA1 that every terminal answers last.
-pub fn attach_query() -> Vec<u8> {
-    let mut query = b"\x1b]10;?\x1b\\\x1b]11;?\x1b\\".to_vec();
-    for index in 0..256 {
-        query.extend_from_slice(format!("\x1b]4;{index};?\x1b\\").as_bytes());
+/// What attach sends: with `colors`, the default colors and the 256 palette colors; then the
+/// margins mode and the DA1 that every terminal answers last. The colors are only worth asking for
+/// when something dims by them.
+pub fn attach_query(colors: bool) -> Vec<u8> {
+    let mut query = Vec::new();
+    if colors {
+        query.extend_from_slice(b"\x1b]10;?\x1b\\\x1b]11;?\x1b\\");
+        for index in 0..256 {
+            query.extend_from_slice(format!("\x1b]4;{index};?\x1b\\").as_bytes());
+        }
     }
     query.extend_from_slice(b"\x1b[?69$p\x1b[c");
     query
@@ -232,13 +236,13 @@ fn send_query(query: &[u8], reply: &mut Vec<u8>) -> bool {
     true
 }
 
-/// Asks the terminal for its default colors, its palette and whether it supports left/right
-/// margins. Run in raw mode before anything else reads input. The DA1 that ends the query is
+/// Asks the terminal whether it supports left/right margins and, with `colors`, for its default
+/// colors and its palette. Run in raw mode before anything else reads input. The DA1 that ends the query is
 /// answered by every terminal, after the answers it does give, so one round trip covers all of it.
 #[cfg(unix)]
-pub fn query_terminal() -> TerminalReport {
+pub fn query_terminal(colors: bool) -> TerminalReport {
     let mut reply = Vec::new();
-    if !send_query(&attach_query(), &mut reply) {
+    if !send_query(&attach_query(colors), &mut reply) {
         return report_from(&reply);
     }
     let deadline = std::time::Instant::now() + QUERY_TIMEOUT;
@@ -252,7 +256,7 @@ pub fn query_terminal() -> TerminalReport {
 }
 
 #[cfg(not(unix))]
-pub fn query_terminal() -> TerminalReport {
+pub fn query_terminal(_colors: bool) -> TerminalReport {
     TerminalReport::default()
 }
 

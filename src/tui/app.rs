@@ -877,7 +877,7 @@ impl Tui {
         opts: AppOptions,
     ) -> Result<Self, String> {
         let guard = TerminalGuard::enter().map_err(|e| format!("Failed to enter raw mode: {e}"))?;
-        let report = super::terminal::query_terminal();
+        let report = super::terminal::query_terminal(opts.config.style.dim_inactive);
         let (mut app, stream) = App::open(endpoint, session, start, opts).await?;
         app.canvas.set_lr_margins(report.margins);
         app.host_colors = super::render::HostColors::from_report(&report);
