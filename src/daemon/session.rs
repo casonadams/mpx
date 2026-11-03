@@ -18,7 +18,7 @@ use super::stores::Stores;
 use crate::node::sleep_until_opt;
 use crate::config::Config;
 use crate::keys::{TermModes, encode_key_names, wrap_paste};
-use crate::layout::{Direction, Workspace};
+use crate::layout::{Direction, Workspace, window_not_found};
 use crate::node::pacing::Pacing;
 use crate::node::pane::{self, InputBuild, Notifier, PaneCtx, PaneHandle, PaneNotice, TermView};
 use crate::node::process::basename;
@@ -159,6 +159,7 @@ pub(super) enum Placement {
 enum Next {
     Msg(SessionMsg),
     Save,
+    Silence,
     Closed,
 }
 
@@ -202,6 +203,8 @@ pub(super) async fn run(boot: Boot, mut rx: mpsc::UnboundedReceiver<SessionMsg>)
     let notifier: Notifier = Arc::new(move |notice| {
         let _ = tx.send(SessionMsg::Notice(notice));
     });
+    let mut workspace = Workspace::new(session.clone());
+    workspace.set_renumber_windows(config.renumber_windows);
     let mut session = Session {
         session: session.clone(),
         endpoint,
@@ -209,7 +212,7 @@ pub(super) async fn run(boot: Boot, mut rx: mpsc::UnboundedReceiver<SessionMsg>)
         created_ms: now_ms(),
         restored_ms: None,
         notifier,
-        workspace: Workspace::new(session),
+        workspace,
         nodes: HashMap::new(),
         history: VecDeque::new(),
         next_pane_id: 0,
@@ -230,6 +233,7 @@ pub(super) async fn run(boot: Boot, mut rx: mpsc::UnboundedReceiver<SessionMsg>)
         let next = tokio::select! {
             msg = rx.recv() => msg.map_or(Next::Closed, Next::Msg),
             () = sleep_until_opt(session.save_due) => Next::Save,
+            () = sleep_until_opt(session.silence_due()) => Next::Silence,
         };
         match next {
             Next::Msg(msg) => session.handle(msg).await,
@@ -237,6 +241,7 @@ pub(super) async fn run(boot: Boot, mut rx: mpsc::UnboundedReceiver<SessionMsg>)
                 session.save_due = None;
                 session.save(false).await;
             }
+            Next::Silence => session.expire_silence(),
             Next::Closed => break,
         }
     }
@@ -301,6 +306,21 @@ impl Session {
         }
     }
 
+    /// When the next background window goes quiet, if `monitor-silence` is on.
+    fn silence_due(&self) -> Option<tokio::time::Instant> {
+        let secs = self.config.monitor_silence;
+        if secs == 0 {
+            return None;
+        }
+        self.workspace.next_silence(secs).map(tokio::time::Instant::from_std)
+    }
+
+    fn expire_silence(&mut self) {
+        if self.workspace.expire_silence(self.config.monitor_silence, std::time::Instant::now()) {
+            self.fanout(&StreamEvent::Layout);
+        }
+    }
+
     fn notice(&mut self, notice: PaneNotice) {
         match notice {
             PaneNotice::Event(event) => {
@@ -311,6 +331,7 @@ impl Session {
                     if self.config.monitor_activity {
                         self.workspace.mark_activity(name);
                     }
+                    self.workspace.note_output(name, std::time::Instant::now());
                 }
                 self.fanout(&event);
             }
@@ -373,6 +394,7 @@ impl Session {
             Request::ReloadConfig { path } => {
                 match Config::load_at(path.as_deref().map(std::path::Path::new)) {
                     Ok(config) => {
+                        self.workspace.set_renumber_windows(config.renumber_windows);
                         self.config = config;
                         self.sync_relay();
                         Response::Ok
@@ -387,6 +409,7 @@ impl Session {
             | Request::ListBuffers
             | Request::DeleteBuffer { .. }
             | Request::MoveWindow { .. }
+            | Request::RenumberWindows
             | Request::RotateWindow { .. }
             | Request::JoinPane { .. }
             | Request::SwapWindow { .. }
@@ -420,14 +443,22 @@ impl Session {
                     Response::Error(no_buffer(name.as_deref()))
                 }
             }
-            Request::MoveWindow { from, to } => {
-                check(self.workspace.move_window(from, to), "No such window")
+            Request::MoveWindow { from, to } => self
+                .workspace
+                .move_window(from, to)
+                .map_or_else(Response::Error, |()| Response::Ok),
+            Request::RenumberWindows => {
+                self.workspace.compact_numbers();
+                Response::Ok
             }
             Request::RotateWindow { down } => {
                 check(self.workspace.rotate_active(down), "No window")
             }
             Request::JoinPane { src, dst, side_by_side } => self.join_pane(&src, &dst, side_by_side),
-            Request::SwapWindow { a, b } => check(self.workspace.swap_windows(a, b), "No such window"),
+            Request::SwapWindow { a, b } => self
+                .workspace
+                .swap_windows(a, b)
+                .map_or_else(Response::Error, |()| Response::Ok),
             Request::Respawn { name, kill, cwd, command } => self.respawn(&name, kill, cwd, command),
             other => Response::Error(format!("not a state request: {other:?}")),
         }
@@ -571,6 +602,10 @@ impl Session {
                 check(self.workspace.select_layout(preset), "No window")
             }
             Request::SpreadLayout => check(self.workspace.spread_layout(), "No window"),
+            Request::Synchronize { window, on } => self
+                .workspace
+                .synchronize(window, on)
+                .map_or_else(Response::Error, |()| Response::Ok),
             _ => self.window_request(req),
         }
     }
@@ -658,14 +693,16 @@ impl Session {
             Request::LastWindow => check(self.workspace.last_window_switch(), "No last window"),
             Request::SelectWindow { index } => check(
                 self.workspace.select_window(index),
-                "Window index out of bounds",
+                &window_not_found(index),
             ),
             Request::RenameWindow { index, name } => {
-                let idx = index.unwrap_or(self.workspace.active_idx);
-                check(
-                    self.workspace.rename_window(idx, name),
-                    "Window index out of bounds",
-                )
+                match index.or_else(|| self.workspace.active_number()) {
+                    Some(number) => check(
+                        self.workspace.rename_window(number, name),
+                        &window_not_found(number),
+                    ),
+                    None => Response::Error("No window".to_string()),
+                }
             }
             _ => Response::Error("Request is handled by the connection".to_string()),
         }
@@ -718,7 +755,7 @@ impl Session {
     async fn info_of(&self, name: &str, full: bool) -> Result<NodeInfo, String> {
         let handle = self.handle_of(name)?;
         let mut info = handle.info(full).await?;
-        info.window = self.workspace.window_of(name);
+        info.window = self.workspace.number_of(name);
         info.marked = Some(self.workspace.marked_pane.as_deref() == Some(name));
         Ok(info)
     }
@@ -735,7 +772,7 @@ impl Session {
             .values()
         {
             if let Ok(mut info) = entry.handle.info(true).await {
-                info.window = self.workspace.window_of(entry.handle.name());
+                info.window = self.workspace.number_of(entry.handle.name());
                 info.marked =
                     Some(self.workspace.marked_pane.as_deref() == Some(entry.handle.name()));
                 infos.push(info);
@@ -813,8 +850,13 @@ impl Session {
         if !self.config.automatic_rename {
             return;
         }
-        for idx in 0..self.workspace.windows.len() {
-            let focused = self.workspace.windows[idx].focused.clone();
+        let windows: Vec<(usize, Option<String>)> = self
+            .workspace
+            .windows
+            .iter()
+            .map(|w| (w.number, w.focused.clone()))
+            .collect();
+        for (number, focused) in windows {
             let handle = focused
                 .and_then(|f| self.nodes.get(&f))
                 .map(|e| e.handle.clone());
@@ -822,7 +864,7 @@ impl Session {
                 Some(handle) => handle.label().await.ok().flatten(),
                 None => None,
             };
-            self.workspace.set_auto_name(idx, label);
+            self.workspace.set_auto_name(number, label);
         }
     }
 
@@ -881,11 +923,11 @@ impl Session {
                 focus,
                 named,
             } => {
-                self.workspace
+                let number = self
+                    .workspace
                     .new_window_with_focus(label.clone(), name.to_string(), focus);
                 if named {
-                    let idx = self.workspace.windows.len() - 1;
-                    self.workspace.rename_window(idx, label);
+                    self.workspace.rename_window(number, label);
                 }
                 Ok(())
             }
@@ -1073,11 +1115,13 @@ impl Session {
     }
 
     fn kill_window(&mut self, index: Option<usize>) -> Result<Vec<oneshot::Receiver<()>>, String> {
-        let idx = index.unwrap_or(self.workspace.active_idx);
+        let number = index
+            .or_else(|| self.workspace.active_number())
+            .ok_or_else(|| "No window".to_string())?;
         let panes = self
             .workspace
-            .kill_window(idx)
-            .ok_or_else(|| "Window index out of bounds".to_string())?;
+            .kill_window(number)
+            .ok_or_else(|| window_not_found(number))?;
         Ok(panes.iter().filter_map(|p| self.kill_entry(p)).collect())
     }
 
@@ -1120,12 +1164,19 @@ impl Session {
 
     fn restore_snapshot(&mut self, snapshot: &SessionSnapshot) {
         let plan = plan_restore(snapshot, &self.config.resume);
-        for window in plan.windows {
-            self.restore_window(window);
-        }
+        let numbers: Vec<usize> = plan
+            .windows
+            .into_iter()
+            .filter_map(|window| self.restore_window(window))
+            .collect();
         if !self.workspace.windows.is_empty() {
-            if !self.workspace.select_window(plan.active_window) {
-                warn!("could not select restored window {}", plan.active_window);
+            match numbers.get(plan.active_window) {
+                Some(&number) => {
+                    if !self.workspace.select_window(number) {
+                        warn!("could not select restored window {number}");
+                    }
+                }
+                None => warn!("could not select restored window {}", plan.active_window),
             }
             self.workspace.last_window = plan.last_window;
         }
@@ -1133,8 +1184,9 @@ impl Session {
         self.schedule_save();
     }
 
-    /// Spawns the window's panes, then installs it with the surviving part of its layout.
-    fn restore_window(&mut self, window: WindowPlan) {
+    /// Spawns the window's panes, then installs it with the surviving part of its layout. Returns the
+    /// installed window's number, or None when no pane of it survived.
+    fn restore_window(&mut self, window: WindowPlan) -> Option<usize> {
         let mut root = Some(window.layout);
         for opts in &window.panes {
             match self.spawn_restored(opts) {
@@ -1149,10 +1201,15 @@ impl Session {
                 }
             }
         }
-        let Some(root) = root else { return };
+        let root = root?;
         let label = root.all_leaves().into_iter().next().unwrap_or_default();
-        self.workspace
-            .install_window(label, window.name, root, window.focused);
+        Some(self.workspace.install_window(
+            window.number,
+            label,
+            window.name,
+            root,
+            window.focused,
+        ))
     }
 
     /// Types `line` into pane `name`; the terminal queues it until the shell reads it.

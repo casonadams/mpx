@@ -1,3 +1,4 @@
+use mpx::tui::style::Style;
 use mpx::layout::{Divider, Rect, WindowTab};
 use mpx::tui::canvas::Canvas;
 use mpx::config::BorderStyle;
@@ -267,7 +268,7 @@ fn status_bar_shows_zoom_flag_and_copy_pane_badge() {
 #[test]
 fn command_line_prints_text_on_its_row() {
     let mut buf = Vec::new();
-    Compositor::draw_command_line(&mut buf, ":split", 10, 40).unwrap();
+    Compositor::draw_command_line(&mut buf, ":split", 10, 40, &Style::default()).unwrap();
     assert!(String::from_utf8_lossy(&buf).contains(":split"));
 }
 
@@ -415,7 +416,7 @@ fn divider_styles_render_distinct_characters() {
             inactive_color: VtColor::BrightBlack,
             marked_color: VtColor::BrightMagenta,
             border_style: BorderStyle::Double,
-            bg: None,
+            ..DividerStyle::default()
         },
     )
     .unwrap();
@@ -436,7 +437,7 @@ fn divider_styles_render_distinct_characters() {
             inactive_color: VtColor::BrightBlack,
             marked_color: VtColor::BrightMagenta,
             border_style: BorderStyle::Ascii,
-            bg: None,
+            ..DividerStyle::default()
         },
     )
     .unwrap();

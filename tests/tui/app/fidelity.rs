@@ -10,7 +10,7 @@ use mpx::layout::Rect;
 use mpx::tui::app::ClockSource;
 use mpx::tui::labels::{label, label_rect, pane_numbers};
 
-use super::support::{ECHO, Harness, MAIN, split};
+use super::support::{ECHO, Harness, MAIN, SIZE, split};
 
 /// Whether the cell at (`x`, `y`) lies inside `area`.
 fn inside(area: Rect, x: u16, y: u16) -> bool {
@@ -218,4 +218,26 @@ async fn pane_overlays_cover_only_their_own_cells() {
     check_masked(&mut h, "clock fills the active pane", &[clock]).await;
     h.key(KeyCode::Char('x')).await;
     check(&mut h, "clock dismissed").await;
+}
+
+#[tokio::test]
+async fn two_status_lines_keep_each_pane_identical_to_its_screen() {
+    let config = Config {
+        which_key_delay_ms: 0,
+        status_lines: 2,
+        status_format: vec![String::new(), "second #{session_name}".to_string()],
+        ..Config::default()
+    };
+    let mut h = Harness::start(config, ECHO).await;
+    h.app.canvas.set_lr_margins(true);
+    check(&mut h, "attach with two status lines").await;
+    assert_eq!(h.app.rows.status_h, 2);
+    let drawn = h.frame().await;
+    let second = drawn.lines().nth(usize::from(SIZE.1) - 1).unwrap_or_default();
+    assert!(second.contains("second test"), "{second:?}");
+
+    split(&mut h.probe, MAIN, "side", Direction::Horizontal).await;
+    check(&mut h, "after split above two status lines").await;
+    h.emit("side", "side text", "side text").await;
+    check(&mut h, "two panes above two status lines").await;
 }

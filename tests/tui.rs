@@ -17,5 +17,6 @@ mod tui {
     mod stream;
     mod statusline;
     mod status_bytes;
+    mod style;
     mod terminal;
 }

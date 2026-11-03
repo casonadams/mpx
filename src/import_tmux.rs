@@ -3,7 +3,6 @@ use std::collections::BTreeMap;
 
 use crate::keys::KeySpec;
 use crate::tui::command::parse as parse_command;
-use crate::tui::render::parse_color;
 
 /// The converted fragment and one note per skipped or approximated line.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -51,6 +50,8 @@ struct Conv {
     notes: Vec<(usize, String)>,
     top: BTreeMap<&'static str, String>,
     style: BTreeMap<&'static str, String>,
+    /// Status rows below the first, by tmux index (`status-format[i]`, stored as TOML strings).
+    status_format: BTreeMap<usize, String>,
     /// Prefix-table bindings: key -> command line (empty removes mpx's default).
     bind: BTreeMap<String, String>,
     /// Root-table bindings (`bind -n`).
@@ -173,10 +174,22 @@ impl Conv {
         if name.starts_with('@') {
             return self.note(line, format!("user option '{name}' has no mpx equivalent"));
         }
-        if opts.has('w') || opts.has('p') {
+        if opts.has('p') {
+            return self.note(line, format!("set {name} -p: mpx has no pane options; ignored"));
+        }
+        if opts.has('s') {
+            return self.note(line, format!("set {name} -s: mpx has no server options; ignored"));
+        }
+        if name == "synchronize-panes" {
+            return self.note(
+                line,
+                "synchronize-panes is a window option set at run time (set-option -w); not read from the config file",
+            );
+        }
+        if opts.has('w') {
             self.note(
                 line,
-                format!("set '{name}': window/pane scope is applied to the whole mpx config"),
+                format!("set '{name}': window scope is applied to the whole mpx config"),
             );
         }
         self.option(line, name, &values.join(" "));
@@ -188,7 +201,8 @@ impl Conv {
         }
         if !(self.session_option(line, name, value)
             || self.style_option(line, name, value)
-            || self.ui_option(line, name, value))
+            || self.ui_option(line, name, value)
+            || self.status_option(line, name, value))
         {
             self.note(
                 line,
@@ -228,9 +242,12 @@ impl Conv {
             "automatic-rename" => self.flag(line, name, "automatic_rename", value),
             "monitor-activity" => self.flag(line, name, "monitor_activity", value),
             "monitor-bell" => self.flag(line, name, "monitor_bell", value),
-            "monitor-silence" => match value.parse::<usize>() {
-                Ok(0) => {}
-                _ => self.note(line, "monitor-silence: not supported by mpx; ignored"),
+            "renumber-windows" => self.flag(line, name, "renumber_windows", value),
+            "monitor-silence" => match value.parse::<u64>() {
+                Ok(secs) => {
+                    self.top.insert("monitor_silence", secs.to_string());
+                }
+                Err(_) => self.note(line, format!("monitor-silence '{value}' is not a number")),
             },
             "display-panes-time" => match value.parse::<u64>() {
                 Ok(ms) => {
@@ -255,21 +272,28 @@ impl Conv {
 
     /// Colour and border options. False when `name` is not one of them.
     fn style_option(&mut self, line: usize, name: &str, value: &str) -> bool {
-        match name {
-            "status-style" => self.colors(
-                line,
-                name,
-                value,
-                &[("bg", "status_bg"), ("fg", "status_fg")],
-            ),
-            "pane-border-style" => {
-                self.colors(line, name, value, &[("fg", "border_inactive")]);
+        let key = match name {
+            "status-style" => "status_style",
+            "message-style" => "message_style",
+            "message-command-style" => "message_command_style",
+            "pane-border-style" => "pane_border_style",
+            "pane-active-border-style" => "pane_active_border_style",
+            "window-status-style" => "window_status_style",
+            "window-status-current-style" => "window_status_current_style",
+            "window-status-activity-style" => "window_status_activity_style",
+            "window-status-bell-style" => "window_status_bell_style",
+            "window-status-last-style" => "window_status_last_style",
+            "pane-border-lines" => {
+                self.border_lines(line, value);
+                return true;
             }
-            "pane-active-border-style" => {
-                self.colors(line, name, value, &[("fg", "border_active")]);
-            }
-            "pane-border-lines" => self.border_lines(line, value),
             _ => return false,
+        };
+        match crate::tui::style::parse(value) {
+            Ok(_) => {
+                self.style.insert(key, toml_str(value));
+            }
+            Err(e) => self.note(line, format!("{name}: {e}")),
         }
         true
     }
@@ -285,6 +309,36 @@ impl Conv {
                 _ => self.note(line, format!("mode-keys '{value}' is not vi or emacs")),
             },
             _ => return false,
+        }
+        true
+    }
+
+    /// `status` and `status-format[N]`. False when `name` is neither.
+    fn status_option(&mut self, line: usize, name: &str, value: &str) -> bool {
+        if let Some(index) = name
+            .strip_prefix("status-format[")
+            .and_then(|rest| rest.strip_suffix(']'))
+        {
+            match index.parse::<usize>() {
+                Ok(i) => {
+                    self.status_format.insert(i, value.to_string());
+                }
+                Err(_) => self.note(line, format!("{name}: '{index}' is not a number")),
+            }
+            return true;
+        }
+        if name != "status" {
+            return false;
+        }
+        match crate::config::parse_status(value) {
+            Ok(None) => {
+                self.top.insert("status", false.to_string());
+            }
+            Ok(Some(lines)) => {
+                self.top.insert("status", true.to_string());
+                self.top.insert("status_lines", lines.to_string());
+            }
+            Err(e) => self.note(line, format!("status: {e}")),
         }
         true
     }
@@ -315,34 +369,6 @@ impl Conv {
         }
     }
 
-    /// Maps the `fg=`/`bg=` items of a tmux style string onto mpx style keys.
-    fn colors(&mut self, line: usize, name: &str, value: &str, targets: &[(&str, &'static str)]) {
-        for item in value.split(',').map(str::trim).filter(|i| !i.is_empty()) {
-            let target = item.split_once('=').and_then(|(k, v)| {
-                targets
-                    .iter()
-                    .find(|(t, _)| *t == k.trim())
-                    .map(|(_, key)| (*key, v.trim()))
-            });
-            match target {
-                Some((_, "default")) => self.note(
-                    line,
-                    format!("{name} '{item}': 'default' has no mpx equivalent; ignored"),
-                ),
-                Some((key, color)) if parse_color(color).is_some() => {
-                    self.style.insert(key, toml_str(color));
-                }
-                Some((_, color)) => {
-                    self.note(line, format!("{name} '{item}': '{color}' is not a colour"))
-                }
-                None => self.note(
-                    line,
-                    format!("{name} '{item}' has no mpx equivalent; ignored"),
-                ),
-            }
-        }
-    }
-
     fn render(&self) -> String {
         let mut blocks: Vec<String> = Vec::new();
         if !self.notes.is_empty() {
@@ -360,6 +386,16 @@ impl Conv {
                     .map(|(key, value)| format!("{key} = {value}\n"))
                     .collect(),
             );
+        }
+        if !self.status_format.is_empty() {
+            let last = self.status_format.keys().next_back().copied().unwrap_or(0);
+            let items: Vec<String> = (0..=last)
+                .map(|i| match self.status_format.get(&i) {
+                    Some(fmt) => toml_str(fmt),
+                    None => "\"\"".to_string(),
+                })
+                .collect();
+            blocks.push(format!("status_format = [{}]\n", items.join(", ")));
         }
         if !self.style.is_empty() {
             let body: String = self

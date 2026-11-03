@@ -8,6 +8,16 @@ fn partial_file_keeps_defaults_for_missing_keys() {
 }
 
 #[test]
+fn status_lines_and_status_format_parse_and_validate_the_row_count() {
+    let cfg = Config::parse("status_lines = 3\nstatus_format = [\"\", \"#{session_name}\"]\n").unwrap();
+    assert_eq!(cfg.status_lines, 3);
+    assert_eq!(cfg.status_format[1], "#{session_name}");
+    assert_eq!(Config::default().status_lines, 1);
+    assert!(Config::parse("status_lines = 0\n").is_err());
+    assert!(Config::parse("status_lines = 6\n").is_err());
+}
+
+#[test]
 fn unknown_keys_are_rejected() {
     assert!(Config::parse("prefx = \"C-a\"").is_err());
 }
@@ -150,4 +160,12 @@ fn inactive_panes_are_not_dimmed_unless_asked() {
     let cfg = Config::parse("").unwrap();
     assert!(!cfg.style.dim_inactive);
     assert_eq!(cfg.style.dim_factor, 0.5);
+}
+
+#[test]
+fn a_style_string_that_is_not_a_tmux_style_fails_the_load() {
+    let err = Config::parse("[style]\nwindow_status_bell_style = \"blink\"\n").unwrap_err();
+    assert!(err.contains("style.window_status_bell_style"), "{err}");
+    let ok = Config::parse("[style]\nwindow_status_bell_style = \"fg=red,bold\"\n").unwrap();
+    assert_eq!(ok.style.window_status_bell_style, "fg=red,bold");
 }

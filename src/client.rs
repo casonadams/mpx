@@ -352,6 +352,12 @@ impl Client {
         self.call_ok("Zoom", req).await
     }
 
+    /// Turns `synchronize-panes` on or off for window `window` (the active window when `None`);
+    /// `on` None toggles it.
+    pub async fn synchronize(&mut self, window: Option<usize>, on: Option<bool>) -> Result<(), String> {
+        self.call_ok("Synchronize", Request::Synchronize { window, on }).await
+    }
+
     pub async fn status(&mut self, name: &str) -> Result<NodeInfo, String> {
         self.call_node(
             "Status",
@@ -518,6 +524,11 @@ impl Client {
 
     pub async fn move_window(&mut self, from: usize, to: usize) -> Result<(), String> {
         self.call_ok("MoveWindow", Request::MoveWindow { from, to }).await
+    }
+
+    /// Renumbers the windows 0, 1, ... in order (tmux `move-window -r`).
+    pub async fn renumber_windows(&mut self) -> Result<(), String> {
+        self.call_ok("RenumberWindows", Request::RenumberWindows).await
     }
 
     /// Moves pane `src` next to `dst`, splitting it side by side or stacked.

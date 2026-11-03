@@ -47,8 +47,8 @@ Commands that take a pane accept its name or its stable id `%N` (tmux style). TU
 mpx import-tmux ~/.tmux.conf > /tmp/mpx-fragment.toml
 ```
 
-- Converted: `prefix` (`set -g prefix`), `history-limit` (to `scrollback_lines`), `remain-on-exit`, `allow-passthrough`, `automatic-rename`, `monitor-activity`, `monitor-bell`, `default-terminal`, `default-shell`, `default-command`, `display-panes-time`, `status-style` and `pane-border-style`/`pane-active-border-style` colours (`fg`/`bg` as mpx colour names or hex), `pane-border-lines` (single, double, rounded, simple as ascii), and `bind`/`bind -n`/`bind -T root`/`unbind` for commands mpx accepts.
-- Skipped or approximated lines are listed on stderr as `# line N: ...` and again in the output as `# unsupported (line N): ...` comments. Examples: `run`/`run-shell` and TPM plugins (never executed), `source-file` (only the given file is converted), `%if` blocks (skipped; use `source-file` for a live, evaluated config), `mouse` and `escape-time` (no mpx setting), `bind` of commands mpx does not have, and `split-window -c '#{pane_current_path}'` (dropped, since mpx already starts new panes in the active pane's directory).
+- Converted: `prefix` (`set -g prefix`), `history-limit` (to `scrollback_lines`), `remain-on-exit`, `allow-passthrough`, `automatic-rename`, `monitor-activity`, `monitor-bell`, `monitor-silence`, `default-terminal`, `default-shell`, `default-command`, `display-panes-time`, the style options (`status-style`, `message-style`, `message-command-style`, `pane-border-style`, `pane-active-border-style`, `window-status-style`, `window-status-current-style`, `window-status-activity-style`, `window-status-bell-style`, `window-status-last-style`, each a tmux style string with its colours and attributes), `pane-border-lines` (single, double, rounded, simple as ascii), and `bind`/`bind -n`/`bind -T root`/`unbind` for commands mpx accepts.
+- Skipped or approximated lines are listed on stderr as `# line N: ...` and again in the output as `# unsupported (line N): ...` comments. Examples: `run`/`run-shell` and TPM plugins (never executed), `source-file` (only the given file is converted), `%if` blocks (skipped; use `source-file` for a live, evaluated config), `mouse` and `escape-time` (no mpx setting), `set -p` and `set -s` (mpx has no pane or server options), `set -w synchronize-panes` (a window option set at run time, not read from the file), `bind` of commands mpx does not have, and `split-window -c '#{pane_current_path}'` (dropped, since mpx already starts new panes in the active pane's directory).
 - `unbind KEY` is written as an empty binding, which removes mpx's default for that key.
 - `~` and `$HOME` are copied as written.
 
@@ -166,11 +166,12 @@ Formats (`status_left` / `status_right`, `display-message`, `command-prompt -F`)
 
 Variables:
 
-- Pane: `pane_id`, `pane_index`, `pane_pid`, `pane_title`, `pane_current_command`, `pane_current_path`, `pane_width`, `pane_height`, `pane_active`, `pane_dead`, `pane_marked`, `pane_marked_set`, `pane_in_mode` and `pane_mode`, `pane_tty`, `pane_start_command`. `pane_left`, `pane_top`, `pane_right` and `pane_bottom` come from the current layout and are empty for a pane that is not laid out.
-- Window: `window_index`, `window_id`, `window_name`, `window_active`, `window_panes`, `window_flags` (`#` activity, `!` bell, `*` active, `Z` zoomed, `-` last, `M` holds the marked pane), `window_zoomed_flag` (`1` when the window is zoomed).
+- Pane: `pane_id`, `pane_index`, `pane_pid`, `pane_title`, `pane_current_command`, `pane_current_path`, `pane_width`, `pane_height`, `pane_active`, `pane_dead`, `pane_marked`, `pane_marked_set`, `pane_in_mode` and `pane_mode`, `pane_tty`, `pane_start_command`, `pane_synchronized` (`1` when the window synchronizes its panes). `pane_left`, `pane_top`, `pane_right` and `pane_bottom` come from the current layout and are empty for a pane that is not laid out. `pane_at_left`, `pane_at_top`, `pane_at_right` and `pane_at_bottom` are `1` when the pane touches that edge of its window.
+- Window: `window_index`, `window_id`, `window_name`, `window_active`, `window_panes`, `window_flags` (`#` activity, `!` bell, `~` silent, `*` active, `Z` zoomed, `-` last, `M` holds the marked pane), `window_zoomed_flag` (`1` when the window is zoomed), and `window_activity_flag`, `window_bell_flag`, `window_silence_flag`, `window_last_flag`, `window_marked_flag` (each `1` or `0`).
 - Session: `session_name`, `session_windows`, `session_attached` (always `1`), `client_session`.
 - Host: `host`, `host_short`, `pid`, `version` (`3.4`).
 - Not available, so they expand to empty: `session_id`, `session_created`, `start_time`.
+- Operators: `#{t:var}` prints a Unix time as local time (`Thu Nov  2 10:00:00 2026`); `#{m:pattern,string}` is `1` when a glob matches (`#{m/r:...}` a regex, `i` in the operator ignores case); `#{e|+:a,b}` does integer arithmetic with `+ - * / % m M` (`/` and `%` by zero give `0`), and `#{e|+|f|N:a,b}` floats with `N` decimals.
 
 ### Copy mode
 

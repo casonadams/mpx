@@ -283,7 +283,7 @@ impl App {
             expected: HashMap::new(),
             layout: LayoutCache::new(),
             viewport: (80, 23),
-            rows: statusline::rows(24, true, false),
+            rows: statusline::rows(24, 1, false),
             status_targets: Vec::new(),
             drawn_at: None,
             panes: Vec::new(),
@@ -337,9 +337,10 @@ impl App {
         let (w, h) = self
             .fixed_size
             .unwrap_or_else(|| crossterm::terminal::size().unwrap_or((80, 24)));
+        let status_lines = if self.config.status { self.config.status_lines } else { 0 };
         let rows = statusline::rows(
             h,
-            self.config.status,
+            status_lines,
             self.config.status_position == StatusPosition::Top,
         );
         if rows != self.rows {

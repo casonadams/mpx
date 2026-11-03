@@ -50,6 +50,21 @@ fn has_note(c: &Converted, line: usize) -> bool {
 }
 
 #[test]
+fn status_line_counts_and_status_formats_are_imported() {
+    let config = parsed(&convert("set -g status 3\nset -g status-format[1] \"#{session_name}\"\n"));
+    assert_eq!((config.status, config.status_lines), (true, 3));
+    assert_eq!(config.status_format, ["", "#{session_name}"]);
+}
+
+#[test]
+fn status_on_off_and_bad_values_are_imported_or_noted() {
+    let off = convert("set -g status off\n");
+    assert!(!parsed(&off).status);
+    let bad = convert("set -g status 9\n");
+    assert!(has_note(&bad, 1));
+}
+
+#[test]
 fn empty_input_converts_to_default_config() {
     let c = convert("");
     assert!(c.notes.is_empty());
@@ -71,10 +86,9 @@ fn sample_output_parses_and_maps_settings() {
     assert_eq!(config.scrollback_lines, 10000);
     assert_eq!(config.remain_on_exit.as_str(), "on");
     assert_eq!(config.allow_passthrough.as_str(), "off");
-    assert_eq!(config.style.status_bg, "colour235");
-    assert_eq!(config.style.status_fg, "colour250");
-    assert_eq!(config.style.border_inactive, "colour240");
-    assert_eq!(config.style.border_active, "green");
+    assert_eq!(config.style.status_style, "bg=colour235, fg=colour250");
+    assert_eq!(config.style.pane_border_style, "fg=colour240");
+    assert_eq!(config.style.pane_active_border_style, "fg=green");
     assert_eq!(config.style.border_style, BorderStyle::Rounded);
 }
 
@@ -306,4 +320,20 @@ fn new_options_map_to_their_config_keys() {
     assert_eq!(config.default_shell.as_deref(), Some("/bin/zsh"));
     assert_eq!(config.scrollback_lines, 2000);
     assert!(c.notes.is_empty(), "{:?}", c.notes);
+}
+
+#[test]
+fn style_strings_and_monitor_silence_convert() {
+    let config = parsed(&convert(
+        "set -g status-style bg=colour235,fg=white,bold\nset -g window-status-current-style reverse\nset -g monitor-silence 30\n",
+    ));
+    assert_eq!(config.style.status_style, "bg=colour235,fg=white,bold");
+    assert_eq!(config.style.window_status_current_style, "reverse");
+    assert_eq!(config.monitor_silence, 30);
+}
+
+#[test]
+fn refused_scopes_and_style_items_are_noted_per_line() {
+    let c = convert("set -g message-style blink\nset -p -g mode-keys vi\nset -s status on\nset -g synchronize-panes on\n");
+    assert!((1..=4).all(|line| has_note(&c, line)), "{:?}", c.notes);
 }

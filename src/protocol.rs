@@ -352,6 +352,14 @@ pub enum Request {
         #[serde(default)]
         on: Option<bool>,
     },
+    /// Turns `synchronize-panes` on or off for window `window` (the active window when `None`);
+    /// `on` None toggles it.
+    Synchronize {
+        #[serde(default)]
+        window: Option<usize>,
+        #[serde(default)]
+        on: Option<bool>,
+    },
     /// Mark or unmark a pane. If `name` is None, targets the currently active pane.
     /// If `clear` is true (-M), clears the marked pane unconditionally.
     MarkPane {
@@ -423,6 +431,8 @@ pub enum Request {
         from: usize,
         to: usize,
     },
+    /// Renumbers the windows 0, 1, ... in order whatever `renumber-windows` says (tmux `move-window -r`).
+    RenumberWindows,
     /// Rotates the panes of the active window through its layout slots (tmux `rotate-window`).
     /// The default moves every pane to the slot before it (the first pane goes last); `down`
     /// moves every pane to the slot after it. Pane names move, slots and focus stay.
@@ -435,7 +445,7 @@ pub enum Request {
         dst: String,
         side_by_side: bool,
     },
-    /// Exchanges the positions of two windows (tmux `swap-window`).
+    /// Exchanges the numbers of two windows (tmux `swap-window`).
     SwapWindow {
         a: usize,
         b: usize,

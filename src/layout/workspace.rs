@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use serde::{Deserialize, Serialize};
 
 use super::geometry::Rect;
@@ -16,6 +18,11 @@ pub struct WindowTab {
     #[serde(default)]
     pub has_bell: bool,
     #[serde(default)]
+    pub has_silence: bool,
+    /// The window's panes all receive typed input (tmux `synchronize-panes`).
+    #[serde(default)]
+    pub synchronized: bool,
+    #[serde(default)]
     pub has_marked: bool,
     #[serde(default)]
     pub marked_pane: Option<String>,
@@ -32,6 +39,9 @@ pub struct WindowTab {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Window {
     pub id: usize,
+    /// The number `select-window` and friends address. Numbers are unique and ascending; with
+    /// renumber-windows on they are the positions.
+    pub number: usize,
     pub name: String,
     /// Name given at creation; automatic naming falls back to it.
     #[serde(default)]
@@ -50,15 +60,25 @@ pub struct Window {
     pub has_activity: bool,
     #[serde(default)]
     pub has_bell: bool,
+    /// The window has been quiet for `monitor-silence` seconds while in the background (tmux `~`).
+    #[serde(default)]
+    pub has_silence: bool,
+    /// The window's panes all receive typed input (tmux `synchronize-panes`).
+    #[serde(default)]
+    pub synchronized: bool,
+    /// When the window last printed output; `None` until it does. Not persisted.
+    #[serde(skip)]
+    pub last_output: Option<Instant>,
     /// Zoomed: only the focused pane is shown. Any change to the layout unzooms the window.
     #[serde(default)]
     pub zoomed: bool,
 }
 
 impl Window {
-    pub fn new(id: usize, name: String, root_node: String) -> Self {
+    pub fn new(id: usize, number: usize, name: String, root_node: String) -> Self {
         Self {
             id,
+            number,
             label: name.clone(),
             name,
             renamed: false,
@@ -68,6 +88,9 @@ impl Window {
             preset: None,
             has_activity: false,
             has_bell: false,
+            has_silence: false,
+            synchronized: false,
+            last_output: None,
             zoomed: false,
         }
     }
@@ -251,6 +274,9 @@ pub struct Workspace {
     pub last_window: Option<usize>,
     #[serde(default)]
     pub marked_pane: Option<String>,
+    /// Whether closing a window renumbers the windows after it (tmux `renumber-windows`).
+    #[serde(skip)]
+    renumber_windows: bool,
 }
 
 impl Workspace {
@@ -262,13 +288,21 @@ impl Workspace {
             next_window_id: 0,
             last_window: None,
             marked_pane: None,
+            renumber_windows: true,
         }
+    }
+
+    /// Whether closing a window renumbers the windows after it (tmux `renumber-windows`).
+    pub fn set_renumber_windows(&mut self, on: bool) {
+        self.renumber_windows = on;
     }
 
     pub fn new_window(&mut self, window_name: String, root_node: String) -> usize {
         self.new_window_with_focus(window_name, root_node, true)
     }
 
+    /// Adds a window at its number's place in the order, numbered with the lowest free number, and
+    /// returns that number.
     pub fn new_window_with_focus(
         &mut self,
         window_name: String,
@@ -277,17 +311,21 @@ impl Workspace {
     ) -> usize {
         let id = self.next_window_id;
         self.next_window_id += 1;
-        self.windows.push(Window::new(id, window_name, root_node));
+        let number = self.lowest_free_number();
+        let pos = self.insert_window(Window::new(id, number, window_name, root_node));
         if focus {
-            self.set_active(self.windows.len() - 1);
+            self.set_active(pos);
         }
-        id
+        number
     }
 
-    /// Adds a window with a restored layout. `sticky` keeps a user-chosen name; otherwise `label`
-    /// names it until automatic naming takes over. Focus falls back to the first pane.
+    /// Adds a window with a restored layout, numbered `number` unless renumber-windows is on or that
+    /// number is taken, then the lowest free one. `sticky` keeps a user-chosen name; otherwise `label`
+    /// names it until automatic naming takes over. Focus falls back to the first pane. Returns the
+    /// window's number.
     pub fn install_window(
         &mut self,
+        number: usize,
         label: String,
         sticky: Option<String>,
         root: LayoutNode,
@@ -298,8 +336,14 @@ impl Workspace {
         let focused = focused
             .filter(|f| root.has_leaf(f))
             .or_else(|| root.all_leaves().into_iter().next());
-        self.windows.push(Window {
+        let number = if self.renumber_windows || self.position_of(number).is_some() {
+            self.lowest_free_number()
+        } else {
+            number
+        };
+        let pos = self.insert_window(Window {
             id,
+            number,
             name: sticky.clone().unwrap_or_else(|| label.clone()),
             label,
             renamed: sticky.is_some(),
@@ -309,9 +353,12 @@ impl Workspace {
             preset: None,
             has_activity: false,
             has_bell: false,
+            has_silence: false,
+            synchronized: false,
+            last_output: None,
             zoomed: false,
         });
-        self.windows.len() - 1
+        self.windows[pos].number
     }
 
     fn set_active(&mut self, idx: usize) {
@@ -326,6 +373,7 @@ impl Workspace {
             if let Some(w) = self.windows.get_mut(idx) {
                 w.has_activity = false;
                 w.has_bell = false;
+                w.has_silence = false;
             }
         }
     }
@@ -347,12 +395,13 @@ impl Workspace {
         }
     }
 
-    pub fn select_window(&mut self, idx: usize) -> bool {
-        if idx < self.windows.len() {
-            self.set_active(idx);
-            true
-        } else {
-            false
+    pub fn select_window(&mut self, number: usize) -> bool {
+        match self.position_of(number) {
+            Some(idx) => {
+                self.set_active(idx);
+                true
+            }
+            None => false,
         }
     }
 
@@ -375,12 +424,14 @@ impl Workspace {
                 let marked_pane = self.marked_pane.as_ref().filter(|m| w.contains(m)).cloned();
                 let has_marked = marked_pane.is_some();
                 WindowTab {
-                    index: i,
+                    index: w.number,
                     name: w.name.clone(),
                     is_active: i == self.active_idx,
                     is_last: Some(i) == self.last_window,
                     has_activity: w.has_activity,
                     has_bell: w.has_bell,
+                    has_silence: w.has_silence,
+                    synchronized: w.synchronized,
                     zoomed: w.zoomed,
                     focused: w.focused.clone(),
                     has_marked,
@@ -421,6 +472,53 @@ impl Workspace {
         self.mark_window_flag(pane_name, |w| &mut w.has_bell)
     }
 
+    /// Records output from a pane: its window's silence timer restarts and its silence flag clears.
+    pub fn note_output(&mut self, pane_name: &str, now: Instant) {
+        if let Some(w) = self.window_of(pane_name).and_then(|i| self.windows.get_mut(i)) {
+            w.last_output = Some(now);
+            w.has_silence = false;
+        }
+    }
+
+    /// Flags background windows that have been quiet for `secs` seconds (`monitor-silence`).
+    /// Returns whether any flag changed.
+    pub fn expire_silence(&mut self, secs: u64, now: Instant) -> bool {
+        let active = self.active_idx;
+        let quiet = Duration::from_secs(secs);
+        let mut changed = false;
+        for (i, w) in self.windows.iter_mut().enumerate() {
+            if i != active && !w.has_silence && w.last_output.is_some_and(|t| now.duration_since(t) >= quiet) {
+                w.has_silence = true;
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// When the next background window goes quiet for `secs` seconds, if any is still counting.
+    pub fn next_silence(&self, secs: u64) -> Option<Instant> {
+        let quiet = Duration::from_secs(secs);
+        self.windows
+            .iter()
+            .enumerate()
+            .filter(|(i, w)| *i != self.active_idx && !w.has_silence)
+            .filter_map(|(_, w)| w.last_output)
+            .map(|t| t + quiet)
+            .min()
+    }
+
+    /// Turns `synchronize-panes` on or off for the window numbered `number` (the active window when
+    /// `None`); `on` None toggles it.
+    pub fn synchronize(&mut self, number: Option<usize>, on: Option<bool>) -> Result<(), String> {
+        let idx = match number {
+            Some(n) => self.position_of(n).ok_or_else(|| window_not_found(n))?,
+            None => self.active_idx,
+        };
+        let win = self.windows.get_mut(idx).ok_or_else(|| "No active window".to_string())?;
+        win.synchronized = on.unwrap_or(!win.synchronized);
+        Ok(())
+    }
+
     pub fn active_window(&self) -> Option<&Window> {
         self.windows.get(self.active_idx)
     }
@@ -431,6 +529,16 @@ impl Workspace {
 
     pub fn window_of(&self, name: &str) -> Option<usize> {
         self.windows.iter().position(|w| w.contains(name))
+    }
+
+    /// The number of the window holding pane `name`.
+    pub fn number_of(&self, name: &str) -> Option<usize> {
+        self.window_of(name).map(|idx| self.windows[idx].number)
+    }
+
+    /// The number of the active window, if there is one.
+    pub fn active_number(&self) -> Option<usize> {
+        self.active_window().map(|w| w.number)
     }
 
     /// Number of panes across all windows.
@@ -503,6 +611,9 @@ impl Workspace {
             .and_then(|id| self.windows.iter().position(|w| w.id == id))
             .unwrap_or_else(|| self.windows.len().saturating_sub(1));
         self.last_window = last.and_then(|id| self.windows.iter().position(|w| w.id == id));
+        if self.renumber_windows {
+            self.compact_numbers();
+        }
     }
 
     pub fn focus_next(&mut self) {
@@ -548,9 +659,10 @@ impl Workspace {
         }
     }
 
-    pub fn rename_window(&mut self, idx: usize, name: String) -> bool {
-        match self.windows.get_mut(idx) {
-            Some(win) => {
+    pub fn rename_window(&mut self, number: usize, name: String) -> bool {
+        match self.position_of(number) {
+            Some(idx) => {
+                let win = &mut self.windows[idx];
                 win.name = name;
                 win.renamed = true;
                 true
@@ -559,20 +671,20 @@ impl Workspace {
         }
     }
 
-    /// Sets the automatic name of a window unless it was renamed explicitly.
-    pub fn set_auto_name(&mut self, idx: usize, name: Option<String>) {
-        if let Some(win) = self.windows.get_mut(idx)
-            && !win.renamed
-        {
-            win.name = name.unwrap_or_else(|| win.label.clone());
+    /// Sets the automatic name of the window numbered `number` unless it was renamed explicitly.
+    pub fn set_auto_name(&mut self, number: usize, name: Option<String>) {
+        if let Some(idx) = self.position_of(number) {
+            let win = &mut self.windows[idx];
+            if !win.renamed {
+                win.name = name.unwrap_or_else(|| win.label.clone());
+            }
         }
     }
 
-    /// Removes a window and returns its panes.
-    pub fn kill_window(&mut self, idx: usize) -> Option<Vec<String>> {
-        if idx >= self.windows.len() {
-            return None;
-        }
+    /// Removes the window numbered `number` and returns its panes. With renumber-windows on, the
+    /// windows after it are renumbered.
+    pub fn kill_window(&mut self, number: usize) -> Option<Vec<String>> {
+        let idx = self.position_of(number)?;
         let panes = self.windows[idx].leaves();
         if let Some(marked) = &self.marked_pane
             && panes.iter().any(|p| p == marked)
@@ -583,6 +695,9 @@ impl Workspace {
         let shift = |i: usize| if i > idx { i - 1 } else { i };
         self.active_idx = shift(self.active_idx).min(self.windows.len().saturating_sub(1));
         self.last_window = self.last_window.filter(|&l| l != idx).map(shift);
+        if self.renumber_windows {
+            self.compact_numbers();
+        }
         Some(panes)
     }
 
@@ -646,9 +761,9 @@ impl Workspace {
         self.windows[idx].remove(name);
         let id = self.next_window_id;
         self.next_window_id += 1;
-        self.windows
-            .push(Window::new(id, name.to_string(), name.to_string()));
-        self.set_active(self.windows.len() - 1);
+        let number = self.lowest_free_number();
+        let pos = self.insert_window(Window::new(id, number, name.to_string(), name.to_string()));
+        self.set_active(pos);
         true
     }
 
@@ -676,25 +791,45 @@ impl Workspace {
         Ok(())
     }
 
-    /// Exchanges the positions of two windows; the active and last window stay the same windows.
-    pub fn swap_windows(&mut self, a: usize, b: usize) -> bool {
-        if a == b || a >= self.windows.len() || b >= self.windows.len() {
-            return false;
+    /// Exchanges the numbers of two windows (tmux `swap-window`); the active and last window stay the
+    /// same windows.
+    pub fn swap_windows(&mut self, a: usize, b: usize) -> Result<(), String> {
+        let pa = self.position_of(a).ok_or_else(|| window_not_found(a))?;
+        let pb = self.position_of(b).ok_or_else(|| window_not_found(b))?;
+        if pa != pb {
+            self.reorder(|windows| {
+                let number = windows[pa].number;
+                windows[pa].number = windows[pb].number;
+                windows[pb].number = number;
+                windows.sort_by_key(|w| w.number);
+            });
         }
-        self.reorder(|windows| windows.swap(a, b));
-        true
+        Ok(())
     }
 
-    /// Moves the window at `from` to position `to`.
-    pub fn move_window(&mut self, from: usize, to: usize) -> bool {
-        if from >= self.windows.len() || to >= self.windows.len() {
-            return false;
+    /// Moves window `from` to number `to` (tmux `move-window`). With renumber-windows on, `to` is a
+    /// position and the windows are renumbered afterwards; otherwise `to` must be free.
+    pub fn move_window(&mut self, from: usize, to: usize) -> Result<(), String> {
+        let from_pos = self.position_of(from).ok_or_else(|| window_not_found(from))?;
+        if self.renumber_windows {
+            if to >= self.windows.len() {
+                return Err(window_not_found(to));
+            }
+            self.reorder(|windows| {
+                let window = windows.remove(from_pos);
+                windows.insert(to, window);
+            });
+            self.compact_numbers();
+        } else if from != to {
+            if self.position_of(to).is_some() {
+                return Err(format!("Window {to} already exists"));
+            }
+            self.reorder(|windows| {
+                windows[from_pos].number = to;
+                windows.sort_by_key(|w| w.number);
+            });
         }
-        self.reorder(|windows| {
-            let window = windows.remove(from);
-            windows.insert(to, window);
-        });
-        true
+        Ok(())
     }
 
     fn reorder(&mut self, change: impl FnOnce(&mut Vec<Window>)) {
@@ -706,6 +841,34 @@ impl Workspace {
         };
         self.active_idx = position(active).unwrap_or(0);
         self.last_window = position(last);
+    }
+
+    fn position_of(&self, number: usize) -> Option<usize> {
+        self.windows.binary_search_by_key(&number, |w| w.number).ok()
+    }
+
+    /// The lowest number no window has: the first gap in the ascending numbers.
+    fn lowest_free_number(&self) -> usize {
+        self.windows
+            .iter()
+            .enumerate()
+            .find(|(i, w)| w.number != *i)
+            .map_or(self.windows.len(), |(i, _)| i)
+    }
+
+    /// Inserts a window in number order and returns its position. The active and last windows stay
+    /// the same windows.
+    fn insert_window(&mut self, window: Window) -> usize {
+        let pos = self.windows.partition_point(|w| w.number < window.number);
+        self.reorder(|windows| windows.insert(pos, window));
+        pos
+    }
+
+    /// Numbers the windows 0, 1, ... in order (tmux `move-window -r`).
+    pub fn compact_numbers(&mut self) {
+        for (i, win) in self.windows.iter_mut().enumerate() {
+            win.number = i;
+        }
     }
 
     /// Applies a preset to the active window; `None` cycles.
@@ -773,4 +936,9 @@ impl Workspace {
             None => (Vec::new(), Vec::new()),
         }
     }
+}
+
+/// The error for a window number that no window has.
+pub fn window_not_found(number: usize) -> String {
+    format!("No window {number}")
 }

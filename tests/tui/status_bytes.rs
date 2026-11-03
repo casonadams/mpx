@@ -1,5 +1,6 @@
 use mpx::tui::render::draw_status_segments;
-use mpx::tui::statusline::{Seg, Style};
+use mpx::tui::statusline::Seg;
+use mpx::tui::style::Style;
 use mpx::vt::Color;
 
 fn draw(segs: &[Seg]) -> Vec<u8> {

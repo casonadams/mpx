@@ -59,3 +59,23 @@ fn get_and_list_print_values_as_tmux_does() {
     let names: Vec<_> = options::list(&c).into_iter().map(|(n, _)| n).collect();
     assert!(names.windows(2).all(|w| w[0] < w[1]), "sorted: {names:?}");
 }
+
+#[test]
+fn status_takes_on_off_or_a_line_count() {
+    let mut c = Config::default();
+    options::set(&mut c, "status", "2").unwrap();
+    assert_eq!((c.status, c.status_lines), (true, 2));
+    assert_eq!(options::get(&c, "status").unwrap(), "2");
+    options::set(&mut c, "status", "on").unwrap();
+    assert_eq!((c.status, c.status_lines), (true, 1));
+    assert_eq!(options::get(&c, "status").unwrap(), "on");
+    options::set(&mut c, "status", "5").unwrap();
+    options::set(&mut c, "status", "off").unwrap();
+    assert!(!c.status);
+    assert_eq!(c.status_lines, 5, "off keeps the line count");
+    assert_eq!(options::get(&c, "status").unwrap(), "off");
+    assert!(options::set(&mut c, "status", "6").is_err());
+    assert!(!c.status, "a bad value leaves the option unchanged");
+    options::unset(&mut c, "status").unwrap();
+    assert_eq!((c.status, c.status_lines), (true, 1));
+}

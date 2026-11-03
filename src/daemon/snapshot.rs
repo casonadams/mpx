@@ -54,6 +54,7 @@ pub fn build_snapshot(
             last_window = Some(windows.len());
         }
         windows.push(WindowSnapshot {
+            number: Some(win.number),
             name: win.name.clone(),
             renamed: win.renamed,
             layout,

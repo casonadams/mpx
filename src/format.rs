@@ -48,6 +48,12 @@ pub struct PaneView {
     pub window_marked: bool,
     /// The window is zoomed (tmux `window_zoomed_flag`).
     pub window_zoomed: bool,
+    /// The window has been quiet for `monitor-silence` seconds (tmux `window_silence_flag`).
+    pub window_silence: bool,
+    /// The window's panes all receive typed input (`synchronize-panes`).
+    pub synchronized: bool,
+    /// The pane touches the left, top, right and bottom edge of the window (`pane_at_*`).
+    pub edges: [bool; 4],
     /// Number of panes in this pane's window.
     pub window_panes: usize,
     /// Number of windows in the session.
@@ -189,6 +195,9 @@ fn eval(body: &str, vars: &Vars, depth: usize) -> String {
         "q" => shell_quote(&resolve(arg, vars, depth)),
         "E" => expand_text(&resolve(arg, vars, depth), vars, depth + 1),
         "l" => unescape(arg),
+        "m" | "m/i" | "m/r" | "m/ri" => matching(op, &split_args(arg), vars, depth),
+        "t" => local_time(&resolve(arg, vars, depth)),
+        _ if op.starts_with("e|") => arithmetic(op, &split_args(arg), vars, depth),
         _ => match op.strip_prefix('=').and_then(|n| n.parse::<i64>().ok()) {
             Some(n) => truncate(&resolve(arg, vars, depth), n),
             None => lookup(vars, body).to_string(),
@@ -296,6 +305,137 @@ fn truncate(s: &str, n: i64) -> String {
     } else {
         s.chars().skip(len - keep).collect()
     }
+}
+
+/// `#{m:pat,str}` matches a shell glob, `#{m/r:...}` a regex; `i` in the operator ignores case.
+/// Expands to `1` on a match and `0` otherwise, as tmux does.
+fn matching(op: &str, args: &[&str], vars: &Vars, depth: usize) -> String {
+    let value = |i: usize| args.get(i).map_or_else(String::new, |a| expand_text(a, vars, depth));
+    let (pattern, text) = (value(0), value(1));
+    let ignore_case = op.ends_with('i');
+    let on = if op.contains('r') {
+        RegexBuilder::new(&pattern)
+            .case_insensitive(ignore_case)
+            .build()
+            .is_ok_and(|re| re.is_match(&text))
+    } else {
+        let fold = |s: &str| -> Vec<char> {
+            s.chars()
+                .map(|c| if ignore_case { c.to_ascii_lowercase() } else { c })
+                .collect()
+        };
+        glob_at(&fold(&pattern), &fold(&text))
+    };
+    flag(on)
+}
+
+/// Glob match of `p` against `t`: `*`, `?` and `[...]` (a leading `!` or `^` negates the class).
+fn glob_at(p: &[char], t: &[char]) -> bool {
+    match p.split_first() {
+        None => t.is_empty(),
+        Some(('*', rest)) => (0..=t.len()).any(|i| glob_at(rest, &t[i..])),
+        Some(('?', rest)) => !t.is_empty() && glob_at(rest, &t[1..]),
+        Some(('[', rest)) => match rest.iter().position(|&c| c == ']') {
+            Some(end) => {
+                t.first().is_some_and(|&c| class_matches(&rest[..end], c))
+                    && glob_at(&rest[end + 1..], &t[1..])
+            }
+            None => t.first() == Some(&'[') && glob_at(rest, &t[1..]),
+        },
+        Some((c, rest)) => t.first() == Some(c) && glob_at(rest, &t[1..]),
+    }
+}
+
+fn class_matches(class: &[char], c: char) -> bool {
+    let (negate, mut body) = match class.first() {
+        Some('!' | '^') => (true, &class[1..]),
+        _ => (false, class),
+    };
+    let mut hit = false;
+    while let Some(&lo) = body.first() {
+        if body.len() >= 3 && body[1] == '-' {
+            hit |= (lo..=body[2]).contains(&c);
+            body = &body[3..];
+        } else {
+            hit |= lo == c;
+            body = &body[1..];
+        }
+    }
+    hit != negate
+}
+
+/// `#{e|op:a,b}`: integer arithmetic with `+ - * / % m M` (`/` and `%` by zero give 0). With
+/// `|f|N` the operands are floats printed with `N` decimals.
+fn arithmetic(op: &str, args: &[&str], vars: &Vars, depth: usize) -> String {
+    let parts: Vec<&str> = op.split('|').collect();
+    let Some(sym) = parts.get(1).copied() else {
+        return String::new();
+    };
+    let value = |i: usize| args.get(i).map_or_else(String::new, |a| expand_text(a, vars, depth));
+    let (a, b) = (value(0), value(1));
+    if parts.get(2) == Some(&"f") {
+        let decimals = parts.get(3).and_then(|n| n.parse().ok()).unwrap_or(2);
+        let (x, y) = (a.trim().parse().unwrap_or(0.0), b.trim().parse().unwrap_or(0.0));
+        let r: f64 = match sym {
+            "+" => x + y,
+            "-" => x - y,
+            "*" => x * y,
+            "/" if y != 0.0 => x / y,
+            "%" if y != 0.0 => x % y,
+            "/" | "%" => 0.0,
+            "m" => x.min(y),
+            "M" => x.max(y),
+            _ => return String::new(),
+        };
+        return format!("{r:.decimals$}");
+    }
+    let (x, y) = (a.trim().parse::<i64>().unwrap_or(0), b.trim().parse::<i64>().unwrap_or(0));
+    let r = match sym {
+        "+" => x.saturating_add(y),
+        "-" => x.saturating_sub(y),
+        "*" => x.saturating_mul(y),
+        "/" => x.checked_div(y).unwrap_or(0),
+        "%" => x.checked_rem(y).unwrap_or(0),
+        "m" => x.min(y),
+        "M" => x.max(y),
+        _ => return String::new(),
+    };
+    r.to_string()
+}
+
+/// `#{t:var}`: the Unix time in `var` as local time, `Thu Nov  2 10:00:00 2026` (ctime layout).
+/// Empty when `var` is not a number or the time cannot be converted.
+#[cfg(unix)]
+fn local_time(value: &str) -> String {
+    const DAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let Ok(secs) = value.trim().parse::<libc::time_t>() else {
+        return String::new();
+    };
+    // SAFETY: `tm` is a plain C struct of integers, valid when zeroed; `localtime_r` fills it.
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    // SAFETY: both pointers refer to live locals; `localtime_r` only writes into `tm`.
+    let ok = !unsafe { libc::localtime_r(&secs, &mut tm) }.is_null();
+    if !ok {
+        return String::new();
+    }
+    let day = DAYS.get(usize::try_from(tm.tm_wday).unwrap_or(7)).copied().unwrap_or("");
+    let month = MONTHS.get(usize::try_from(tm.tm_mon).unwrap_or(12)).copied().unwrap_or("");
+    format!(
+        "{day} {month} {:>2} {:02}:{:02}:{:02} {}",
+        tm.tm_mday,
+        tm.tm_hour,
+        tm.tm_min,
+        tm.tm_sec,
+        tm.tm_year + 1900
+    )
+}
+
+#[cfg(not(unix))]
+fn local_time(_value: &str) -> String {
+    String::new()
 }
 
 fn basename(v: &str) -> String {
@@ -426,6 +566,16 @@ pub fn pane_vars(p: &PaneView) -> Vars {
     vars.insert("window_panes", p.window_panes.to_string());
     vars.insert("window_flags", window_flags(p));
     vars.insert("window_zoomed_flag", flag(p.window_zoomed));
+    vars.insert("window_activity_flag", flag(p.window_activity));
+    vars.insert("window_bell_flag", flag(p.window_bell));
+    vars.insert("window_silence_flag", flag(p.window_silence));
+    vars.insert("window_last_flag", flag(p.window_last));
+    vars.insert("window_marked_flag", flag(p.window_marked));
+    vars.insert("pane_synchronized", flag(p.synchronized));
+    vars.insert("pane_at_left", flag(p.edges[0]));
+    vars.insert("pane_at_top", flag(p.edges[1]));
+    vars.insert("pane_at_right", flag(p.edges[2]));
+    vars.insert("pane_at_bottom", flag(p.edges[3]));
     shared_vars(&mut vars, &p.session);
     vars
 }
@@ -435,6 +585,7 @@ pub fn pane_vars(p: &PaneView) -> Vars {
 pub(crate) struct WindowFlags {
     pub(crate) activity: bool,
     pub(crate) bell: bool,
+    pub(crate) silence: bool,
     pub(crate) current: bool,
     pub(crate) zoomed: bool,
     pub(crate) last: bool,
@@ -450,6 +601,9 @@ impl WindowFlags {
         }
         if self.bell {
             flags.push('!');
+        }
+        if self.silence {
+            flags.push('~');
         }
         if self.current {
             flags.push('*');
@@ -473,6 +627,7 @@ impl WindowFlags {
             activity,
             bell,
             current,
+            silence: tab.has_silence,
             zoomed: current && zoomed,
             last: tab.is_last,
             marked: tab.has_marked,
@@ -486,6 +641,7 @@ impl From<&PaneView> for WindowFlags {
             activity: p.window_activity,
             bell: p.window_bell,
             current: p.window_active,
+            silence: p.window_silence,
             zoomed: p.window_zoomed,
             last: p.window_last,
             marked: p.window_marked,
@@ -514,6 +670,7 @@ pub fn pane_view(
         let marked = node.marked.unwrap_or(false);
         let marked_set = tabs.iter().any(|t| t.has_marked) || marked;
         let tab = tabs.iter().find(|t| t.index == window);
+        let edges = at_edges(rect, rects);
         PaneView {
             session: session.to_string(),
             id: node.id,
@@ -547,7 +704,27 @@ pub fn pane_view(
             window_bell: tab.is_some_and(|t| t.has_bell),
             window_marked: tab.is_some_and(|t| t.has_marked),
             window_zoomed: tab.is_some_and(|t| t.zoomed),
+            window_silence: tab.is_some_and(|t| t.has_silence),
+            synchronized: tab.is_some_and(|t| t.synchronized),
+            edges,
             session_windows: tabs.len(),
             ..Default::default()
         }
+}
+
+/// Whether `rect` touches the left, top, right and bottom edges of the laid-out panes.
+fn at_edges(rect: Option<Rect>, rects: &[(String, Rect, bool)]) -> [bool; 4] {
+    let Some(r) = rect else {
+        return [false; 4];
+    };
+    let left = rects.iter().map(|(_, q, _)| q.x).min().unwrap_or(r.x);
+    let top = rects.iter().map(|(_, q, _)| q.y).min().unwrap_or(r.y);
+    let right = rects.iter().map(|(_, q, _)| q.x.saturating_add(q.width)).max().unwrap_or(0);
+    let bottom = rects.iter().map(|(_, q, _)| q.y.saturating_add(q.height)).max().unwrap_or(0);
+    [
+        r.x == left,
+        r.y == top,
+        r.x.saturating_add(r.width) == right,
+        r.y.saturating_add(r.height) == bottom,
+    ]
 }

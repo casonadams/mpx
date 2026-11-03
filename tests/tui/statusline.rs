@@ -3,9 +3,10 @@ use std::time::{Duration, Instant};
 use mpx::config::Justify;
 use mpx::layout::WindowTab;
 use mpx::tui::statusline::{
-    Item, Line, Seg, Style, Target, compose, parse_styled, rows, segs_width, status_due,
-    status_vars, strftime, tab_flags, truncate,
+    Item, Line, Seg, Target, compose, parse_styled, rows, segs_width, status_due, status_vars,
+    strftime, tab_flags, truncate,
 };
+use mpx::tui::style::Style;
 use mpx::vt::Color;
 
 /// 2024-03-05 14:07:09 UTC.
@@ -24,6 +25,8 @@ fn tab(index: usize, name: &str, active: bool) -> WindowTab {
         agent_badge: None,
         focused: None,
         zoomed: false,
+        has_silence: false,
+        synchronized: false,
     }
 }
 
@@ -192,25 +195,48 @@ fn truncate_keeps_the_leading_cells_and_their_style() {
 }
 
 #[test]
-fn rows_put_the_status_line_at_the_bottom_or_top() {
-    let bottom = rows(24, true, false);
-    assert_eq!(
-        (bottom.status, bottom.prompt, bottom.pane_top, bottom.pane_h),
-        (Some(23), 23, 0, 23)
-    );
-    let top = rows(24, true, true);
-    assert_eq!(
-        (top.status, top.prompt, top.pane_top, top.pane_h),
-        (Some(0), 0, 1, 23)
-    );
+fn status_lines_stack_at_the_bottom_or_top_and_shrink_the_panes() {
+    for (lines, top, status, pane_top, pane_h) in [
+        (1, false, 23, 0, 23),
+        (1, true, 0, 1, 23),
+        (2, false, 22, 0, 22),
+        (2, true, 0, 2, 22),
+        (5, false, 19, 0, 19),
+        (5, true, 0, 5, 19),
+    ] {
+        let r = rows(24, lines, top);
+        assert_eq!(
+            (r.status, r.status_h, r.prompt, r.pane_top, r.pane_h),
+            (Some(status), lines as u16, status, pane_top, pane_h),
+            "{lines} lines, top {top}"
+        );
+        assert_eq!(r.extra_status_rows().len(), lines - 1);
+    }
+}
+
+#[test]
+fn status_rows_and_panes_tile_the_screen_for_every_line_count() {
+    for top in [false, true] {
+        for lines in 0..=5 {
+            let r = rows(24, lines, top);
+            let status = r.status.map_or(0..0, |first| first..first + r.status_h);
+            let panes = r.pane_top..r.pane_top + r.pane_h;
+            assert_eq!(status.len() + panes.len(), 24, "{lines} lines, top {top}");
+            assert!(panes.end <= status.start || status.end <= panes.start);
+            if lines > 0 {
+                assert!(status.contains(&r.prompt), "{lines} lines, top {top}");
+            }
+        }
+    }
 }
 
 #[test]
 fn rows_with_the_status_line_hidden_give_every_row_to_the_panes() {
-    let hidden = rows(24, false, false);
+    let hidden = rows(24, 0, false);
     assert_eq!(hidden.status, None);
-    assert_eq!((hidden.pane_top, hidden.pane_h), (0, 24));
+    assert_eq!((hidden.pane_top, hidden.pane_h, hidden.status_h), (0, 24, 0));
     assert_eq!(hidden.prompt, 23, "messages still use the bottom row");
+    assert!(hidden.extra_status_rows().is_empty());
 }
 
 #[test]

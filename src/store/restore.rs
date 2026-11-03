@@ -11,7 +11,8 @@ pub fn plan_restore(
     let planned: Vec<Option<WindowPlan>> = snapshot
         .windows
         .iter()
-        .map(|window| plan_window(window, rules))
+        .enumerate()
+        .map(|(position, window)| plan_window(window, position, rules))
         .collect();
     RestorePlan {
         active_window: remap_active(snapshot.active_window, &planned),
@@ -44,6 +45,7 @@ fn remap_active(active: usize, planned: &[Option<WindowPlan>]) -> usize {
 
 fn plan_window(
     window: &WindowSnapshot,
+    position: usize,
     rules: &[ResumeRule],
 ) -> Option<WindowPlan> {
     let planned: Vec<(SpawnOpts, Option<String>)> = window
@@ -73,6 +75,7 @@ fn plan_window(
         .filter(|name| leaves.contains(name))
         .or_else(|| leaves.first().cloned());
     Some(WindowPlan {
+        number: window.number.unwrap_or(position),
         name: window.renamed.then(|| window.name.clone()),
         layout,
         focused,

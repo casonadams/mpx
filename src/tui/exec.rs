@@ -125,6 +125,10 @@ impl App {
                 self.settle(result)
             }
             Command::MoveWindow { to } => self.move_window(to).await,
+            Command::RenumberWindows => {
+                let result = self.client.renumber_windows().await;
+                self.settle(result)
+            }
             Command::DisplayMessage { format } => {
                 let format = format.as_deref().unwrap_or(DEFAULT_DISPLAY_MESSAGE);
                 let text = super::frame::expand_active(self, format);
@@ -195,6 +199,7 @@ impl App {
             Command::FindWindow { pattern } => self.find_window(&pattern).await,
             Command::Sequence(commands) => Box::pin(self.run_sequence(commands)).await,
             Command::Zoom => self.toggle_zoom().await,
+            Command::SetSynchronize { all, on } => self.set_synchronize(all, on).await,
             Command::CopyMode(opts) => self.copy_mode_cmd(opts).await,
             Command::Detach => Flow::Quit,
             Command::RenameSession { name } => {
@@ -387,7 +392,7 @@ impl App {
         let current = tabs.iter().position(|t| t.is_active).unwrap_or(0);
         let alert = (1..count)
             .map(|step| if forward { (current + step) % count } else { (current + count - step) % count })
-            .find(|&i| tabs[i].has_activity || tabs[i].has_bell)
+            .find(|&i| tabs[i].has_activity || tabs[i].has_bell || tabs[i].has_silence)
             .map(|i| tabs[i].index);
         match alert {
             Some(index) => self.simple(Simple::SelectWindow(index)).await,
@@ -706,6 +711,25 @@ impl App {
     /// `resize-pane -Z`: the daemon zooms or unzooms the active window.
     async fn toggle_zoom(&mut self) -> Flow {
         let result = self.client.zoom(None, None).await;
+        self.settle(result)
+    }
+
+    /// `set-option [-g] synchronize-panes`: the active window, or every window with `-g`.
+    async fn set_synchronize(&mut self, all: bool, on: bool) -> Flow {
+        let windows: Vec<usize> = self
+            .layout
+            .tabs
+            .iter()
+            .filter(|t| all || t.is_active)
+            .map(|t| t.index)
+            .collect();
+        let mut result = Ok(());
+        for window in windows {
+            result = self.client.synchronize(Some(window), Some(on)).await;
+            if result.is_err() {
+                break;
+            }
+        }
         self.settle(result)
     }
 

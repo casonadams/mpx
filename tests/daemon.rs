@@ -14,6 +14,7 @@ mod daemon {
     mod panes;
     mod plan;
     mod prompt;
+    mod renumber;
     mod rotate;
     mod snapshot;
     mod state;

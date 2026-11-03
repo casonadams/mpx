@@ -13,6 +13,7 @@ fn sample() -> SessionSnapshot {
         active_window: 1,
         last_window: None,
         windows: vec![WindowSnapshot {
+            number: None,
             name: "editor".into(),
             renamed: true,
             layout: LayoutNode::Split {

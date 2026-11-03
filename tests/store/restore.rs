@@ -69,6 +69,7 @@ fn window(
     panes: Vec<PaneSnapshot>,
 ) -> WindowSnapshot {
     WindowSnapshot {
+        number: None,
         name: name.into(),
         renamed,
         layout,

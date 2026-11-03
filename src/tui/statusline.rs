@@ -3,21 +3,9 @@
 use crate::config::Justify;
 use crate::format::{PaneView, Vars, WindowFlags, pane_vars};
 use crate::layout::WindowTab;
-use crate::vt::Color as VtColor;
 use std::time::{Duration, Instant};
 
-use super::render::parse_color;
-
-/// Attributes and colours of a run of text. `None` colours are the status row's own.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct Style {
-    pub fg: Option<VtColor>,
-    pub bg: Option<VtColor>,
-    pub bold: bool,
-    pub dim: bool,
-    pub underscore: bool,
-    pub reverse: bool,
-}
+use super::style::{Style, apply_directive};
 
 /// A run of text drawn in one style.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -70,37 +58,6 @@ fn push_run(segs: &mut Vec<Seg>, text: &str, style: &Style) {
             text: text.to_string(),
             style: style.clone(),
         });
-    }
-}
-
-fn apply_directive(style: &mut Style, body: &str) {
-    for item in body.split(',').map(str::trim) {
-        match item {
-            "default" | "none" => *style = Style::default(),
-            "bold" => style.bold = true,
-            "nobold" => style.bold = false,
-            "dim" => style.dim = true,
-            "nodim" => style.dim = false,
-            "underscore" => style.underscore = true,
-            "nounderscore" => style.underscore = false,
-            "reverse" => style.reverse = true,
-            "noreverse" => style.reverse = false,
-            _ => {
-                if let Some(color) = item.strip_prefix("fg=") {
-                    set_colour(&mut style.fg, color);
-                } else if let Some(color) = item.strip_prefix("bg=") {
-                    set_colour(&mut style.bg, color);
-                }
-            }
-        }
-    }
-}
-
-fn set_colour(slot: &mut Option<VtColor>, name: &str) {
-    if name == "default" {
-        *slot = None;
-    } else if let Some(color) = parse_color(name) {
-        *slot = Some(color);
     }
 }
 
@@ -203,6 +160,15 @@ pub fn status_vars(
             "window_active",
             if tab.is_active { "1" } else { "0" }.to_string(),
         );
+        for (name, on) in [
+            ("window_activity_flag", tab.has_activity),
+            ("window_bell_flag", tab.has_bell),
+            ("window_silence_flag", tab.has_silence),
+            ("window_last_flag", tab.is_last),
+            ("window_marked_flag", tab.has_marked),
+        ] {
+            vars.insert(name, if on { "1" } else { "0" }.to_string());
+        }
     }
     vars
 }
@@ -298,42 +264,62 @@ pub fn truncate(segs: Vec<Seg>, max: usize) -> Vec<Seg> {
     out
 }
 
-/// Screen rows for one frame. The panes fill `pane_h` rows from `pane_top`; the status line, when
-/// shown, takes one row (`status`); messages and prompts use `prompt`, which is the status row
-/// when it is shown and the bottom row (over the panes) when it is not.
+/// Screen rows for one frame. The panes fill `pane_h` rows from `pane_top`. The status block, when
+/// shown, takes `status_h` rows from `status`, its first row; messages and prompts use `prompt`,
+/// which is that first row when the block is shown and the bottom row (over the panes) when not.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rows {
     pub screen_h: u16,
     pub pane_top: u16,
     pub pane_h: u16,
     pub status: Option<u16>,
+    pub status_h: u16,
     pub prompt: u16,
 }
 
-pub fn rows(screen_h: u16, status: bool, top: bool) -> Rows {
-    let bottom = screen_h.saturating_sub(1);
-    match (status, top) {
-        (false, _) => Rows {
+impl Rows {
+    /// The status block's rows below its first: the `status-format` lines.
+    pub fn extra_status_rows(&self) -> std::ops::Range<u16> {
+        match self.status {
+            Some(first) => first + 1..first + self.status_h,
+            None => 0..0,
+        }
+    }
+}
+
+/// Lays out one frame. `status_lines` is the status block's height, 0 when it is hidden (capped at
+/// the screen height); `top` puts the block above the panes instead of below them.
+pub fn rows(screen_h: u16, status_lines: usize, top: bool) -> Rows {
+    let status_h = status_lines.min(usize::from(screen_h)) as u16;
+    if status_h == 0 {
+        return Rows {
             screen_h,
             pane_top: 0,
             pane_h: screen_h,
             status: None,
-            prompt: bottom,
-        },
-        (true, true) => Rows {
+            status_h: 0,
+            prompt: screen_h.saturating_sub(1),
+        };
+    }
+    let pane_h = screen_h - status_h;
+    if top {
+        Rows {
             screen_h,
-            pane_top: 1,
-            pane_h: bottom,
+            pane_top: status_h,
+            pane_h,
             status: Some(0),
+            status_h,
             prompt: 0,
-        },
-        (true, false) => Rows {
+        }
+    } else {
+        Rows {
             screen_h,
             pane_top: 0,
-            pane_h: bottom,
-            status: Some(bottom),
-            prompt: bottom,
-        },
+            pane_h,
+            status: Some(pane_h),
+            status_h,
+            prompt: pane_h,
+        }
     }
 }
 

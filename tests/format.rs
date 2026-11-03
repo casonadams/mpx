@@ -326,3 +326,80 @@ fn pane_active_is_each_windows_focused_pane() {
     assert_eq!(active("q", 1), "1");
     assert_eq!(active("x", 1), "0");
 }
+
+#[test]
+fn match_operator_globs_or_matches_a_regex() {
+    let v = vars(&[("name", "build-42")]);
+    assert_expands(
+        &v,
+        &[
+            ("#{m:build*,#{name}}", "1"),
+            ("#{m:b?ild-4[0-9],#{name}}", "1"),
+            ("#{m:[!b]*,#{name}}", "0"),
+            ("#{m:BUILD*,#{name}}", "0"),
+            ("#{m/i:BUILD*,#{name}}", "1"),
+            ("#{m/r:^build-\\d+$,#{name}}", "1"),
+            ("#{m/r:^deploy,#{name}}", "0"),
+            ("#{m/r:(,#{name}}", "0"),
+        ],
+    );
+}
+
+#[test]
+fn arithmetic_operator_computes_integers_and_floats() {
+    let v = base_vars();
+    assert_expands(
+        &v,
+        &[
+            ("#{e|+:2,3}", "5"),
+            ("#{e|-:2,5}", "-3"),
+            ("#{e|*:4,6}", "24"),
+            ("#{e|/:7,2}", "3"),
+            ("#{e|%:7,2}", "1"),
+            ("#{e|/:7,0}", "0"),
+            ("#{e|m:4,9}", "4"),
+            ("#{e|M:4,9}", "9"),
+            ("#{e|+|f|2:1.5,2.25}", "3.75"),
+            ("#{e|+:#{window_index},1}", "3"),
+        ],
+    );
+}
+
+#[test]
+fn time_operator_prints_local_ctime_layout() {
+    let v = vars(&[("now", "0"), ("bad", "soon")]);
+    let local = expand("#{t:now}", &v);
+    assert_eq!(local.split_whitespace().count(), 5, "{local:?}");
+    assert!(local.ends_with(|c: char| c.is_ascii_digit()), "{local:?}");
+    assert_eq!(expand("#{t:bad}", &v), "");
+}
+
+#[test]
+fn window_flags_and_pane_edges_are_exposed_as_variables() {
+    let tabs = vec![WindowTab {
+        is_active: true,
+        has_activity: true,
+        has_silence: true,
+        has_bell: true,
+        is_last: true,
+        ..tab(0)
+    }];
+    let left = Rect::new(0, 0, 40, 10);
+    let right = Rect::new(40, 0, 40, 10);
+    let rects = vec![
+        ("a".to_string(), left, true),
+        ("b".to_string(), right, false),
+    ];
+    let a = pane_vars(&pane_view("dev", 0, &node("a", 0), &rects, &tabs));
+    assert_expands(
+        &a,
+        &[
+            ("#{window_activity_flag}#{window_bell_flag}#{window_silence_flag}#{window_last_flag}", "1111"),
+            ("#{window_marked_flag}", "0"),
+            ("#{pane_at_left}#{pane_at_top}#{pane_at_right}#{pane_at_bottom}", "1101"),
+            ("#{window_flags}", "#!~*-"),
+        ],
+    );
+    let b = pane_vars(&pane_view("dev", 0, &node("b", 0), &rects, &tabs));
+    assert_expands(&b, &[("#{pane_at_left}#{pane_at_right}", "01")]);
+}

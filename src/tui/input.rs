@@ -240,9 +240,30 @@ impl App {
         self.client.send_input(&pane, &text).await
     }
 
-    /// Writes typed bytes to the active pane.
+    /// Writes typed bytes to the active pane, or to every running pane of its window while
+    /// `synchronize-panes` is on for that window.
     async fn write_typed(&mut self, bytes: &[u8]) -> Result<(), String> {
-        self.write_active(bytes).await
+        let text = String::from_utf8_lossy(bytes).into_owned();
+        for pane in self.typed_targets() {
+            self.client.send_input(&pane, &text).await?;
+        }
+        Ok(())
+    }
+
+    /// The panes typed input goes to.
+    fn typed_targets(&self) -> Vec<String> {
+        if self.active_pane.is_empty() {
+            return Vec::new();
+        }
+        match self.layout.tabs.iter().find(|t| t.is_active) {
+            Some(tab) if tab.synchronized => self
+                .nodes
+                .iter()
+                .filter(|n| n.window == Some(tab.index) && n.is_running())
+                .map(|n| n.name.clone())
+                .collect(),
+            _ => vec![self.active_pane.clone()],
+        }
     }
 
     pub async fn on_paste(&mut self, text: &str) -> Flow {
