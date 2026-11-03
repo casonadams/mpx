@@ -83,6 +83,20 @@ fn lerp_rgb(from: (u8, u8, u8), to: (f32, f32, f32), factor: f32) -> VtColor {
     VtColor::Rgb(nr, ng, nb)
 }
 
+/// An ANSI color (named, or indexed below 16) as the terminal reported it at attach, so dimming
+/// starts from what it really shows; every other color, and one the terminal did not report, is
+/// returned as it is.
+pub fn from_terminal_palette(color: VtColor, palette: &[Option<(u8, u8, u8)>; 16]) -> VtColor {
+    let index = match color {
+        VtColor::Indexed(i) if i < 16 => Some(usize::from(i)),
+        other => named_index(other),
+    };
+    match index.and_then(|i| palette[i]) {
+        Some((r, g, b)) => VtColor::Rgb(r, g, b),
+        None => color,
+    }
+}
+
 /// `color` darkened by `factor` (0.0 leaves it, 1.0 is black): each channel scales toward zero.
 pub fn dim_color(color: VtColor, factor: f32) -> VtColor {
     lerp_rgb(color_to_rgb(color), (0.0, 0.0, 0.0), factor)

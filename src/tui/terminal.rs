@@ -136,13 +136,24 @@ pub fn parse_color_spec(spec: &str) -> Option<(u8, u8, u8)> {
 /// The color a terminal answered to `OSC code ; ?` in `reply` (10 is the foreground, 11 the
 /// background); the answer ends with ST or BEL.
 pub fn osc_color_reply(reply: &[u8], code: u8) -> Option<(u8, u8, u8)> {
+    color_after(reply, &format!("\x1b]{code};"))
+}
+
+/// The color a terminal answered to `OSC 4 ; index ; ?` in `reply`.
+pub fn palette_reply(reply: &[u8], index: usize) -> Option<(u8, u8, u8)> {
+    color_after(reply, &format!("\x1b]4;{index};"))
+}
+
+fn color_after(reply: &[u8], head: &str) -> Option<(u8, u8, u8)> {
     let text = String::from_utf8_lossy(reply);
-    let head = format!("\x1b]{code};");
-    let start = text.find(&head)? + head.len();
+    let start = text.find(head)? + head.len();
     let rest = &text[start..];
     let end = rest.find(['\x1b', '\x07'])?;
     parse_color_spec(&rest[..end])
 }
+
+/// The terminal's 16 ANSI colors, in order, each when it reported it.
+pub type AnsiPalette = [Option<(u8, u8, u8)>; 16];
 
 /// What the terminal told us at attach.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -152,6 +163,8 @@ pub struct TerminalReport {
     /// Default foreground and background colors, when it reported them.
     pub fg: Option<(u8, u8, u8)>,
     pub bg: Option<(u8, u8, u8)>,
+    /// The ANSI colors it reported, so dimming starts from what the terminal really shows.
+    pub palette: AnsiPalette,
 }
 
 /// Interprets a complete reply to the attach query.
@@ -160,7 +173,19 @@ pub fn report_from(reply: &[u8]) -> TerminalReport {
         margins: margins_reply(reply).unwrap_or(false),
         fg: osc_color_reply(reply, 10),
         bg: osc_color_reply(reply, 11),
+        palette: std::array::from_fn(|i| palette_reply(reply, i)),
     }
+}
+
+/// What attach sends: the default colors, the 16 ANSI colors and the margins mode, then the DA1
+/// that every terminal answers last.
+pub fn attach_query() -> Vec<u8> {
+    let mut query = b"\x1b]10;?\x1b\\\x1b]11;?\x1b\\".to_vec();
+    for index in 0..16 {
+        query.extend_from_slice(format!("\x1b]4;{index};?\x1b\\").as_bytes());
+    }
+    query.extend_from_slice(b"\x1b[?69$p\x1b[c");
+    query
 }
 
 /// Asks the terminal for its default colors and whether it supports left/right margins. Run in raw
@@ -169,8 +194,8 @@ pub fn report_from(reply: &[u8]) -> TerminalReport {
 #[cfg(unix)]
 pub fn query_terminal() -> TerminalReport {
     let mut out = stdout();
-    let query = b"\x1b]10;?\x1b\\\x1b]11;?\x1b\\\x1b[?69$p\x1b[c";
-    if out.write_all(query).and_then(|()| out.flush()).is_err() {
+    let query = attach_query();
+    if out.write_all(&query).and_then(|()| out.flush()).is_err() {
         return TerminalReport::default();
     }
     let deadline = std::time::Instant::now() + QUERY_TIMEOUT;

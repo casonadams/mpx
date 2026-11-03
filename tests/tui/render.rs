@@ -3,7 +3,7 @@ use mpx::tui::canvas::Canvas;
 use mpx::config::BorderStyle;
 use mpx::tui::render::{
     Compositor, DividerStyle, HostColors, PaneColors, RenderPaneContext, SelectionRange,
-    StatusBar, color_to_rgb, dim_color, format_tab, hud_rect, inactive_color, parse_color,
+    StatusBar, color_to_rgb, dim_color, format_tab, from_terminal_palette, hud_rect, inactive_color, parse_color,
     status_left, status_right, vt_to_crossterm,
 };
 use mpx::vt::{CellStyle, Color as VtColor};
@@ -24,6 +24,7 @@ fn pane_ctx<'a>(grid: &'a Grid, rect: Rect, dimmed: bool) -> RenderPaneContext<'
         inactive_bg: None,
         default_fg: None,
         default_bg: None,
+        palette: Default::default(),
     }
 }
 
@@ -537,6 +538,7 @@ fn pane_context_takes_defaults_from_the_active_template_before_the_host() {
     let host = HostColors {
         fg: Some(VtColor::Rgb(10, 10, 10)),
         bg: Some(VtColor::Rgb(20, 20, 20)),
+        ..HostColors::default()
     };
     let grid = Grid::new(2, 1);
     let rect = Rect::new(0, 0, 2, 1);
@@ -572,7 +574,7 @@ fn dividers_take_the_inactive_background_so_no_stripe_shows_between_panes() {
     .unwrap();
     assert!(String::from_utf8_lossy(&buf).contains(";48;2;30;40;50"));
 
-    let host = HostColors { fg: None, bg: Some(VtColor::Rgb(46, 52, 64)) };
+    let host = HostColors { bg: Some(VtColor::Rgb(46, 52, 64)), ..HostColors::default() };
     let mut style = mpx::config::StyleConfig::default();
     style.dim_factor = 0.5;
     let colors = PaneColors::new(&style, host);
@@ -584,4 +586,33 @@ fn dividers_take_the_inactive_background_so_no_stripe_shows_between_panes() {
         "a configured inactive background wins"
     );
     assert_eq!(PaneColors::new(&mpx::config::StyleConfig::default(), HostColors::default()).inactive_default_bg(), None);
+}
+
+#[test]
+fn dimmed_ansi_colors_start_from_the_terminals_own_palette_when_it_reported_one() {
+    let mut grid = Grid::new(10, 5);
+    grid.current_style.fg = Some(VtColor::Red);
+    grid.put_char('R');
+    // Without a report the built-in red (205,49,49) is halved.
+    let builtin = draw_dimmed_with(&grid, |_| {});
+    assert!(builtin.contains(";38;2;103;25;25"), "{builtin:?}");
+
+    let themed = draw_dimmed_with(&grid, |ctx| ctx.palette[1] = Some((220, 50, 47)));
+    assert!(themed.contains(";38;2;110;25;24"), "{themed:?}");
+    // Indexed colors below 16 are the same colors; RGB colors are never remapped.
+    assert_eq!(
+        from_terminal_palette(VtColor::Indexed(1), &themed_palette()),
+        VtColor::Rgb(220, 50, 47)
+    );
+    assert_eq!(
+        from_terminal_palette(VtColor::Rgb(1, 2, 3), &themed_palette()),
+        VtColor::Rgb(1, 2, 3)
+    );
+    assert_eq!(from_terminal_palette(VtColor::Indexed(200), &themed_palette()), VtColor::Indexed(200));
+}
+
+fn themed_palette() -> [Option<(u8, u8, u8)>; 16] {
+    let mut palette = [None; 16];
+    palette[1] = Some((220, 50, 47));
+    palette
 }

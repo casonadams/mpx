@@ -6,7 +6,7 @@ use crossterm::{
 use std::io::{self, Write};
 
 use super::canvas::Canvas;
-pub use super::color::{color_to_rgb, dim_color, inactive_color, parse_color};
+pub use super::color::{color_to_rgb, dim_color, from_terminal_palette, inactive_color, parse_color};
 use crate::config::BorderStyle;
 use crate::format::WindowFlags;
 use crate::layout::{Divider, WindowTab, geometry::Rect};
@@ -87,6 +87,8 @@ pub struct PaneColors {
     /// Default foreground and background the terminal reported at attach, when it did.
     pub host_fg: Option<VtColor>,
     pub host_bg: Option<VtColor>,
+    /// The ANSI colors the terminal reported, which dimming starts from.
+    pub host_palette: [Option<(u8, u8, u8)>; 16],
 }
 
 impl PaneColors {
@@ -99,6 +101,7 @@ impl PaneColors {
             inactive_bg: parse_color(&style.inactive.bg),
             host_fg: host.fg,
             host_bg: host.bg,
+            host_palette: host.palette,
         }
     }
 }
@@ -108,6 +111,7 @@ impl PaneColors {
 pub struct HostColors {
     pub fg: Option<VtColor>,
     pub bg: Option<VtColor>,
+    pub palette: [Option<(u8, u8, u8)>; 16],
 }
 
 impl PaneColors {
@@ -129,6 +133,7 @@ impl HostColors {
         Self {
             fg: color(report.fg),
             bg: color(report.bg),
+            palette: report.palette,
         }
     }
 }
@@ -148,6 +153,8 @@ pub struct RenderPaneContext<'a> {
     /// What a default-colored cell is: the configured active color, else the host terminal's.
     pub default_fg: Option<VtColor>,
     pub default_bg: Option<VtColor>,
+    /// The terminal's own ANSI colors, when it reported them; dimming starts from these.
+    pub palette: [Option<(u8, u8, u8)>; 16],
 }
 
 impl<'a> RenderPaneContext<'a> {
@@ -174,6 +181,7 @@ impl<'a> RenderPaneContext<'a> {
             inactive_bg: colors.inactive_bg,
             default_fg: colors.active_fg.or(colors.host_fg),
             default_bg: colors.active_bg.or(colors.host_bg),
+            palette: colors.host_palette,
         }
     }
 }
@@ -720,13 +728,13 @@ fn cell_content(
             c: cell.c,
             style: CellStyle {
                 fg: inactive_color(
-                    cell.style.fg,
+                    cell.style.fg.map(|c| from_terminal_palette(c, &ctx.palette)),
                     ctx.inactive_fg,
                     ctx.default_fg,
                     ctx.dim_factor,
                 ),
                 bg: inactive_color(
-                    cell.style.bg,
+                    cell.style.bg.map(|c| from_terminal_palette(c, &ctx.palette)),
                     ctx.inactive_bg,
                     ctx.default_bg,
                     ctx.dim_factor,
