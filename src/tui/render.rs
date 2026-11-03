@@ -6,7 +6,7 @@ use crossterm::{
 use std::io::{self, Write};
 
 use super::canvas::Canvas;
-pub use super::color::{color_to_rgb, desaturate_color, inactive_color, parse_color};
+pub use super::color::{color_to_rgb, dim_color, inactive_color, parse_color};
 use crate::config::BorderStyle;
 use crate::format::WindowFlags;
 use crate::layout::{Divider, WindowTab, geometry::Rect};
@@ -112,7 +112,7 @@ pub struct HostColors {
 
 impl PaneColors {
     /// What a default-colored background becomes in an inactive pane: the configured color, else
-    /// the terminal's (or the active template's) default, desaturated.
+    /// the terminal's (or the active template's) default, dimmed.
     pub fn inactive_default_bg(&self) -> Option<VtColor> {
         inactive_color(
             None,

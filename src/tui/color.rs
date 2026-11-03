@@ -83,14 +83,13 @@ fn lerp_rgb(from: (u8, u8, u8), to: (f32, f32, f32), factor: f32) -> VtColor {
     VtColor::Rgb(nr, ng, nb)
 }
 
-pub fn desaturate_color(color: VtColor, factor: f32) -> VtColor {
-    let rgb = color_to_rgb(color);
-    let lum = 0.299 * (rgb.0 as f32) + 0.587 * (rgb.1 as f32) + 0.114 * (rgb.2 as f32);
-    lerp_rgb(rgb, (lum, lum, lum), factor)
+/// `color` darkened by `factor` (0.0 leaves it, 1.0 is black): each channel scales toward zero.
+pub fn dim_color(color: VtColor, factor: f32) -> VtColor {
+    lerp_rgb(color_to_rgb(color), (0.0, 0.0, 0.0), factor)
 }
 
-/// A cell color in an unfocused pane: desaturated by `factor`. A cell in the default color takes
-/// the configured inactive color, else the terminal's own default desaturated, else stays default.
+/// A cell color in an unfocused pane: dimmed by `factor`. A cell in the default color takes
+/// the configured inactive color, else the terminal's own default dimmed, else stays default.
 pub fn inactive_color(
     orig: Option<VtColor>,
     configured: Option<VtColor>,
@@ -98,8 +97,8 @@ pub fn inactive_color(
     factor: f32,
 ) -> Option<VtColor> {
     match orig {
-        Some(c) => Some(desaturate_color(c, factor)),
-        None => configured.or_else(|| terminal_default.map(|c| desaturate_color(c, factor))),
+        Some(c) => Some(dim_color(c, factor)),
+        None => configured.or_else(|| terminal_default.map(|c| dim_color(c, factor))),
     }
 }
 

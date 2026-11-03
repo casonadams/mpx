@@ -36,8 +36,8 @@ border_marked = "bright-magenta"    # marked border color or hex ("#bc8cff")
 border_style = "single"             # "single", "rounded", "double", "ascii"
 status_bg = "dark-green"            # status line background or hex ("#121820")
 status_fg = "black"                 # status line foreground or hex ("#c5d1de")
-dim_inactive = false                # true: desaturate inactive panes when multiple are visible
-dim_factor = 0.5                    # how far toward grey (0.0 = untouched, 1.0 = grey)
+dim_inactive = false                # true: dim inactive panes when multiple are visible
+dim_factor = 0.5                    # how far toward black (0.0 = untouched, 1.0 = black)
 
 # Optional template for active (focused) pane
 [style.active]
@@ -162,11 +162,11 @@ These tmux options are applied by the terminal UI.
 
 ### Inactive panes (`[style]`)
 
-Off by default. With `dim_inactive = true` and several panes visible, every pane but the focused one is desaturated: each color moves toward its own grey by `dim_factor` (`0.0` leaves it alone, `1.0` is fully grey, default `0.5`), and bold is dropped. There is no other dimming mode.
+Off by default. With `dim_inactive = true` and several panes visible, every pane but the focused one is dimmed, as tmux's `dim=` does: every color channel is scaled down by `dim_factor` (`0.0` leaves it alone, `1.0` is black, default `0.5`), and bold is dropped. Colors keep their hue; mpx no longer desaturates toward grey.
 
-- Cells with an explicit color (the ANSI palette, 256-color, truecolor; syntax highlighting, diffs, selections) are desaturated, text and background alike.
-- Cells in the terminal's default colors are desaturated too. At attach, mpx asks the terminal for its default foreground and background (`OSC 10` / `OSC 11`). A terminal that does not answer leaves those cells untouched. Colors are read once per attach; attach again after changing the terminal theme.
-- `[style.active] fg` / `bg` replace the terminal's colors as the default to desaturate. `[style.inactive] fg` / `bg` replace the result: an inactive pane then shows exactly that color for default-colored cells.
+- Cells with an explicit color (the ANSI palette, 256-color, truecolor; syntax highlighting, diffs, selections) are dimmed, text and background alike.
+- Cells in the terminal's default colors are dimmed too. At attach, mpx asks the terminal for its default foreground and background (`OSC 10` / `OSC 11`). A terminal that does not answer leaves those cells untouched. Colors are read once per attach; attach again after changing the terminal theme.
+- `[style.active] fg` / `bg` replace the terminal's colors as the default to dim. `[style.inactive] fg` / `bg` replace the result: an inactive pane then shows exactly that color for default-colored cells.
 - Removed: `color_mode`, `factor` and `dim_content_bg` (under `[style]` or `[style.inactive]`). The config now fails to load with an unknown-key error if they are present; use `dim_factor` instead.
 
 ### Process Resumption Rules (`[[resume]]`)

@@ -3,7 +3,7 @@ use mpx::tui::canvas::Canvas;
 use mpx::config::BorderStyle;
 use mpx::tui::render::{
     Compositor, DividerStyle, HostColors, PaneColors, RenderPaneContext, SelectionRange,
-    StatusBar, color_to_rgb, desaturate_color, format_tab, hud_rect, inactive_color, parse_color,
+    StatusBar, color_to_rgb, dim_color, format_tab, hud_rect, inactive_color, parse_color,
     status_left, status_right, vt_to_crossterm,
 };
 use mpx::vt::{CellStyle, Color as VtColor};
@@ -66,12 +66,10 @@ fn dimmed_default_text_follows_the_terminals_default_colors_when_known() {
     let known = draw_dimmed_with(&grid, |ctx| {
         ctx.default_fg = Some(VtColor::Rgb(216, 222, 233));
         ctx.default_bg = Some(VtColor::Rgb(46, 52, 64));
-        ctx.dim_factor = 1.0;
+        ctx.dim_factor = 0.5;
     });
-    let fg: f32 = 0.299 * 216.0 + 0.587 * 222.0 + 0.114 * 233.0;
-    assert!(known.contains(&format!(";38;2;{0};{0};{0};", fg.round() as u8)), "{known:?}");
-    let bg: f32 = 0.299 * 46.0 + 0.587 * 52.0 + 0.114 * 64.0;
-    assert!(known.contains(&format!(";48;2;{0};{0};{0}mZ", bg.round() as u8)), "{known:?}");
+    assert!(known.contains(";38;2;108;111;117;"), "{known:?}");
+    assert!(known.contains(";48;2;23;26;32mZ"), "{known:?}");
 
     let unknown = draw_dimmed_with(&grid, |_| {});
     assert!(!unknown.contains("38;2;") && !unknown.contains("48;2;"), "{unknown:?}");
@@ -86,8 +84,8 @@ fn draw_colored(fg: VtColor, dimmed: bool) -> String {
 }
 
 #[test]
-fn dimmed_pane_draws_palette_colors_desaturated() {
-    let (r, g, bl) = match desaturate_color(VtColor::Blue, 0.5) {
+fn dimmed_pane_draws_palette_colors_dimmed() {
+    let (r, g, bl) = match dim_color(VtColor::Blue, 0.5) {
         VtColor::Rgb(r, g, b) => (r, g, b),
         other => panic!("{other:?}"),
     };
@@ -368,7 +366,7 @@ fn vt_to_crossterm_maps_correctly() {
 }
 
 #[test]
-fn dimmed_pane_desaturates_content_colors_and_suppresses_bold() {
+fn dimmed_pane_dims_content_colors_and_suppresses_bold() {
     let mut grid = Grid::new(10, 5);
     grid.current_style = CellStyle {
         fg: Some(VtColor::Rgb(200, 100, 50)),
@@ -377,10 +375,10 @@ fn dimmed_pane_desaturates_content_colors_and_suppresses_bold() {
         ..CellStyle::default()
     };
     grid.put_char('X');
-    let out = draw_dimmed_with(&grid, |ctx| ctx.dim_factor = 1.0);
-    // Fully desaturated, each color is its luminance.
-    assert!(out.contains(";38;2;124;124;124"), "foreground not desaturated: {out}");
-    assert!(out.contains(";48;2;124;124;124"), "background not desaturated: {out}");
+    let out = draw_dimmed_with(&grid, |ctx| ctx.dim_factor = 0.5);
+    // Half dimmed, each channel is halved.
+    assert!(out.contains(";38;2;100;50;25"), "foreground not dimmed: {out}");
+    assert!(out.contains(";48;2;50;75;25"), "background not dimmed: {out}");
     assert!(!out.contains(";1m"), "bold was not suppressed in dimmed pane: {out}");
 }
 
@@ -501,31 +499,24 @@ fn inactive_pane_template_uses_explicit_fg_and_bg() {
 }
 
 #[test]
-fn color_to_rgb_and_desaturation_and_tint() {
+fn color_to_rgb_and_dimming() {
     let (r, g, b) = color_to_rgb(VtColor::Red);
     assert_eq!((r, g, b), (205, 49, 49));
 
-    // Desaturate pure red by 100% -> luminance grayscale
-    let desat_full = desaturate_color(VtColor::Rgb(255, 0, 0), 1.0);
-    if let VtColor::Rgb(dr, dg, db) = desat_full {
-        assert_eq!(dr, dg);
-        assert_eq!(dg, db);
-        assert_eq!(dr, 76); // 0.299 * 255 = 76.245
-    } else {
-        panic!("expected rgb");
-    }
+    assert_eq!(dim_color(VtColor::Rgb(255, 0, 0), 1.0), VtColor::Rgb(0, 0, 0));
+    assert_eq!(dim_color(VtColor::Rgb(200, 100, 50), 0.5), VtColor::Rgb(100, 50, 25));
+    assert_eq!(dim_color(VtColor::Rgb(200, 100, 50), 0.0), VtColor::Rgb(200, 100, 50));
 }
 
 
 
 #[test]
-fn inactive_cells_are_desaturated_by_the_factor() {
-    let red = Some(VtColor::Rgb(255, 0, 0));
-    assert_eq!(inactive_color(red, None, None, 0.0), red);
-    assert_eq!(inactive_color(red, None, None, 1.0), Some(VtColor::Rgb(76, 76, 76)));
-    let half = inactive_color(red, None, None, 0.5).unwrap();
-    assert_eq!(half, VtColor::Rgb(166, 38, 38));
-    // Palette colors are desaturated through their RGB value too.
+fn inactive_cells_are_dimmed_by_the_factor() {
+    let orange = Some(VtColor::Rgb(200, 100, 50));
+    assert_eq!(inactive_color(orange, None, None, 0.0), orange);
+    assert_eq!(inactive_color(orange, None, None, 1.0), Some(VtColor::Rgb(0, 0, 0)));
+    assert_eq!(inactive_color(orange, None, None, 0.5), Some(VtColor::Rgb(100, 50, 25)));
+    // Palette colors are dimmed through their RGB value too.
     assert_ne!(inactive_color(Some(VtColor::Green), None, None, 0.5), Some(VtColor::Green));
 }
 
@@ -536,7 +527,7 @@ fn default_colored_cells_use_the_configured_color_then_the_terminals_default() {
     assert_eq!(inactive_color(None, configured, host, 0.5), configured);
     assert_eq!(
         inactive_color(None, None, host, 1.0),
-        Some(desaturate_color(VtColor::Rgb(46, 52, 64), 1.0))
+        Some(dim_color(VtColor::Rgb(46, 52, 64), 1.0))
     );
     assert_eq!(inactive_color(None, None, None, 0.5), None, "nothing is known about the default");
 }
@@ -583,10 +574,9 @@ fn dividers_take_the_inactive_background_so_no_stripe_shows_between_panes() {
 
     let host = HostColors { fg: None, bg: Some(VtColor::Rgb(46, 52, 64)) };
     let mut style = mpx::config::StyleConfig::default();
-    style.dim_factor = 1.0;
+    style.dim_factor = 0.5;
     let colors = PaneColors::new(&style, host);
-    let lum = (0.299 * 46.0 + 0.587 * 52.0 + 0.114 * 64.0_f32).round() as u8;
-    assert_eq!(colors.inactive_default_bg(), Some(VtColor::Rgb(lum, lum, lum)));
+    assert_eq!(colors.inactive_default_bg(), Some(VtColor::Rgb(23, 26, 32)));
     style.inactive.bg = "#102030".into();
     assert_eq!(
         PaneColors::new(&style, host).inactive_default_bg(),

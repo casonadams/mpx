@@ -140,7 +140,7 @@ fn ui_options_read_from_the_config_file() {
 }
 
 #[test]
-fn inactive_panes_are_not_desaturated_unless_asked() {
+fn inactive_panes_are_not_dimmed_unless_asked() {
     let cfg = Config::parse("").unwrap();
     assert!(!cfg.style.dim_inactive);
     assert_eq!(cfg.style.dim_factor, 0.5);

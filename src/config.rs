@@ -95,9 +95,9 @@ pub struct StyleConfig {
     pub status_bg: String,
     /// Status bar foreground color name or hex.
     pub status_fg: String,
-    /// Desaturate the colors of inactive panes when multiple are visible.
+    /// Dim the colors of inactive panes when multiple are visible.
     pub dim_inactive: bool,
-    /// How far inactive panes are desaturated (0.0 = untouched, 1.0 = grey).
+    /// How far inactive panes are dimmed (0.0 = untouched, 1.0 = black).
     pub dim_factor: f32,
     /// Template styling for the active (focused) pane.
     pub active: ActiveStyle,
