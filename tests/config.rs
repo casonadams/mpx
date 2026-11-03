@@ -35,9 +35,9 @@ fallback = ["codex", "resume", "--last"]
 
 #[test]
 fn parse_style_dim_factor() {
-    let text = "[style]\ndim_inactive = false\ndim_factor = 0.05\n";
+    let text = "[style]\ndim_inactive = true\ndim_factor = 0.05\n";
     let cfg = Config::parse(text).unwrap();
-    assert!(!cfg.style.dim_inactive);
+    assert!(cfg.style.dim_inactive);
     assert_eq!(cfg.style.dim_factor, 0.05);
 }
 
@@ -137,4 +137,11 @@ fn ui_options_read_from_the_config_file() {
     assert_eq!(config.status_justify, mpx::config::Justify::Centre);
     assert_eq!(config.base_index, 1);
     assert_eq!(config.status_left.as_deref(), Some("[a]"));
+}
+
+#[test]
+fn inactive_panes_are_not_desaturated_unless_asked() {
+    let cfg = Config::parse("").unwrap();
+    assert!(!cfg.style.dim_inactive);
+    assert_eq!(cfg.style.dim_factor, 0.5);
 }

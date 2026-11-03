@@ -142,7 +142,7 @@ impl Default for StyleConfig {
             border_style: BorderStyle::Single,
             status_bg: "dark-green".to_string(),
             status_fg: "black".to_string(),
-            dim_inactive: true,
+            dim_inactive: false,
             dim_factor: 0.5,
             active: ActiveStyle::default(),
             inactive: InactiveStyle::default(),
