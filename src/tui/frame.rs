@@ -13,7 +13,8 @@ use super::render::{
 use super::status::{exit_badge, node_named};
 use super::status::{local_utc_offset, pane_items};
 use super::statusline::{
-    Item, Line, Seg, Target, compose, parse_styled, status_lists, status_vars, strftime, truncate,
+    Item, Line, Seg, SessionInfo, Target, compose, parse_styled, status_lists, status_vars, strftime,
+    truncate,
 };
 use crate::config::Justify;
 use crate::format::{Lists, expand_with};
@@ -440,8 +441,13 @@ fn active_vars(app: &App) -> crate::format::Vars {
 fn loop_lists(app: &App) -> Lists {
     let panes: Vec<crate::format::PaneView> =
         app.nodes.iter().map(|n| format_view(app, n)).collect();
+    let session = SessionInfo {
+        name: &app.session,
+        times: app.times,
+        attached: app.attached,
+    };
     status_lists(
-        &app.session,
+        session,
         &app.layout.tabs,
         &panes,
         app.zoomed(),

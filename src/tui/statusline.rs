@@ -173,10 +173,18 @@ pub fn status_vars(
     vars
 }
 
+/// The session a status line describes: its name, its times and how many clients are attached.
+#[derive(Debug, Clone, Copy)]
+pub struct SessionInfo<'a> {
+    pub name: &'a str,
+    pub times: crate::format::SessionTimes,
+    pub attached: usize,
+}
+
 /// The lists the loop formats `#{W:}`, `#{P:}` and `#{S:}` iterate over: one entry per window (its
 /// first pane's variables with the window's own), the panes of the current window, and the session.
 pub fn status_lists(
-    session: &str,
+    session: SessionInfo,
     tabs: &[WindowTab],
     panes: &[PaneView],
     zoomed: bool,
@@ -186,7 +194,7 @@ pub fn status_lists(
         .iter()
         .map(|tab| {
             let pane = panes.iter().find(|p| p.window == tab.index);
-            status_vars(session, pane, Some(tab), zoomed, window_base)
+            status_vars(session.name, pane, Some(tab), zoomed, window_base)
         })
         .collect();
     let current = tabs.iter().find(|t| t.is_active).map(|t| t.index);
@@ -195,10 +203,9 @@ pub fn status_lists(
         .filter(|p| Some(p.window) == current)
         .map(pane_vars)
         .collect();
-    let sessions = vec![Vars::from([
-        ("session_name", session.to_string()),
-        ("session_windows", tabs.len().to_string()),
-    ])];
+    let mut session_entry = crate::format::session_vars(session.name, session.times, session.attached);
+    session_entry.insert("session_windows", tabs.len().to_string());
+    let sessions = vec![session_entry];
     Lists {
         windows,
         panes: current_panes,
@@ -225,6 +232,10 @@ pub struct Item {
 pub struct Line {
     pub segs: Vec<Seg>,
     pub targets: Vec<(usize, usize, Target)>,
+    /// First column after the left segment (`status-left`).
+    pub left_end: usize,
+    /// First column of the right segment (`status-right`).
+    pub right_start: usize,
 }
 
 /// Lays out `left`, the window `items` (joined by `separator`) and `right` across `width` cells.
@@ -241,7 +252,8 @@ pub fn compose(
     let items_width: usize = items.iter().map(|i| segs_width(&i.segs)).sum::<usize>()
         + sep_width * items.len().saturating_sub(1);
     let left_width = segs_width(&left);
-    let used = left_width + items_width + segs_width(&right);
+    let right_width = segs_width(&right);
+    let used = left_width + items_width + right_width;
     let free = width.saturating_sub(used);
     let (before, after) = match justify {
         Justify::Left => (0, free),
@@ -270,7 +282,12 @@ pub fn compose(
         segs.push(Seg::plain(" ".repeat(after)));
     }
     segs.extend(right);
-    Line { segs, targets }
+    Line {
+        segs,
+        targets,
+        left_end: left_width,
+        right_start: width.saturating_sub(right_width),
+    }
 }
 
 /// The first `max` cells of `segs`, keeping their styles.
