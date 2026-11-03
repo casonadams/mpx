@@ -1,5 +1,5 @@
 use mpx::keys::TermModes;
-use mpx::vt::grid::{CellStyle, Color};
+use mpx::vt::grid::{CellStyle, Color, ShellMark};
 use mpx::vt::{Alert, VtScreen};
 
 fn feed(vt: &mut VtScreen, bytes: &str) {
@@ -586,4 +586,26 @@ fn delete_and_insert_line_respect_left_right_margins() {
     assert_eq!((row(&vt, 1), row(&vt, 3)), ("mnijkl".into(), "  uvwx".into()));
     feed(&mut vt, "\x1b[2;1H\x1b[L");
     assert_eq!(row(&vt, 1), "  ijkl");
+}
+
+#[test]
+fn osc_133_marks_the_row_of_each_prompt_and_command_output_start() {
+    let mut vt = VtScreen::new(10, 3);
+    feed(&mut vt, "\x1b]133;A\x07$ one\r\n\x1b]133;C\x07out\r\n\x1b]133;A\x07$ two");
+    let prompts: Vec<usize> = vt.grid().shell_marks(ShellMark::Prompt).collect();
+    let outputs: Vec<usize> = vt.grid().shell_marks(ShellMark::Output).collect();
+    assert_eq!((prompts, outputs), (vec![0, 2], vec![1]));
+}
+
+#[test]
+fn shell_marks_follow_their_row_into_history_and_drop_when_it_leaves() {
+    let mut vt = VtScreen::new(10, 2);
+    vt.grid_mut().set_history_limit(2);
+    let marks = |vt: &VtScreen| vt.grid().shell_marks(ShellMark::Prompt).collect::<Vec<_>>();
+    feed(&mut vt, "\x1b]133;A\x07p1\r\nx\r\n");
+    assert_eq!(marks(&vt), vec![0], "p1 is in history at line 0");
+    feed(&mut vt, "y\r\n");
+    assert_eq!(marks(&vt), vec![0], "still in history after one more line");
+    feed(&mut vt, "z\r\n");
+    assert!(marks(&vt).is_empty(), "p1 left the history");
 }

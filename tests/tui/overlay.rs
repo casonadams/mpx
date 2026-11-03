@@ -199,6 +199,7 @@ fn tree_enter_acts_on_the_row_it_is_on() {
             "claude",
             OverlayAction::Run(vec![Command::Pane(PaneCommand::SelectPane {
                 target: "work:%4".to_string(),
+                keep_zoom: false,
             })]),
         ),
     ];
@@ -654,6 +655,7 @@ fn palette_executes_commands_and_arbitrary_lines() {
             argv: Vec::new(),
             cwd: None,
             detach: false,
+            keep_zoom: false,
         })])
     );
 
@@ -707,7 +709,8 @@ fn palette_sessions_tab_selection() {
     assert_eq!(
         action,
         OverlayAction::Run(vec![Command::Pane(PaneCommand::SelectPane {
-            target: "dev:term".to_string()
+            target: "dev:term".to_string(),
+            keep_zoom: false,
         })])
     );
 }

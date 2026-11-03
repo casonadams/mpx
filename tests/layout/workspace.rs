@@ -311,23 +311,16 @@ fn focused(ws: &Workspace) -> Option<String> {
 }
 
 #[test]
-fn rotate_up_moves_each_pane_to_the_slot_before_and_focus_follows_the_pane() {
-    let mut ws = three_ws();
-    assert_eq!(focused(&ws).as_deref(), Some("c"));
-    assert!(ws.rotate_active(false));
-    assert_eq!(slot_names(&ws), ["b", "c", "a"]);
-    assert_eq!(focused(&ws).as_deref(), Some("c"));
-}
-
-#[test]
-fn rotate_down_moves_each_pane_to_the_slot_after_and_rotating_back_restores_the_order() {
-    let mut ws = three_ws();
-    assert!(ws.rotate_active(true));
-    assert_eq!(slot_names(&ws), ["c", "a", "b"]);
-    assert_eq!(focused(&ws).as_deref(), Some("c"));
-    assert!(ws.rotate_active(false));
-    assert_eq!(slot_names(&ws), ["a", "b", "c"]);
-    assert_eq!(focused(&ws).as_deref(), Some("c"));
+fn rotate_moves_each_pane_one_slot_and_rotating_back_restores_the_order() {
+    for (down, after_one) in [(false, ["b", "c", "a"]), (true, ["c", "a", "b"])] {
+        let mut ws = three_ws();
+        assert!(ws.rotate_active(down, false));
+        assert_eq!(slot_names(&ws), after_one);
+        assert_eq!(focused(&ws).as_deref(), Some("c"), "focus follows the pane");
+        assert!(ws.rotate_active(!down, false));
+        assert_eq!(slot_names(&ws), ["a", "b", "c"]);
+        assert_eq!(focused(&ws).as_deref(), Some("c"));
+    }
 }
 
 #[test]
@@ -338,7 +331,7 @@ fn rotate_keeps_the_geometry_and_only_moves_names() {
         .into_iter()
         .map(|(_, r, _)| r)
         .collect();
-    assert!(ws.rotate_active(false));
+    assert!(ws.rotate_active(false, false));
     let after: Vec<Rect> = ws
         .compute_layout(90, 10)
         .into_iter()
@@ -350,10 +343,48 @@ fn rotate_keeps_the_geometry_and_only_moves_names() {
 #[test]
 fn rotate_with_one_pane_is_a_no_op_and_without_a_window_is_refused() {
     let mut ws = Workspace::new("main".to_string());
-    assert!(!ws.rotate_active(false));
+    assert!(!ws.rotate_active(false, false));
     ws.add_or_split("solo".to_string(), Direction::Horizontal);
-    assert!(ws.rotate_active(true));
+    assert!(ws.rotate_active(true, false));
     assert_eq!(slot_names(&ws), ["solo"]);
+}
+
+#[test]
+fn rotate_keeps_the_zoom_only_when_asked() {
+    let mut ws = three_ws();
+    assert!(ws.set_zoom(Some(true)));
+    assert!(ws.rotate_active(true, true));
+    assert!(ws.window_tabs()[0].zoomed);
+    assert!(ws.rotate_active(true, false));
+    assert!(!ws.window_tabs()[0].zoomed);
+}
+
+/// The focused pane after `b` joins `a`'s window, with or without `-d`.
+fn focus_after_join(detach: bool) -> Option<String> {
+    let mut ws = Workspace::new("main".to_string());
+    ws.new_window("w1".to_string(), "a".to_string());
+    ws.new_window("w2".to_string(), "b".to_string());
+    assert!(ws.select_window(0));
+    ws.join_pane("b", "a", Direction::Horizontal, detach).unwrap();
+    assert_eq!(ws.window_of("b"), Some(0));
+    ws.active_window().unwrap().focused.clone()
+}
+
+#[test]
+fn join_pane_keeps_the_active_pane_with_detach_and_focuses_the_joined_pane_without() {
+    assert_eq!(focus_after_join(true).as_deref(), Some("a"));
+    assert_eq!(focus_after_join(false).as_deref(), Some("b"));
+}
+
+#[test]
+fn zoomed_at_and_zoom_window_of_follow_the_window_holding_the_pane() {
+    let mut ws = Workspace::new("main".to_string());
+    ws.new_window("w1".to_string(), "a".to_string());
+    ws.new_window("w2".to_string(), "b".to_string());
+    ws.zoom_window_of("a");
+    assert!(ws.zoomed_at(Some("a")));
+    assert!(!ws.zoomed_at(Some("b")));
+    assert!(!ws.zoomed_at(None));
 }
 
 #[test]

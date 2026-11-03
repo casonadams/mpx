@@ -319,6 +319,7 @@ impl Conv {
     fn ui_option(&mut self, line: usize, name: &str, value: &str) -> bool {
         match name {
             "mouse" => self.flag(line, name, "mouse", value),
+            "wrap-search" => self.flag(line, name, "wrap_search", value),
             "mode-keys" => match value {
                 "vi" | "emacs" => {
                     self.top.insert("mode_keys", toml_str(value));

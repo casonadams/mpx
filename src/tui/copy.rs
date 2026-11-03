@@ -3,7 +3,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::prompt::PromptState;
 use super::render::SelectionRange;
-use crate::vt::grid::{Cell, Grid};
+use crate::vt::grid::{Cell, Grid, ShellMark};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SelectionKind {
@@ -64,6 +64,10 @@ pub struct CopyState {
     /// Entered by the wheel: scrolling it back down to the live screen leaves copy mode, as
     /// tmux's `copy-mode -e` does. Entered from the keyboard, only `q` or Esc leave.
     pub wheel_exit: bool,
+    /// `set-mark`: the row of the marked line (a `Grid::row_at` number), if one is set.
+    pub mark: Option<usize>,
+    /// Whether searches wrap around the ends of the history (the `wrap-search` option).
+    pub wrap_search: bool,
 }
 
 /// What a copy-mode command asks the app to do next.
@@ -108,6 +112,8 @@ impl CopyState {
             search_prompt: None,
             last_search: None,
             wheel_exit: false,
+            mark: None,
+            wrap_search: true,
         }
     }
 
@@ -124,6 +130,8 @@ impl CopyState {
             search_prompt: None,
             last_search: None,
             wheel_exit: false,
+            mark: None,
+            wrap_search: true,
         }
     }
 
@@ -166,6 +174,8 @@ impl CopyState {
             search_prompt: None,
             last_search: None,
             wheel_exit: true,
+            mark: None,
+            wrap_search: true,
         }
     }
 
@@ -379,14 +389,13 @@ pub fn char_selection_text(
             row_text(cells, from_col, to_col)
         } else if i == 0 {
             row_text(cells, from_col, cells.len().saturating_sub(1))
-                .map(|s| s.trim_end().to_string())
         } else if i + 1 == row_count {
             row_text(cells, 0, to_col)
         } else {
-            row_text(cells, 0, cells.len().saturating_sub(1)).map(|s| s.trim_end().to_string())
+            row_text(cells, 0, cells.len().saturating_sub(1))
         };
         if let Some(t) = text {
-            parts.push(t);
+            parts.push(t.trim_end().to_string());
         }
     }
     parts.join("\n")
@@ -481,7 +490,7 @@ fn execute_search(
         return CopyOutcome::Stay;
     };
     let from = (cs.cursor_x, cs.cursor_abs_y(g));
-    if let Some((col, abs_y)) = find_next_match(g, query, from, dir) {
+    if let Some((col, abs_y)) = find_next_match(g, query, from, dir, cs.wrap_search) {
         cs.scroll_to_match(col, abs_y, g.history_len(), pane.1 as usize);
         CopyOutcome::Stay
     } else {
@@ -522,6 +531,7 @@ pub fn find_next_match(
     query: &str,
     from: (usize, usize),
     direction: SearchDirection,
+    wrap: bool,
 ) -> Option<(usize, usize)> {
     if query.is_empty() {
         return None;
@@ -533,10 +543,13 @@ pub fn find_next_match(
     let query_chars: Vec<char> = query.chars().collect();
     let smart_case = query_chars.iter().all(|c| !c.is_uppercase());
     let from = (from.0, from.1.min(total_lines.saturating_sub(1)));
-    match direction {
-        SearchDirection::Down => find_forward(grid, &query_chars, from, total_lines, smart_case),
-        SearchDirection::Up => find_backward(grid, &query_chars, from, total_lines, smart_case),
-    }
+    let search = Search {
+        query: &query_chars,
+        smart_case,
+        wrap,
+        forward: matches!(direction, SearchDirection::Down),
+    };
+    find_match(grid, search, from, total_lines)
 }
 
 fn trimmed_cell_len(cells: &[Cell]) -> usize {
@@ -603,72 +616,55 @@ fn rfind_cell_match(
     })
 }
 
-fn find_forward(
-    grid: &Grid,
-    query: &[char],
-    (from_x, from_abs_y): (usize, usize),
-    total_lines: usize,
+/// What a search looks for: the query, its case rule, whether it wraps and its direction.
+#[derive(Clone, Copy)]
+struct Search<'a> {
+    query: &'a [char],
     smart_case: bool,
-) -> Option<(usize, usize)> {
-    if let Some(cells) = grid.line_cells(from_abs_y)
-        && let Some(col) = find_cell_match(&cells, query, smart_case, Some(from_x))
-    {
-        return Some((col, from_abs_y));
-    }
-    for abs_y in (from_abs_y + 1)..total_lines {
-        if let Some(cells) = grid.line_cells(abs_y)
-            && let Some(col) = find_cell_match(&cells, query, smart_case, None)
-        {
-            return Some((col, abs_y));
-        }
-    }
-    for abs_y in 0..from_abs_y {
-        if let Some(cells) = grid.line_cells(abs_y)
-            && let Some(col) = find_cell_match(&cells, query, smart_case, None)
-        {
-            return Some((col, abs_y));
-        }
-    }
-    if let Some(cells) = grid.line_cells(from_abs_y)
-        && let Some(col) = find_cell_match(&cells, query, smart_case, None)
-    {
-        return Some((col, from_abs_y));
-    }
-    None
+    wrap: bool,
+    forward: bool,
 }
 
-fn find_backward(
+/// The first match from the cursor in the search direction. The cursor's own line is searched
+/// only past (or before) the cursor first; with `wrap` the search comes round to it again.
+fn find_match(
     grid: &Grid,
-    query: &[char],
+    search: Search,
     (from_x, from_abs_y): (usize, usize),
     total_lines: usize,
-    smart_case: bool,
 ) -> Option<(usize, usize)> {
-    if let Some(cells) = grid.line_cells(from_abs_y)
-        && let Some(col) = rfind_cell_match(&cells, query, smart_case, Some(from_x))
-    {
-        return Some((col, from_abs_y));
-    }
-    for abs_y in (0..from_abs_y).rev() {
-        if let Some(cells) = grid.line_cells(abs_y)
-            && let Some(col) = rfind_cell_match(&cells, query, smart_case, None)
-        {
-            return Some((col, abs_y));
+    let Search {
+        query,
+        smart_case,
+        wrap,
+        forward,
+    } = search;
+    let hit = |abs_y: usize, bound: Option<usize>| {
+        let cells = grid.line_cells(abs_y)?;
+        let col = if forward {
+            find_cell_match(&cells, query, smart_case, bound)
+        } else {
+            rfind_cell_match(&cells, query, smart_case, bound)
+        }?;
+        Some((col, abs_y))
+    };
+    let scan = |lines: std::ops::Range<usize>| {
+        if forward {
+            lines.into_iter().find_map(|y| hit(y, None))
+        } else {
+            lines.rev().find_map(|y| hit(y, None))
         }
+    };
+    let (ahead, behind) = if forward {
+        (from_abs_y + 1..total_lines, 0..from_abs_y)
+    } else {
+        (0..from_abs_y, from_abs_y + 1..total_lines)
+    };
+    let first = hit(from_abs_y, Some(from_x)).or_else(|| scan(ahead));
+    if first.is_some() || !wrap {
+        return first;
     }
-    for abs_y in ((from_abs_y + 1)..total_lines).rev() {
-        if let Some(cells) = grid.line_cells(abs_y)
-            && let Some(col) = rfind_cell_match(&cells, query, smart_case, None)
-        {
-            return Some((col, abs_y));
-        }
-    }
-    if let Some(cells) = grid.line_cells(from_abs_y)
-        && let Some(col) = rfind_cell_match(&cells, query, smart_case, None)
-    {
-        return Some((col, from_abs_y));
-    }
-    None
+    scan(behind).or_else(|| hit(from_abs_y, None))
 }
 
 /// A cursor or scroll move. tmux's `cursor-*`, `*-line`, `*-word`, page and history commands map
@@ -752,6 +748,15 @@ pub enum CopyAction {
     OtherEnd,
     /// `rectangle-toggle` (vi `C-v`): a character selection covers a rectangle instead of a run.
     RectangleToggle,
+    /// `set-mark`: marks the cursor's line.
+    SetMark,
+    /// `jump-to-mark`: the cursor goes to the mark and the mark to the line the cursor left.
+    JumpToMark,
+    /// `rectangle-on` / `rectangle-off`: sets the rectangle selection on or off, without toggling.
+    SetRectangle(bool),
+    /// `next-prompt` / `previous-prompt`: the next or previous shell prompt, or with `output` (`-o`)
+    /// the next or previous start of command output, as marked by OSC 133.
+    JumpToPrompt { forward: bool, output: bool },
     /// `copy-*`: copies `what`; `cancel` leaves copy mode, `clear` drops the selection after
     /// copying, and `pipe` also pipes the text to a shell command.
     Copy {
@@ -808,6 +813,10 @@ pub fn parse_copy_command(name: &str, args: &[String]) -> Result<CopyAction, Str
             direction: SearchDirection::Up,
             query: required_text(name, args)?,
         }),
+        "next-prompt" | "previous-prompt" => Ok(CopyAction::JumpToPrompt {
+            forward: name == "next-prompt",
+            output: prompt_output_flag(name, args)?,
+        }),
         _ => Err(format!("copy-mode command not supported: {name}")),
     }
 }
@@ -817,6 +826,15 @@ fn move_action(motion: Motion) -> CopyAction {
     CopyAction::Move {
         motion,
         cancel_at_bottom: false,
+    }
+}
+
+/// `-o` (the start of command output) or no argument; any other argument is refused.
+fn prompt_output_flag(name: &str, args: &[String]) -> Result<bool, String> {
+    match args {
+        [] => Ok(false),
+        [flag] if flag == "-o" => Ok(true),
+        _ => Err(format!("send-keys -X {name}: takes only -o")),
     }
 }
 
@@ -877,6 +895,10 @@ fn plain_command(name: &str) -> Option<CopyAction> {
         "toggle-line-selection" => CopyAction::ToggleLineSelection,
         "other-end" => CopyAction::OtherEnd,
         "rectangle-toggle" => CopyAction::RectangleToggle,
+        "set-mark" => CopyAction::SetMark,
+        "jump-to-mark" => CopyAction::JumpToMark,
+        "rectangle-on" => CopyAction::SetRectangle(true),
+        "rectangle-off" => CopyAction::SetRectangle(false),
         "copy-selection-if-any" => CopyAction::CopyIfSelected,
         "search-again" => CopyAction::SearchAgain { reverse: false },
         "search-reverse" => CopyAction::SearchAgain { reverse: true },
@@ -989,18 +1011,16 @@ pub fn apply_action(
             select_word(cs, grid);
             CopyOutcome::Stay
         }
-        CopyAction::ToggleSelection => {
-            cs.toggle_char(grid);
-            CopyOutcome::Stay
-        }
         CopyAction::ToggleLineSelection => {
             cs.toggle_line(grid);
             CopyOutcome::Stay
         }
-        CopyAction::RectangleToggle => {
-            cs.toggle_rectangle(grid);
-            CopyOutcome::Stay
-        }
+        CopyAction::ToggleSelection
+        | CopyAction::RectangleToggle
+        | CopyAction::SetMark
+        | CopyAction::JumpToMark
+        | CopyAction::SetRectangle(_)
+        | CopyAction::JumpToPrompt { .. } => apply_marks(cs, action, grid, pane),
         CopyAction::OtherEnd => {
             other_end(cs, grid, pane);
             CopyOutcome::Stay
@@ -1074,6 +1094,73 @@ fn search_again(
 /// The absolute line of the cursor, or its screen row without a grid.
 fn cursor_abs(cs: &CopyState, grid: Option<&Grid>) -> usize {
     grid.map_or(cs.cursor_y, |g| cs.cursor_abs_y(g))
+}
+
+/// The mark, rectangle and shell-prompt commands: they set the mark or the selection's shape, or
+/// move the cursor to a mark or a prompt.
+fn apply_marks(cs: &mut CopyState, action: &CopyAction, grid: Option<&Grid>, pane: PaneSize) -> CopyOutcome {
+    match action {
+        CopyAction::ToggleSelection => cs.toggle_char(grid),
+        CopyAction::RectangleToggle => cs.toggle_rectangle(grid),
+        CopyAction::SetMark => cs.mark = grid.map(|g| g.row_at(cs.cursor_abs_y(g))),
+        CopyAction::JumpToMark => jump_to_mark(cs, grid, pane),
+        CopyAction::SetRectangle(on) => set_rectangle(cs, *on, grid),
+        CopyAction::JumpToPrompt { forward, output } => {
+            jump_to_prompt(cs, grid, *forward, *output, pane);
+        }
+        _ => {}
+    }
+    CopyOutcome::Stay
+}
+
+/// `jump-to-mark`: the cursor moves to the marked line and the mark moves to the line the cursor
+/// left, so a second jump comes back. A mark whose row has left history is dropped.
+fn jump_to_mark(cs: &mut CopyState, grid: Option<&Grid>, pane: PaneSize) {
+    let (Some(g), Some(row)) = (grid, cs.mark) else {
+        return;
+    };
+    let Some(target) = g.abs_at(row) else {
+        cs.mark = None;
+        return;
+    };
+    cs.mark = Some(g.row_at(cs.cursor_abs_y(g)));
+    cs.scroll_to_abs_y(target, g.history_len(), pane.1 as usize);
+}
+
+/// `rectangle-on` and `rectangle-off`: set the selection's shape instead of toggling it.
+fn set_rectangle(cs: &mut CopyState, on: bool, grid: Option<&Grid>) {
+    if on && cs.mode != SelectionKind::Rectangle {
+        cs.toggle_rectangle(grid);
+    } else if !on && cs.mode == SelectionKind::Rectangle {
+        cs.mode = SelectionKind::Character;
+    }
+}
+
+/// `next-prompt` and `previous-prompt`: the cursor moves to the next (or previous) shell mark of
+/// the kind asked for, and nothing happens when there is none.
+fn jump_to_prompt(
+    cs: &mut CopyState,
+    grid: Option<&Grid>,
+    forward: bool,
+    output: bool,
+    pane: PaneSize,
+) {
+    let Some(g) = grid else { return };
+    let kind = if output {
+        ShellMark::Output
+    } else {
+        ShellMark::Prompt
+    };
+    let here = cs.cursor_abs_y(g);
+    let target = if forward {
+        g.shell_marks(kind).find(|&line| line > here)
+    } else {
+        g.shell_marks(kind).filter(|&line| line < here).last()
+    };
+    if let Some(line) = target {
+        cs.scroll_to_abs_y(line, g.history_len(), pane.1 as usize);
+        cs.cursor_x = 0;
+    }
 }
 
 /// What a copy command hands to the app: the text it copies, and whether it leaves copy mode.

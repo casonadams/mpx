@@ -101,17 +101,15 @@ fn run_command<'a>(tx: &'a Tx, ctx: &'a Context, command: Command) -> Run<'a> {
                 argv,
                 cwd,
                 detach,
+                keep_zoom,
             }) => {
                 let opts = SplitOpts {
                     target: Some(pane(ctx)?),
                     spawn: spawn_opts(None, argv, cwd),
-                    direction: if side_by_side {
-                        crate::layout::Direction::Horizontal
-                    } else {
-                        crate::layout::Direction::Vertical
-                    },
+                    direction: split_direction(side_by_side),
                     percent: None,
                     focus: !detach,
+                    keep_zoom,
                 };
                 request(tx, Request::Pane(PaneRequest::Split(opts))).await.map(drop)
             }
@@ -165,11 +163,11 @@ fn run_command<'a>(tx: &'a Tx, ctx: &'a Context, command: Command) -> Run<'a> {
             Command::Window(WindowCommand::LastWindow) => {
                 request(tx, Request::Window(WindowRequest::Last)).await.map(drop)
             }
-            Command::Pane(PaneCommand::SelectPane { target }) => request(
+            Command::Pane(PaneCommand::SelectPane { target, keep_zoom }) => request(
                 tx,
                 Request::Pane(PaneRequest::Focus {
                     name: target,
-                    keep_zoom: false,
+                    keep_zoom,
                 }),
             )
             .await
@@ -177,9 +175,9 @@ fn run_command<'a>(tx: &'a Tx, ctx: &'a Context, command: Command) -> Run<'a> {
             Command::Pane(PaneCommand::NextPane) => {
                 request(tx, Request::Pane(PaneRequest::FocusNext)).await.map(drop)
             }
-            Command::Pane(PaneCommand::LastPane) => request(
+            Command::Pane(PaneCommand::LastPane { keep_zoom }) => request(
                 tx,
-                Request::Pane(PaneRequest::FocusLast { keep_zoom: false }),
+                Request::Pane(PaneRequest::FocusLast { keep_zoom }),
             )
             .await
             .map(drop),
@@ -198,8 +196,10 @@ fn run_command<'a>(tx: &'a Tx, ctx: &'a Context, command: Command) -> Run<'a> {
             Command::Pane(PaneCommand::SpreadLayout) => {
                 request(tx, Request::Pane(PaneRequest::SpreadLayout)).await.map(drop)
             }
-            Command::Window(WindowCommand::RotateWindow { down }) => {
-                request(tx, Request::Window(WindowRequest::Rotate { down })).await.map(drop)
+            Command::Window(WindowCommand::RotateWindow { down, keep_zoom }) => {
+                request(tx, Request::Window(WindowRequest::Rotate { down, keep_zoom }))
+                    .await
+                    .map(drop)
             }
             _ => Err("command not available in hooks".to_string()),
         }
@@ -301,6 +301,15 @@ async fn run_script(tx: &Tx, ctx: &Context, script: ScriptCommand) -> Result<(),
         ScriptCommand::ShowHooks | ScriptCommand::SourceFile { .. } => {
             Err("command not available in hooks".to_string())
         }
+    }
+}
+
+/// The direction `split-window` splits in: side by side with `-h`, else stacked.
+fn split_direction(side_by_side: bool) -> crate::layout::Direction {
+    if side_by_side {
+        crate::layout::Direction::Horizontal
+    } else {
+        crate::layout::Direction::Vertical
     }
 }
 

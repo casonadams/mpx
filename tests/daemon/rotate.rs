@@ -15,12 +15,12 @@ async fn rotate_window_moves_names_through_the_slots_and_focus_stays_on_its_pane
     client.split(split_right("a", "b")).await.unwrap();
     client.split(split_right("b", "c")).await.unwrap();
 
-    client.rotate_window(false).await.unwrap();
+    client.rotate_window(false, false).await.unwrap();
     let (layout, _, _) = client.layout(90, 10).await.unwrap();
     assert_eq!(names(&layout), ["b", "c", "a"]);
     assert!(layout.iter().any(|p| p.0 == "c" && p.2), "focus follows c");
 
-    client.rotate_window(true).await.unwrap();
+    client.rotate_window(true, false).await.unwrap();
     let (layout, _, _) = client.layout(90, 10).await.unwrap();
     assert_eq!(names(&layout), ["a", "b", "c"]);
 
@@ -32,5 +32,5 @@ async fn rotate_window_moves_names_through_the_slots_and_focus_stays_on_its_pane
 #[tokio::test]
 async fn rotate_window_without_a_window_is_an_error() {
     let (_daemon, mut client) = fresh().await;
-    assert!(client.rotate_window(false).await.is_err());
+    assert!(client.rotate_window(false, false).await.is_err());
 }

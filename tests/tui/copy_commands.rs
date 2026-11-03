@@ -293,6 +293,11 @@ fn at_origin(vt: &VtScreen) -> CopyState {
     cs
 }
 
+/// Applies one copy action to `cs` as a 10x3 pane showing `vt`.
+fn press(cs: &mut CopyState, vt: &VtScreen, action: CopyAction) {
+    apply_action(cs, &action, Some(vt.grid()), (10, 3));
+}
+
 #[test]
 fn rectangle_toggle_selects_the_columns_between_the_corners_on_every_row() {
     let vt = screen();
@@ -338,19 +343,22 @@ fn rectangle_toggle_selects_the_columns_between_the_corners_on_every_row() {
 }
 
 #[test]
-fn rectangle_toggle_twice_returns_to_a_character_selection_with_the_same_anchor() {
+fn rectangle_toggle_and_set_change_the_shape_without_moving_the_anchor() {
     let vt = screen();
-    let pane = (10, 3);
     let mut cs = at_origin(&vt);
-    apply_action(&mut cs, &CopyAction::BeginSelection, Some(vt.grid()), pane);
-    apply_action(&mut cs, &CopyAction::RectangleToggle, Some(vt.grid()), pane);
+    press(&mut cs, &vt, CopyAction::BeginSelection);
+    press(&mut cs, &vt, CopyAction::RectangleToggle);
     assert_eq!(cs.mode, SelectionKind::Rectangle);
-    apply_action(&mut cs, &CopyAction::RectangleToggle, Some(vt.grid()), pane);
+    press(&mut cs, &vt, CopyAction::RectangleToggle);
     assert_eq!(cs.mode, SelectionKind::Character);
-    assert_eq!(
-        (cs.anchor_x, cs.anchor_abs_y),
-        (0, vt.grid().abs_line(0, 0))
-    );
+    assert_eq!((cs.anchor_x, cs.anchor_abs_y), (0, vt.grid().abs_line(0, 0)));
+
+    press(&mut cs, &vt, CopyAction::SetRectangle(true));
+    press(&mut cs, &vt, CopyAction::SetRectangle(true));
+    assert_eq!(cs.mode, SelectionKind::Rectangle, "on stays on");
+    press(&mut cs, &vt, CopyAction::SetRectangle(false));
+    press(&mut cs, &vt, CopyAction::SetRectangle(false));
+    assert_eq!(cs.mode, SelectionKind::Character, "off stays off");
 }
 
 #[test]
@@ -358,4 +366,75 @@ fn rectangle_toggle_without_a_grid_still_changes_the_selection_kind() {
     let mut cs = CopyState::enter(None);
     apply_action(&mut cs, &CopyAction::RectangleToggle, None, (10, 3));
     assert_eq!(cs.mode, SelectionKind::Rectangle);
+}
+
+#[test]
+fn set_mark_and_jump_to_mark_swap_the_cursor_with_the_mark() {
+    let vt = screen();
+    let mut cs = at_origin(&vt);
+    press(&mut cs, &vt, CopyAction::SetMark);
+    press(&mut cs, &vt, motion(Motion::Down));
+    assert_eq!(cs.cursor_y, 1);
+    press(&mut cs, &vt, CopyAction::JumpToMark);
+    assert_eq!(cs.cursor_y, 0, "back on the marked line");
+    press(&mut cs, &vt, CopyAction::JumpToMark);
+    assert_eq!(cs.cursor_y, 1, "a second jump returns");
+}
+
+#[test]
+fn jump_to_mark_without_a_mark_leaves_the_cursor_alone() {
+    let vt = screen();
+    let pane = (10, 3);
+    let mut cs = at_origin(&vt);
+    apply_action(&mut cs, &motion(Motion::Down), Some(vt.grid()), pane);
+    apply_action(&mut cs, &CopyAction::JumpToMark, Some(vt.grid()), pane);
+    assert_eq!(cs.cursor_y, 1);
+}
+
+#[test]
+fn next_and_previous_prompt_move_between_osc_133_prompt_marks() {
+    let mut vt = VtScreen::new(10, 3);
+    vt.feed(b"\x1b]133;A\x07$ one\r\nout\r\n\x1b]133;A\x07$ two\r\n");
+    let pane = (10, 3);
+    let mut cs = CopyState::enter(Some(vt.grid()));
+    let line = |cs: &CopyState| {
+        vt.grid()
+            .line_text(cs.cursor_abs_y(vt.grid()))
+            .unwrap_or_default()
+    };
+    let jump = |forward| CopyAction::JumpToPrompt {
+        forward,
+        output: false,
+    };
+    apply_action(&mut cs, &jump(false), Some(vt.grid()), pane);
+    assert_eq!(line(&cs), "$ two");
+    apply_action(&mut cs, &jump(false), Some(vt.grid()), pane);
+    assert_eq!(line(&cs), "$ one");
+    apply_action(&mut cs, &jump(false), Some(vt.grid()), pane);
+    assert_eq!(line(&cs), "$ one", "no earlier prompt: the cursor stays");
+    apply_action(&mut cs, &jump(true), Some(vt.grid()), pane);
+    assert_eq!(line(&cs), "$ two");
+}
+
+#[test]
+fn mark_rectangle_and_prompt_names_parse_to_their_actions() {
+    assert_eq!(parse("set-mark", &[]), Ok(CopyAction::SetMark));
+    assert_eq!(parse("jump-to-mark", &[]), Ok(CopyAction::JumpToMark));
+    assert_eq!(parse("rectangle-on", &[]), Ok(CopyAction::SetRectangle(true)));
+    assert_eq!(parse("rectangle-off", &[]), Ok(CopyAction::SetRectangle(false)));
+    assert_eq!(
+        parse("next-prompt", &[]),
+        Ok(CopyAction::JumpToPrompt {
+            forward: true,
+            output: false
+        })
+    );
+    assert_eq!(
+        parse("previous-prompt", &["-o"]),
+        Ok(CopyAction::JumpToPrompt {
+            forward: false,
+            output: true
+        })
+    );
+    assert!(parse("next-prompt", &["-x"]).is_err());
 }

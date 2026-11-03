@@ -71,6 +71,7 @@ fn split_window_takes_cwd_detach_and_command() {
             argv: vec!["htop".into(), "-d".into()],
             cwd: Some("/tmp/x".into()),
             detach: true,
+            keep_zoom: false,
         })
     );
 }
@@ -153,24 +154,25 @@ fn select_pane_by_target_or_direction() {
     assert_eq!(
         ok("select-pane -t build"),
         Command::Pane(PaneCommand::SelectPane {
-            target: "build".into()
+            target: "build".into(),
+            keep_zoom: false,
         })
     );
     assert_eq!(
         ok("select-pane -L"),
-        Command::Pane(PaneCommand::SelectPaneDir { side: Side::Left })
+        Command::Pane(PaneCommand::SelectPaneDir { side: Side::Left, keep_zoom: false })
     );
     assert_eq!(
         ok("select-pane -R"),
-        Command::Pane(PaneCommand::SelectPaneDir { side: Side::Right })
+        Command::Pane(PaneCommand::SelectPaneDir { side: Side::Right, keep_zoom: false })
     );
     assert_eq!(
         ok("select-pane -U"),
-        Command::Pane(PaneCommand::SelectPaneDir { side: Side::Up })
+        Command::Pane(PaneCommand::SelectPaneDir { side: Side::Up, keep_zoom: false })
     );
     assert_eq!(
         ok("select-pane -D"),
-        Command::Pane(PaneCommand::SelectPaneDir { side: Side::Down })
+        Command::Pane(PaneCommand::SelectPaneDir { side: Side::Down, keep_zoom: false })
     );
     assert_eq!(ok("select-pane -m"), Command::Pane(PaneCommand::MarkPane { target: None }));
     assert_eq!(
@@ -207,13 +209,14 @@ fn resize_pane_defaults_to_five_cells_and_supports_zoom() {
 
 #[test]
 fn swap_pane_directions_and_marked() {
-    assert_eq!(ok("swap-pane -U"), Command::Pane(PaneCommand::SwapPane { next: false }));
-    assert_eq!(ok("swap-pane -D"), Command::Pane(PaneCommand::SwapPane { next: true }));
+    assert_eq!(ok("swap-pane -U"), Command::Pane(PaneCommand::SwapPane { next: false, keep_zoom: false }));
+    assert_eq!(ok("swap-pane -D"), Command::Pane(PaneCommand::SwapPane { next: true, keep_zoom: false }));
     assert_eq!(
         ok("swap-pane"),
         Command::Pane(PaneCommand::SwapPaneMarked {
             source: None,
-            target: None
+            target: None,
+            keep_zoom: false,
         })
     );
     assert_eq!(
@@ -221,6 +224,7 @@ fn swap_pane_directions_and_marked() {
         Command::Pane(PaneCommand::SwapPaneMarked {
             source: Some("a".into()),
             target: Some("b".into()),
+            keep_zoom: false,
         })
     );
 }
@@ -359,13 +363,35 @@ fn confirm_before_asks_then_runs_the_command() {
 }
 
 #[test]
-fn zoom_is_the_only_zoom_form() {
+fn zoom_flags_keep_the_window_zoomed_on_pane_and_window_commands() {
     assert_eq!(ok("resize-pane -Z"), Command::Zoom);
     assert!(err("resize-pane -Z -t work").contains("-Z does not take -t"));
-    assert!(err("select-pane -Z -t x").contains("-Z is not supported"));
-    assert!(err("last-pane -Z").contains("takes no arguments"));
-    assert!(err("swap-pane -Z -s a -t b").contains("-Z is not supported"));
-    assert_eq!(ok("last-pane"), Command::Pane(PaneCommand::LastPane));
+    assert_eq!(
+        ok("select-pane -Z -t x"),
+        Command::Pane(PaneCommand::SelectPane { target: "x".into(), keep_zoom: true })
+    );
+    assert_eq!(
+        ok("select-pane -Z -L"),
+        Command::Pane(PaneCommand::SelectPaneDir { side: Side::Left, keep_zoom: true })
+    );
+    assert_eq!(ok("last-pane -Z"), Command::Pane(PaneCommand::LastPane { keep_zoom: true }));
+    assert_eq!(ok("last-pane"), Command::Pane(PaneCommand::LastPane { keep_zoom: false }));
+    assert_eq!(
+        ok("swap-pane -Z -s a -t b"),
+        Command::Pane(PaneCommand::SwapPaneMarked {
+            source: Some("a".into()),
+            target: Some("b".into()),
+            keep_zoom: true,
+        })
+    );
+    assert_eq!(
+        ok("rotate-window -Z -D"),
+        Command::Window(WindowCommand::RotateWindow { down: true, keep_zoom: true })
+    );
+    assert!(matches!(
+        ok("split-window -Z"),
+        Command::Pane(PaneCommand::SplitWindow { keep_zoom: true, .. })
+    ));
 }
 
 #[test]
@@ -409,6 +435,9 @@ fn unknown_command_and_unknown_option_are_reported() {
     assert!(err("split-window -x").contains("unknown option -x"));
     assert!(err("kill-pane extra").contains("unexpected argument 'extra'"));
     assert!(err("   ").contains("empty command"));
+    assert!(err("link-window -s a -t 2").contains("not supported"));
+    assert!(err("unlink-window").contains("nothing to unlink"));
+    assert!(err("resize-window -x 10").contains("attached terminal"));
 }
 
 #[test]
@@ -668,7 +697,8 @@ fn pane_and_window_moves_parse_their_flags() {
         Command::Pane(PaneCommand::JoinPane {
             src: Some("a".into()),
             dst: Some("b".into()),
-            side_by_side: true
+            side_by_side: true,
+            detach: false,
         })
     );
     assert_eq!(
@@ -676,7 +706,8 @@ fn pane_and_window_moves_parse_their_flags() {
         Command::Pane(PaneCommand::JoinPane {
             src: None,
             dst: None,
-            side_by_side: false
+            side_by_side: false,
+            detach: false,
         })
     );
     assert_eq!(
@@ -841,4 +872,50 @@ fn capture_pane_and_environment_commands_parse() {
         env_of("show-environment FOO"),
         EnvCommand::ShowEnvironment { name: Some(n) } if n == "FOO"
     ));
+}
+
+#[test]
+fn move_pane_is_join_pane_and_join_pane_detaches_with_d() {
+    assert_eq!(
+        ok("move-pane -h -s a -t b"),
+        Command::Pane(PaneCommand::JoinPane {
+            src: Some("a".into()),
+            dst: Some("b".into()),
+            side_by_side: true,
+            detach: false,
+        })
+    );
+    assert_eq!(
+        ok("movep -d"),
+        Command::Pane(PaneCommand::JoinPane {
+            src: None,
+            dst: None,
+            side_by_side: false,
+            detach: true,
+        })
+    );
+    assert!(err("join-pane -b").contains("unknown option -b"));
+}
+
+#[test]
+fn respawn_window_takes_a_window_index_kill_cwd_and_command() {
+    assert_eq!(
+        ok("respawn-window -k -c /tmp -t 2 sh -c 'echo hi'"),
+        Command::Window(WindowCommand::RespawnWindow {
+            target: Some(2),
+            kill: true,
+            cwd: Some("/tmp".into()),
+            command: vec!["sh".into(), "-c".into(), "echo hi".into()],
+        })
+    );
+    assert_eq!(
+        ok("respawnw"),
+        Command::Window(WindowCommand::RespawnWindow {
+            target: None,
+            kill: false,
+            cwd: None,
+            command: vec![],
+        })
+    );
+    assert!(err("respawn-window -t x").contains("invalid window index"));
 }

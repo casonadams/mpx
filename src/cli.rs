@@ -19,6 +19,10 @@ pub use resolve::{
 pub use sessions::{
     RestoreOutcome, apply_key, daemon_args, ensure_session, restore_session, run_cli,
 };
+pub use windows::{
+    PaneCommands, PaneMoveCommands, RespawnCommands, ResizeCommands, UnsupportedWindowCommands,
+    WindowCommands, WindowOrderCommands,
+};
 
 /// Process entry point behind the `mpx` binary: tracing, clap parsing and dispatch.
 /// Returns the process exit code.
@@ -234,6 +238,10 @@ pub enum Commands {
         #[arg(short = 'd', long = "detach", alias = "no-focus")]
         detach: bool,
 
+        /// Keep the window zoomed if it was zoomed (tmux -Z)
+        #[arg(short = 'Z')]
+        keep_zoom: bool,
+
         /// Command to execute, then its arguments; options after the command are its own
         #[arg(
             required = true,
@@ -244,147 +252,38 @@ pub enum Commands {
         argv: Vec<String>,
     },
 
-    /// Create a window with a new pane (tmux new-window)
-    #[command(name = "new-window")]
-    NewWindow {
-        /// Window label
-        #[arg(short, long)]
-        name: Option<String>,
+    /// Window commands (new-window, kill-window, rename-window, select-window, last-window)
+    #[command(flatten)]
+    Window(WindowCommands),
 
-        /// Working directory
-        #[arg(short = 'c', long = "cwd")]
-        cwd: Option<String>,
+    /// Pane focus, marks, breaks and layouts (select-pane, last-pane, break-pane, select-layout)
+    #[command(flatten)]
+    Pane(PaneCommands),
 
-        /// Extra environment variable K=V (repeatable)
-        #[arg(long = "env", value_name = "K=V")]
-        env: Vec<String>,
+    /// Moving panes (swap-pane, join-pane)
+    #[command(flatten)]
+    PaneMove(PaneMoveCommands),
 
-        /// Run inside an interactive PTY
-        #[arg(long)]
-        pty: bool,
+    /// Resizing a pane (resize-pane)
+    #[command(flatten)]
+    Resize(ResizeCommands),
 
-        /// Do not focus the new window (tmux -d)
-        #[arg(short = 'd', long = "detach")]
-        detach: bool,
+    /// Restarting processes (respawn-pane, respawn-window)
+    #[command(flatten)]
+    Respawn(RespawnCommands),
 
-        /// Command to execute (defaults to the shell), then its arguments; options after the command are its own
-        #[arg(
-            trailing_var_arg = true,
-            allow_hyphen_values = true,
-            value_name = "COMMAND"
-        )]
-        argv: Vec<String>,
-    },
+    /// Window order and unsupported window commands (rotate-window, swap-window, move-window, ...)
+    #[command(flatten)]
+    WindowOrder(WindowOrderCommands),
 
-    /// Close a window (defaults to the active window)
-    #[command(name = "kill-window")]
-    KillWindow {
-        #[arg(short = 't', long = "target")]
-        index: Option<usize>,
-    },
-
-    /// Rename a window
-    #[command(name = "rename-window")]
-    RenameWindow {
-        #[arg(short = 't', long = "target")]
-        index: Option<usize>,
-
-        name: String,
-    },
-
-    /// Select a window by index
-    #[command(name = "select-window")]
-    SelectWindow {
-        #[arg(short = 't', long = "target")]
-        index: usize,
-    },
-
-    /// Switch to the previously active window
-    #[command(name = "last-window")]
-    LastWindow,
-
-    /// Switch to the previously focused pane
-    #[command(name = "last-pane")]
-    LastPane,
+    /// Window commands mpx refuses (link-window, unlink-window, resize-window)
+    #[command(flatten)]
+    Unsupported(UnsupportedWindowCommands),
 
     /// Focus a specific pane
     Focus {
         /// Name of the pane to focus
         name: String,
-    },
-
-    /// Select, mark, or unmark a pane
-    #[command(name = "select-pane", alias = "selectp")]
-    SelectPane {
-        /// Target pane (defaults to active pane)
-        #[arg(short = 't', long = "target")]
-        target: Option<String>,
-
-        /// Mark target pane (toggle if already marked)
-        #[arg(short = 'm')]
-        mark: bool,
-
-        /// Clear the marked pane
-        #[arg(short = 'M')]
-        clear_mark: bool,
-    },
-
-    /// Swap the positions of two panes (defaults to swapping active pane with marked pane)
-    #[command(name = "swap-pane")]
-    SwapPane {
-        /// Source pane (tmux -s; defaults to marked pane or active pane)
-        #[arg(long = "source")]
-        source: Option<String>,
-
-        #[arg(short = 't', long = "target")]
-        target: Option<String>,
-    },
-
-    /// Move a pane into its own window
-    #[command(name = "break-pane")]
-    BreakPane {
-        /// Pane to break out
-        name: String,
-    },
-
-    /// Apply a layout preset (even-horizontal, even-vertical, main-vertical, main-vertical-mirrored,
-    /// main-horizontal, main-horizontal-mirrored, tiled); none cycles
-    #[command(name = "select-layout")]
-    SelectLayout {
-        preset: Option<String>,
-        /// Spread the panes evenly, keeping their arrangement (tmux -E)
-        #[arg(short = 'E', conflicts_with = "preset")]
-        spread: bool,
-    },
-
-    /// Resize a pane: -L/-R/-U/-D move its border by AMOUNT cells; -x/-y set the size
-    #[command(name = "resize-pane")]
-    ResizePane {
-        #[arg(short = 't', long = "target")]
-        target: Option<String>,
-
-        #[arg(short = 'L')]
-        left: bool,
-
-        #[arg(short = 'R')]
-        right: bool,
-
-        #[arg(short = 'U')]
-        up: bool,
-
-        #[arg(short = 'D')]
-        down: bool,
-
-        /// Absolute width in columns
-        #[arg(short = 'x')]
-        width: Option<u16>,
-
-        /// Absolute height in rows
-        #[arg(short = 'y')]
-        height: Option<u16>,
-
-        /// Cells to move (default 1)
-        amount: Option<u16>,
     },
 
     /// Get status and metadata for a specific node

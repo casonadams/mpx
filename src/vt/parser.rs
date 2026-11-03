@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use vte::{Params, Perform};
 
-use super::grid::{Cell, CellStyle, Color, Grid};
+use super::grid::{Cell, CellStyle, Color, Grid, ShellMark};
 use crate::keys::TermModes;
 
 pub struct VtHandler {
@@ -546,6 +546,8 @@ impl Perform for VtHandler {
     fn osc_dispatch(&mut self, params: &[&[u8]], bell_terminated: bool) {
         match params {
             [b"0" | b"2", rest @ ..] => self.title = Some(join_osc(rest)),
+            [b"133", b"A", ..] => self.grid.mark_shell(ShellMark::Prompt),
+            [b"133", b"C", ..] => self.grid.mark_shell(ShellMark::Output),
             // OSC 9;4 is ConEmu/Windows Terminal progress reporting, not a notification.
             [b"9", b"4", ..] => {}
             [b"9", rest @ ..] => self.push_notify(join_osc(rest)),

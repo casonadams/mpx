@@ -1,4 +1,4 @@
-use super::fixture::{Fixture, run_command};
+use super::fixture::{Fixture, expect_exits, run_command};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Geometry {
@@ -207,4 +207,102 @@ fn new_window_and_split_pass_dash_c_to_the_command_not_to_mpx() {
     assert_eq!(run_command(&f, &split), 0);
     let wait = ["wait", "sc", "--match", "from-split", "--timeout", "5"];
     assert_eq!(run_command(&f, &wait), 0);
+}
+
+fn layout_tabs(f: &Fixture) -> Vec<mpx::layout::WindowTab> {
+    let (w, h) = crossterm::terminal::size().unwrap_or((80, 24));
+    f.query(|mut c| async move { c.layout(w, h).await.expect("layout").2 })
+}
+
+fn window_names(f: &Fixture) -> Vec<String> {
+    layout_tabs(f).into_iter().map(|t| t.name).collect()
+}
+
+fn zoomed(f: &Fixture) -> bool {
+    layout_tabs(f).iter().any(|t| t.is_active && t.zoomed)
+}
+
+#[test]
+fn join_pane_moves_a_pane_and_move_pane_is_its_alias() {
+    let f = Fixture::start();
+    expect_exits(
+        &f,
+        r#"
+        new-window -n a sleep 30 => 0
+        new-window -n b sleep 30 => 0
+        join-pane --source b -t a -h => 0
+        move-pane --source nowhere -t a => 1
+        "#,
+    );
+    assert_eq!(f.info().windows, 1);
+}
+
+#[test]
+fn join_pane_detach_keeps_the_active_pane_focused() {
+    let f = Fixture::start();
+    expect_exits(
+        &f,
+        r#"
+        new-window -n a sleep 30 => 0
+        new-window -n b sleep 30 => 0
+        select-window -t 0 => 0
+        join-pane -d --source b -t a => 0
+        "#,
+    );
+    assert_eq!(focused(&f), "a");
+}
+
+#[test]
+fn respawn_window_refuses_a_running_window_unless_killed() {
+    let f = Fixture::start();
+    expect_exits(
+        &f,
+        r#"
+        new-window -n w sleep 30 => 0
+        respawn-window => 1
+        respawn-window -k -t 0 sleep 30 => 0
+        respawn-window -k -t 9 => 1
+        "#,
+    );
+}
+
+#[test]
+fn swap_window_and_move_window_reorder_windows_by_index() {
+    let f = Fixture::start();
+    for name in ["first", "second", "third"] {
+        assert_eq!(run_command(&f, &["new-window", "-d", "-n", name, "sleep", "30"]), 0);
+    }
+    assert_eq!(run_command(&f, &["swap-window", "--source", "0", "-t", "2"]), 0);
+    assert_eq!(window_names(&f), ["third", "second", "first"]);
+    assert_eq!(run_command(&f, &["move-window", "--source", "0", "-t", "2"]), 0);
+    assert_eq!(window_names(&f), ["second", "first", "third"]);
+    assert_eq!(run_command(&f, &["swap-window", "-t", "7"]), 1);
+}
+
+#[test]
+fn zoom_flags_keep_the_window_zoomed_where_tmux_keeps_it() {
+    let f = Fixture::start();
+    base_and_side(&f);
+    assert_eq!(run_command(&f, &["resize-pane", "-Z"]), 0);
+    assert!(zoomed(&f));
+    assert_eq!(run_command(&f, &["select-pane", "-Z", "-t", "base"]), 0);
+    assert!(zoomed(&f), "select-pane -Z keeps the zoom");
+    assert_eq!(run_command(&f, &["rotate-window", "-Z"]), 0);
+    assert!(zoomed(&f), "rotate-window -Z keeps the zoom");
+    assert_eq!(run_command(&f, &["split", "-Z", "-t", "base", "-n", "third", "sleep", "30"]), 0);
+    assert!(zoomed(&f), "split-window -Z keeps the zoom");
+    assert_eq!(run_command(&f, &["rotate-window"]), 0);
+    assert!(!zoomed(&f), "rotate-window without -Z unzooms");
+}
+
+#[test]
+fn link_unlink_and_resize_window_fail_with_exit_1() {
+    let f = Fixture::start();
+    for args in [
+        &["link-window", "-s", "a", "-t", "2"][..],
+        &["unlink-window"][..],
+        &["resize-window", "-x", "10"][..],
+    ] {
+        assert_eq!(run_command(&f, args), 1, "{args:?}");
+    }
 }

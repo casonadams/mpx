@@ -165,7 +165,7 @@ async fn mark_pane_and_swap_with_marked_pane() {
     assert_eq!(node_b.marked, Some(false));
 
     // Swapping without source swaps active (mk-b) with marked (mk-a)
-    client.swap_pane_targets(None, None).await.unwrap();
+    client.swap_pane_targets(None, None, false).await.unwrap();
     let (layout, _, _) = client.layout(80, 24).await.unwrap();
     let left = layout.iter().min_by_key(|p| p.1.x).unwrap();
     assert_eq!(left.0, "mk-b");

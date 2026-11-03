@@ -136,6 +136,7 @@ pub fn split_with(target: &str, name: &str, focus: bool, percent: Option<u8>) ->
         direction: Direction::Horizontal,
         percent,
         focus,
+        keep_zoom: false,
     }
 }
 

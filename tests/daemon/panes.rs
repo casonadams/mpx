@@ -14,6 +14,7 @@ async fn pane_ids_count_up_from_zero_and_resolve_as_targets() {
             direction: Direction::Horizontal,
             percent: None,
             focus: true,
+            keep_zoom: false,
         })
         .await
         .unwrap();

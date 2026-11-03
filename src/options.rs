@@ -77,6 +77,18 @@ macro_rules! style_option {
     };
 }
 
+/// A free-text option: shown quoted, set as typed.
+macro_rules! text_option {
+    ($name:literal, $field:ident) => {
+        option!(
+            $name,
+            $field,
+            |v: &String| quoted(v.clone()),
+            |v: &str| Ok::<_, String>(v.to_string())
+        )
+    };
+}
+
 static OPTIONS: &[Opt] = &[
     option!(
         "allow-passthrough",
@@ -169,12 +181,7 @@ static OPTIONS: &[Opt] = &[
         |v: &crate::config::Justify| v.as_str().to_string(),
         |v: &str| v.parse()
     ),
-    option!(
-        "status-left",
-        status_left,
-        |v: &String| quoted(v.clone()),
-        |v: &str| Ok::<_, String>(v.to_string())
-    ),
+    text_option!("status-left", status_left),
     option!(
         "status-left-length",
         status_left_length,
@@ -187,12 +194,7 @@ static OPTIONS: &[Opt] = &[
         |v: &crate::config::StatusPosition| v.as_str().to_string(),
         |v: &str| v.parse()
     ),
-    option!(
-        "status-right",
-        status_right,
-        |v: &String| quoted(v.clone()),
-        |v: &str| Ok::<_, String>(v.to_string())
-    ),
+    text_option!("status-right", status_right),
     option!(
         "status-right-length",
         status_right_length,
@@ -208,27 +210,13 @@ static OPTIONS: &[Opt] = &[
     ),
     style_option!("window-status-activity-style", window_status_activity_style),
     style_option!("window-status-bell-style", window_status_bell_style),
-    option!(
-        "window-status-current-format",
-        window_status_current_format,
-        |v: &String| quoted(v.clone()),
-        |v: &str| Ok::<_, String>(v.to_string())
-    ),
+    text_option!("window-status-current-format", window_status_current_format),
     style_option!("window-status-current-style", window_status_current_style),
-    option!(
-        "window-status-format",
-        window_status_format,
-        |v: &String| quoted(v.clone()),
-        |v: &str| Ok::<_, String>(v.to_string())
-    ),
+    text_option!("window-status-format", window_status_format),
     style_option!("window-status-last-style", window_status_last_style),
-    option!(
-        "window-status-separator",
-        window_status_separator,
-        |v: &String| quoted(v.clone()),
-        |v: &str| Ok::<_, String>(v.to_string())
-    ),
+    text_option!("window-status-separator", window_status_separator),
     style_option!("window-status-style", window_status_style),
+    option!("wrap-search", wrap_search, |v: &bool| on_off(*v), parse_switch),
 ];
 
 fn find(name: &str) -> Result<&'static Opt, String> {

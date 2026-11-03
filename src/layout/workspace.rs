@@ -214,7 +214,6 @@ impl Window {
     /// Moves every pane to the slot before it, or after it when `down`: the pane names turn
     /// through the fixed layout slots, so geometry stays and focus stays on the same pane.
     pub fn rotate(&mut self, down: bool) {
-        self.zoomed = false;
         let Some(root) = self.root.as_mut() else {
             return;
         };
@@ -788,7 +787,13 @@ impl Workspace {
 
     /// Moves pane `src` next to `target`, splitting `target` in direction `dir`, whichever windows
     /// they live in. A window left without panes goes away.
-    pub fn join_pane(&mut self, src: &str, target: &str, dir: Direction) -> Result<(), String> {
+    pub fn join_pane(
+        &mut self,
+        src: &str,
+        target: &str,
+        dir: Direction,
+        detach: bool,
+    ) -> Result<(), String> {
         if src == target {
             return Err("Cannot join a pane to itself".to_string());
         }
@@ -798,14 +803,19 @@ impl Workspace {
         if self.window_of(target).is_none() {
             return Err(format!("Node '{target}' not found"));
         }
+        let previous = self.active_window().and_then(|w| w.focused.clone());
         self.windows[from].remove(src);
         let to = self.window_of(target).unwrap_or(from);
-        if !self.windows[to].split_at(Some(target), src.to_string(), dir, None, true) {
+        if !self.windows[to].split_at(Some(target), src.to_string(), dir, None, !detach) {
             return Err("Split target not found".to_string());
         }
         self.drop_empty_windows();
-        if let Some(idx) = self.window_of(target) {
-            self.set_active(idx);
+        if !detach {
+            if let Some(idx) = self.window_of(target) {
+                self.set_active(idx);
+            }
+        } else if let Some(previous) = previous.filter(|p| self.window_of(p).is_some()) {
+            self.focus_with(&previous, true);
         }
         Ok(())
     }
@@ -917,9 +927,27 @@ impl Workspace {
         self.in_active_window(|win| win.zoomed = false);
     }
 
+    /// Whether the window holding `target` (the active window when `None`) is zoomed.
+    pub fn zoomed_at(&self, target: Option<&str>) -> bool {
+        let idx = target.and_then(|t| self.window_of(t)).unwrap_or(self.active_idx);
+        self.windows.get(idx).is_some_and(|w| w.zoomed)
+    }
+
+    /// Zooms the window holding pane `pane`.
+    pub fn zoom_window_of(&mut self, pane: &str) {
+        if let Some(idx) = self.window_of(pane) {
+            self.windows[idx].zoomed = true;
+        }
+    }
+
     /// Rotates the active window's panes through its layout slots; false when there is no window.
-    pub fn rotate_active(&mut self, down: bool) -> bool {
-        self.in_active_window(|win| win.rotate(down))
+    pub fn rotate_active(&mut self, down: bool, keep_zoom: bool) -> bool {
+        self.in_active_window(|win| {
+            win.rotate(down);
+            if !keep_zoom {
+                win.zoomed = false;
+            }
+        })
     }
 
     /// Runs `change` on the active window; false when there is none.

@@ -139,18 +139,27 @@ Timeout exits with `124`, matching coreutils `timeout`.
 
 | Command | Description |
 | :--- | :--- |
-| `mpx split [-t pane] [-h \| -v] [-l PERCENT] [-d] [--pty] [--env K=V] CMD...` | Split a pane (`-h` side by side, `-v` stacked; `-d` keeps focus). |
+| `mpx split [-t pane] [-h \| -v] [-l PERCENT] [-d] [-Z] [--pty] [--env K=V] CMD...` | Split a pane (`-h` side by side, `-v` stacked; `-d` keeps focus; `-Z` keeps a zoomed window zoomed). |
 | `mpx new-window [-n name] [-c dir] [-d] [--pty] [--env K=V] [CMD...]` | New window (defaults to user's shell). |
 | `mpx kill-window [-t index]` / `mpx rename-window [-t index] <name>` | Close / rename a window. |
-| `mpx select-window -t <index>` / `mpx last-window` / `mpx last-pane` | Navigation. |
+| `mpx select-window -t <index>` / `mpx last-window` / `mpx last-pane [-Z]` | Navigation (`-Z` keeps a zoomed window zoomed). |
 | `mpx focus <pane>` | Focus a pane (switches window if needed). |
-| `mpx select-pane [-t <pane>] [-m] [-M]` | Focus a pane, mark it (`-m`), or clear the mark (`-M`). |
-| `mpx swap-pane [--source <pane>] [-t <pane>]` | Swap two panes. |
+| `mpx select-pane [-t <pane>] [-Z] [-m] [-M]` | Focus a pane (`-Z` keeps a zoomed window zoomed), mark it (`-m`), or clear the mark (`-M`). |
+| `mpx swap-pane [--source <pane>] [-t <pane>] [-Z]` | Swap two panes (`-Z` keeps a zoomed window zoomed). |
 | `mpx break-pane <pane>` | Move a pane into its own window. |
+| `mpx join-pane [-h \| -v] [-d] [--source <pane>] [-t <pane>]` (`move-pane`) | Move a pane next to another, splitting it: `-h` side by side, `-v` stacked (the default). `--source` defaults to the marked pane, `-t` to the active pane; `-d` keeps the active pane focused. A window left empty goes away. |
+| `mpx respawn-pane [-t <pane>] [-k] [-c dir] [CMD...]` | Restart a pane's process in place. `-k` kills a running one first; otherwise only an exited pane restarts. |
+| `mpx respawn-window [-t index] [-k] [-c dir] [CMD...]` | Restart every pane of a window, in place. Refused while a pane still runs unless `-k`. |
+| `mpx rotate-window [-D \| -U] [-Z]` | Rotate the active window's panes through its layout slots: each moves to the slot before its own (`-U`, the default) or after it (`-D`). `-Z` keeps a zoomed window zoomed. |
+| `mpx swap-window [--source <index>] -t <index>` | Exchange two windows by index (`--source` defaults to the active window). |
+| `mpx move-window [--source <index>] -t <index>` | Move a window to another index (`--source` defaults to the active window). |
+| `mpx link-window`, `mpx unlink-window`, `mpx resize-window` | Not supported, and refused with the reason. A pane belongs to one window, so a window cannot be linked elsewhere (`unlink-window` has nothing to undo). A window has no size of its own: the attached terminal sets it. |
 | `mpx select-layout [preset]` | `even-horizontal`, `even-vertical`, `main-vertical`, `main-vertical-mirrored`, `main-horizontal`, `main-horizontal-mirrored`, `tiled`, `-E`. |
 | `mpx resize-pane [-t pane] -L\|-R\|-U\|-D [cells]` | Move split border (or `-x`/`-y` for absolute size). |
 | `mpx resize-pane [-t pane] -Z` | Zoom the pane's window so its focused pane fills it, or unzoom it. Zoom is the daemon's, so every attached terminal shows it. |
 | `mpx layout [--width W --height H]` | Print the computed pane geometry. |
+
+`-s` is the session flag, so the commands that take a source pane or window spell it `--source` (as `swap-pane` always has). Window indices are the daemon's, starting at 0, as `select-window` uses them.
 
 ---
 
@@ -249,14 +258,18 @@ The commands mpx runs:
 | Scrolling | `history-top`, `history-bottom`, `page-up`, `page-down`, `halfpage-up`, `halfpage-down`, `halfpage-down-and-cancel`, `scroll-up`, `scroll-down` |
 | Search | `search-forward text`, `search-backward text`, `search-again`, `search-reverse`, `search-prompt-forward`, `search-prompt-backward` (open the `/` or `?` prompt) |
 | Selection | `begin-selection`, `select-line`, `select-word`, `clear-selection`, `other-end`, `rectangle-toggle` (the selection covers the rectangle between its corners; toggling again returns to a run of text; without a selection it starts one at the cursor) |
+| Rectangles | `rectangle-on`, `rectangle-off` (set the rectangle selection on or off, where `rectangle-toggle` flips it; turning it off returns to a run of text with the same anchor) |
+| Marks and prompts | `set-mark` (marks the cursor's line), `jump-to-mark` (the cursor goes to the mark and the mark to the line the cursor left, so a second jump returns; nothing happens without a mark), `next-prompt [-o]`, `previous-prompt [-o]` (move to the next or previous shell prompt, which the shell marks with OSC 133;A; `-o` moves to the start of command output marked with OSC 133;C; nothing happens when there is none) |
 | Copying | `copy-selection`, `copy-selection-no-clear`, `copy-selection-and-cancel`, `copy-selection-or-line-and-cancel`, `copy-selection-if-any`, `copy-line`, `copy-line-and-cancel`, `copy-end-of-line`, `copy-end-of-line-and-cancel` |
 | Piping | `copy-pipe command`, `copy-pipe-no-clear`, `copy-pipe-and-cancel`, `copy-pipe-line`, `copy-pipe-line-and-cancel`, `copy-pipe-end-of-line`, `copy-pipe-end-of-line-and-cancel`. The text goes to the shell command's standard input and its output is discarded. |
 | Leaving | `cancel` |
 
-Copied text goes to the session's paste buffers (`show-buffer`) and, unless `set-clipboard off`, to the system clipboard. Known difference: a character selection keeps the blank cells at the end of its last row, where tmux trims them.
+Copied text goes to the session's paste buffers (`show-buffer`) and, unless `set-clipboard off`, to the system clipboard. Each copied row loses its trailing blanks, as in tmux.
 
 Key tables: `copy-mode-vi` is the table for `mode-keys vi` and `copy-mode` the table for `mode-keys emacs` (see [KEYBINDINGS.md](KEYBINDINGS.md#vi-copy-mode-prefix-)). `bind-key -T copy-mode-vi KEY send-keys -X command [args]` binds a key in the table and `unbind-key -T copy-mode-vi KEY` removes it. A binding takes effect in every attached terminal at once. Other commands in a copy-mode table are refused with `copy-mode-vi: only send-keys -X commands can be bound`.
 
-Not implemented: commands mpx has no counterpart for, such as the mark commands (`set-mark`, `jump-to-mark`) and `rectangle-on` / `rectangle-off`, fail with `copy-mode command not supported`.
+Names mpx does not implement, such as `stop-selection`, `selection-mode`, and the line-number and bracket-matching commands, fail with `copy-mode command not supported`.
 
-Zoom follows tmux: focusing another pane (`select-pane`, `last-pane`, `next-pane`), swapping panes (`swap-pane`), splitting, and switching windows unzoom the window. The `-Z` forms that keep a window zoomed are not supported.
+Zoom follows tmux: focusing another pane (`select-pane`, `last-pane`, `next-pane`), swapping panes (`swap-pane`), splitting, rotating, and switching windows unzoom the window. The forms that take `-Z` keep a zoomed window zoomed: `select-pane -Z`, `last-pane -Z`, `swap-pane -Z`, `split -Z`, and `rotate-window -Z`.
+
+Searches wrap around the ends of the history by default. `set -g wrap-search off` (config `wrap_search = false`) stops a search at its first or last match instead.

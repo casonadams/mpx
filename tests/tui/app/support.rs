@@ -137,6 +137,7 @@ fn split_opts(target: &str, name: &str, direction: Direction) -> SplitOpts {
         direction,
         percent: None,
         focus: false,
+        keep_zoom: false,
     }
 }
 

@@ -46,11 +46,9 @@ pub struct Config {
     pub which_key_delay_ms: u64,
     /// Milliseconds the display-panes numbers stay up (tmux `display-panes-time`); 0 waits for a key.
     pub display_panes_time_ms: u64,
-    /// Window number of the first window (tmux `base-index`). The daemon numbers windows from 0; the
-    /// TUI translates.
+    /// Window number of the first window (tmux `base-index`); the daemon numbers from 0, the TUI translates.
     pub base_index: usize,
-    /// Whether closing a window renumbers the windows after it (tmux `renumber-windows`). Off keeps
-    /// each window's number, leaving a gap.
+    /// Whether closing a window renumbers the windows after it (tmux `renumber-windows`); off keeps gaps.
     pub renumber_windows: bool,
     /// Whether windows start with their panes synchronized, so typed input reaches every pane of the window (tmux `synchronize-panes`); `set-option -w` changes a window afterwards.
     pub synchronize_panes: bool,
@@ -94,6 +92,8 @@ pub struct Config {
     pub mode_keys: ModeKeys,
     /// Whether copy-mode yanks reach the system clipboard (tmux `set-clipboard`; `off` disables it).
     pub set_clipboard: bool,
+    /// Whether copy-mode searches wrap around the ends of the history (tmux `wrap-search`).
+    pub wrap_search: bool,
     /// Extra or overriding key bindings: key (tmux notation) -> command line.
     pub bind: BTreeMap<String, String>,
     /// Extra or overriding bindings for keys pressed without the prefix (tmux `bind -n`).
@@ -457,6 +457,7 @@ impl Default for Config {
             display_time_ms: 3000,
             mode_keys: ModeKeys::Vi,
             set_clipboard: true,
+            wrap_search: true,
             bind: BTreeMap::new(),
             bind_root: BTreeMap::new(),
             alias: BTreeMap::new(),

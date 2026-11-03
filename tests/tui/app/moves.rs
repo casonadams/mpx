@@ -43,16 +43,21 @@ async fn swap_window_exchanges_the_active_window_with_the_target() {
 }
 
 #[tokio::test]
-async fn respawn_pane_with_kill_shows_the_new_process_on_the_same_pane() {
-    let mut h = Harness::idle().await;
-    h.command("respawn-pane -k sh -c 'printf AGAIN; exec cat'").await;
-    h.until("the old screen dropped", |app| !app.expected.contains_key(MAIN)).await;
-    h.frame().await;
-    h.until("the respawned output", |app| {
-        app.vt.get(MAIN).is_some_and(|vt| vt.snapshot().contains("AGAIN"))
-    })
-    .await;
-    assert_eq!(h.layout_panes().await, [MAIN]);
+async fn respawn_with_kill_shows_the_new_process_in_the_pane_or_the_window() {
+    for command in [
+        "respawn-pane -k sh -c 'printf AGAIN; exec cat'",
+        "respawn-window -k sh -c 'printf AGAIN; exec cat'",
+    ] {
+        let mut h = Harness::idle().await;
+        h.command(command).await;
+        h.until("the old screen dropped", |app| !app.expected.contains_key(MAIN)).await;
+        h.frame().await;
+        h.until("the respawned output", |app| {
+            app.vt.get(MAIN).is_some_and(|vt| vt.snapshot().contains("AGAIN"))
+        })
+        .await;
+        assert_eq!(h.layout_panes().await, [MAIN]);
+    }
 }
 
 #[tokio::test]

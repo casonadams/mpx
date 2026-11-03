@@ -102,11 +102,15 @@ fn default_bindings_resolve_to_commands() {
             argv: vec![],
             cwd: None,
             detach: false,
+            keep_zoom: false,
         }))
     );
     assert_eq!(
         command_of(&keymap, &key('h')),
-        Some(Command::Pane(PaneCommand::SelectPaneDir { side: Side::Left }))
+        Some(Command::Pane(PaneCommand::SelectPaneDir {
+            side: Side::Left,
+            keep_zoom: false,
+        }))
     );
     assert_eq!(
         command_of(&keymap, &key('x')),
@@ -285,11 +289,11 @@ fn tmux_default_prefix_keys_are_bound_to_their_tmux_commands() {
 
     assert!(matches!(
         bound(ctrl('o')),
-        Some(Command::Window(WindowCommand::RotateWindow { down: false }))
+        Some(Command::Window(WindowCommand::RotateWindow { down: false, .. }))
     ));
     assert!(matches!(
         bound(alt('o')),
-        Some(Command::Window(WindowCommand::RotateWindow { down: true }))
+        Some(Command::Window(WindowCommand::RotateWindow { down: true, .. }))
     ));
     assert!(matches!(bound(ctrl('z')), Some(Command::SuspendClient)));
     assert!(
