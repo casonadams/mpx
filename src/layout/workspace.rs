@@ -274,6 +274,9 @@ pub struct Workspace {
     pub last_window: Option<usize>,
     #[serde(default)]
     pub marked_pane: Option<String>,
+    /// Whether windows created from now on start with `synchronize-panes` on (config `synchronize_panes`).
+    #[serde(skip)]
+    synchronize_new: bool,
     /// Whether closing a window renumbers the windows after it (tmux `renumber-windows`).
     #[serde(skip)]
     renumber_windows: bool,
@@ -289,7 +292,13 @@ impl Workspace {
             last_window: None,
             marked_pane: None,
             renumber_windows: true,
+            synchronize_new: false,
         }
+    }
+
+    /// Whether windows created from now on start with `synchronize-panes` on.
+    pub fn set_synchronize_new(&mut self, on: bool) {
+        self.synchronize_new = on;
     }
 
     /// Whether closing a window renumbers the windows after it (tmux `renumber-windows`).
@@ -858,7 +867,8 @@ impl Workspace {
 
     /// Inserts a window in number order and returns its position. The active and last windows stay
     /// the same windows.
-    fn insert_window(&mut self, window: Window) -> usize {
+    fn insert_window(&mut self, mut window: Window) -> usize {
+        window.synchronized = self.synchronize_new;
         let pos = self.windows.partition_point(|w| w.number < window.number);
         self.reorder(|windows| windows.insert(pos, window));
         pos

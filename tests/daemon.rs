@@ -1,6 +1,7 @@
 mod daemon {
     mod basics;
     mod config_policy;
+    mod cursor;
     mod env;
     mod exit_drain;
     mod idempotency;

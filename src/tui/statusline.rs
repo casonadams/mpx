@@ -1,7 +1,7 @@
 //! Status line composition: tmux formats and `#[style]` directives become styled segments laid out
 //! across one row. Pure: callers supply the variables, the time and the width.
 use crate::config::Justify;
-use crate::format::{PaneView, Vars, WindowFlags, pane_vars};
+use crate::format::{Lists, PaneView, Vars, WindowFlags, pane_vars};
 use crate::layout::WindowTab;
 use std::time::{Duration, Instant};
 
@@ -171,6 +171,39 @@ pub fn status_vars(
         }
     }
     vars
+}
+
+/// The lists the loop formats `#{W:}`, `#{P:}` and `#{S:}` iterate over: one entry per window (its
+/// first pane's variables with the window's own), the panes of the current window, and the session.
+pub fn status_lists(
+    session: &str,
+    tabs: &[WindowTab],
+    panes: &[PaneView],
+    zoomed: bool,
+    window_base: usize,
+) -> Lists {
+    let windows = tabs
+        .iter()
+        .map(|tab| {
+            let pane = panes.iter().find(|p| p.window == tab.index);
+            status_vars(session, pane, Some(tab), zoomed, window_base)
+        })
+        .collect();
+    let current = tabs.iter().find(|t| t.is_active).map(|t| t.index);
+    let current_panes = panes
+        .iter()
+        .filter(|p| Some(p.window) == current)
+        .map(pane_vars)
+        .collect();
+    let sessions = vec![Vars::from([
+        ("session_name", session.to_string()),
+        ("session_windows", tabs.len().to_string()),
+    ])];
+    Lists {
+        windows,
+        panes: current_panes,
+        sessions,
+    }
 }
 
 /// Where a clickable region of the status row leads.

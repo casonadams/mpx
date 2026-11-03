@@ -104,7 +104,7 @@ fallback = ["nvim", "-c", "silent! source Session.vim"]
 | `mouse` | bool | `true` | TUI | `false` turns the terminal's mouse reporting off and ignores mouse events. |
 | `status` | bool | `true` | TUI | Show the status line. `false` gives its row to the panes; messages and prompts then use the bottom row. |
 | `status_lines` | integer `1`..`5` | `1` | TUI | Rows the status line takes (tmux `status 2`..`5`). Rows after the first show `status_format`. |
-| `status_format` | list of strings (tmux format) | empty | TUI | `status_format[N]` is drawn on status row N (index 0 is not drawn); empty rows stay blank. |
+| `status_format` | list of strings (tmux format) | empty | TUI | `status_format[N]` is drawn on status row N. A non-empty entry 0 replaces the main status line (window list and `status_left`/`status_right` included). |
 | `status_position` | `"top"` or `"bottom"` | `"bottom"` | TUI | Row the status line occupies. |
 | `status_interval` | integer (seconds) | `1` | TUI | Seconds between timed status redraws, which keep the clock current. `0` redraws only on events. |
 | `status_left`, `status_right` | string (tmux format) | `"[#{session_name}] "`, `"#{?pane_in_mode,[copy] ,}\"#{=21:pane_title}\" %H:%M %d-%b-%y"` | TUI | The left and right sides of the status line. Formats expand as in tmux; `#[fg=red,bold]`-style directives and strftime apply. The defaults are tmux's, plus a `[copy]` badge while the pane is in copy mode. |
@@ -114,6 +114,7 @@ fallback = ["nvim", "-c", "silent! source Session.vim"]
 | `display_time_ms` | integer | `3000` | TUI | Milliseconds a message stays on the status row (tmux `display-time`). |
 | `mode_keys` | `"vi"` or `"emacs"` | `"vi"` | TUI | Copy-mode key table (tmux `mode-keys`); see [KEYBINDINGS.md](KEYBINDINGS.md#emacs-copy-mode-mode-keys-emacs). |
 | `set_clipboard` | bool | `true` | TUI | `false` keeps copy-mode yanks off the system clipboard. They still go to the paste buffers. |
+| `synchronize_panes` | bool | `false` | TUI | Windows created afterwards start with `synchronize-panes` on: typed input reaches every running pane of the window. `set-option -w synchronize-panes` changes a window. |
 | `[style]` `status_style`, `message_style`, `message_command_style`, `pane_border_style`, `pane_active_border_style`, `window_status_style`, `window_status_current_style`, `window_status_activity_style`, `window_status_bell_style`, `window_status_last_style` | tmux style strings (see [tmux option names](#terminal-option-names)). | empty (no change) | TUI | A value that is not a valid style fails the file to load. |
 
 ### tmux option names
@@ -146,7 +147,7 @@ These tmux options are applied by the terminal UI.
 | `pane-base-index N` | `pane_base_index` for `#{pane_index}`. The display-panes numbers are not offset. | `0` |
 | `renumber-windows on\|off` | `renumber_windows`. `on` (default): closing a window renumbers the windows after it. `off`: windows keep their numbers and a new window takes the lowest free number; `move-window -r` renumbers them. | `on` (tmux: `off`) |
 | `mouse on\|off` | `mouse`. | `on` |
-| `status on\|off\|2`..`5` | `status`; a count shows that many status rows. Rows after the first draw `status-format[N]`, expanded with the focused pane's variables; `status_format[N]` in the file is row N and is empty when unset. | `on` (one row) |
+| `status on\|off\|2`..`5` | `status`; a count shows that many status rows. `status-format[0]` replaces the main line; rows 1 and up draw `status-format[N]`, expanded with the focused pane's variables. | `on` (one row) |
 | `status-position top\|bottom` | `status_position`. | `bottom` |
 | `status-interval N` | `status_interval`. | `1` |
 | `status-left`, `status-right` | `status_left`, `status_right`. | `[#{session_name}] `, and `"#{=21:pane_title}" %H:%M %d-%b-%y` (mpx adds `#{?pane_in_mode,[copy] ,}` in front) |

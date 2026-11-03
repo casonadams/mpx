@@ -270,8 +270,20 @@ impl App {
 
     /// `show-options`: every option in an overlay, or one on the status row.
     async fn show_options(&mut self, name: Option<&str>, value_only: bool, quiet: bool) -> Flow {
+        let synchronize = self.layout.tabs.iter().any(|t| t.is_active && t.synchronized);
+        let synchronize = if synchronize { "on" } else { "off" };
+        if name == Some("synchronize-panes") {
+            return if value_only {
+                self.say(synchronize)
+            } else {
+                self.say(format!("synchronize-panes {synchronize}"))
+            };
+        }
         let Some(name) = name else {
-            let lines = crate::options::list(&self.config)
+            let mut options = crate::options::list(&self.config);
+            options.push(("synchronize-panes", synchronize.to_string()));
+            options.sort_by_key(|(name, _)| *name);
+            let lines = options
                 .into_iter()
                 .map(|(name, value)| format!("{name} {value}"))
                 .collect();

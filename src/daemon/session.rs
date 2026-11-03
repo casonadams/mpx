@@ -205,6 +205,7 @@ pub(super) async fn run(boot: Boot, mut rx: mpsc::UnboundedReceiver<SessionMsg>)
     });
     let mut workspace = Workspace::new(session.clone());
     workspace.set_renumber_windows(config.renumber_windows);
+    workspace.set_synchronize_new(config.synchronize_panes);
     let mut session = Session {
         session: session.clone(),
         endpoint,
@@ -395,6 +396,7 @@ impl Session {
                 match Config::load_at(path.as_deref().map(std::path::Path::new)) {
                     Ok(config) => {
                         self.workspace.set_renumber_windows(config.renumber_windows);
+                        self.workspace.set_synchronize_new(config.synchronize_panes);
                         self.config = config;
                         self.sync_relay();
                         Response::Ok

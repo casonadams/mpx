@@ -13,11 +13,13 @@ use super::render::{
 use super::render::draw_status_segments;
 use super::status::{exit_badge, node_named};
 use super::status::{local_utc_offset, pane_items};
-use super::statusline::{Item, Line, Seg, Target, compose, parse_styled, status_vars, strftime, truncate};
+use super::statusline::{
+    Item, Line, Seg, Target, compose, parse_styled, status_lists, status_vars, strftime, truncate,
+};
 use crate::layout::geometry::Rect;
 use crate::protocol::NodeInfo;
 use crate::config::Justify;
-use crate::format::expand;
+use crate::format::{Lists, expand_with};
 use crate::vt::Color as VtColor;
 use crate::vt::VtScreen;
 use crate::vt::grid::Grid;
@@ -228,6 +230,7 @@ fn draw_status_extra<W: Write>(app: &App, out: &mut W) -> io::Result<()> {
     let bg = parse_color(&app.config.style.status_bg);
     let fg = parse_color(&app.config.style.status_fg);
     let vars = active_vars(app);
+    let lists = loop_lists(app);
     let now = crate::node::now_ms();
     for y in app.rows.extra_status_rows() {
         let fmt = app
@@ -235,7 +238,7 @@ fn draw_status_extra<W: Write>(app: &App, out: &mut W) -> io::Result<()> {
             .status_format
             .get(usize::from(y - first))
             .map_or("", String::as_str);
-        let cells = truncate(format_status(fmt, &vars, now), width);
+        let cells = truncate(format_status(fmt, &vars, &lists, now), width);
         let line = compose(width, cells, Vec::new(), "", Vec::new(), Justify::Left);
         draw_status_segments(out, &line.segs, y, bg, fg)?;
     }
@@ -281,13 +284,24 @@ fn status_row(app: &mut App, out: &mut Vec<u8>) -> io::Result<()> {
         .unwrap_or_default();
     let bg = parse_color(&config.status_bg);
     let fg = parse_color(&config.status_fg);
-    let mut line = status_line(app, width as usize);
+    let mut line = match app.config.status_format.first().filter(|fmt| !fmt.is_empty()) {
+        Some(fmt) => override_line(app, fmt, width as usize),
+        None => status_line(app, width as usize),
+    };
     for seg in &mut line.segs {
         seg.style = row.over(&seg.style);
     }
     draw_status_segments(out, &line.segs, y, bg, fg)?;
     app.status_targets = line.targets;
     Ok(())
+}
+
+/// The main status line when `status-format[0]` is set: that format alone, with no window list.
+fn override_line(app: &App, fmt: &str, width: usize) -> Line {
+    let vars = active_vars(app);
+    let lists = loop_lists(app);
+    let cells = truncate(format_status(fmt, &vars, &lists, crate::node::now_ms()), width);
+    compose(width, cells, Vec::new(), "", Vec::new(), Justify::Left)
 }
 
 /// The style of the message row: the command style while a prompt, a confirmation or a search
@@ -322,10 +336,17 @@ fn status_line(app: &App, width: usize) -> Line {
     let config = &app.config;
     let zoomed = app.zoomed();
     let vars = active_vars(app);
+    let lists = loop_lists(app);
     let now = crate::node::now_ms();
-    let left = truncate(format_status(&config.status_left, &vars, now), config.status_left_length);
-    let right = truncate(format_status(&config.status_right, &vars, now), config.status_right_length);
-    let (items, separator) = window_items(app, zoomed);
+    let left = truncate(
+        format_status(&config.status_left, &vars, &lists, now),
+        config.status_left_length,
+    );
+    let right = truncate(
+        format_status(&config.status_right, &vars, &lists, now),
+        config.status_right_length,
+    );
+    let (items, separator) = window_items(app, zoomed, &lists);
     compose(width, left, items, &separator, right, config.status_justify)
 }
 
@@ -346,10 +367,17 @@ fn active_vars(app: &App) -> crate::format::Vars {
     )
 }
 
+/// The lists the loop formats iterate over: every window and the panes of the current window.
+fn loop_lists(app: &App) -> Lists {
+    let panes: Vec<crate::format::PaneView> =
+        app.nodes.iter().map(|n| format_view(app, n)).collect();
+    status_lists(&app.session, &app.layout.tabs, &panes, app.zoomed(), app.config.base_index)
+}
+
 /// A status format expanded, styled by its `#[...]` directives, with strftime applied to its text.
-fn format_status(fmt: &str, vars: &crate::format::Vars, now: u64) -> Vec<Seg> {
+fn format_status(fmt: &str, vars: &crate::format::Vars, lists: &Lists, now: u64) -> Vec<Seg> {
     let offset = local_utc_offset(now);
-    parse_styled(&expand(fmt, vars))
+    parse_styled(&expand_with(fmt, vars, lists))
         .into_iter()
         .map(|seg| Seg {
             text: strftime(&seg.text, now, offset),
@@ -360,9 +388,8 @@ fn format_status(fmt: &str, vars: &crate::format::Vars, now: u64) -> Vec<Seg> {
 
 /// The window list: clickable tabs (mpx's own, or built from `window-status-format`), or pane names
 /// when the session has no windows. Returns the items and the separator between them.
-fn window_items(app: &App, zoomed: bool) -> (Vec<Item>, String) {
+fn window_items(app: &App, zoomed: bool, lists: &Lists) -> (Vec<Item>, String) {
     let config = &app.config;
-    let base = config.base_index;
     if app.layout.tabs.is_empty() {
         let marked = app.layout.marked_pane_global();
         return (pane_items(&app.panes, zoomed, marked), String::new());
@@ -371,21 +398,16 @@ fn window_items(app: &App, zoomed: bool) -> (Vec<Item>, String) {
         .layout
         .tabs
         .iter()
-        .map(|tab| {
+        .zip(&lists.windows)
+        .map(|(tab, vars)| {
             let fmt = if tab.is_active {
                 &config.window_status_current_format
             } else {
                 &config.window_status_format
             };
-            let focused = app
-                .nodes
-                .iter()
-                .find(|n| n.window == Some(tab.index))
-                .map(|n| format_view(app, n));
-            let vars = status_vars(&app.session, focused.as_ref(), Some(tab), zoomed, base);
                 let tab_look = tab_style(&config.style, tab);
             Item {
-                segs: parse_styled(&expand(fmt, &vars))
+                segs: parse_styled(&expand_with(fmt, vars, lists))
                     .into_iter()
                     .map(|seg| Seg {
                         style: tab_look.over(&seg.style),
@@ -436,7 +458,7 @@ fn format_view(app: &App, node: &crate::protocol::NodeInfo) -> crate::format::Pa
 
 /// `fmt` expanded the way the status line expands its formats: the active pane's variables.
 pub fn expand_active(app: &App, fmt: &str) -> String {
-    expand(fmt, &active_vars(app))
+    expand_with(fmt, &active_vars(app), &loop_lists(app))
 }
 
 /// Places and shows (or hides) the terminal cursor where the frame wants it.

@@ -49,6 +49,12 @@ pub struct NodeInfo {
     /// Size (cols, rows) of a terminal pane's PTY (absent from daemons that predate it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size: Option<(u16, u16)>,
+    /// Column and row, zero-based, of a terminal pane's screen cursor (absent from daemons that predate it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<(u16, u16)>,
+    /// Scrollback lines a terminal pane's captures can reach (tmux `history_size`; absent from daemons that predate it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_size: Option<usize>,
     /// Whether this pane is the marked pane in the session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub marked: Option<bool>,
@@ -74,6 +80,8 @@ impl NodeInfo {
             last_output_ms: 0,
             window: None,
             modes: None,
+            cursor: None,
+            history_size: None,
             size: None,
             marked: None,
         }

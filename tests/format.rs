@@ -1,7 +1,7 @@
 //! Format expansion (`#{...}`) and the variables panes and sessions provide.
 use mpx::layout::{Rect, WindowTab};
 use mpx::protocol::NodeInfo;
-use mpx::format::{PaneView, Vars, expand, pane_vars, pane_view};
+use mpx::format::{Lists, PaneView, Vars, expand, expand_with, pane_vars, pane_view};
 
 fn vars(pairs: &[(&'static str, &str)]) -> Vars {
     pairs.iter().map(|(k, v)| (*k, v.to_string())).collect()
@@ -402,4 +402,108 @@ fn window_flags_and_pane_edges_are_exposed_as_variables() {
     );
     let b = pane_vars(&pane_view("dev", 0, &node("b", 0), &rects, &tabs));
     assert_expands(&b, &[("#{pane_at_left}#{pane_at_right}", "01")]);
+}
+
+#[test]
+fn window_loop_expands_body_once_per_window() {
+    let lists = Lists {
+        windows: vec![
+            vars(&[("window_index", "1"), ("window_name", "shell")]),
+            vars(&[("window_index", "2"), ("window_name", "logs")]),
+        ],
+        ..Lists::default()
+    };
+    assert_eq!(
+        expand_with("#{W:#{window_index}=#{window_name} }", &Vars::new(), &lists),
+        "1=shell 2=logs "
+    );
+}
+
+#[test]
+fn pane_loop_expands_body_once_per_pane() {
+    let lists = Lists {
+        panes: vec![
+            vars(&[("pane_index", "0"), ("pane_active", "1")]),
+            vars(&[("pane_index", "1"), ("pane_active", "0")]),
+        ],
+        ..Lists::default()
+    };
+    assert_eq!(
+        expand_with(
+            "#{P:#{pane_index}#{?pane_active,*,}}",
+            &Vars::new(),
+            &lists
+        ),
+        "0*1"
+    );
+}
+
+#[test]
+fn session_loop_expands_once_for_the_session() {
+    let lists = Lists {
+        sessions: vec![vars(&[("session_name", "work")])],
+        ..Lists::default()
+    };
+    assert_eq!(
+        expand_with("#{S:#{session_name}}", &Vars::new(), &lists),
+        "work"
+    );
+}
+
+#[test]
+fn loops_over_empty_lists_expand_to_nothing() {
+    assert_eq!(
+        expand("x#{W:#{window_index}}y#{P:#{pane_index}}z#{S:#{session_name}}", &Vars::new()),
+        "xyz"
+    );
+}
+
+#[test]
+fn loop_body_may_nest_conditionals_and_escapes() {
+    let lists = Lists {
+        windows: vec![
+            vars(&[("window_active", "1"), ("window_name", "shell")]),
+            vars(&[("window_active", "0"), ("window_name", "logs")]),
+        ],
+        ..Lists::default()
+    };
+    assert_eq!(
+        expand_with(
+            "#{W:#{?window_active,[#{window_name}],#{window_name}}}",
+            &Vars::new(),
+            &lists
+        ),
+        "[shell]logs"
+    );
+    assert_eq!(
+        expand_with("#{W:a#,b#}c}", &Vars::new(), &lists),
+        "a,b}ca,b}c"
+    );
+}
+
+#[test]
+fn cursor_and_history_come_from_the_node_when_it_is_a_terminal() {
+    let mut terminal = node("p", 0);
+    terminal.cursor = Some((3, 1));
+    terminal.history_size = Some(40);
+    let v = pane_vars(&pane_view("dev", 0, &terminal, &[], &[]));
+    assert_expands(&v, &[("#{cursor_x},#{cursor_y},#{history_size}", "3,1,40")]);
+    let task = pane_vars(&pane_view("dev", 0, &node("t", 0), &[], &[]));
+    assert_expands(&task, &[("#{cursor_x}|#{history_size}|", "||")]);
+}
+
+#[test]
+fn pretty_time_shows_the_clock_for_recent_times_and_the_day_for_older_ones() {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let stamp = now.to_string();
+    let v = vars(&[("now", stamp.as_str()), ("old", "1000000000"), ("bad", "x")]);
+    let recent = expand("#{t/p:now}", &v);
+    assert_eq!(recent.len(), 5, "{recent:?}");
+    assert_eq!(recent.as_bytes()[2], b':', "{recent:?}");
+    let older = expand("#{t/p:old}", &v);
+    assert!(older.len() > 5 && older.chars().next().is_some_and(char::is_alphabetic), "{older:?}");
+    assert_eq!(expand("#{t/p:bad}", &v), "");
 }

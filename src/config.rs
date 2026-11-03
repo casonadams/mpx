@@ -52,6 +52,8 @@ pub struct Config {
     /// Whether closing a window renumbers the windows after it (tmux `renumber-windows`). Off keeps
     /// each window's number, leaving a gap.
     pub renumber_windows: bool,
+    /// Whether windows start with their panes synchronized, so typed input reaches every pane of the window (tmux `synchronize-panes`); `set-option -w` changes a window afterwards.
+    pub synchronize_panes: bool,
     /// Pane number of the first pane of a window (tmux `pane-base-index`), as `#{pane_index}` shows it.
     pub pane_base_index: usize,
     /// Mouse input (tmux `mouse`). Off: the terminal's mouse reporting is turned off and mpx ignores mouse events.
@@ -62,8 +64,9 @@ pub struct Config {
     /// draw `status_format`.
     #[serde(deserialize_with = "status_lines_in_range")]
     pub status_lines: usize,
-    /// Formats of the status rows below the first, by tmux index: `status-format[i]` draws row `i`.
-    /// Entry 0 is unused; entries past the row count are ignored.
+    /// Formats of the status rows by tmux index: `status-format[i]` draws row `i`. A non-empty
+    /// entry 0 replaces the main status line (window list and `status_left`/`status_right` included).
+    /// Entries past the row count are ignored.
     pub status_format: Vec<String>,
     /// Row the status line occupies (tmux `status-position`).
     pub status_position: StatusPosition,
@@ -417,6 +420,7 @@ impl Default for Config {
             display_panes_time_ms: 1000,
             base_index: 0,
             renumber_windows: true,
+            synchronize_panes: false,
             pane_base_index: 0,
             mouse: true,
             status: true,
