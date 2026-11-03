@@ -83,15 +83,44 @@ fn lerp_rgb(from: (u8, u8, u8), to: (f32, f32, f32), factor: f32) -> VtColor {
     VtColor::Rgb(nr, ng, nb)
 }
 
-/// An ANSI color (named, or indexed below 16) as the terminal reported it at attach, so dimming
-/// starts from what it really shows; every other color, and one the terminal did not report, is
-/// returned as it is.
-pub fn from_terminal_palette(color: VtColor, palette: &[Option<(u8, u8, u8)>; 16]) -> VtColor {
+/// The terminal's 256-color palette as it reported or set it. `None` is an entry nobody told mpx
+/// about, which dimming takes from the built-in palette.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Palette([Option<(u8, u8, u8)>; 256]);
+
+impl Default for Palette {
+    fn default() -> Self {
+        Self([None; 256])
+    }
+}
+
+impl Palette {
+    pub fn get(&self, index: usize) -> Option<(u8, u8, u8)> {
+        self.0.get(index).copied().flatten()
+    }
+
+    pub fn set(&mut self, index: usize, rgb: (u8, u8, u8)) {
+        if let Some(slot) = self.0.get_mut(index) {
+            *slot = Some(rgb);
+        }
+    }
+
+    /// Puts entry `index` back to what `original` has for it.
+    pub fn restore(&mut self, index: usize, original: &Palette) {
+        if let Some(slot) = self.0.get_mut(index) {
+            *slot = original.get(index);
+        }
+    }
+}
+
+/// A palette color (named, or indexed) as the terminal shows it, so dimming starts from what it
+/// really displays; an RGB color, and an entry the terminal did not report, is returned as it is.
+pub fn from_terminal_palette(color: VtColor, palette: &Palette) -> VtColor {
     let index = match color {
-        VtColor::Indexed(i) if i < 16 => Some(usize::from(i)),
+        VtColor::Indexed(i) => Some(usize::from(i)),
         other => named_index(other),
     };
-    match index.and_then(|i| palette[i]) {
+    match index.and_then(|i| palette.get(i)) {
         Some((r, g, b)) => VtColor::Rgb(r, g, b),
         None => color,
     }

@@ -3,7 +3,7 @@ use mpx::tui::canvas::Canvas;
 use mpx::config::BorderStyle;
 use mpx::tui::render::{
     Compositor, DividerStyle, HostColors, PaneColors, RenderPaneContext, SelectionRange,
-    StatusBar, color_to_rgb, dim_color, format_tab, from_terminal_palette, hud_rect, inactive_color, parse_color,
+    StatusBar, color_to_rgb, dim_color, format_tab, from_terminal_palette, hud_rect, Palette, inactive_color, parse_color,
     status_left, status_right, vt_to_crossterm,
 };
 use mpx::vt::{CellStyle, Color as VtColor};
@@ -597,7 +597,7 @@ fn dimmed_ansi_colors_start_from_the_terminals_own_palette_when_it_reported_one(
     let builtin = draw_dimmed_with(&grid, |_| {});
     assert!(builtin.contains(";38;2;103;25;25"), "{builtin:?}");
 
-    let themed = draw_dimmed_with(&grid, |ctx| ctx.palette[1] = Some((220, 50, 47)));
+    let themed = draw_dimmed_with(&grid, |ctx| ctx.palette.set(1, (220, 50, 47)));
     assert!(themed.contains(";38;2;110;25;24"), "{themed:?}");
     // Indexed colors below 16 are the same colors; RGB colors are never remapped.
     assert_eq!(
@@ -609,10 +609,63 @@ fn dimmed_ansi_colors_start_from_the_terminals_own_palette_when_it_reported_one(
         VtColor::Rgb(1, 2, 3)
     );
     assert_eq!(from_terminal_palette(VtColor::Indexed(200), &themed_palette()), VtColor::Indexed(200));
+    let mut cube = themed_palette();
+    cube.set(200, (1, 2, 3));
+    assert_eq!(from_terminal_palette(VtColor::Indexed(200), &cube), VtColor::Rgb(1, 2, 3));
 }
 
-fn themed_palette() -> [Option<(u8, u8, u8)>; 16] {
-    let mut palette = [None; 16];
-    palette[1] = Some((220, 50, 47));
+fn themed_palette() -> Palette {
+    let mut palette = Palette::default();
+    palette.set(1, (220, 50, 47));
     palette
+}
+
+fn theme_sequence(parts: &str) -> Vec<u8> {
+    format!("\x1b]{parts}\x1b\\").into_bytes()
+}
+
+#[test]
+fn a_theme_switcher_changing_colors_changes_what_dimming_starts_from() {
+    let original = HostColors {
+        fg: Some(VtColor::Rgb(200, 200, 200)),
+        bg: Some(VtColor::Rgb(10, 10, 10)),
+        ..HostColors::default()
+    };
+    let mut host = original;
+    assert!(host.follow(&original, &theme_sequence("4;1;rgb:ff/00/00;2;rgb:00/ff/00")));
+    assert_eq!(host.palette.get(1), Some((255, 0, 0)));
+    assert_eq!(host.palette.get(2), Some((0, 255, 0)));
+    assert!(host.follow(&original, &theme_sequence("4;200;rgb:01/02/03")));
+    assert_eq!(host.palette.get(200), Some((1, 2, 3)), "the 256-color cube follows too");
+
+    assert!(host.follow(&original, &theme_sequence("10;rgb:11/22/33")));
+    assert!(host.follow(&original, b"\x1b]11;rgb:44/55/66\x07"));
+    assert_eq!((host.fg, host.bg), (Some(VtColor::Rgb(17, 34, 51)), Some(VtColor::Rgb(68, 85, 102))));
+
+    assert!(!host.follow(&original, &theme_sequence("4;3;?")), "a query changes nothing");
+    assert!(!host.follow(&original, &theme_sequence("4;3;rgb:zz")), "neither does a bad color");
+    assert!(!host.follow(&original, b"\x1b]0;a title\x07"));
+}
+
+#[test]
+fn resets_return_to_what_the_terminal_reported_at_attach() {
+    let mut original = HostColors {
+        fg: Some(VtColor::Rgb(200, 200, 200)),
+        bg: Some(VtColor::Rgb(10, 10, 10)),
+        ..HostColors::default()
+    };
+    original.palette.set(1, (205, 49, 49));
+    let mut host = original;
+    host.follow(&original, &theme_sequence("4;1;rgb:ff/00/00;2;rgb:00/ff/00"));
+    host.follow(&original, &theme_sequence("10;rgb:11/22/33"));
+    host.follow(&original, &theme_sequence("11;rgb:44/55/66"));
+
+    assert!(host.follow(&original, &theme_sequence("104;1")));
+    assert_eq!(host.palette.get(1), Some((205, 49, 49)));
+    assert_eq!(host.palette.get(2), Some((0, 255, 0)), "only the named entry resets");
+    assert!(host.follow(&original, &theme_sequence("104")));
+    assert_eq!(host.palette.get(2), None);
+    assert!(host.follow(&original, &theme_sequence("110")));
+    assert!(host.follow(&original, &theme_sequence("111")));
+    assert_eq!(host, original);
 }

@@ -12,6 +12,8 @@ use crossterm::{
 };
 use std::io::{self, Write, stdout};
 
+use super::color::Palette;
+
 /// What the terminal is sent to show the TUI: the alternate screen, cleared, cursor hidden, mouse,
 /// paste and focus reporting on, autowrap off so the status bar never scrolls the screen.
 pub fn enter_sequence() -> Vec<u8> {
@@ -145,15 +147,15 @@ pub fn palette_reply(reply: &[u8], index: usize) -> Option<(u8, u8, u8)> {
 }
 
 fn color_after(reply: &[u8], head: &str) -> Option<(u8, u8, u8)> {
-    let text = String::from_utf8_lossy(reply);
+    color_in(&String::from_utf8_lossy(reply), head)
+}
+
+fn color_in(text: &str, head: &str) -> Option<(u8, u8, u8)> {
     let start = text.find(head)? + head.len();
     let rest = &text[start..];
     let end = rest.find(['\x1b', '\x07'])?;
     parse_color_spec(&rest[..end])
 }
-
-/// The terminal's 16 ANSI colors, in order, each when it reported it.
-pub type AnsiPalette = [Option<(u8, u8, u8)>; 16];
 
 /// What the terminal told us at attach.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -163,25 +165,32 @@ pub struct TerminalReport {
     /// Default foreground and background colors, when it reported them.
     pub fg: Option<(u8, u8, u8)>,
     pub bg: Option<(u8, u8, u8)>,
-    /// The ANSI colors it reported, so dimming starts from what the terminal really shows.
-    pub palette: AnsiPalette,
+    /// The palette colors it reported, so dimming starts from what the terminal really shows.
+    pub palette: Palette,
 }
 
 /// Interprets a complete reply to the attach query.
 pub fn report_from(reply: &[u8]) -> TerminalReport {
+    let text = String::from_utf8_lossy(reply);
+    let mut palette = Palette::default();
+    for index in 0..256 {
+        if let Some(rgb) = color_in(&text, &format!("\x1b]4;{index};")) {
+            palette.set(index, rgb);
+        }
+    }
     TerminalReport {
         margins: margins_reply(reply).unwrap_or(false),
         fg: osc_color_reply(reply, 10),
         bg: osc_color_reply(reply, 11),
-        palette: std::array::from_fn(|i| palette_reply(reply, i)),
+        palette,
     }
 }
 
-/// What attach sends: the default colors, the 16 ANSI colors and the margins mode, then the DA1
+/// What attach sends: the default colors, the 256 palette colors and the margins mode, then the DA1
 /// that every terminal answers last.
 pub fn attach_query() -> Vec<u8> {
     let mut query = b"\x1b]10;?\x1b\\\x1b]11;?\x1b\\".to_vec();
-    for index in 0..16 {
+    for index in 0..256 {
         query.extend_from_slice(format!("\x1b]4;{index};?\x1b\\").as_bytes());
     }
     query.extend_from_slice(b"\x1b[?69$p\x1b[c");

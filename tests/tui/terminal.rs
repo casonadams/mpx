@@ -65,9 +65,9 @@ fn entering_the_tui_switches_screens_and_leaving_hands_the_shell_its_own_back() 
 }
 
 #[test]
-fn the_attach_query_asks_for_all_sixteen_ansi_colors_before_the_da1_that_ends_it() {
+fn the_attach_query_asks_for_every_palette_color_before_the_da1_that_ends_it() {
     let query = String::from_utf8(attach_query()).unwrap();
-    for index in 0..16 {
+    for index in 0..256 {
         assert!(query.contains(&format!("\x1b]4;{index};?\x1b\\")), "color {index}");
     }
     assert!(query.ends_with("\x1b[c"), "DA1 last");
@@ -77,9 +77,9 @@ fn the_attach_query_asks_for_all_sixteen_ansi_colors_before_the_da1_that_ends_it
 fn palette_answers_are_matched_by_index_not_by_prefix() {
     let reply = b"\x1b]4;1;rgb:dc/32/2f\x1b\\\x1b]4;10;rgb:00/ff/00\x07\x1b[?62c";
     let report = report_from(reply);
-    assert_eq!(report.palette[1], Some((220, 50, 47)));
-    assert_eq!(report.palette[10], Some((0, 255, 0)));
-    assert_eq!(report.palette[0], None);
+    assert_eq!(report.palette.get(1), Some((220, 50, 47)));
+    assert_eq!(report.palette.get(10), Some((0, 255, 0)));
+    assert_eq!(report.palette.get(0), None);
     assert_eq!(palette_reply(reply, 11), None);
     assert_eq!(report.fg, None, "an OSC 4 answer for color 10 is not the default foreground");
 }

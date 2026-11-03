@@ -6,7 +6,9 @@ use crossterm::{
 use std::io::{self, Write};
 
 use super::canvas::Canvas;
-pub use super::color::{color_to_rgb, dim_color, from_terminal_palette, inactive_color, parse_color};
+pub use super::color::{
+    Palette, color_to_rgb, dim_color, from_terminal_palette, inactive_color, parse_color,
+};
 use crate::config::BorderStyle;
 use crate::format::WindowFlags;
 use crate::layout::{Divider, WindowTab, geometry::Rect};
@@ -88,7 +90,7 @@ pub struct PaneColors {
     pub host_fg: Option<VtColor>,
     pub host_bg: Option<VtColor>,
     /// The ANSI colors the terminal reported, which dimming starts from.
-    pub host_palette: [Option<(u8, u8, u8)>; 16],
+    pub host_palette: Palette,
 }
 
 impl PaneColors {
@@ -111,7 +113,7 @@ impl PaneColors {
 pub struct HostColors {
     pub fg: Option<VtColor>,
     pub bg: Option<VtColor>,
-    pub palette: [Option<(u8, u8, u8)>; 16],
+    pub palette: Palette,
 }
 
 impl PaneColors {
@@ -128,6 +130,56 @@ impl PaneColors {
 }
 
 impl HostColors {
+    /// Follows a color sequence a pane sent to the terminal (`OSC 4`, `10`, `11`, `104`, `110`,
+    /// `111`), such as a theme switcher emits, so dimming starts from the colors the terminal now
+    /// shows. A reset goes back to `original`, what the terminal reported at attach. Returns
+    /// whether anything changed.
+    pub fn follow(&mut self, original: &HostColors, sequence: &[u8]) -> bool {
+        let text = String::from_utf8_lossy(sequence);
+        let Some(body) = text.strip_prefix("\x1b]") else {
+            return false;
+        };
+        let body = body
+            .strip_suffix("\x1b\\")
+            .or_else(|| body.strip_suffix('\x07'))
+            .unwrap_or(body);
+        let before = *self;
+        let mut parts = body.split(';');
+        let rgb = |spec: Option<&str>| {
+            spec.and_then(super::terminal::parse_color_spec)
+                .map(|(r, g, b)| VtColor::Rgb(r, g, b))
+        };
+        match parts.next() {
+            Some("4") => {
+                while let (Some(index), Some(spec)) = (parts.next(), parts.next()) {
+                    if let (Ok(index), Some((r, g, b))) =
+                        (index.parse::<usize>(), super::terminal::parse_color_spec(spec))
+                    {
+                        self.palette.set(index, (r, g, b));
+                    }
+                }
+            }
+            Some("104") => {
+                let indexes: Vec<usize> = parts.filter_map(|i| i.parse().ok()).collect();
+                if indexes.is_empty() {
+                    self.palette = original.palette;
+                }
+                for index in indexes {
+                    self.palette.restore(index, &original.palette);
+                }
+            }
+            Some("10") => {
+                self.fg = rgb(parts.next()).or(self.fg);
+                self.bg = rgb(parts.next()).or(self.bg);
+            }
+            Some("11") => self.bg = rgb(parts.next()).or(self.bg),
+            Some("110") => self.fg = original.fg,
+            Some("111") => self.bg = original.bg,
+            _ => {}
+        }
+        *self != before
+    }
+
     pub fn from_report(report: &super::terminal::TerminalReport) -> Self {
         let color = |rgb: Option<(u8, u8, u8)>| rgb.map(|(r, g, b)| VtColor::Rgb(r, g, b));
         Self {
@@ -154,7 +206,7 @@ pub struct RenderPaneContext<'a> {
     pub default_fg: Option<VtColor>,
     pub default_bg: Option<VtColor>,
     /// The terminal's own ANSI colors, when it reported them; dimming starts from these.
-    pub palette: [Option<(u8, u8, u8)>; 16],
+    pub palette: Palette,
 }
 
 impl<'a> RenderPaneContext<'a> {

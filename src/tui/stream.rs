@@ -176,6 +176,9 @@ impl App {
         vt.feed(data.as_bytes());
         let pass = vt.take_passthroughs();
         if self.config.allow_passthrough.allows(name == self.active_pane) {
+            for sequence in &pass {
+                self.host_colors.follow(&self.host_original, sequence);
+            }
             self.passthroughs.extend(pass);
         }
         self.expected.insert(name.to_string(), next);

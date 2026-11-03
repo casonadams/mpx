@@ -159,6 +159,8 @@ pub struct App {
     pub yanks: Vec<String>,
     /// Default foreground and background of the host terminal, read at attach.
     pub host_colors: super::render::HostColors,
+    /// What the terminal reported at attach, which a color reset goes back to.
+    pub host_original: super::render::HostColors,
     /// The last `MESSAGE_LOG_CAP` status-row messages, oldest first (`show-messages`).
     pub message_log: Vec<String>,
     /// Set by `suspend-client`; the event loop stops the process once the command has run.
@@ -306,6 +308,7 @@ impl App {
             last_copy: None,
             yanks: Vec::new(),
             host_colors: super::render::HostColors::default(),
+            host_original: super::render::HostColors::default(),
             message_log: Vec::new(),
             suspend_requested: false,
             clock: ClockSource::default(),
@@ -876,6 +879,7 @@ impl Tui {
         let (mut app, stream) = App::open(endpoint, session, start, opts).await?;
         app.canvas.set_lr_margins(report.margins);
         app.host_colors = super::render::HostColors::from_report(&report);
+        app.host_original = app.host_colors;
         Ok(Self {
             out: BufWriter::with_capacity(64 * 1024, stdout()),
             body: Vec::with_capacity(64 * 1024),
