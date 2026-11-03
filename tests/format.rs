@@ -154,6 +154,17 @@ fn basename_and_dirname_follow_posix_rules() {
 }
 
 #[test]
+fn basename_splits_on_backslashes_only_where_they_separate_paths() {
+    let v = vars(&[("win", r"C:\work\app\")]);
+    let expected = if cfg!(windows) {
+        "app"
+    } else {
+        r"C:\work\app\"
+    };
+    assert_eq!(expand("#{b:win}", &v), expected);
+}
+
+#[test]
 fn literal_modifier_outputs_its_text_unexpanded_except_escapes() {
     let v = base_vars();
     assert_eq!(expand("#{l:#{pane_id}}", &v), "#{pane_id}");

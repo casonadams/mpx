@@ -23,21 +23,8 @@ pub fn exit_badge(node: &NodeInfo) -> Option<String> {
 
 /// Seconds east of UTC of the local time zone at `unix_ms` (0 when it cannot be determined).
 pub fn local_utc_offset(unix_ms: u64) -> i64 {
-    #[cfg(unix)]
-    {
-        let t = (unix_ms / 1000) as libc::time_t;
-        // SAFETY: localtime_r only writes into the zeroed `tm` we own.
-        let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-        if unsafe { libc::localtime_r(&t, &mut tm) }.is_null() {
-            return 0;
-        }
-        tm.tm_gmtoff as i64
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = unix_ms;
-        0
-    }
+    let secs = i64::try_from(unix_ms / 1000).unwrap_or(i64::MAX);
+    crate::format::utc_offset_secs(secs).unwrap_or(0)
 }
 
 /// `(hours, minutes, seconds)` of the day for `unix_ms` shifted by `utc_offset_secs`.
