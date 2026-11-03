@@ -147,6 +147,9 @@ pub(super) enum HookMsg {
         line: String,
         reply: Reply<Result<(Command, hooks::Context), String>>,
     },
+    /// The session's windows, its marked pane and the panes of its active window, which the
+    /// commands a hook runs take their defaults from.
+    State { reply: Reply<hooks::State> },
 }
 
 /// Which session-wide events a subscriber receives.
@@ -312,7 +315,7 @@ pub(super) async fn run(boot: Boot, mut rx: mpsc::UnboundedReceiver<SessionMsg>)
         save_due: None,
         shutting_down: false,
     };
-    session.startup_restore();
+    session.start();
     let _ = ready.send(());
 
     let mut client_check = tokio::time::interval(CLIENT_CHECK);
@@ -346,7 +349,38 @@ async fn next_event(
 }
 
 impl Session {
+    /// Restores the last snapshot, then fires `after-new-session` when the session is fresh.
+    fn start(&mut self) {
+        self.startup_restore();
+        if self.restored_ms.is_none() {
+            self.fire("after-new-session", None);
+        }
+    }
+
     async fn handle(&mut self, msg: SessionMsg) {
+        // Window events follow from what the message can change. A hook's own requests fire none.
+        let tracked = matches!(
+            msg,
+            SessionMsg::Req { .. }
+                | SessionMsg::Kill { .. }
+                | SessionMsg::KillWindow { .. }
+                | SessionMsg::Notice(PaneNotice::Exited { .. })
+        );
+        let from_hook = matches!(
+            msg,
+            SessionMsg::Req {
+                origin: Origin::Hook,
+                ..
+            }
+        );
+        let before = tracked.then(|| self.window_ids());
+        self.dispatch(msg).await;
+        if let Some(before) = before {
+            self.window_events(&before, !from_hook);
+        }
+    }
+
+    async fn dispatch(&mut self, msg: SessionMsg) {
         match msg {
             SessionMsg::Req { req, origin, reply } => self.serve(*req, origin, reply).await,
             SessionMsg::Lookup { target, reply } => {
@@ -363,6 +397,7 @@ impl Session {
                 let _ = reply.send(result);
             }
             SessionMsg::Shutdown { reply } => {
+                self.fire("session-closed", None);
                 let stops = self.shutdown().await;
                 let _ = reply.send(stops);
             }
@@ -406,12 +441,48 @@ impl Session {
             .map(tokio::time::Instant::from_std)
     }
 
+    /// Flags background windows that have been quiet for `monitor-silence`, and fires
+    /// `alert-silence` for each window flagged now.
     fn expire_silence(&mut self) {
-        if self
-            .workspace
-            .expire_silence(self.config.window.monitor_silence, std::time::Instant::now())
-        {
-            self.fanout(&StreamEvent::Layout);
+        let flagged = self.workspace.expire_silence(
+            self.config.window.monitor_silence,
+            std::time::Instant::now(),
+        );
+        if flagged.is_empty() {
+            return;
+        }
+        for number in flagged {
+            let pane = self
+                .workspace
+                .windows
+                .iter()
+                .find(|w| w.number == number)
+                .and_then(|w| w.focused.clone());
+            self.fire("alert-silence", pane);
+        }
+        self.fanout(&StreamEvent::Layout);
+    }
+
+    /// The ids of the session's windows, to tell which windows a message added or removed.
+    fn window_ids(&self) -> Vec<usize> {
+        self.workspace.windows.iter().map(|w| w.id).collect()
+    }
+
+    /// Fires `window-linked` for each window added since `before` and `window-unlinked` for each
+    /// one removed, unless `fire` is off.
+    fn window_events(&self, before: &[usize], fire: bool) {
+        if !fire {
+            return;
+        }
+        for window in &self.workspace.windows {
+            if !before.contains(&window.id) {
+                self.fire("window-linked", window.focused.clone());
+            }
+        }
+        for id in before {
+            if !self.workspace.windows.iter().any(|w| w.id == *id) {
+                self.fire("window-unlinked", None);
+            }
         }
     }
 
@@ -482,6 +553,17 @@ impl Session {
             HookMsg::Event { event, pane } => self.fire(event, pane),
             HookMsg::Parse { line, reply } => {
                 let _ = reply.send(self.parse_script(&line));
+            }
+            HookMsg::State { reply } => {
+                let _ = reply.send(hooks::State {
+                    windows: self.workspace.window_tabs(),
+                    marked: self.workspace.marked_pane().map(str::to_string),
+                    panes: self
+                        .workspace
+                        .active_window()
+                        .map(|w| w.leaves())
+                        .unwrap_or_default(),
+                });
             }
         }
     }

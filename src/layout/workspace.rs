@@ -492,11 +492,11 @@ impl Workspace {
     }
 
     /// Flags background windows that have been quiet for `secs` seconds (`monitor-silence`).
-    /// Returns whether any flag changed.
-    pub fn expire_silence(&mut self, secs: u64, now: Instant) -> bool {
+    /// Returns the numbers of the windows flagged now.
+    pub fn expire_silence(&mut self, secs: u64, now: Instant) -> Vec<usize> {
         let active = self.active_idx;
         let quiet = Duration::from_secs(secs);
-        let mut changed = false;
+        let mut flagged = Vec::new();
         for (i, w) in self.windows.iter_mut().enumerate() {
             if i != active
                 && !w.has_silence
@@ -504,10 +504,10 @@ impl Workspace {
                     .is_some_and(|t| now.duration_since(t) >= quiet)
             {
                 w.has_silence = true;
-                changed = true;
+                flagged.push(w.number);
             }
         }
-        changed
+        flagged
     }
 
     /// When the next background window goes quiet for `secs` seconds, if any is still counting.

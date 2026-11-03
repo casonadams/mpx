@@ -8,8 +8,8 @@ fn a_background_window_goes_silent_after_its_quiet_period() {
     let t0 = Instant::now();
     ws.note_output("pane2", t0);
     assert_eq!(ws.next_silence(10), Some(t0 + Duration::from_secs(10)));
-    assert!(!ws.expire_silence(10, t0 + Duration::from_secs(9)));
-    assert!(ws.expire_silence(10, t0 + Duration::from_secs(11)));
+    assert!(ws.expire_silence(10, t0 + Duration::from_secs(9)).is_empty());
+    assert_eq!(ws.expire_silence(10, t0 + Duration::from_secs(11)), vec![1]);
     let tabs = ws.window_tabs();
     assert!(tabs[1].has_silence);
     assert!(!tabs[0].has_silence, "the active window never goes silent");

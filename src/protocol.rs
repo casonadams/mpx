@@ -274,6 +274,11 @@ pub const HOOK_EVENTS: &[&str] = &[
     "client-detached",
     "alert-bell",
     "alert-activity",
+    "alert-silence",
+    "after-new-session",
+    "window-linked",
+    "window-unlinked",
+    "session-closed",
 ];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
