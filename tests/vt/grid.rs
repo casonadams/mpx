@@ -1,3 +1,4 @@
+use mpx::vt::grid::ShellMark;
 use mpx::vt::{Cell, CellStyle, Color, Grid, HistoryRow, ScrollHint};
 
 fn write_str(grid: &mut Grid, text: &str) {
@@ -75,14 +76,205 @@ fn insert_and_delete_lines_shift_from_the_cursor_to_the_region_bottom() {
     assert!(grid.history.is_empty());
 }
 
+/// Writes `text` on the cursor's row and moves the cursor to the start of the next one.
+fn line(grid: &mut Grid, text: &str) {
+    write_str(grid, text);
+    grid.carriage_return();
+    grid.newline();
+}
+
+/// Five lines `r0`..`r4` written to a 3-row grid: `r0` and `r1` in history, the cursor on the
+/// bottom row after `r4`.
+fn with_two_in_history() -> Grid {
+    let mut grid = Grid::new(4, 3);
+    for i in 0..4 {
+        line(&mut grid, &format!("r{i}"));
+    }
+    write_str(&mut grid, "r4");
+    grid
+}
+
 #[test]
-fn resize_keeps_the_top_left_and_blanks_new_space() {
+fn growing_pulls_history_back_and_keeps_the_cursor_on_the_bottom_row() {
+    let mut grid = with_two_in_history();
+    assert_eq!(grid.history_len(), 2);
+    grid.resize(4, 5);
+    assert_eq!(screen(&grid), ["r0", "r1", "r2", "r3", "r4"]);
+    assert_eq!(grid.cursor.y, 4, "the prompt row stays the bottom row");
+    assert_eq!(grid.history_len(), 0);
+}
+
+#[test]
+fn growing_with_partial_history_puts_the_unfilled_rows_on_top() {
+    let mut grid = Grid::new(4, 2);
+    line(&mut grid, "r0");
+    line(&mut grid, "r1");
+    write_str(&mut grid, "r2");
+    assert_eq!(screen(&grid), ["r1", "r2"]);
+    assert_eq!(grid.history_len(), 1);
+
+    grid.resize(4, 5);
+    assert_eq!(screen(&grid), ["", "", "r0", "r1", "r2"]);
+    assert_eq!(grid.cursor.y, 4);
+    assert_eq!(grid.history_len(), 0);
+}
+
+#[test]
+fn growing_with_no_history_keeps_the_content_bottom_anchored() {
+    let mut grid = Grid::new(4, 3);
+    write_str(&mut grid, "r0");
+    grid.move_cursor(0, 2);
+    write_str(&mut grid, "r2");
+    grid.resize(4, 6);
+    assert_eq!(screen(&grid), ["", "", "", "r0", "", "r2"]);
+    assert_eq!(grid.cursor.y, 5);
+}
+
+#[test]
+fn growing_with_the_cursor_above_the_bottom_leaves_blank_rows_below() {
+    let mut grid = Grid::new(4, 3);
+    write_str(&mut grid, "r0");
+    grid.resize(4, 5);
+    assert_eq!(screen(&grid), ["r0", "", "", "", ""]);
+    assert_eq!(grid.cursor.y, 0, "the cursor keeps its row");
+}
+
+#[test]
+fn growing_pulls_history_even_when_the_cursor_is_not_on_the_bottom() {
+    let mut grid = with_two_in_history();
+    grid.move_cursor(0, 0);
+    grid.resize(4, 4);
+    assert_eq!(screen(&grid), ["r1", "r2", "r3", "r4"]);
+    assert_eq!(
+        grid.cursor.y, 1,
+        "the cursor moves down with the pulled row"
+    );
+    assert_eq!(grid.history_len(), 1);
+}
+
+#[test]
+fn growing_without_scrollback_only_pads() {
+    let mut grid = with_two_in_history();
+    grid.set_history_limit(0);
+    grid.resize(4, 6);
+    assert_eq!(screen(&grid), ["", "", "", "r2", "r3", "r4"]);
+    assert_eq!(grid.cursor.y, 5);
+}
+
+#[test]
+fn growing_the_alternate_screen_never_pulls_history() {
+    let mut grid = with_two_in_history();
+    grid.set_alternate_screen(true);
+    grid.resize(4, 5);
+    assert_eq!(screen(&grid), ["r2", "r3", "r4", "", ""]);
+    assert_eq!(grid.cursor.y, 2);
+    assert_eq!(grid.history_len(), 2);
+}
+
+#[test]
+fn shrinking_with_the_cursor_on_the_bottom_pushes_the_top_rows_into_history() {
     let mut grid = numbered(4, 3);
-    grid.resize(2, 2);
+    grid.resize(4, 2);
+    assert_eq!(screen(&grid), ["r1", "r2"]);
+    assert_eq!(grid.cursor.y, 1, "the cursor keeps its row at the bottom");
+    let kept: Vec<String> = grid
+        .history
+        .iter()
+        .map(|row| text(&row.to_cells(0)))
+        .collect();
+    assert_eq!(kept, ["r0"]);
+}
+
+#[test]
+fn shrinking_with_the_cursor_mid_screen_cuts_rows_from_the_bottom() {
+    let mut grid = numbered(4, 5);
+    grid.move_cursor(0, 1);
+    grid.resize(4, 4);
+    assert_eq!(screen(&grid), ["r0", "r1", "r2", "r3"]);
+    assert_eq!(grid.cursor.y, 1);
+    assert!(grid.history.is_empty());
+}
+
+#[test]
+fn shrinking_the_alternate_screen_cuts_rows_from_the_bottom() {
+    let mut grid = numbered(4, 3);
+    grid.set_alternate_screen(true);
+    grid.resize(4, 2);
     assert_eq!(screen(&grid), ["r0", "r1"]);
-    grid.resize(5, 4);
-    assert_eq!(screen(&grid), ["r0", "r1", "", ""]);
-    assert_eq!(grid.screen_lines().map(<[Cell]>::len).max(), Some(5));
+    assert_eq!(grid.cursor.y, 1);
+    assert!(grid.history.is_empty());
+}
+
+#[test]
+fn shrinking_without_scrollback_keeps_the_cursor_row_and_stores_nothing() {
+    let mut grid = numbered(4, 3);
+    grid.set_history_limit(0);
+    grid.resize(4, 2);
+    assert_eq!(screen(&grid), ["r1", "r2"]);
+    assert!(grid.history.is_empty());
+}
+
+#[test]
+fn a_grow_then_shrink_round_trip_restores_the_screen() {
+    let mut grid = with_two_in_history();
+    grid.resize(4, 5);
+    grid.resize(4, 3);
+    assert_eq!(screen(&grid), ["r2", "r3", "r4"]);
+    assert_eq!(grid.cursor.y, 2);
+}
+
+#[test]
+fn wrapped_rows_keep_their_flag_through_history() {
+    let mut grid = Grid::new(4, 2);
+    write_str(&mut grid, "abcdefgh");
+    grid.carriage_return();
+    grid.newline();
+    assert_eq!(screen(&grid), ["efgh", ""]);
+    assert!(grid.line_wrapped(0), "abcd is in history, wrapped");
+
+    grid.resize(4, 3);
+    assert_eq!(screen(&grid), ["abcd", "efgh", ""]);
+    assert!(grid.line_wrapped(0), "the pulled row still wraps");
+    assert!(!grid.line_wrapped(1));
+}
+
+#[test]
+fn shell_marks_keep_their_rows_through_a_grow_and_a_shrink() {
+    let mut grid = Grid::new(4, 3);
+    write_str(&mut grid, "r0");
+    grid.carriage_return();
+    grid.newline();
+    write_str(&mut grid, "r1");
+    grid.carriage_return();
+    grid.newline();
+    write_str(&mut grid, "r2");
+    grid.mark_shell(ShellMark::Prompt);
+    assert_eq!(grid.shell_marks(ShellMark::Prompt).collect::<Vec<_>>(), [2]);
+
+    grid.resize(4, 5);
+    assert_eq!(
+        grid.shell_marks(ShellMark::Prompt).collect::<Vec<_>>(),
+        [4],
+        "the prompt moved down with its row"
+    );
+    assert_eq!(grid.line_text(4).as_deref(), Some("r2"));
+
+    grid.resize(4, 2);
+    assert_eq!(
+        grid.shell_marks(ShellMark::Prompt).collect::<Vec<_>>(),
+        [4],
+        "the prompt is still at its row number after the rows above it went to history"
+    );
+    assert_eq!(grid.line_text(4).as_deref(), Some("r2"));
+}
+
+#[test]
+fn growing_pulls_history_back_and_keeps_marks_on_their_rows() {
+    let mut grid = with_two_in_history();
+    grid.mark_shell(ShellMark::Output);
+    grid.resize(4, 5);
+    assert_eq!(grid.shell_marks(ShellMark::Output).collect::<Vec<_>>(), [4]);
+    assert_eq!(grid.line_text(4).as_deref(), Some("r4"));
 }
 
 #[test]

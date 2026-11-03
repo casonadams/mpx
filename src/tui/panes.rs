@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use crate::client::Client;
 use crate::layout::{Divider, Rect, WindowTab};
 use crate::protocol::{NodeInfo, Side};
-use crate::vt::VtScreen;
+use crate::vt::{Grid, VtScreen};
 
 /// A visible pane: name, cell rectangle, focused.
 pub type PaneRect = (String, Rect, bool);
@@ -213,12 +213,51 @@ pub async fn sync_dims(
     for (name, width, height) in pending_resizes(panes, dims) {
         dims.insert(name.clone(), (width, height));
         let _ = client.resize_pane(&name, width, height).await;
-        let scrollback = vt.get(&name).is_some_and(has_scrollback);
-        if let Some((screen, next)) = load_pane(client, &name, (width, height), scrollback).await {
-            expected.insert(name.clone(), next);
-            vt.insert(name, screen);
+        let to = (width as usize, height as usize);
+        match vt
+            .get(&name)
+            .map(|screen| (grid_size(screen), has_scrollback(screen)))
+        {
+            Some((from, keep_history)) => {
+                if let Some((grid, next)) =
+                    rebuild_grid(client, &name, from, to, keep_history).await
+                {
+                    if let Some(screen) = vt.get_mut(&name) {
+                        *screen.grid_mut() = grid;
+                    }
+                    expected.insert(name, next);
+                }
+            }
+            None => {
+                if let Some((screen, next)) = load_pane(client, &name, (width, height), false).await
+                {
+                    expected.insert(name.clone(), next);
+                    vt.insert(name, screen);
+                }
+            }
         }
     }
+}
+
+/// The size of a screen's grid as `(cols, rows)`.
+fn grid_size(screen: &VtScreen) -> (usize, usize) {
+    (screen.grid().cols, screen.grid().rows)
+}
+
+/// The grid of pane `name` after it resizes from `from` to `to` (see `VtScreen::resized_grid`),
+/// rebuilt from its log, and the stream offset the log ends at.
+async fn rebuild_grid(
+    client: &mut Client,
+    name: &str,
+    from: (usize, usize),
+    to: (usize, usize),
+    keep_history: bool,
+) -> Option<(Grid, u64)> {
+    let (logs, next) = client.logs(name, None, false, None).await.ok()?;
+    Some((
+        VtScreen::resized_grid(logs.as_bytes(), from, to, keep_history),
+        next,
+    ))
 }
 
 /// Panes whose terminal is not the size last sent to it: another client or `mpx resize-pane`

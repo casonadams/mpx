@@ -18,6 +18,7 @@ mod prompt_cmds;
 mod reload;
 mod sessions;
 mod statusline;
+mod resize;
 pub mod support;
 mod views;
 mod windows;
