@@ -157,7 +157,17 @@ These tmux options are applied by the terminal UI.
 | `display-panes-time N` | `display_panes_time_ms`. | `1000` |
 | `set-clipboard on\|external\|off` | `set_clipboard`. `off` keeps copy-mode yanks off the system clipboard. Applications' OSC 52 requests are still governed by `allow-passthrough`. | `external` |
 | `escape-time N` | Stored and reported only: mpx reads Escape without a delay. | `500` (no effect) |
-| `focus-events`, `aggressive-resize`, `extended-keys`, `xterm-keys`, `status-keys` | Stored and reported only; they have no effect in mpx. | tmux defaults (no effect) |
+| `focus-events on\|off` | `focus_events`. Focus in and out reach the panes that asked for focus reports (DEC 1004) only while this is on. | `off` |
+| `extended-keys on\|always\|off` | `extended_keys`. Modified keys go to panes as CSI u or xterm modifyOtherKeys sequences: `on` when a pane asked for them (kitty `CSI > flags u` or `CSI > 4 ; n m`), `always` regardless, `off` never. Only the kitty disambiguate flag (`1`) is honoured; the other kitty flags (event types, alternate keys, all keys as escape codes, associated text) are not, and graphics protocols (sixel, kitty graphics) are not supported. | `off` |
+| `xterm-keys on\|off` | `xterm_keys`. With `on`, function and cursor keys keep their modifiers (`CSI 1;5A` for Ctrl-Up). `off` sends them without modifiers. | `on` |
+| `set-titles on\|off` | `set_titles`. Sets the outer terminal's title from `set-titles-string` whenever it changes, and restores the title it had on exit. | `off` |
+| `set-titles-string FORMAT` | `set_titles_string`: a format for the outer terminal's title, expanded for the active pane (`#S`, `#W`, `#{pane_title}`, ...). Control characters are dropped. | `#S:#I:#W - "#T"` (same as tmux) |
+| `bell-action none\|any\|current\|other` | `bell_action`. Which windows' bells ring the outer terminal: `none` never, `any` all, `current` only the shown window, `other` only windows not shown. | `any` |
+| `visual-bell on\|off` | `visual_bell`. A bell shows `Bell in window NAME` on the status row instead of ringing the outer terminal. | `off` |
+| `visual-activity on\|off` | `visual_activity`. A window that gains output while not shown announces `Activity in window NAME` once on the status row. | `off` |
+| `aggressive-resize`, `status-keys` | Stored and reported only; they have no effect in mpx. | tmux defaults (no effect) |
+
+Hyperlinks (OSC 8), underline styles and colours (`4:n`, `58`), and synchronized output (DEC 2026, held for at most one second) are passed through to the outer terminal without options.
 
 
 ### Inactive panes (`[style]`)

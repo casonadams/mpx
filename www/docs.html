@@ -65,6 +65,7 @@
           </thead>
           <tbody>
             <tr><td><code>Ctrl-Space</code></td><td>Command Palette</td><td>Instant fuzzy search across sessions, windows, panes, commands, and key bindings (no prefix required)</td></tr>
+            <tr><td><code>Prefix &lt;</code> / <code>Prefix &gt;</code></td><td>display-menu</td><td>Window and pane menus: arrows or j/k move, Enter or an item's key runs it, q or Esc closes. Popups from <code>display-popup</code> run a command in a box over the panes.</td></tr>
             <tr><td><code>Prefix + c</code></td><td>New Window</td><td>Create a new window tab in current directory</td></tr>
             <tr><td><code>Prefix + %</code> / <code>|</code></td><td>Split Vertical</td><td>Split active pane side by side</td></tr>
             <tr><td><code>Prefix + "</code> / <code>-</code></td><td>Split Horizontal</td><td>Split active pane top / bottom</td></tr>
@@ -178,6 +179,12 @@ fallback = ["nvim", "-c", "silent! source Session.vim"]</code></pre>
             <tr><td><code>display_time_ms</code></td><td>integer</td><td><code>3000</code></td><td>TUI</td><td>Milliseconds a status message stays up (tmux <code>display-time</code>).</td></tr>
             <tr><td><code>mode_keys</code></td><td><code>"vi"</code> or <code>"emacs"</code></td><td><code>"vi"</code></td><td>TUI</td><td>Copy-mode key table (tmux <code>mode-keys</code>).</td></tr>
             <tr><td><code>set_clipboard</code></td><td>bool</td><td><code>true</code></td><td>TUI</td><td><code>false</code> keeps copy-mode yanks off the system clipboard.</td></tr>
+            <tr><td><code>focus_events</code></td><td>bool</td><td><code>false</code></td><td>TUI</td><td>Forward focus in and out to panes that asked for focus reports (tmux <code>focus-events</code>).</td></tr>
+            <tr><td><code>extended_keys</code></td><td><code>"off"</code>, <code>"on"</code> or <code>"always"</code></td><td><code>"off"</code></td><td>TUI</td><td>Modified keys as CSI u or modifyOtherKeys sequences (tmux <code>extended-keys</code>). Only the kitty disambiguate flag is honoured; sixel and kitty graphics are not supported.</td></tr>
+            <tr><td><code>xterm_keys</code></td><td>bool</td><td><code>true</code></td><td>TUI</td><td>Function and cursor keys keep their modifiers (tmux <code>xterm-keys</code>).</td></tr>
+            <tr><td><code>set_titles</code>, <code>set_titles_string</code></td><td>bool, format</td><td><code>false</code>, <code>"#S:#I:#W - \"#T\""</code></td><td>TUI</td><td>Outer terminal title from a format (tmux <code>set-titles</code>, <code>set-titles-string</code>).</td></tr>
+            <tr><td><code>bell_action</code></td><td><code>"none"</code>, <code>"any"</code>, <code>"current"</code> or <code>"other"</code></td><td><code>"any"</code></td><td>TUI</td><td>Which windows' bells ring the outer terminal (tmux <code>bell-action</code>).</td></tr>
+            <tr><td><code>visual_bell</code>, <code>visual_activity</code></td><td>bool</td><td><code>false</code>, <code>false</code></td><td>TUI</td><td>Show bells and window activity on the status row instead of ringing (tmux <code>visual-bell</code>, <code>visual-activity</code>).</td></tr>
             <tr><td><code>resume</code></td><td>array of tables</td><td>defaults</td><td>Daemon</td><td>Rules for resuming processes across restarts (repeat <code>[[resume]]</code>).</td></tr>
           </tbody>
         </table>
