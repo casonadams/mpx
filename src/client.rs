@@ -6,8 +6,8 @@ use crate::ipc::{IpcStream, connect_stream};
 use crate::layout::{Divider, Rect, WindowTab};
 use crate::protocol::{
     Buffer, BufferRequest, DaemonMessage, EnvChange, EnvEntry, LayoutPreset, NewWindowOpts,
-    NodeInfo, NodeRequest, PROTOCOL, PaneRequest, PasteBufferOpts, Request, Response, SessionInfo,
-    SessionRequest, Side, SpawnOpts, SplitOpts, StreamEvent, WaitCondition, WaitOutcome,
+    NodeInfo, NodeRequest, PROTOCOL, PaneRequest, PasteBufferOpts, Request, Response, ScriptRequest,
+    SessionInfo, SessionRequest, Side, SpawnOpts, SplitOpts, StreamEvent, WaitCondition, WaitOutcome,
     WindowRequest,
 };
 use crate::vt::capture::CaptureSpec;
@@ -17,6 +17,14 @@ const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2)
 const SHUTDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 pub type LayoutTuple = (Vec<(String, Rect, bool)>, Vec<Divider>, Vec<WindowTab>);
+
+/// What a foreground `run-shell` printed and how it ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShellOutput {
+    /// The exit status, `None` when a signal ended the command.
+    pub status: Option<i32>,
+    pub output: String,
+}
 
 pub struct Client {
     framed: Framed<IpcStream, LinesCodec>,
@@ -46,6 +54,15 @@ fn unexpected(op: &str, resp: Response) -> String {
     }
 }
 
+/// The answer to a `RunShell`: a foreground run's status and output, or `None` for a background run.
+fn shell_reply(resp: Response) -> Result<Option<ShellOutput>, String> {
+    match resp {
+        Response::Shell { status, output } => Ok(Some(ShellOutput { status, output })),
+        Response::Ok => Ok(None),
+        other => Err(unexpected("RunShell", other)),
+    }
+}
+
 impl Client {
     pub async fn connect(endpoint: &str) -> Result<Self, String> {
         let stream = connect_stream(endpoint)
@@ -64,7 +81,7 @@ impl Client {
         self
     }
 
-    async fn call(&mut self, req: Request) -> Result<Response, String> {
+    pub async fn call(&mut self, req: Request) -> Result<Response, String> {
         let req = match self.pending_key.take() {
             Some(key) => Request::Idempotent {
                 key,
@@ -88,7 +105,7 @@ impl Client {
         }
     }
 
-    async fn call_ok(&mut self, op: &str, req: Request) -> Result<(), String> {
+    pub async fn call_ok(&mut self, op: &str, req: Request) -> Result<(), String> {
         match self.call(req).await? {
             Response::Ok => Ok(()),
             other => Err(unexpected(op, other)),
@@ -539,6 +556,27 @@ impl Client {
             Response::Bindings(bindings) => Ok(bindings),
             other => Err(unexpected("GetBindings", other)),
         }
+    }
+
+    /// Runs `command` through the daemon's shell (see `Request::Script(ScriptRequest::RunShell)`). A
+    /// foreground run answers its exit status and output; a background run answers `None` once it
+    /// has started.
+    pub async fn run_shell(
+        &mut self,
+        command: &str,
+        target: Option<&str>,
+        background: bool,
+        delay_ms: Option<u64>,
+    ) -> Result<Option<ShellOutput>, String> {
+        let resp = self
+            .call(Request::Script(ScriptRequest::RunShell {
+                command: command.to_string(),
+                target: target.map(str::to_string),
+                background,
+                delay_ms,
+            }))
+            .await?;
+        shell_reply(resp)
     }
 
     /// Pushes a paste buffer; `name` replaces the buffer of that name, `append` adds to it instead.

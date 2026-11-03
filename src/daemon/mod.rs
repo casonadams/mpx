@@ -1,7 +1,10 @@
+pub mod channels;
 mod dispatch;
+pub mod hooks;
 pub mod idempotency;
 pub mod plan;
 mod session;
+mod shell;
 pub mod snapshot;
 mod stores;
 
@@ -23,10 +26,10 @@ use crate::node::pacing::{Backlog, CloseOnDrop, Pacing};
 use crate::protocol::{DaemonMessage, Request, Response, StreamEvent};
 use crate::wire;
 use idempotency::Claim;
-use session::{Filter, SessionMsg};
+use session::{Filter, HookMsg, Origin, SessionMsg};
 
 pub(super) const KILL_GRACE: Duration = Duration::from_secs(2);
-const SESSION_GONE: &str = "Session is unavailable";
+pub(super) const SESSION_GONE: &str = "Session is unavailable";
 
 pub struct DaemonState {
     tx: mpsc::UnboundedSender<SessionMsg>,
@@ -74,16 +77,19 @@ impl DaemonState {
     }
 
     async fn session_req(&self, req: Request) -> Response {
-        match self
-            .ask(|reply| SessionMsg::Req {
-                req: Box::new(req),
-                reply,
-            })
-            .await
-        {
+        match session::ask_req(&self.tx, Origin::Client, req).await {
             Ok(resp) => resp,
             Err(e) => Response::Error(e),
         }
+    }
+
+    /// Tells the session that an event happened, so the hooks of that event run.
+    fn event(&self, event: &'static str) {
+        let _ = self.tx.send(SessionMsg::Hook(HookMsg::Event { event, pane: None }));
+    }
+
+    fn session_tx(&self) -> &mpsc::UnboundedSender<SessionMsg> {
+        &self.tx
     }
 
     async fn lookup(&self, target: &str) -> Result<PaneHandle, String> {
@@ -255,12 +261,20 @@ async fn subscribe_node<S: AsyncStream>(
     // A session-wide subscriber is an attached terminal: its backlog paces pane output.
     let backlog = (name.is_none() && since.is_none()).then(|| state.pacing.track(now_ms()));
     let (sink, rx) = Sink::channel(backlog.clone());
+    let terminal = name.is_none() && active_window;
     let registered = match (name, since) {
         (None, Some(_)) => Err("since requires a node name".to_string()),
         (Some(name), since) => state.subscribe_node(name, since, sink).await,
         (None, None) => state.subscribe(session_wide, sink).await,
     };
+    let attached = terminal && registered.is_ok();
+    if attached {
+        state.event("client-attached");
+    }
     stream_events(framed, registered, rx, backlog, binary).await;
+    if attached {
+        state.event("client-detached");
+    }
 }
 
 pub async fn handle_client<S: AsyncStream>(state: Arc<DaemonState>, stream: S) {

@@ -12,6 +12,7 @@ pub mod layout;
 pub mod node;
 pub mod options;
 pub mod protocol;
+pub mod source;
 pub mod store;
 pub mod tui;
 pub mod vt;

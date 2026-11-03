@@ -1,7 +1,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use mpx::config::Config;
 use mpx::protocol::Side;
-use mpx::tui::command::Command;
+use mpx::tui::command::{Command, PaneCommand, WindowCommand};
 use mpx::tui::keymap::{Table, default_table, resolve};
 
 fn key(c: char) -> KeyEvent {
@@ -97,24 +97,24 @@ fn default_bindings_resolve_to_commands() {
     let keymap = default_keymap();
     assert_eq!(
         command_of(&keymap, &key('%')),
-        Some(Command::SplitWindow {
+        Some(Command::Pane(PaneCommand::SplitWindow {
             side_by_side: true,
             argv: vec![],
             cwd: None,
             detach: false,
-        })
+        }))
     );
     assert_eq!(
         command_of(&keymap, &key('h')),
-        Some(Command::SelectPaneDir { side: Side::Left })
+        Some(Command::Pane(PaneCommand::SelectPaneDir { side: Side::Left }))
     );
     assert_eq!(
         command_of(&keymap, &key('x')),
-        Some(Command::KillPane { target: None })
+        Some(Command::Pane(PaneCommand::KillPane { target: None }))
     );
     assert_eq!(
         command_of(&keymap, &key('3')),
-        Some(Command::SelectWindow { index: 3 })
+        Some(Command::Window(WindowCommand::SelectWindow { index: 3 }))
     );
     assert_eq!(command_of(&keymap, &key('z')), Some(Command::Zoom));
     assert_eq!(
@@ -209,7 +209,7 @@ fn config_bind_root_rebinds_and_an_empty_command_unbinds() {
     let keymap = resolve(&config).unwrap();
     assert_eq!(
         command_in(&keymap, Table::Root, &alt('n')),
-        Some(Command::NextWindow)
+        Some(Command::Window(WindowCommand::NextWindow))
     );
     assert_eq!(command_of(&keymap, &key('.')), None, "unbound prefix key");
 }
@@ -228,13 +228,13 @@ fn runtime_bind_adds_replaces_and_removes_keys_in_either_table() {
     let mut keymap = default_keymap();
     assert!(matches!(
         command_of(&keymap, &key('x')),
-        Some(Command::KillPane { .. })
+        Some(Command::Pane(PaneCommand::KillPane { .. }))
     ));
 
     keymap.bind(Table::Prefix, "x", "kill-window").unwrap();
     assert!(matches!(
         command_of(&keymap, &key('x')),
-        Some(Command::KillWindow { .. })
+        Some(Command::Window(WindowCommand::KillWindow { .. }))
     ));
     keymap.bind(Table::Prefix, "x", "").unwrap();
     assert!(
@@ -285,11 +285,11 @@ fn tmux_default_prefix_keys_are_bound_to_their_tmux_commands() {
 
     assert!(matches!(
         bound(ctrl('o')),
-        Some(Command::RotateWindow { down: false })
+        Some(Command::Window(WindowCommand::RotateWindow { down: false }))
     ));
     assert!(matches!(
         bound(alt('o')),
-        Some(Command::RotateWindow { down: true })
+        Some(Command::Window(WindowCommand::RotateWindow { down: true }))
     ));
     assert!(matches!(bound(ctrl('z')), Some(Command::SuspendClient)));
     assert!(
@@ -306,7 +306,7 @@ fn tmux_default_prefix_keys_are_bound_to_their_tmux_commands() {
         ))
     ));
     assert!(matches!(bound(key('=')), Some(Command::ChooseBuffer)));
-    assert!(matches!(bound(key('E')), Some(Command::SpreadLayout)));
+    assert!(matches!(bound(key('E')), Some(Command::Pane(PaneCommand::SpreadLayout))));
     assert!(matches!(
         bound(key('i')),
         Some(Command::DisplayMessage { format: None })
@@ -325,29 +325,29 @@ fn tmux_default_resize_and_layout_keys_are_bound() {
 
     assert!(matches!(
         bound(ctrl_code(KeyCode::Up)),
-        Some(Command::ResizePane {
+        Some(Command::Pane(PaneCommand::ResizePane {
             side: Side::Up,
             cells: 1
-        })
+        }))
     ));
     assert!(matches!(
         bound(alt_code(KeyCode::Right)),
-        Some(Command::ResizePane {
+        Some(Command::Pane(PaneCommand::ResizePane {
             side: Side::Right,
             cells: 5
-        })
+        }))
     ));
     assert!(matches!(
         bound(alt('1')),
-        Some(Command::SelectLayout { preset: Some(_) })
+        Some(Command::Pane(PaneCommand::SelectLayout { preset: Some(_) }))
     ));
     assert!(matches!(
         bound(alt('7')),
-        Some(Command::SelectLayout { preset: Some(_) })
+        Some(Command::Pane(PaneCommand::SelectLayout { preset: Some(_) }))
     ));
     assert!(matches!(
         bound(alt('n')),
-        Some(Command::StepAlert { forward: true })
+        Some(Command::Window(WindowCommand::StepAlert { forward: true }))
     ));
 }
 
@@ -358,13 +358,13 @@ fn vim_motion_keys_stay_bound_to_pane_navigation_and_resize() {
 
     for c in ['h', 'j', 'k', 'l'] {
         assert!(
-            matches!(bound(key(c)), Some(Command::SelectPaneDir { .. })),
+            matches!(bound(key(c)), Some(Command::Pane(PaneCommand::SelectPaneDir { .. }))),
             "{c}"
         );
     }
     for c in ['H', 'J', 'K', 'L'] {
         assert!(
-            matches!(bound(key(c)), Some(Command::ResizePane { .. })),
+            matches!(bound(key(c)), Some(Command::Pane(PaneCommand::ResizePane { .. }))),
             "{c}"
         );
     }

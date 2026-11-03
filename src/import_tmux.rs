@@ -56,6 +56,8 @@ struct Conv {
     bind: BTreeMap<String, String>,
     /// Root-table bindings (`bind -n`).
     root: BTreeMap<String, String>,
+    /// Command aliases (`set -s command-alias`): name -> command line.
+    alias: BTreeMap<String, String>,
 }
 
 impl Conv {
@@ -90,9 +92,14 @@ impl Conv {
                 line,
                 "source-file is not followed: only this file is converted",
             ),
-            "run" | "run-shell" => {
-                self.note(line, format!("'{name}': plugin/shell commands are not run"))
-            }
+            "run" | "run-shell" => self.note(
+                line,
+                format!("'{name}' runs at tmux startup, which has no mpx config equivalent; use `mpx run-shell`"),
+            ),
+            "if-shell" => self.note(
+                line,
+                "'if-shell' runs at tmux startup, which has no mpx config equivalent; bind it or use `source-file`",
+            ),
             other => self.note(line, format!("command '{other}' has no mpx equivalent")),
         }
     }
@@ -171,6 +178,9 @@ impl Conv {
         let Some((name, values)) = opts.rest.split_first() else {
             return self.note(line, "set: missing option name");
         };
+        if opts.has('s') && name.split('[').next() == Some("command-alias") {
+            return self.alias_line(line, &values.join(" "));
+        }
         if name.starts_with('@') {
             return self.note(line, format!("user option '{name}' has no mpx equivalent"));
         }
@@ -199,6 +209,16 @@ impl Conv {
             );
         }
         self.option(line, name, &values.join(" "));
+    }
+
+    /// `set -s command-alias name=command`: one entry of the config's `[alias]` table.
+    fn alias_line(&mut self, line: usize, value: &str) {
+        match value.split_once('=') {
+            Some((name, command)) if !name.is_empty() && !command.is_empty() => {
+                self.alias.insert(name.to_string(), command.to_string());
+            }
+            _ => self.note(line, format!("set -s command-alias: '{value}' is not name=command")),
+        }
     }
 
     fn option(&mut self, line: usize, name: &str, value: &str) {
@@ -402,7 +422,11 @@ impl Conv {
                 .collect();
             blocks.push(format!("[style]\n{body}"));
         }
-        for (table, name) in [(&self.bind, "bind"), (&self.root, "bind_root")] {
+        for (table, name) in [
+            (&self.bind, "bind"),
+            (&self.root, "bind_root"),
+            (&self.alias, "alias"),
+        ] {
             if !table.is_empty() {
                 let body: String = table
                     .iter()

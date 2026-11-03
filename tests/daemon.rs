@@ -6,6 +6,7 @@ mod daemon {
     mod env;
     mod environment;
     mod exit_drain;
+    mod hooks;
     mod idempotency;
     mod idempotent;
     mod input;

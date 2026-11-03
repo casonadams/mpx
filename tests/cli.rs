@@ -4,6 +4,7 @@ mod cli {
     #[cfg(unix)]
     mod e2e;
     mod entry;
+    mod if_shell;
     mod fixture;
     #[cfg(unix)]
     mod incompatible;

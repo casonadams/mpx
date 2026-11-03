@@ -2,7 +2,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::app::{App, Flow, Mode};
-use super::command::{self, COMMAND_NAMES, Command};
+use super::command::{self, COMMAND_NAMES, Command, PaneCommand};
 use super::copy::{CopyState, apply_bound_key};
 use super::keymap::Table;
 use super::labels;
@@ -45,7 +45,7 @@ impl App {
         }
         if self.repeating()
             && let Some(binding) = self.keymap.lookup(Table::Prefix, &key)
-            && matches!(binding.command, Command::ResizePane { .. })
+            && matches!(binding.command, Command::Pane(PaneCommand::ResizePane { .. }))
         {
             let cmd = binding.command.clone();
             self.arm_repeat();
@@ -65,7 +65,7 @@ impl App {
             return Flow::Continue;
         };
         let cmd = binding.command.clone();
-        if matches!(cmd, Command::ResizePane { .. }) {
+        if matches!(cmd, Command::Pane(PaneCommand::ResizePane { .. })) {
             self.arm_repeat();
         }
         self.dispatch(cmd).await
@@ -128,7 +128,7 @@ impl App {
             .find(|(n, _)| *n == number as usize)
             .map(|(_, pane)| pane);
         match picked {
-            Some(target) => self.run(Command::SelectPane { target }).await,
+            Some(target) => self.run(Command::Pane(PaneCommand::SelectPane { target })).await,
             None => Flow::Continue,
         }
     }
@@ -207,7 +207,7 @@ impl App {
             return Flow::Continue;
         }
         self.remember(&line);
-        match command::parse(&line) {
+        match command::parse_in(&line, &self.config.alias) {
             Ok(cmd) => self.dispatch(cmd).await,
             Err(e) => self.say(e),
         }

@@ -1,4 +1,4 @@
-use mpx::tui::command::Command;
+use mpx::tui::command::{Command, WindowCommand};
 use mpx::tui::input::{OverlayNext, overlay_next};
 use mpx::tui::overlay::OverlayAction;
 
@@ -17,7 +17,7 @@ fn overlay_that_closes_runs_nothing() {
 
 #[test]
 fn overlay_run_closes_and_hands_back_its_commands_in_order() {
-    let cmds = vec![Command::Detach, Command::NextWindow];
+    let cmds = vec![Command::Detach, Command::Window(WindowCommand::NextWindow)];
     assert_eq!(
         overlay_next(OverlayAction::Run(cmds.clone())),
         OverlayNext::Close(cmds)

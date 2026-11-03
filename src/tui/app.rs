@@ -10,6 +10,7 @@ use super::canvas::Canvas;
 use super::command::Command;
 use super::copy::CopyState;
 use super::frame;
+use super::job::Job;
 use super::keymap::{self, Keymap};
 use super::overlay::Overlay;
 use super::panes::{BorderGrab, LayoutCache, PaneRect, resized_elsewhere, sync_dims};
@@ -167,6 +168,9 @@ pub struct App {
     pub suspend_requested: bool,
     /// Where clock mode reads the time.
     pub clock: ClockSource,
+    /// Commands that wait on the daemon report back here (see `job`).
+    pub jobs: mpsc::UnboundedSender<Job>,
+    pub job_rx: UnboundedReceiver<Job>,
 }
 
 /// Where clock mode reads the time: the system clock, or a fixed time (for tests).
@@ -262,6 +266,7 @@ impl App {
             socket_dir,
             size,
         } = opts;
+        let (jobs, job_rx) = unbounded_channel();
         App {
             endpoint: endpoint.to_string(),
             session: session.to_string(),
@@ -314,6 +319,8 @@ impl App {
             message_log: Vec::new(),
             suspend_requested: false,
             clock: ClockSource::default(),
+            jobs,
+            job_rx,
         }
     }
 
@@ -826,6 +833,8 @@ enum Wake {
     Tick,
     /// A delayed element is due: pane output's frame, the shortcut popup, or a sidebar switch.
     Due,
+    /// A command that waited on the daemon finished.
+    Job(Job),
 }
 
 /// Terminal input read on its own thread and handed over a channel. crossterm's async
@@ -986,6 +995,7 @@ impl Tui {
             item = self.stream.recv() => Wake::Stream(item),
             _ = self.tick.tick() => Wake::Tick,
             _ = sleep_until_opt(due.map(tokio::time::Instant::from_std)) => Wake::Due,
+            Some(job) = self.app.job_rx.recv() => Wake::Job(job),
         }
     }
 
@@ -998,6 +1008,7 @@ impl Tui {
                 flow
             }
             Wake::Tick => self.app.on_tick().await,
+            Wake::Job(job) => self.app.finish_job(job).await,
             Wake::Due => {
                 self.app.expire_panes(Instant::now());
                 Flow::Continue

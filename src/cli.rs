@@ -4,6 +4,7 @@ use clap::{Parser, Subcommand};
 
 mod buffers;
 mod environment;
+mod hooks;
 mod panes;
 pub mod render;
 mod resolve;
@@ -186,98 +187,9 @@ pub enum Commands {
         argv: Vec<String>,
     },
 
-    /// Read or stream logs from a node
-    Logs {
-        /// Name of the node
-        name: String,
-
-        /// Follow stream live
-        #[arg(short, long)]
-        follow: bool,
-
-        /// Number of lines to show from history
-        #[arg(short = 'n', long, visible_alias = "tail")]
-        lines: Option<usize>,
-
-        /// Render scrollback as plain text (no escape sequences)
-        #[arg(long)]
-        plain: bool,
-
-        /// Only output after this byte offset (the `next` value of a previous call)
-        #[arg(long)]
-        since: Option<u64>,
-
-        /// Print {"data": ..., "next": ...}
-        #[arg(long)]
-        json: bool,
-    },
-
-    /// Send raw input (plus a newline) to a running node's stdin
-    Send {
-        /// Name of the node
-        name: String,
-
-        /// Input data string
-        data: String,
-    },
-
-    /// Send keys to a pane (tmux send-keys); key names such as Enter, C-c, or literal text with -l
-    #[command(name = "send-keys")]
-    SendKeys {
-        #[arg(short = 't', long = "target")]
-        target: Option<String>,
-
-        /// Send the operands as literal text
-        #[arg(short = 'l', long = "literal")]
-        literal: bool,
-
-        /// Keys or text
-        #[arg(allow_hyphen_values = true)]
-        keys: Vec<String>,
-    },
-
-    /// Paste text into a pane; `-` reads stdin
-    Paste {
-        #[arg(short = 't', long = "target")]
-        target: Option<String>,
-
-        /// Press Enter after the paste
-        #[arg(long)]
-        submit: bool,
-
-        /// Text to paste, or `-` for stdin
-        #[arg(allow_hyphen_values = true)]
-        text: String,
-    },
-
-    /// Terminate a running node
-    Kill {
-        /// Name of the node
-        name: String,
-    },
-
-    /// Wait for a node: exit code (default), idle output, screen match, or agent state
-    Wait {
-        /// Name of the node
-        name: String,
-
-        /// Give up after this many seconds (exit 124)
-        #[arg(long)]
-        timeout: Option<u64>,
-
-        /// Wait until no output for this many milliseconds
-        #[arg(long)]
-        idle: Option<u64>,
-
-        /// Wait until the screen or output matches this regex
-        #[arg(long = "match")]
-        pattern: Option<String>,
-    },
-    /// Snapshot the 2D virtual terminal screen of a node
-    Screen {
-        /// Name of the node
-        name: String,
-    },
+    /// Read logs, send input, wait on, capture and kill nodes
+    #[command(flatten)]
+    Nodes(panes::NodeCommands),
 
     /// Split an existing pane and run a new command (`-h` is side by side as in tmux; use --help)
     #[command(disable_help_flag = true)]
@@ -509,4 +421,8 @@ pub enum Commands {
     /// The session environment: set-environment and show-environment
     #[command(flatten)]
     Environment(environment::EnvCommands),
+
+    /// Daemon-side commands: run-shell, if-shell, wait-for, set-hook and show-hooks
+    #[command(flatten)]
+    Hooks(hooks::HookCommands),
 }

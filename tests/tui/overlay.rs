@@ -1,7 +1,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use mpx::layout::{Rect, WindowTab};
 use mpx::protocol::{NodeInfo, NodeState};
-use mpx::tui::command::Command;
+use mpx::tui::command::{Command, PaneCommand, SessionCommand, WindowCommand};
 use mpx::tui::overlay::nav::fuzzy_match;
 use mpx::tui::overlay::tree_view::session_from_snapshot;
 use mpx::tui::overlay::widgets::{age_label, printable, short_path};
@@ -178,25 +178,28 @@ fn tree_enter_acts_on_the_row_it_is_on() {
         ("main", OverlayAction::Close),
         (
             "work",
-            OverlayAction::Run(vec![Command::SwitchSession {
+            OverlayAction::Run(vec![Command::Session(SessionCommand::SwitchSession {
                 name: "work".to_string(),
-            }]),
+            })]),
         ),
-        ("logs", OverlayAction::Run(vec![Command::SelectWindow { index: 1 }])),
+        (
+            "logs",
+            OverlayAction::Run(vec![Command::Window(WindowCommand::SelectWindow { index: 1 })]),
+        ),
         (
             "edit",
             OverlayAction::Run(vec![
-                Command::SwitchSession {
+                Command::Session(SessionCommand::SwitchSession {
                     name: "work".to_string(),
-                },
-                Command::SelectWindow { index: 0 },
+                }),
+                Command::Window(WindowCommand::SelectWindow { index: 0 }),
             ]),
         ),
         (
             "claude",
-            OverlayAction::Run(vec![Command::SelectPane {
+            OverlayAction::Run(vec![Command::Pane(PaneCommand::SelectPane {
                 target: "work:%4".to_string(),
-            }]),
+            })]),
         ),
     ];
     for (label, want) in cases {
@@ -212,29 +215,29 @@ fn tree_x_asks_to_kill_the_row_it_is_on() {
             "claude",
             OverlayAction::Run(vec![Command::Confirm {
                 prompt: "kill pane claude?".to_string(),
-                then: Box::new(Command::KillPane {
+                then: Box::new(Command::Pane(PaneCommand::KillPane {
                     target: Some("work:%4".to_string()),
-                }),
+                })),
             }]),
         ),
         (
             "edit",
             OverlayAction::Run(vec![
-                Command::SwitchSession {
+                Command::Session(SessionCommand::SwitchSession {
                     name: "work".to_string(),
-                },
+                }),
                 Command::Confirm {
                     prompt: "kill window edit?".to_string(),
-                    then: Box::new(Command::KillWindow { index: Some(0) }),
+                    then: Box::new(Command::Window(WindowCommand::KillWindow { index: Some(0) })),
                 },
             ]),
         ),
         (
             "work",
             OverlayAction::Run(vec![
-                Command::SwitchSession {
+                Command::Session(SessionCommand::SwitchSession {
                     name: "work".to_string(),
-                },
+                }),
                 Command::Confirm {
                     prompt: "kill session work?".to_string(),
                     then: Box::new(Command::KillServer),
@@ -646,12 +649,12 @@ fn palette_executes_commands_and_arbitrary_lines() {
     let action = view.handle_key(code(KeyCode::Enter));
     assert_eq!(
         action,
-        OverlayAction::Run(vec![Command::SplitWindow {
+        OverlayAction::Run(vec![Command::Pane(PaneCommand::SplitWindow {
             side_by_side: true,
             argv: Vec::new(),
             cwd: None,
             detach: false,
-        }])
+        })])
     );
 
     view.prompt.clear();
@@ -662,11 +665,11 @@ fn palette_executes_commands_and_arbitrary_lines() {
     let action = view.handle_key(code(KeyCode::Enter));
     assert_eq!(
         action,
-        OverlayAction::Run(vec![Command::NewWindow {
+        OverlayAction::Run(vec![Command::Window(WindowCommand::NewWindow {
             name: Some("custom".to_string()),
             argv: Vec::new(),
             cwd: None,
-        }])
+        })])
     );
 }
 
@@ -703,9 +706,9 @@ fn palette_sessions_tab_selection() {
     let action = view.handle_key(code(KeyCode::Enter));
     assert_eq!(
         action,
-        OverlayAction::Run(vec![Command::SelectPane {
+        OverlayAction::Run(vec![Command::Pane(PaneCommand::SelectPane {
             target: "dev:term".to_string()
-        }])
+        })])
     );
 }
 

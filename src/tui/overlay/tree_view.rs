@@ -9,7 +9,7 @@ use crate::config::home_dir;
 use crate::ipc::list_sessions;
 use crate::layout::{Rect, WindowTab};
 use crate::protocol::{NodeInfo, PaneId};
-use crate::tui::command::Command;
+use crate::tui::command::{Command, PaneCommand, SessionCommand, WindowCommand};
 use crate::tui::overlay::nav::{Filter, ListState, route_list_key};
 use crate::tui::overlay::widgets::{
     self, Span, Tone, age_label, fit, join_meta, now_ms, short_path, tail_lines,
@@ -432,7 +432,7 @@ impl TreeView {
         if *name == self.current {
             Vec::new()
         } else {
-            vec![Command::SwitchSession { name: name.clone() }]
+            vec![Command::Session(SessionCommand::SwitchSession { name: name.clone() })]
         }
     }
 
@@ -441,14 +441,14 @@ impl TreeView {
             Node::Session(s) => self.switch_to(s),
             Node::Window(s, w) => {
                 let mut commands = self.switch_to(s);
-                commands.push(Command::SelectWindow {
+                commands.push(Command::Window(WindowCommand::SelectWindow {
                     index: self.sessions[s].windows[w].index,
-                });
+                }));
                 commands
             }
-            Node::Pane(s, w, p) => vec![Command::SelectPane {
+            Node::Pane(s, w, p) => vec![Command::Pane(PaneCommand::SelectPane {
                 target: self.pane_target(s, w, p),
-            }],
+            })],
         };
         if commands.is_empty() {
             OverlayAction::Close
@@ -469,17 +469,17 @@ impl TreeView {
                 let window = &self.sessions[s].windows[w];
                 (
                     format!("kill window {}?", window.name),
-                    Command::KillWindow {
+                    Command::Window(WindowCommand::KillWindow {
                         index: Some(window.index),
-                    },
+                    }),
                     Some(s),
                 )
             }
             Node::Pane(s, w, p) => (
                 format!("kill pane {}?", self.sessions[s].windows[w].panes[p].name),
-                Command::KillPane {
+                Command::Pane(PaneCommand::KillPane {
                     target: Some(self.pane_target(s, w, p)),
-                },
+                }),
                 None,
             ),
         };

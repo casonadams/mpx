@@ -88,6 +88,13 @@ Vim-style command line on the status row. Supports tab-completion, history (`Up`
 | `new-window [-n name] [-c dir] [cmd...]` | `new`, `tabnew` | Create window |
 | `rename-session NAME` | `rename` | Rename current session |
 | `reload-config` | `source-file` (without a file) | Re-read the config file into the TUI and the session's daemon |
+| `run-shell [-b] [-t PANE] [-d SECONDS] COMMAND` | | Run a shell command in the daemon, formats expanded for PANE; its output goes to the status row, a message per line (`-b` does not wait) |
+| `if-shell [-bF] [-t PANE] SHELL-COMMAND COMMAND [COMMAND]` | | Run the first command when the shell command exits 0, else the second; with `-F` the first word is a format (true when non-empty and not `0`) |
+| `wait-for [-S \| -L \| -U] CHANNEL` | | Wait for a signal on CHANNEL, or signal it (`-S`), or take (`-L`) or release (`-U`) its lock |
+| `set-hook [-a] HOOK COMMAND`, `set-hook -u HOOK`, `set-hook -R HOOK` | | Set, append to, remove or run now the commands of a session hook (see [Shell, Channels and Hooks](CLI.md#shell-channels-and-hooks)) |
+| `show-hooks` | | List every hook command, `HOOK COMMAND`, in an overlay |
+| `set -s command-alias NAME=COMMAND` | | Make NAME a command for this prompt, bindings and hooks (`set -su command-alias NAME` removes it) |
+| `source-file [-q] FILE...` | | Run the command lines of each file, in order; `-q` ignores a missing file |
 | `set-option [-g] [-u] [-q] NAME [VALUE]` | `set`, `set-window-option`, `setw` | Change a UI option of this terminal until the next `reload-config` (names and values in [Options at run time](CONFIG.md#options-at-run-time)) |
 | `show-options [-g] [-v] [-q] [NAME]` | `show`, `show-window-options`, `showw` | List the options, or show one on the status row |
 | `rotate-window [-D]` | `rotatew` | Move each pane to the layout slot before its own (`-D`: after) |

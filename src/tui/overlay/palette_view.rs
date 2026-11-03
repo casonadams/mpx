@@ -5,7 +5,7 @@ use std::io::{self, Write};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::layout::Rect;
-use crate::tui::command::{Command, PaletteTab};
+use crate::tui::command::{Command, PaletteTab, PaneCommand, SessionCommand, WindowCommand};
 use crate::tui::overlay::nav::{ListState, fuzzy_match, has_ctrl};
 use crate::tui::overlay::tree_view::{TreePane, TreeSession, TreeWindow, load_session};
 use crate::tui::overlay::widgets::{self, Span, Tone, fit, put_row};
@@ -269,17 +269,17 @@ impl PaletteView {
         {
             let actions = if session.name != self.current_session {
                 vec![
-                    Command::SwitchSession {
+                    Command::Session(SessionCommand::SwitchSession {
                         name: session.name.clone(),
-                    },
-                    Command::SelectWindow {
+                    }),
+                    Command::Window(WindowCommand::SelectWindow {
                         index: window.index,
-                    },
+                    }),
                 ]
             } else {
-                vec![Command::SelectWindow {
+                vec![Command::Window(WindowCommand::SelectWindow {
                     index: window.index,
-                }]
+                })]
             };
 
             let badge = if window.active && session.name == self.current_session {
@@ -327,7 +327,7 @@ fn collect_pane_row(
             subtitle: pane.program.clone(),
             shortcut: Some(format!("%{}", pane.id)),
             badge: None,
-            actions: vec![Command::SelectPane { target }],
+            actions: vec![Command::Pane(PaneCommand::SelectPane { target })],
         });
     }
 }

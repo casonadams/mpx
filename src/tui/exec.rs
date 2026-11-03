@@ -1,7 +1,12 @@
 //! Command execution: maps each `Command` onto daemon requests and TUI state.
 use super::app::{App, Flow, Mode};
-use super::command::{BufferCommand, Command, CopyModeOpts, EnvCommand, PromptSpec};
+use super::command::{
+    BufferCommand, Command, CopyModeOpts, EnvCommand, PaneCommand, PromptSpec, ScriptCommand,
+    SessionCommand, WindowCommand, parse_in,
+};
 use super::copy::{CopyAction, CopyOutcome, CopyState, Motion, apply_action};
+use super::frame;
+use super::job::{self, Job, Work};
 use super::keymap;
 use super::overlay::{Overlay, OverlayCtx, buffer_summary};
 use super::panes::{find_directional, neighbor_pane};
@@ -12,12 +17,27 @@ use crate::config::Config;
 use crate::format::{buffer_vars, expand};
 use crate::ipc;
 use crate::layout::Direction;
-use crate::protocol::{LayoutPreset, NewWindowOpts, PasteBufferOpts, Side, SpawnOpts, SplitOpts};
+use crate::protocol::{
+    LayoutPreset, NewWindowOpts, PasteBufferOpts, Request, Response, ScriptRequest, Side,
+    SpawnOpts, SplitOpts,
+};
 use crate::vt::capture::CaptureSpec;
 use std::collections::VecDeque;
 use std::io::Write;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
+
+/// What one command of a sequence does: nothing more, a branch to run next, a job to start, or
+/// a quit.
+enum Step {
+    Next,
+    Branch(Command),
+    /// A job that the commands after it do not wait for.
+    Background(Work),
+    /// A job that the commands after it wait for.
+    Wait(Work),
+    Quit,
+}
 
 /// Client calls that need only the active window.
 enum Simple {
@@ -40,7 +60,9 @@ const DEFAULT_DISPLAY_MESSAGE: &str = "[#{session_name}] #{window_index}:#{windo
 /// Commands that destroy something interactively need a `y` first.
 fn needs_confirm(cmd: &Command) -> Option<String> {
     match cmd {
-        Command::KillWindow { index: None } => Some("kill-window? (y/n)".to_string()),
+        Command::Window(WindowCommand::KillWindow { index: None }) => {
+            Some("kill-window? (y/n)".to_string())
+        }
         _ => None,
     }
 }
@@ -73,7 +95,7 @@ impl App {
             self.mode = Mode::Confirm(question, cmd);
             return Flow::Continue;
         }
-        if let Command::KillPane { target: None } = cmd {
+        if let Command::Pane(PaneCommand::KillPane { target: None }) = cmd {
             self.mode = Mode::Confirm(format!("kill-pane {}? (y/n)", self.active_pane), cmd);
             return Flow::Continue;
         }
@@ -86,7 +108,7 @@ impl App {
             Ok(flow) => return flow,
             Err(cmd) => cmd,
         };
-        match self.run_panes(cmd).await {
+        match self.run_pane(cmd).await {
             Ok(flow) => flow,
             Err(cmd) => self.run_ui(cmd).await,
         }
@@ -95,34 +117,42 @@ impl App {
     /// Window and layout operations. Other commands come back as `Err`.
     async fn run_windows(&mut self, cmd: Command) -> Result<Flow, Command> {
         let flow = match cmd {
-            Command::SplitWindow {
+            Command::Pane(PaneCommand::SplitWindow {
                 side_by_side,
                 argv,
                 cwd,
                 detach,
-            } => self.split_window(side_by_side, argv, cwd, detach).await,
-            Command::NewWindow { name, argv, cwd } => self.new_window(name, argv, cwd).await,
-            Command::KillPane { target } => self.kill_pane(target).await,
-            Command::KillWindow { index } => match index
+            }) => self.split_window(side_by_side, argv, cwd, detach).await,
+            Command::Window(WindowCommand::NewWindow { name, argv, cwd }) => {
+                self.new_window(name, argv, cwd).await
+            }
+            Command::Pane(PaneCommand::KillPane { target }) => self.kill_pane(target).await,
+            Command::Window(WindowCommand::KillWindow { index }) => match index
                 .map(|i| i.checked_sub(self.config.base_index))
             {
                 None => self.simple(Simple::KillWindow(None)).await,
                 Some(Some(daemon)) => self.simple(Simple::KillWindow(Some(daemon))).await,
                 Some(None) => self.say(format!("can't find window: {}", index.unwrap_or_default())),
             },
-            Command::RenameWindow { name } => self.simple(Simple::RenameWindow(name)).await,
-            Command::SelectWindow { index } => match index.checked_sub(self.config.base_index) {
-                Some(daemon) => self.simple(Simple::SelectWindow(daemon)).await,
-                None => self.say(format!("can't find window: {index}")),
-            },
-            Command::SelectWindowNamed { name } => self.select_window_named(name).await,
-            Command::StepAlert { forward } => self.step_alert(forward).await,
-            Command::RotateWindow { down } => {
+            Command::Window(WindowCommand::RenameWindow { name }) => {
+                self.simple(Simple::RenameWindow(name)).await
+            }
+            Command::Window(WindowCommand::SelectWindow { index }) => {
+                match index.checked_sub(self.config.base_index) {
+                    Some(daemon) => self.simple(Simple::SelectWindow(daemon)).await,
+                    None => self.say(format!("can't find window: {index}")),
+                }
+            }
+            Command::Window(WindowCommand::SelectWindowNamed { name }) => {
+                self.select_window_named(name).await
+            }
+            Command::Window(WindowCommand::StepAlert { forward }) => self.step_alert(forward).await,
+            Command::Window(WindowCommand::RotateWindow { down }) => {
                 let result = self.client.rotate_window(down).await;
                 self.settle(result)
             }
-            Command::MoveWindow { to } => self.move_window(to).await,
-            Command::RenumberWindows => {
+            Command::Window(WindowCommand::MoveWindow { to }) => self.move_window(to).await,
+            Command::Window(WindowCommand::RenumberWindows) => {
                 let result = self.client.renumber_windows().await;
                 self.settle(result)
             }
@@ -131,29 +161,37 @@ impl App {
                 let text = super::frame::expand_active(self, format);
                 self.say(text)
             }
-            Command::NextWindow => self.simple(Simple::NextWindow).await,
-            Command::PrevWindow => self.simple(Simple::PrevWindow).await,
-            Command::LastWindow => self.simple(Simple::LastWindow).await,
-            Command::BreakPane => self.simple(Simple::BreakPane).await,
-            Command::SelectLayout { preset } => self.simple(Simple::SelectLayout(preset)).await,
-            Command::SpreadLayout => self.simple(Simple::SpreadLayout).await,
-            Command::SwapPane { next } => self.swap(next).await,
-            Command::SwapPaneMarked { source, target } => self.swap_marked(source, target).await,
-            Command::MarkPane { target } => self.mark_pane(target.as_deref()).await,
-            Command::ClearMark => self.clear_mark().await,
             other => return Err(other),
         };
         Ok(flow)
     }
 
-    /// Pane focus, keys, resize and agent operations. Other commands come back as `Err`.
-    async fn run_panes(&mut self, cmd: Command) -> Result<Flow, Command> {
+    /// Pane, window-navigation and layout operations. Other commands come back as `Err`.
+    async fn run_pane(&mut self, cmd: Command) -> Result<Flow, Command> {
         let flow = match cmd {
-            Command::SelectPane { target } => self.select_pane(target).await,
-            Command::SelectPaneDir { side } => self.select_dir(side).await,
-            Command::NextPane => self.simple(Simple::FocusNext).await,
-            Command::LastPane => self.simple(Simple::FocusLast).await,
-            Command::ResizePane { side, cells } => self.resize(side, cells).await,
+            Command::Window(WindowCommand::NextWindow) => self.simple(Simple::NextWindow).await,
+            Command::Window(WindowCommand::PrevWindow) => self.simple(Simple::PrevWindow).await,
+            Command::Window(WindowCommand::LastWindow) => self.simple(Simple::LastWindow).await,
+            Command::Pane(PaneCommand::BreakPane) => self.simple(Simple::BreakPane).await,
+            Command::Pane(PaneCommand::SelectLayout { preset }) => {
+                self.simple(Simple::SelectLayout(preset)).await
+            }
+            Command::Pane(PaneCommand::SpreadLayout) => self.simple(Simple::SpreadLayout).await,
+            Command::Pane(PaneCommand::SwapPane { next }) => self.swap(next).await,
+            Command::Pane(PaneCommand::SwapPaneMarked { source, target }) => {
+                self.swap_marked(source, target).await
+            }
+            Command::Pane(PaneCommand::MarkPane { target }) => {
+                self.mark_pane(target.as_deref()).await
+            }
+            Command::Pane(PaneCommand::ClearMark) => self.clear_mark().await,
+            Command::Pane(PaneCommand::SelectPane { target }) => self.select_pane(target).await,
+            Command::Pane(PaneCommand::SelectPaneDir { side }) => self.select_dir(side).await,
+            Command::Pane(PaneCommand::NextPane) => self.simple(Simple::FocusNext).await,
+            Command::Pane(PaneCommand::LastPane) => self.simple(Simple::FocusLast).await,
+            Command::Pane(PaneCommand::ResizePane { side, cells }) => {
+                self.resize(side, cells).await
+            }
             Command::SendKeys { target, keys } => self.send_keys(target, keys).await,
             Command::CopyCommand {
                 target,
@@ -174,9 +212,11 @@ impl App {
     /// Sessions, modes, overlays and the remaining commands.
     async fn run_ui(&mut self, cmd: Command) -> Flow {
         match cmd {
-            Command::SwitchSession { name } => self.go_session(&name).await,
-            Command::NextSession => self.step_session(true).await,
-            Command::PrevSession => self.step_session(false).await,
+            Command::Session(SessionCommand::SwitchSession { name }) => {
+                self.go_session(&name).await
+            }
+            Command::Session(SessionCommand::NextSession) => self.step_session(true).await,
+            Command::Session(SessionCommand::PrevSession) => self.step_session(false).await,
             Command::KillServer => self.kill_server().await,
             Command::ReloadConfig => self.reload_config().await,
             Command::SetOption {
@@ -190,26 +230,46 @@ impl App {
                 value_only,
                 quiet,
             } => self.show_options(name.as_deref(), value_only, quiet).await,
-            Command::JoinPane {
+            Command::Pane(PaneCommand::JoinPane {
                 src,
                 dst,
                 side_by_side,
-            } => self.join_pane(src, dst, side_by_side).await,
-            Command::SwapWindow { src, dst } => self.swap_window(src, dst).await,
-            Command::RespawnPane {
+            }) => self.join_pane(src, dst, side_by_side).await,
+            Command::Window(WindowCommand::SwapWindow { src, dst }) => {
+                self.swap_window(src, dst).await
+            }
+            Command::Pane(PaneCommand::RespawnPane {
                 target,
                 kill,
                 cwd,
                 command,
-            } => self.respawn_pane(target, kill, cwd, command).await,
+            }) => self.respawn_pane(target, kill, cwd, command).await,
             Command::Bind { table, key, line } => self.bind_key(table, &key, &line).await,
-            Command::FindWindow { pattern } => self.find_window(&pattern).await,
+            Command::Window(WindowCommand::FindWindow { pattern }) => {
+                self.find_window(&pattern).await
+            }
             Command::Sequence(commands) => Box::pin(self.run_sequence(commands)).await,
             Command::Zoom => self.toggle_zoom().await,
             Command::SetSynchronize { all, on } => self.set_synchronize(all, on).await,
             Command::CopyMode(opts) => self.copy_mode_cmd(opts).await,
             Command::Detach => Flow::Quit,
-            Command::RenameSession { name } => self.rename_session_cmd(name).await,
+            Command::Session(SessionCommand::RenameSession { name }) => {
+                self.rename_session_cmd(name).await
+            }
+            Command::Buffer(cmd) => self.buffer_command(cmd).await,
+            Command::Environment(cmd) => self.environment_command(cmd).await,
+            Command::SuspendClient => self.suspend_client(),
+            Command::Script(script) => self.run_script(script).await,
+            other => match self.run_overlay(other).await {
+                Ok(flow) => flow,
+                Err(cmd) => self.say(format!("unhandled command: {cmd:?}")),
+            },
+        }
+    }
+
+    /// Overlays, prompts and the message log. Other commands come back as `Err`.
+    async fn run_overlay(&mut self, cmd: Command) -> Result<Flow, Command> {
+        let flow = match cmd {
             Command::OpenTree => self.open_overlay(Overlay::tree()).await,
             Command::OpenHelp => self.open_help().await,
             Command::OpenPalette { tab } => self.open_palette(tab).await,
@@ -221,12 +281,10 @@ impl App {
                 let lines = self.message_log.clone();
                 self.open_overlay(Overlay::text("messages", lines)).await
             }
-            Command::Buffer(cmd) => self.buffer_command(cmd).await,
-            Command::Environment(cmd) => self.environment_command(cmd).await,
             Command::ChooseBuffer => self.open_overlay(Overlay::buffers()).await,
-            Command::SuspendClient => self.suspend_client(),
-            other => self.say(format!("unhandled command: {other:?}")),
-        }
+            other => return Err(other),
+        };
+        Ok(flow)
     }
 
     /// `select-window -t name`: selects the window with that name, or reports it missing.
@@ -510,11 +568,216 @@ impl App {
         }
     }
 
-    /// Commands one after the other, until one quits.
+    /// Commands one after the other, until one quits. A command that waits on the daemon starts a
+    /// job, and the commands after it run when the job finishes; a background one lets them run at
+    /// once. `if-shell -F` decides its branch here, without waiting.
     async fn run_sequence(&mut self, commands: Vec<Command>) -> Flow {
-        for cmd in commands {
-            if self.run(cmd).await == Flow::Quit {
-                return Flow::Quit;
+        let mut queue = VecDeque::from(commands);
+        while let Some(cmd) = queue.pop_front() {
+            match self.step(cmd).await {
+                Step::Next => {}
+                Step::Branch(cmd) => queue.push_front(cmd),
+                Step::Quit => return Flow::Quit,
+                Step::Background(work) => self.spawn_job(work, Vec::new()),
+                Step::Wait(work) => {
+                    self.spawn_job(work, queue.drain(..).collect());
+                    return Flow::Continue;
+                }
+            }
+        }
+        Flow::Continue
+    }
+
+    /// Plans one command of a sequence: the job it starts, the branch it runs, or it runs now.
+    async fn step(&mut self, cmd: Command) -> Step {
+        match cmd {
+            Command::Script(ScriptCommand::IfShell {
+                format: true,
+                target,
+                condition,
+                then,
+                otherwise,
+                ..
+            }) => {
+                let value = frame::expand_for(self, target.as_deref(), &condition);
+                let branch = if crate::format::truthy(&value) {
+                    Some(*then)
+                } else {
+                    otherwise.map(|o| *o)
+                };
+                branch.map_or(Step::Next, Step::Branch)
+            }
+            Command::Script(ScriptCommand::RunShell {
+                background,
+                target,
+                delay_ms,
+                command,
+            }) => {
+                let command = frame::expand_for(self, target.as_deref(), &command);
+                let work = Work::Shell {
+                    command,
+                    target,
+                    background,
+                    delay: delay_ms.map(Duration::from_millis),
+                };
+                if background { Step::Background(work) } else { Step::Wait(work) }
+            }
+            Command::Script(ScriptCommand::IfShell {
+                background,
+                target,
+                condition,
+                then,
+                otherwise,
+                ..
+            }) => {
+                let condition = frame::expand_for(self, target.as_deref(), &condition);
+                let work = Work::If {
+                    condition,
+                    target,
+                    then,
+                    otherwise,
+                };
+                if background { Step::Background(work) } else { Step::Wait(work) }
+            }
+            Command::Script(ScriptCommand::WaitFor { op, channel }) => {
+                Step::Wait(Work::Wait { op, channel })
+            }
+            cmd => {
+                if Box::pin(self.run(cmd)).await == Flow::Quit {
+                    Step::Quit
+                } else {
+                    Step::Next
+                }
+            }
+        }
+    }
+
+    /// The script commands: the ones that wait on the daemon run as a sequence of one, the rest act
+    /// at once.
+    async fn run_script(&mut self, script: ScriptCommand) -> Flow {
+        match script {
+            ScriptCommand::RunShell { .. }
+            | ScriptCommand::IfShell { .. }
+            | ScriptCommand::WaitFor { .. } => self.run_sequence(vec![Command::Script(script)]).await,
+            ScriptCommand::SetHook {
+                name,
+                command,
+                append,
+            } => {
+                let req = Request::Script(ScriptRequest::SetHook {
+                    name,
+                    command,
+                    append,
+                });
+                let result = self.client.call_ok("SetHook", req).await;
+                self.settle(result)
+            }
+            ScriptCommand::RunHook { name } => {
+                let req = Request::Script(ScriptRequest::RunHook { name });
+                let result = self.client.call_ok("RunHook", req).await;
+                self.settle(result)
+            }
+            ScriptCommand::ShowHooks => self.show_hooks().await,
+            ScriptCommand::SetAlias { name, command } => self.set_alias(name, command).await,
+            ScriptCommand::SourceFile { paths, quiet } => self.source_file(paths, quiet).await,
+        }
+    }
+
+    /// Starts a job for a command that waits on the daemon; `rest` are the commands that follow it.
+    fn spawn_job(&self, work: Work, rest: Vec<Command>) {
+        let endpoint = self.endpoint.clone();
+        let jobs = self.jobs.clone();
+        tokio::spawn(async move {
+            let finished = job::run(&endpoint, work, rest).await;
+            let _ = jobs.send(finished);
+        });
+    }
+
+    /// Applies a finished job: its output goes to the status row, and the commands that followed
+    /// its command run.
+    pub async fn finish_job(&mut self, finished: Job) -> Flow {
+        match finished.outcome {
+            Ok(lines) => {
+                for line in lines {
+                    self.say(line);
+                }
+            }
+            Err(e) => {
+                self.say(e);
+            }
+        }
+        self.run_sequence(finished.then).await
+    }
+
+    async fn show_hooks(&mut self) -> Flow {
+        let lines = match self.client.call(Request::Script(ScriptRequest::ShowHooks)).await {
+            Ok(Response::Hooks(hooks)) => Ok(hooks
+                .into_iter()
+                .map(|(name, command)| format!("{name} {command}"))
+                .collect()),
+            Ok(Response::Error(e)) | Err(e) => Err(e),
+            Ok(other) => Err(format!("unexpected response to show-hooks: {other:?}")),
+        };
+        self.show_lines("hooks", lines).await
+    }
+
+    /// Opens the overlay `title` with `lines`, or says the error.
+    async fn show_lines(&mut self, title: &str, lines: Result<Vec<String>, String>) -> Flow {
+        match lines {
+            Ok(lines) => self.open_overlay(Overlay::text(title, lines)).await,
+            Err(e) => self.say(e),
+        }
+    }
+
+    /// `set -s command-alias`: the alias is set in the daemon and here, and bindings made from now
+    /// on expand it.
+    async fn set_alias(&mut self, name: String, command: Option<String>) -> Flow {
+        let req = Request::Script(ScriptRequest::SetAlias {
+            name: name.clone(),
+            command: command.clone(),
+        });
+        let result = self.client.call_ok("SetAlias", req).await;
+        if result.is_ok() {
+            match &command {
+                Some(command) => self.config.alias.insert(name, command.clone()),
+                None => self.config.alias.remove(&name),
+            };
+            self.apply_bindings().await;
+        }
+        self.settle(result)
+    }
+
+    /// `source-file`: runs the commands of each file, in order. A line that does not parse is
+    /// reported and skipped; a missing file is reported unless `-q` silences it.
+    async fn source_file(&mut self, paths: Vec<String>, quiet: bool) -> Flow {
+        let vars = crate::format::session_vars(&self.session);
+        for path in paths {
+            let text = match std::fs::read_to_string(&path) {
+                Ok(text) => text,
+                Err(e) if quiet && e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => {
+                    self.say(format!("{path}: {e}"));
+                    continue;
+                }
+            };
+            let lines = match crate::source::lines(&text, |fmt| crate::format::expand(fmt, &vars)) {
+                Ok(lines) => lines,
+                Err(e) => {
+                    self.say(format!("{path}: {e}"));
+                    continue;
+                }
+            };
+            for (line, text) in lines {
+                match parse_in(&text, &self.config.alias) {
+                    Ok(command) => {
+                        if self.run_sequence(vec![command]).await == Flow::Quit {
+                            return Flow::Quit;
+                        }
+                    }
+                    Err(e) => {
+                        self.say(format!("{path}:{line}: {e}"));
+                    }
+                }
             }
         }
         Flow::Continue
@@ -553,20 +816,16 @@ impl App {
 
     /// `list-buffers`: one line per paste buffer, newest first, each rendered by `format`.
     async fn list_buffers(&mut self, format: Option<String>) -> Flow {
-        match self.client.list_buffers().await {
-            Ok(buffers) => {
-                let lines = match format {
-                    Some(format) => buffers
-                        .iter()
-                        .map(|buffer| expand(&format, &buffer_vars(buffer)))
-                        .collect(),
-                    None => buffers.iter().map(buffer_summary).collect(),
-                };
-                self.open_overlay(Overlay::text("list-buffers", lines))
-                    .await
+        let lines: Result<Vec<String>, String> = self.client.list_buffers().await.map(|buffers| {
+            match format {
+                Some(format) => buffers
+                    .iter()
+                    .map(|buffer| expand(&format, &buffer_vars(buffer)))
+                    .collect(),
+                None => buffers.iter().map(buffer_summary).collect(),
             }
-            Err(e) => self.say(e),
-        }
+        });
+        self.show_lines("list-buffers", lines).await
     }
 
     /// `show-buffer`: the text of a paste buffer, in an overlay.

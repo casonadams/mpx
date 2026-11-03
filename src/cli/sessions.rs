@@ -119,6 +119,7 @@ async fn dispatch(command: Commands, r: Resolved) -> Result<i32, String> {
         Commands::ImportTmux { file } => import_tmux(file.as_deref()),
         Commands::Buffers(cmd) => buffers::run(cmd, &r).await,
         Commands::Environment(cmd) => environment::run(cmd, &r).await,
+        Commands::Hooks(cmd) => super::hooks::run(cmd, &r).await,
         other => panes::run(other, &r).await,
     }
 }

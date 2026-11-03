@@ -11,6 +11,9 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
 use tracing::warn;
 
+use super::SESSION_GONE;
+use super::channels::Channels;
+use super::hooks::{self, HookTable, Tx};
 use super::idempotency::{Claim, IdemCache};
 use super::plan::{self, PaneIdentity};
 use super::snapshot::{PaneRecord, build_snapshot};
@@ -24,23 +27,49 @@ use crate::node::process::basename;
 use crate::node::sink::Sink;
 use crate::node::sleep_until_opt;
 use crate::node::{SpawnSpec, now_ms};
+use crate::format::{self, Vars};
 use crate::protocol::{
-    BufferRequest, NewWindowOpts, NodeInfo, NodeRequest, PaneId, PaneRequest, Request, Response,
-    SessionInfo, SessionRequest, SpawnOpts, SplitOpts, StreamEvent, WindowRequest,
+    BufferRequest, ChannelOp, HOOK_EVENTS, NewWindowOpts, NodeInfo, NodeRequest, PaneId,
+    PaneRequest, Request, Response, ScriptRequest, SessionInfo, SessionRequest, SpawnOpts,
+    SplitOpts, StreamEvent, WindowRequest,
 };
 use crate::protocol::{EnvEntry, PasteBufferOpts};
+use crate::tui::command::{Command, parse_in};
 use crate::store::{SessionSnapshot, SnapshotStore, WindowPlan, plan_restore};
 use crate::vt::capture::CaptureSpec;
 
 pub(super) type Reply<T> = oneshot::Sender<T>;
 
+/// Sends `req` to the session as `origin`, answering with the session's response, or with why none
+/// came.
+pub(super) async fn ask_req(
+    tx: &mpsc::UnboundedSender<SessionMsg>,
+    origin: Origin,
+    req: Request,
+) -> Result<Response, String> {
+    pane::ask_actor(tx, SESSION_GONE, |reply| SessionMsg::Req {
+        req: Box::new(req),
+        origin,
+        reply,
+    })
+    .await
+}
+
 const SAVE_DEBOUNCE: Duration = Duration::from_millis(400);
+
+/// Where a request came from. A hook's own requests fire no hooks, so a hook cannot loop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Origin {
+    Client,
+    Hook,
+}
 
 /// Messages to the session actor.
 pub(super) enum SessionMsg {
     /// A request the session answers by itself.
     Req {
         req: Box<Request>,
+        origin: Origin,
         reply: Reply<Response>,
     },
     Lookup {
@@ -50,6 +79,7 @@ pub(super) enum SessionMsg {
     /// Starts a kill. `Some` is a running pane whose exit the caller waits for.
     Kill {
         target: String,
+        origin: Origin,
         reply: Reply<Result<Option<oneshot::Receiver<()>>, String>>,
     },
     KillWindow {
@@ -59,6 +89,8 @@ pub(super) enum SessionMsg {
     Shutdown {
         reply: Reply<Vec<oneshot::Receiver<()>>>,
     },
+    /// Hook and script messages, see `HookMsg`.
+    Hook(HookMsg),
     Subscribe {
         filter: Filter,
         sink: Sink,
@@ -82,6 +114,33 @@ pub(super) enum SessionMsg {
         key: String,
     },
     Notice(PaneNotice),
+}
+
+/// Messages of the hooks and the scripts they run, apart from requests.
+pub(super) enum HookMsg {
+    /// `wait-for`: answers when the channel allows it; `Wait` and `Lock` may keep waiting.
+    Channel {
+        channel: String,
+        op: ChannelOp,
+        reply: Reply<Result<(), String>>,
+    },
+    /// The program and working directory of a `run-shell` for `target` (the active pane when
+    /// `None`).
+    ShellEnv {
+        target: Option<String>,
+        reply: Reply<Result<(String, Option<String>), String>>,
+    },
+    /// An event of the session that hooks may run on, with the pane it concerns.
+    Event {
+        event: &'static str,
+        pane: Option<String>,
+    },
+    /// A command line parsed with the session's aliases, with the context it runs in: the
+    /// active pane is its target.
+    Parse {
+        line: String,
+        reply: Reply<Result<(Command, hooks::Context), String>>,
+    },
 }
 
 /// Which session-wide events a subscriber receives.
@@ -174,6 +233,10 @@ struct Session {
     created_ms: u64,
     restored_ms: Option<u64>,
     notifier: Notifier,
+    /// The session's own mailbox: hook commands send their requests here.
+    tx: Tx,
+    hooks: HookTable,
+    channels: Channels,
     workspace: Workspace,
     /// Live panes and exited panes kept on screen (`remain_on_exit`).
     nodes: HashMap<String, Entry>,
@@ -204,6 +267,7 @@ pub(super) async fn run(boot: Boot, mut rx: mpsc::UnboundedReceiver<SessionMsg>)
         ready,
         pacing,
     } = boot;
+    let hook_tx = tx.clone();
     let notifier: Notifier = Arc::new(move |notice| {
         let _ = tx.send(SessionMsg::Notice(notice));
     });
@@ -217,6 +281,9 @@ pub(super) async fn run(boot: Boot, mut rx: mpsc::UnboundedReceiver<SessionMsg>)
         created_ms: now_ms(),
         restored_ms: None,
         notifier,
+        tx: hook_tx,
+        hooks: HookTable::default(),
+        channels: Channels::default(),
         workspace,
         nodes: HashMap::new(),
         history: VecDeque::new(),
@@ -235,11 +302,7 @@ pub(super) async fn run(boot: Boot, mut rx: mpsc::UnboundedReceiver<SessionMsg>)
     let _ = ready.send(());
 
     loop {
-        let next = tokio::select! {
-            msg = rx.recv() => msg.map_or(Next::Closed, Next::Msg),
-            () = sleep_until_opt(session.save_due) => Next::Save,
-            () = sleep_until_opt(session.silence_due()) => Next::Silence,
-        };
+        let next = next_event(&session, &mut rx).await;
         match next {
             Next::Msg(msg) => session.handle(msg).await,
             Next::Save => {
@@ -252,29 +315,27 @@ pub(super) async fn run(boot: Boot, mut rx: mpsc::UnboundedReceiver<SessionMsg>)
     }
 }
 
+/// Waits for the next message, the save deadline, or the silence deadline.
+async fn next_event(session: &Session, rx: &mut mpsc::UnboundedReceiver<SessionMsg>) -> Next {
+    tokio::select! {
+        msg = rx.recv() => msg.map_or(Next::Closed, Next::Msg),
+        () = sleep_until_opt(session.save_due) => Next::Save,
+        () = sleep_until_opt(session.silence_due()) => Next::Silence,
+    }
+}
+
 impl Session {
     async fn handle(&mut self, msg: SessionMsg) {
         match msg {
-            SessionMsg::Req { req, reply } => {
-                let mutates = !is_read_only(&req);
-                let before = mutates.then(|| self.workspace.clone());
-                let resp = self.request(*req).await;
-                if mutates {
-                    self.schedule_save();
-                }
-                if before.is_some_and(|before| before != self.workspace) {
-                    self.fanout(&StreamEvent::Layout);
-                }
-                let _ = reply.send(resp);
-            }
+            SessionMsg::Req { req, origin, reply } => self.serve(*req, origin, reply).await,
             SessionMsg::Lookup { target, reply } => {
                 let _ = reply.send(self.handle_of(&target));
             }
-            SessionMsg::Kill { target, reply } => {
-                let result = self.kill(&target);
-                self.schedule_save();
-                let _ = reply.send(result);
-            }
+            SessionMsg::Kill {
+                target,
+                origin,
+                reply,
+            } => self.kill_msg(&target, origin, reply),
             SessionMsg::KillWindow { index, reply } => {
                 let result = self.kill_window(index);
                 self.schedule_save();
@@ -308,6 +369,7 @@ impl Session {
             SessionMsg::IdemFinish { key, value } => self.idem.finish(&key, *value, now_ms()),
             SessionMsg::IdemAbandon { key } => self.idem.abandon(&key),
             SessionMsg::Notice(notice) => self.notice(notice),
+            SessionMsg::Hook(msg) => self.hook(msg).await,
         }
     }
 
@@ -331,29 +393,263 @@ impl Session {
         }
     }
 
-    fn notice(&mut self, notice: PaneNotice) {
-        match notice {
-            PaneNotice::Event(event) => {
-                if let StreamEvent::Output { name, data, .. } = &event {
-                    if self.config.monitor_bell && data.contains('\x07') {
-                        self.workspace.mark_bell(name);
-                    }
-                    if self.config.monitor_activity {
-                        self.workspace.mark_activity(name);
-                    }
-                    self.workspace.note_output(name, std::time::Instant::now());
-                }
-                self.fanout(&event);
+    /// Answers a request, then fires the hooks it caused: the layout changed, a window or pane was
+    /// made, or a client selected one.
+    async fn serve(&mut self, req: Request, origin: Origin, reply: Reply<Response>) {
+        let mutates = !is_read_only(&req);
+        let before = mutates.then(|| self.workspace.clone());
+        let made = match req {
+            Request::Pane(PaneRequest::Split(_)) => Some("after-split-window"),
+            Request::Window(WindowRequest::New(_)) => Some("after-new-window"),
+            _ => None,
+        };
+        let selected = (origin == Origin::Client && selects(&req))
+            .then(|| (self.workspace.active_idx, self.active_pane()));
+        let resp = self.request(req).await;
+        if mutates {
+            self.schedule_save();
+        }
+        if before.is_some_and(|before| before != self.workspace) {
+            self.fanout(&StreamEvent::Layout);
+        }
+        if origin == Origin::Client && !matches!(resp, Response::Error(_)) {
+            if let (Some(event), Response::Node(info)) = (made, &resp) {
+                self.fire(event, Some(info.name.clone()));
             }
-            PaneNotice::Exited { name, id, code } => {
-                if self.finish(&name, id, code) {
-                    self.fanout(&StreamEvent::Exit {
-                        name: name.clone(),
-                        code,
-                    });
-                }
+            if let Some((window, pane)) = selected {
+                self.fire_selection(window, pane);
             }
         }
+        let _ = reply.send(resp);
+    }
+
+    /// Starts a kill for a client or a hook. A client's kill that worked fires `after-kill-pane`.
+    fn kill_msg(
+        &mut self,
+        target: &str,
+        origin: Origin,
+        reply: Reply<Result<Option<oneshot::Receiver<()>>, String>>,
+    ) {
+        let killed = self.target_name(target).ok();
+        let result = self.kill(target);
+        self.schedule_save();
+        if let Some(name) = killed
+            && origin == Origin::Client
+            && result.is_ok()
+        {
+            self.fire("after-kill-pane", Some(name));
+        }
+        let _ = reply.send(result);
+    }
+
+    /// A message from a hook, or the session event that hooks run on.
+    async fn hook(&mut self, msg: HookMsg) {
+        match msg {
+            HookMsg::Channel { channel, op, reply } => self.channel(&channel, op, reply),
+            HookMsg::ShellEnv { target, reply } => {
+                let env = self.shell_env(target).await;
+                let _ = reply.send(env);
+            }
+            HookMsg::Event { event, pane } => self.fire(event, pane),
+            HookMsg::Parse { line, reply } => {
+                let _ = reply.send(self.parse_script(&line));
+            }
+        }
+    }
+
+    /// `line` as a command with the session's aliases, and the hook context it runs in: the active
+    /// pane is the target the commands act on by default.
+    fn parse_script(&self, line: &str) -> Result<(Command, hooks::Context), String> {
+        let command = parse_in(line, &self.config.alias)?;
+        let ctx = hooks::Context {
+            event: String::new(),
+            pane: self.active_pane(),
+            base_index: self.config.base_index,
+        };
+        Ok((command, ctx))
+    }
+
+    fn notice(&mut self, notice: PaneNotice) {
+        match notice {
+            PaneNotice::Event(event) => self.pane_event(event),
+            PaneNotice::Exited { name, id, code } => self.pane_exited(name, id, code),
+        }
+    }
+
+    /// Fires the bell and activity alerts an output event raises, then relays the event.
+    fn pane_event(&mut self, event: StreamEvent) {
+        if let StreamEvent::Output { name, data, .. } = &event {
+            if self.config.monitor_bell && data.contains('\x07') && self.workspace.mark_bell(name) {
+                self.fire("alert-bell", Some(name.clone()));
+            }
+            if self.config.monitor_activity && self.workspace.mark_activity(name) {
+                self.fire("alert-activity", Some(name.clone()));
+            }
+            self.workspace.note_output(name, std::time::Instant::now());
+        }
+        self.fanout(&event);
+    }
+
+    /// A pane's process ended: its exit fires the hooks and reaches the subscribers.
+    fn pane_exited(&mut self, name: String, id: PaneId, code: Option<i32>) {
+        if self.finish(&name, id, code) {
+            self.fire("pane-exited", Some(name.clone()));
+            if self.nodes.contains_key(&name) {
+                self.fire("pane-died", Some(name.clone()));
+            }
+            self.fanout(&StreamEvent::Exit {
+                name: name.clone(),
+                code,
+            });
+        }
+    }
+
+    /// Fires `after-select-window` and `after-select-pane` for what a selection changed.
+    fn fire_selection(&self, window: usize, pane: Option<String>) {
+        if self.workspace.active_idx != window {
+            self.fire("after-select-window", self.active_pane());
+        }
+        if self.active_pane() != pane {
+            self.fire("after-select-pane", self.active_pane());
+        }
+    }
+
+    fn active_pane(&self) -> Option<String> {
+        self.workspace.active_window().and_then(|w| w.focused.clone())
+    }
+
+    /// Runs the commands of hook `event` for `pane`, when any are set.
+    fn fire(&self, event: &str, pane: Option<String>) {
+        let lines = self.hooks.commands(event);
+        if lines.is_empty() {
+            return;
+        }
+        let commands = lines
+            .iter()
+            .filter_map(|line| match parse_in(line, &self.config.alias) {
+                Ok(command) => Some(command),
+                Err(e) => {
+                    warn!("hook {event}: {line}: {e}");
+                    None
+                }
+            })
+            .collect();
+        let ctx = hooks::Context {
+            event: event.to_string(),
+            pane,
+            base_index: self.config.base_index,
+        };
+        hooks::spawn(self.tx.clone(), ctx, commands);
+    }
+
+    /// `wait-for`: a signal or unlock answers at once; a wait or lock answers when the channel
+    /// lets it through.
+    fn channel(&mut self, channel: &str, op: ChannelOp, reply: Reply<Result<(), String>>) {
+        let result = match op {
+            ChannelOp::Wait => return self.channels.wait(channel, reply),
+            ChannelOp::Lock => return self.channels.lock_channel(channel, reply),
+            ChannelOp::Signal => {
+                self.channels.signal(channel);
+                Ok(())
+            }
+            ChannelOp::Unlock => self.channels.unlock(channel),
+        };
+        let _ = reply.send(result);
+    }
+
+    /// The program `run-shell` runs and the directory it starts in: the target pane's, when it
+    /// has one.
+    async fn shell_env(&self, target: Option<String>) -> Result<(String, Option<String>), String> {
+        let program = self
+            .config
+            .default_shell
+            .clone()
+            .or_else(|| std::env::var("SHELL").ok())
+            .unwrap_or_else(|| "sh".to_string());
+        let cwd = match target.or_else(|| self.active_pane()) {
+            Some(target) => self.cwd(&target).await?,
+            None => None,
+        };
+        Ok((program, cwd))
+    }
+
+    /// `fmt` with the formats expanded for pane `target` (the active pane when `None`).
+    async fn format(
+        &self,
+        fmt: &str,
+        target: Option<String>,
+        hook: Option<&str>,
+    ) -> Result<String, String> {
+        let vars = self.format_vars(target, hook).await?;
+        Ok(format::expand(fmt, &vars))
+    }
+
+    /// The variables of pane `target` (the active pane when `None`), or of the session alone
+    /// when there is no pane. A hook adds its own variables: `hook` and `hook_pane`.
+    async fn format_vars(&self, target: Option<String>, hook: Option<&str>) -> Result<Vars, String> {
+        let name = match target {
+            Some(target) => Some(self.target_name(&target)?),
+            None => self.active_pane(),
+        };
+        let mut vars = match name {
+            Some(name) => {
+                let node = self.info_of(&name, true).await?;
+                let window = node.window.unwrap_or(0);
+                let slot = self
+                    .workspace
+                    .windows
+                    .get(window)
+                    .and_then(|w| w.leaves().iter().position(|leaf| leaf == &name))
+                    .unwrap_or(0);
+                let tabs = self.workspace.window_tabs();
+                let mut view = format::pane_view(&self.session, slot, &node, &[], &tabs);
+                view.window_base = self.config.base_index;
+                view.pane_base = self.config.pane_base_index;
+                format::pane_vars(&view)
+            }
+            None => format::session_vars(&self.session),
+        };
+        if let Some(event) = hook {
+            let pane_id = vars.get("pane_id").cloned().unwrap_or_default();
+            vars.insert("hook", event.to_string());
+            vars.insert("hook_pane", pane_id);
+        }
+        Ok(vars)
+    }
+
+    /// `set-hook`: the commands of a hook, after checking that the hook exists and they parse.
+    fn set_hook(&mut self, name: &str, command: Option<String>, append: bool) -> Response {
+        if !HOOK_EVENTS.contains(&name) {
+            return Response::Error(format!("unknown hook '{name}'"));
+        }
+        if let Some(line) = &command
+            && let Err(e) = parse_in(line, &self.config.alias)
+        {
+            return Response::Error(e);
+        }
+        self.hooks.set(name, command, append);
+        Response::Ok
+    }
+
+    /// `set-hook -R`: runs the commands of a hook now, for the active pane.
+    fn run_hook(&self, name: &str) -> Response {
+        if !HOOK_EVENTS.contains(&name) {
+            return Response::Error(format!("unknown hook '{name}'"));
+        }
+        self.fire(name, self.active_pane());
+        Response::Ok
+    }
+
+    /// `set -s command-alias`: sets the alias `name`, or removes it.
+    fn set_alias(&mut self, name: String, command: Option<String>) -> Response {
+        if name.is_empty() || name.contains(char::is_whitespace) {
+            return Response::Error(format!("invalid alias name '{name}'"));
+        }
+        match command {
+            Some(command) => self.config.alias.insert(name, command),
+            None => self.config.alias.remove(&name),
+        };
+        Response::Ok
     }
 
     /// Panes relay output to the session only while session-wide subscribers exist: relaying every
@@ -392,6 +688,7 @@ impl Session {
             Request::Window(req) => self.window_request(req).await,
             Request::Buffer(req) => self.buffer_request(req).await,
             Request::Session(req) => self.session_request(req).await,
+            Request::Script(req) => self.script_request(req).await,
             Request::Shutdown | Request::Idempotent { .. } | Request::Subscribe { .. } => {
                 Response::Error("Request is handled by the connection".to_string())
             }
@@ -458,6 +755,30 @@ impl Session {
                 show_environment(self.stores.environment(), name.as_deref())
             }
             SessionRequest::Layout { width, height } => self.layout(width, height).await,
+        }
+    }
+
+    /// The script group: formats, hooks and aliases, which the session evaluates itself. The
+    /// commands that run a shell or wait on a channel are answered by the connection.
+    async fn script_request(&mut self, req: ScriptRequest) -> Response {
+        match req {
+            ScriptRequest::Format { fmt, target, hook } => reply(
+                self.format(&fmt, target, hook.as_deref()).await,
+                Response::Text,
+            ),
+            ScriptRequest::SetHook {
+                name,
+                command,
+                append,
+            } => self.set_hook(&name, command, append),
+            ScriptRequest::RunHook { name } => self.run_hook(&name),
+            ScriptRequest::ShowHooks => Response::Hooks(self.hooks.list()),
+            ScriptRequest::SetAlias { name, command } => self.set_alias(name, command),
+            ScriptRequest::RunShell { .. }
+            | ScriptRequest::RunCommand { .. }
+            | ScriptRequest::WaitFor { .. } => {
+                Response::Error("Request is handled by the connection".to_string())
+            }
         }
     }
 
@@ -1428,6 +1749,22 @@ fn is_read_only(req: &Request) -> bool {
                     | SessionRequest::GetBindings
                     | SessionRequest::ShowEnvironment { .. }
                     | SessionRequest::Layout { .. }
+            )
+    )
+}
+
+/// Requests that select a window or a pane: they fire the selection hooks when they change it.
+fn selects(req: &Request) -> bool {
+    matches!(
+        req,
+        Request::Pane(
+            PaneRequest::Focus { .. } | PaneRequest::FocusNext | PaneRequest::FocusLast { .. },
+        )
+            | Request::Window(
+                WindowRequest::Next
+                    | WindowRequest::Prev
+                    | WindowRequest::Last
+                    | WindowRequest::Select { .. },
             )
     )
 }

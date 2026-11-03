@@ -90,6 +90,12 @@ pub async fn fresh() -> (TestDaemon, Client) {
     (daemon, client)
 }
 
+/// Asserts that the daemon refused a request: `result` is an error containing `needle`.
+pub fn assert_refused(result: Result<(), String>, needle: &str) {
+    let err = result.expect_err("the daemon refuses the request");
+    assert!(err.contains(needle), "error: {err}");
+}
+
 /// The window tabs of the session, in window order (one layout request).
 pub async fn tabs(client: &mut Client) -> Vec<WindowTab> {
     client.layout(80, 24).await.unwrap().2

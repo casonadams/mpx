@@ -1,3 +1,5 @@
+use clap::Subcommand;
+
 use super::Commands;
 use super::render::{FollowStep, follow_step};
 use super::resolve::{Resolved, parse_env_pairs, wait_condition, wait_exit_code};
@@ -30,6 +32,103 @@ pub struct RunRequest {
     pub remain: bool,
     pub command: String,
     pub args: Vec<String>,
+}
+
+/// The node commands of the CLI, flattened into `Commands`.
+#[derive(Subcommand, Debug)]
+pub enum NodeCommands {
+    /// Read or stream logs from a node
+    Logs {
+        /// Name of the node
+        name: String,
+
+        /// Follow stream live
+        #[arg(short, long)]
+        follow: bool,
+
+        /// Number of lines to show from history
+        #[arg(short = 'n', long, visible_alias = "tail")]
+        lines: Option<usize>,
+
+        /// Render scrollback as plain text (no escape sequences)
+        #[arg(long)]
+        plain: bool,
+
+        /// Only output after this byte offset (the `next` value of a previous call)
+        #[arg(long)]
+        since: Option<u64>,
+
+        /// Print {"data": ..., "next": ...}
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Send raw input (plus a newline) to a running node's stdin
+    Send {
+        /// Name of the node
+        name: String,
+
+        /// Input data string
+        data: String,
+    },
+
+    /// Send keys to a pane (tmux send-keys); key names such as Enter, C-c, or literal text with -l
+    #[command(name = "send-keys")]
+    SendKeys {
+        #[arg(short = 't', long = "target")]
+        target: Option<String>,
+
+        /// Send the operands as literal text
+        #[arg(short = 'l', long = "literal")]
+        literal: bool,
+
+        /// Keys or text
+        #[arg(allow_hyphen_values = true)]
+        keys: Vec<String>,
+    },
+
+    /// Paste text into a pane; `-` reads stdin
+    Paste {
+        #[arg(short = 't', long = "target")]
+        target: Option<String>,
+
+        /// Press Enter after the paste
+        #[arg(long)]
+        submit: bool,
+
+        /// Text to paste, or `-` for stdin
+        #[arg(allow_hyphen_values = true)]
+        text: String,
+    },
+
+    /// Terminate a running node
+    Kill {
+        /// Name of the node
+        name: String,
+    },
+
+    /// Wait for a node: exit code (default), idle output, screen match, or agent state
+    Wait {
+        /// Name of the node
+        name: String,
+
+        /// Give up after this many seconds (exit 124)
+        #[arg(long)]
+        timeout: Option<u64>,
+
+        /// Wait until no output for this many milliseconds
+        #[arg(long)]
+        idle: Option<u64>,
+
+        /// Wait until the screen or output matches this regex
+        #[arg(long = "match")]
+        pattern: Option<String>,
+    },
+    /// Snapshot the 2D virtual terminal screen of a node
+    Screen {
+        /// Name of the node
+        name: String,
+    },
 }
 
 pub fn default_node_name(command: &str) -> String {
@@ -91,17 +190,10 @@ pub async fn focused_name(client: &mut Client) -> Result<String, String> {
         .ok_or_else(|| "no focused pane".to_string())
 }
 
-pub async fn run(cmd: Commands, r: &Resolved) -> Result<i32, String> {
+/// Runs a node command: logs, input, waits, screen captures and kills.
+async fn node_command(cmd: NodeCommands, r: &Resolved) -> Result<i32, String> {
     match cmd {
-        Commands::Run {
-            name,
-            pty,
-            cwd,
-            env,
-            remain,
-            argv,
-        } => run_command(r, name, pty, cwd, env, remain, argv).await,
-        Commands::Logs {
+        NodeCommands::Logs {
             name,
             follow,
             lines,
@@ -122,19 +214,19 @@ pub async fn run(cmd: Commands, r: &Resolved) -> Result<i32, String> {
             )
             .await
         }
-        Commands::Send { name, data } => send(r, &name, &data).await,
-        Commands::SendKeys {
+        NodeCommands::Send { name, data } => send(r, &name, &data).await,
+        NodeCommands::SendKeys {
             target,
             literal,
             keys,
         } => send_keys(r, target.as_deref(), literal, keys).await,
-        Commands::Paste {
+        NodeCommands::Paste {
             target,
             submit,
             text,
         } => paste(r, target.as_deref(), submit, &text).await,
-        Commands::Kill { name } => kill_node(r, &name).await,
-        Commands::Wait {
+        NodeCommands::Kill { name } => kill_node(r, &name).await,
+        NodeCommands::Wait {
             name,
             timeout,
             idle,
@@ -149,7 +241,21 @@ pub async fn run(cmd: Commands, r: &Resolved) -> Result<i32, String> {
             )
             .await
         }
-        Commands::Screen { name } => screen_node(r, &name).await,
+        NodeCommands::Screen { name } => screen_node(r, &name).await,
+    }
+}
+
+pub async fn run(cmd: Commands, r: &Resolved) -> Result<i32, String> {
+    match cmd {
+        Commands::Run {
+            name,
+            pty,
+            cwd,
+            env,
+            remain,
+            argv,
+        } => run_command(r, name, pty, cwd, env, remain, argv).await,
+        Commands::Nodes(cmd) => node_command(cmd, r).await,
         Commands::Split {
             target,
             name,

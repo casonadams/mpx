@@ -4,10 +4,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::idempotency::Claim;
-use super::session::{SessionMsg, reply};
-use super::{DaemonState, KILL_GRACE};
+use super::session::{HookMsg, Origin, SessionMsg, reply};
+use super::hooks;
+use super::{DaemonState, KILL_GRACE, shell};
 use crate::node::pane::LogQuery;
-use crate::protocol::{NodeRequest, Request, Response, WindowRequest};
+use crate::protocol::{NodeRequest, Request, Response, ScriptRequest, WindowRequest};
 
 pub(super) async fn dispatch(state: &Arc<DaemonState>, req: Request) -> Response {
     match req {
@@ -71,6 +72,33 @@ pub(super) async fn execute(state: &Arc<DaemonState>, req: Request) -> Response 
         Request::Shutdown => shutdown(state).await,
         Request::Node(NodeRequest::Kill { name }) => kill(state, &name).await,
         Request::Window(WindowRequest::Kill { index }) => kill_window(state, index).await,
+        Request::Script(ScriptRequest::RunShell {
+            command,
+            target,
+            background,
+            delay_ms,
+        }) => {
+            let job = shell::Job {
+                command,
+                target,
+                background,
+                delay: delay_ms.map(Duration::from_millis),
+            };
+            match shell::run(state.session_tx(), job).await {
+                Ok(resp) => resp,
+                Err(e) => Response::Error(e),
+            }
+        }
+        Request::Script(ScriptRequest::RunCommand { line }) => run_line(state, &line).await,
+        Request::Script(ScriptRequest::WaitFor { channel, op }) => {
+            match state
+                .ask(|reply| SessionMsg::Hook(HookMsg::Channel { channel, op, reply }))
+                .await
+            {
+                Ok(Ok(())) => Response::Ok,
+                Ok(Err(e)) | Err(e) => Response::Error(e),
+            }
+        }
         Request::Node(NodeRequest::Wait {
             name,
             condition,
@@ -121,7 +149,14 @@ async fn shutdown(state: &Arc<DaemonState>) -> Response {
 
 async fn kill(state: &Arc<DaemonState>, name: &str) -> Response {
     let target = name.to_string();
-    match state.ask(|reply| SessionMsg::Kill { target, reply }).await {
+    match state
+        .ask(|reply| SessionMsg::Kill {
+            target,
+            origin: Origin::Client,
+            reply,
+        })
+        .await
+    {
         Ok(Ok(Some(exit))) => {
             await_exits(vec![exit]).await;
             Response::Ok
@@ -160,3 +195,20 @@ async fn wait(
     reply(waited.await, Response::WaitResult)
 }
 
+/// `RunCommand`: parses `line` with the session's aliases and runs it as a hook's command would.
+async fn run_line(state: &Arc<DaemonState>, line: &str) -> Response {
+    let parsed = state
+        .ask(|reply| SessionMsg::Hook(HookMsg::Parse {
+            line: line.to_string(),
+            reply,
+        }))
+        .await;
+    let outcome = match parsed {
+        Ok(Ok((command, ctx))) => hooks::run_now(state.session_tx().clone(), ctx, command).await,
+        Ok(Err(e)) | Err(e) => Err(e),
+    };
+    match outcome {
+        Ok(()) => Response::Ok,
+        Err(e) => Response::Error(e),
+    }
+}

@@ -3,8 +3,9 @@
 use super::copy::CopyAction;
 use super::keymap::Table;
 use super::prompt::PromptKind;
-use crate::protocol::{EnvChange, LayoutPreset, PasteBufferOpts, Side};
+use crate::protocol::{ChannelOp, EnvChange, HOOK_EVENTS, LayoutPreset, PasteBufferOpts, Side};
 use crate::vt::capture::CaptureSpec;
+use std::collections::BTreeMap;
 
 /// The options of `copy-mode`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -48,59 +49,12 @@ pub struct PromptSpec {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
-    /// `side_by_side`: vertical divider (`:vsplit`, tmux `split-window -h`).
-    SplitWindow {
-        side_by_side: bool,
-        argv: Vec<String>,
-        cwd: Option<String>,
-        detach: bool,
-    },
-    NewWindow {
-        name: Option<String>,
-        argv: Vec<String>,
-        cwd: Option<String>,
-    },
-    KillPane {
-        target: Option<String>,
-    },
-    KillWindow {
-        index: Option<usize>,
-    },
-    RenameWindow {
-        name: String,
-    },
-    SelectPane {
-        target: String,
-    },
-    SelectPaneDir {
-        side: Side,
-    },
-    MarkPane {
-        target: Option<String>,
-    },
-    ClearMark,
-    SelectWindow {
-        index: usize,
-    },
-    /// `select-window -t name`: the window with that name.
-    SelectWindowNamed {
-        name: String,
-    },
-    /// `rotate-window [-D]`: the active window's panes move through its layout slots.
-    RotateWindow {
-        down: bool,
-    },
-    /// `move-window -t index`: moves the active window to that index (`-r` renumbers instead).
-    MoveWindow {
-        to: usize,
-    },
-    /// `move-window -r`: renumbers the windows 0, 1, ... in order.
-    RenumberWindows,
-    /// `display-message [-p] [format]`: the expanded format on the status row; with no format it
-    /// describes the current pane.
-    DisplayMessage {
-        format: Option<String>,
-    },
+    /// The window commands: see `WindowCommand`.
+    Window(WindowCommand),
+    /// The pane commands: see `PaneCommand`.
+    Pane(PaneCommand),
+    /// The session commands: see `SessionCommand`.
+    Session(SessionCommand),
     /// `set-option [-gwsqu] name [value]`: sets a TUI option for this client; `-u` restores the
     /// default, `-q` ignores an unknown option.
     SetOption {
@@ -116,43 +70,9 @@ pub enum Command {
         value_only: bool,
         quiet: bool,
     },
-    /// `join-pane [-h] [-s src] [-t dst]`: moves `src` (default: the marked pane) next to `dst`
-    /// (default: the active pane), side by side with `-h`, else stacked.
-    JoinPane {
-        src: Option<String>,
-        dst: Option<String>,
-        side_by_side: bool,
-    },
-    /// `swap-window [-s src] -t dst`: exchanges two windows; `src` defaults to the active one.
-    SwapWindow {
-        src: Option<usize>,
-        dst: usize,
-    },
-    /// `respawn-pane [-k] [-c dir] [-t target] [command...]`: restarts the pane's process.
-    RespawnPane {
-        target: Option<String>,
-        kill: bool,
-        cwd: Option<String>,
-        command: Vec<String>,
-    },
-    /// `find-window [-iNT] pattern`: the sessions and windows palette filtered by `pattern`.
-    FindWindow {
-        pattern: String,
-    },
-    /// `next-window -a` / `previous-window -a`: the next window with activity or a bell.
-    StepAlert {
-        forward: bool,
-    },
-    NextWindow,
-    PrevWindow,
-    LastWindow,
-    NextPane,
-    LastPane,
-    SwitchSession {
-        name: String,
-    },
-    NextSession,
-    PrevSession,
+    /// `display-message [-p] [format]`: the expanded format on the status row; with no format it
+    /// describes the current pane.
+    DisplayMessage { format: Option<String> },
     SendKeys {
         target: Option<String>,
         keys: Vec<String>,
@@ -162,30 +82,10 @@ pub enum Command {
         text: String,
         submit: bool,
     },
-    ResizePane {
-        side: Side,
-        cells: u16,
-    },
-    SwapPane {
-        next: bool,
-    },
-    SwapPaneMarked {
-        source: Option<String>,
-        target: Option<String>,
-    },
-    BreakPane,
-    SelectLayout {
-        preset: Option<LayoutPreset>,
-    },
-    /// `select-layout -E`: spread the panes evenly, keeping their arrangement.
-    SpreadLayout,
     Zoom,
     /// `set-option [-g] synchronize-panes on|off`: typed input goes to every pane of the active
     /// window (every window with `-g`).
-    SetSynchronize {
-        all: bool,
-        on: bool,
-    },
+    SetSynchronize { all: bool, on: bool },
     /// `copy-mode [-eHMqu] [-t pane]`: enters copy mode, or with `quit` leaves it.
     CopyMode(CopyModeOpts),
     /// `send-keys -X command [args]`: runs one copy-mode command in the copy mode of `target`
@@ -201,22 +101,14 @@ pub enum Command {
     SendPrefix,
     /// Re-read the config file into the TUI and the session's daemon.
     ReloadConfig,
-    RenameSession {
-        name: String,
-    },
     OpenTree,
     OpenHelp,
-    OpenPalette {
-        tab: Option<PaletteTab>,
-    },
+    OpenPalette { tab: Option<PaletteTab> },
     /// `command-prompt`: one question per `prompts` entry (`-p`), each starting with its `initial`
     /// text (`-I`). With a `template` the answers fill it in (`%%`, `%1`..`%9`); without one the
     /// typed line runs as a command.
     CommandPrompt(PromptSpec),
-    Confirm {
-        prompt: String,
-        then: Box<Command>,
-    },
+    Confirm { prompt: String, then: Box<Command> },
     /// Commands run one after the other (`a ; b`), stopping at the first that fails or quits.
     Sequence(Vec<Command>),
     /// `bind-key`: bind `key` in `table`; an empty `line` is `unbind-key`.
@@ -227,13 +119,9 @@ pub enum Command {
     },
     /// `display-panes [-d ms]`: number each visible pane until a digit picks one, a key is
     /// pressed or the time runs out. `None` takes `display-panes-time`; `Some(0)` waits for a key.
-    DisplayPanes {
-        duration_ms: Option<u64>,
-    },
+    DisplayPanes { duration_ms: Option<u64> },
     /// `clock-mode [-t pane]`: a large clock fills the pane until a key is pressed.
-    ClockMode {
-        target: Option<String>,
-    },
+    ClockMode { target: Option<String> },
     /// `show-messages`: the status-row messages of this session, oldest first.
     ShowMessages,
     /// `choose-buffer`: the paste buffers, newest first; Enter pastes, `d` deletes.
@@ -244,6 +132,146 @@ pub enum Command {
     Environment(EnvCommand),
     /// `suspend-client`: stop the process as Ctrl-Z does; the TUI resumes on SIGCONT.
     SuspendClient,
+    /// The script commands: `run-shell`, `if-shell`, `wait-for`, hooks, `command-alias` and
+    /// `source-file`.
+    Script(ScriptCommand),
+}
+
+/// The window commands. They act on the active window, or on the window at the index, name or
+/// offset they carry.
+#[derive(Debug, Clone, PartialEq)]
+pub enum WindowCommand {
+    NewWindow {
+        name: Option<String>,
+        argv: Vec<String>,
+        cwd: Option<String>,
+    },
+    KillWindow { index: Option<usize> },
+    RenameWindow { name: String },
+    SelectWindow { index: usize },
+    /// `select-window -t name`: the window with that name.
+    SelectWindowNamed { name: String },
+    /// `rotate-window [-D]`: the active window's panes move through its layout slots.
+    RotateWindow { down: bool },
+    /// `move-window -t index`: moves the active window to that index (`-r` renumbers instead).
+    MoveWindow { to: usize },
+    /// `move-window -r`: renumbers the windows 0, 1, ... in order.
+    RenumberWindows,
+    /// `swap-window [-s src] -t dst`: exchanges two windows; `src` defaults to the active one.
+    SwapWindow { src: Option<usize>, dst: usize },
+    /// `find-window [-iNT] pattern`: the sessions and windows palette filtered by `pattern`.
+    FindWindow { pattern: String },
+    /// `next-window -a` / `previous-window -a`: the next window with activity or a bell.
+    StepAlert { forward: bool },
+    NextWindow,
+    PrevWindow,
+    LastWindow,
+}
+
+/// The pane commands. They act on the active pane, or on the pane a `target` names.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PaneCommand {
+    /// `side_by_side`: vertical divider (`:vsplit`, tmux `split-window -h`).
+    SplitWindow {
+        side_by_side: bool,
+        argv: Vec<String>,
+        cwd: Option<String>,
+        detach: bool,
+    },
+    KillPane { target: Option<String> },
+    SelectPane { target: String },
+    SelectPaneDir { side: Side },
+    MarkPane { target: Option<String> },
+    ClearMark,
+    /// `join-pane [-h] [-s src] [-t dst]`: moves `src` (default: the marked pane) next to `dst`
+    /// (default: the active pane), side by side with `-h`, else stacked.
+    JoinPane {
+        src: Option<String>,
+        dst: Option<String>,
+        side_by_side: bool,
+    },
+    /// `respawn-pane [-k] [-c dir] [-t target] [command...]`: restarts the pane's process.
+    RespawnPane {
+        target: Option<String>,
+        kill: bool,
+        cwd: Option<String>,
+        command: Vec<String>,
+    },
+    NextPane,
+    LastPane,
+    ResizePane { side: Side, cells: u16 },
+    SwapPane { next: bool },
+    SwapPaneMarked {
+        source: Option<String>,
+        target: Option<String>,
+    },
+    BreakPane,
+    SelectLayout { preset: Option<LayoutPreset> },
+    /// `select-layout -E`: spread the panes evenly, keeping their arrangement.
+    SpreadLayout,
+}
+
+/// The session commands: switching between sessions and renaming the current one.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SessionCommand {
+    SwitchSession { name: String },
+    NextSession,
+    PrevSession,
+    RenameSession { name: String },
+}
+
+/// Commands that run scripts, hooks, channels and aliases in the daemon, or read them from files.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ScriptCommand {
+    /// `run-shell [-b] [-t pane] [-d seconds] command`: runs `command` through the shell in the
+    /// daemon, with formats expanded for the pane. Its output goes to the status row, a message per
+    /// line; `-b` does not wait for it.
+    RunShell {
+        background: bool,
+        target: Option<String>,
+        delay_ms: Option<u64>,
+        command: String,
+    },
+    /// `if-shell [-bF] [-t pane] shell-command command [command]`: runs `then` when the shell
+    /// command exits 0, else `otherwise`. With `-F` the condition is a format, true when non-empty
+    /// and not `0`.
+    IfShell {
+        background: bool,
+        format: bool,
+        target: Option<String>,
+        condition: String,
+        then: Box<Command>,
+        otherwise: Option<Box<Command>>,
+    },
+    /// `wait-for [-L|-S|-U] channel`: waits for a signal on, or takes or releases the lock of, a
+    /// named channel of the daemon.
+    WaitFor {
+        op: ChannelOp,
+        channel: String,
+    },
+    /// `set-hook [-a] hook command` sets the commands a hook runs, `-a` after the existing ones;
+    /// `set-hook -u hook` removes them (`command` is `None`).
+    SetHook {
+        name: String,
+        command: Option<String>,
+        append: bool,
+    },
+    /// `set-hook -R hook`: runs the commands of a hook now.
+    RunHook {
+        name: String,
+    },
+    /// `show-hooks`: every hook command, one line each, in an overlay.
+    ShowHooks,
+    /// `set -s command-alias name=command` sets an alias; `-u` removes it (`command` is `None`).
+    SetAlias {
+        name: String,
+        command: Option<String>,
+    },
+    /// `source-file [-q] path...`: runs the commands of each file, one command line per line.
+    SourceFile {
+        paths: Vec<String>,
+        quiet: bool,
+    },
 }
 
 /// The paste-buffer and capture commands. They act on the daemon's buffers, which the CLI shares.
@@ -309,6 +337,7 @@ pub const COMMAND_NAMES: &[&str] = &[
     "display-panes",
     "find-window",
     "help",
+    "if-shell",
     "join-pane",
     "kill-pane",
     "kill-server",
@@ -342,6 +371,7 @@ pub const COMMAND_NAMES: &[&str] = &[
     "resize-pane",
     "respawn-pane",
     "rotate-window",
+    "run-shell",
     "save-buffer",
     "select-layout",
     "select-pane",
@@ -351,10 +381,12 @@ pub const COMMAND_NAMES: &[&str] = &[
     "session",
     "set-buffer",
     "set-environment",
+    "set-hook",
     "set-option",
     "set-window-option",
     "show-buffer",
     "show-environment",
+    "show-hooks",
     "show-messages",
     "show-options",
     "show-window-options",
@@ -374,17 +406,22 @@ pub const COMMAND_NAMES: &[&str] = &[
     "unbind-key",
     "vs",
     "vsplit",
+    "wait-for",
 ];
 
-/// A family of command names; returns `None` when the name belongs to another family.
-type Group = fn(&str, &[String]) -> Option<Result<Command, String>>;
-
-/// Parses a command line (tmux command names plus vim aliases such as `vsplit`, `q`).
+/// Parses a command line (tmux command names plus vim aliases such as `vsplit`, `q`), without
+/// command aliases.
 pub fn parse(line: &str) -> Result<Command, String> {
+    parse_in(line, &BTreeMap::new())
+}
+
+/// Parses a command line with the command `aliases` of the config (tmux `command-alias`): a
+/// command whose name is an alias runs the alias's command line, with its own arguments after it.
+pub fn parse_in(line: &str, aliases: &BTreeMap<String, String>) -> Result<Command, String> {
     if line.contains(';') {
         let mut commands = Vec::new();
         for words in crate::cmdline::split_commands(line)? {
-            commands.push(parse_words(&words)?);
+            commands.push(parse_words(&expand_alias(words, aliases)?, aliases)?);
         }
         return match commands.len() {
             0 => Err("empty command".to_string()),
@@ -392,17 +429,30 @@ pub fn parse(line: &str) -> Result<Command, String> {
             _ => Ok(Command::Sequence(commands)),
         };
     }
-    parse_words(&split_words(line)?)
+    parse_words(&expand_alias(split_words(line)?, aliases)?, aliases)
 }
 
-fn parse_words(words: &[String]) -> Result<Command, String> {
+/// The words with an aliased command name replaced by the alias's words. An alias is expanded
+/// once, so an alias may name another command but not loop.
+fn expand_alias(
+    mut words: Vec<String>,
+    aliases: &BTreeMap<String, String>,
+) -> Result<Vec<String>, String> {
+    let Some(target) = words.first().and_then(|name| aliases.get(name)) else {
+        return Ok(words);
+    };
+    let mut expanded = split_words(target)?;
+    expanded.extend(words.drain(1..));
+    Ok(expanded)
+}
+
+fn parse_words(words: &[String], aliases: &BTreeMap<String, String>) -> Result<Command, String> {
     let (name, args) = words
         .split_first()
         .ok_or_else(|| "empty command".to_string())?;
-    let groups: [Group; 3] = [window_cmd, pane_cmd, misc_cmd];
-    groups
-        .into_iter()
-        .find_map(|group| group(name, args))
+    window_cmd(name, args)
+        .or_else(|| pane_cmd(name, args))
+        .or_else(|| misc_cmd(name, args, aliases))
         .unwrap_or_else(|| Err(format!("unknown command: {name}")))
 }
 
@@ -521,13 +571,19 @@ fn window_cmd(name: &str, args: &[String]) -> Option<Result<Command, String>> {
         "kill-window" => kill_window(name, args),
         "rename-window" => rename_window(args),
         "select-window" => select_window(name, args),
-        "next-window" if args == ["-a"] => Ok(Command::StepAlert { forward: true }),
-        "previous-window" if args == ["-a"] => Ok(Command::StepAlert { forward: false }),
-        "next-window" | "tabnext" | "tabn" => bare(name, args, Command::NextWindow),
-        "previous-window" | "prev-window" | "tabprevious" | "tabp" => {
-            bare(name, args, Command::PrevWindow)
+        "next-window" if args == ["-a"] => {
+            Ok(Command::Window(WindowCommand::StepAlert { forward: true }))
         }
-        "last-window" => bare(name, args, Command::LastWindow),
+        "previous-window" if args == ["-a"] => {
+            Ok(Command::Window(WindowCommand::StepAlert { forward: false }))
+        }
+        "next-window" | "tabnext" | "tabn" => {
+            bare(name, args, Command::Window(WindowCommand::NextWindow))
+        }
+        "previous-window" | "prev-window" | "tabprevious" | "tabp" => {
+            bare(name, args, Command::Window(WindowCommand::PrevWindow))
+        }
+        "last-window" => bare(name, args, Command::Window(WindowCommand::LastWindow)),
         _ => return None,
     };
     Some(cmd)
@@ -545,17 +601,25 @@ fn pane_cmd(name: &str, args: &[String]) -> Option<Result<Command, String>> {
         "join-pane" | "joinp" => join_pane(name, args),
         "respawn-pane" | "respawnp" => respawn_pane(name, args),
         "find-window" | "findw" => find_window(name, args),
-        "break-pane" => bare(name, args, Command::BreakPane),
+        "break-pane" => bare(name, args, Command::Pane(PaneCommand::BreakPane)),
         "last-pane" => last_pane(name, args),
-        "next-pane" => bare(name, args, Command::NextPane),
+        "next-pane" => bare(name, args, Command::Pane(PaneCommand::NextPane)),
         "select-layout" => select_layout(name, args),
-        "next-layout" => bare(name, args, Command::SelectLayout { preset: None }),
+        "next-layout" => bare(
+            name,
+            args,
+            Command::Pane(PaneCommand::SelectLayout { preset: None }),
+        ),
         _ => return None,
     };
     Some(cmd)
 }
 
-fn misc_cmd(name: &str, args: &[String]) -> Option<Result<Command, String>> {
+fn misc_cmd(
+    name: &str,
+    args: &[String],
+    aliases: &BTreeMap<String, String>,
+) -> Option<Result<Command, String>> {
     let cmd = match name {
         "copy-mode" => copy_mode(name, args),
         "detach-client" | "detach" | "q" | "quit" => bare(name, args, Command::Detach),
@@ -597,10 +661,16 @@ fn misc_cmd(name: &str, args: &[String]) -> Option<Result<Command, String>> {
         "send-prefix" => bare(name, args, Command::SendPrefix),
         "reload-config" => bare(name, args, Command::ReloadConfig),
         "source-file" if args.is_empty() => Ok(Command::ReloadConfig),
+        "source-file" => source_file(name, args).map(Command::Script),
+        "run-shell" => run_shell(name, args).map(Command::Script),
+        "if-shell" => if_shell(name, args, aliases).map(Command::Script),
+        "wait-for" => wait_for(name, args).map(Command::Script),
+        "set-hook" => set_hook(name, args, aliases).map(Command::Script),
+        "show-hooks" => bare(name, args, Command::Script(ScriptCommand::ShowHooks)),
         "bind-key" | "bind" => bind_key(name, args),
         "unbind-key" | "unbind" => unbind_key(name, args),
-        "next-session" => bare(name, args, Command::NextSession),
-        "prev-session" => bare(name, args, Command::PrevSession),
+        "next-session" => bare(name, args, Command::Session(SessionCommand::NextSession)),
+        "prev-session" => bare(name, args, Command::Session(SessionCommand::PrevSession)),
         "switch-client" | "session" => switch_client(name, args),
         "rename-session" | "rename" => rename_session(name, args),
         "palette" | "command-palette" => palette_cmd(name, args),
@@ -633,20 +703,20 @@ const DISPLAY_MESSAGE: Spec = Spec {
 fn rotate_window(name: &str, args: &[String]) -> Result<Command, String> {
     let o = parse_opts(name, args, ROTATE)?;
     o.no_rest(name)?;
-    Ok(Command::RotateWindow { down: o.has("-D") })
+    Ok(Command::Window(WindowCommand::RotateWindow { down: o.has("-D") }))
 }
 
 fn move_window(name: &str, args: &[String]) -> Result<Command, String> {
     let o = parse_opts(name, args, MOVE_WINDOW)?;
     o.no_rest(name)?;
     if o.has("-r") {
-        return Ok(Command::RenumberWindows);
+        return Ok(Command::Window(WindowCommand::RenumberWindows));
     }
     let raw = o
         .value("-t")
         .ok_or_else(|| format!("{name}: need -t <index> or -r"))?;
     let to = parse_index(raw).map_err(|_| format!("{name}: invalid window index '{raw}'"))?;
-    Ok(Command::MoveWindow { to })
+    Ok(Command::Window(WindowCommand::MoveWindow { to }))
 }
 
 const JOIN_PANE: Spec = Spec {
@@ -668,11 +738,11 @@ const RESPAWN_PANE: Spec = Spec {
 fn join_pane(name: &str, args: &[String]) -> Result<Command, String> {
     let o = parse_opts(name, args, JOIN_PANE)?;
     o.no_rest(name)?;
-    Ok(Command::JoinPane {
+    Ok(Command::Pane(PaneCommand::JoinPane {
         src: o.value("-s").map(str::to_string),
         dst: o.value("-t").map(str::to_string),
         side_by_side: o.has("-h"),
-    })
+    }))
 }
 
 fn window_index(name: &str, raw: &str) -> Result<usize, String> {
@@ -686,20 +756,20 @@ fn swap_window(name: &str, args: &[String]) -> Result<Command, String> {
         .value("-t")
         .ok_or_else(|| format!("{name}: need -t <index>"))?;
     let src = o.value("-s").map(|s| window_index(name, s)).transpose()?;
-    Ok(Command::SwapWindow {
+    Ok(Command::Window(WindowCommand::SwapWindow {
         src,
         dst: window_index(name, dst)?,
-    })
+    }))
 }
 
 fn respawn_pane(name: &str, args: &[String]) -> Result<Command, String> {
     let o = parse_opts(name, args, RESPAWN_PANE)?;
-    Ok(Command::RespawnPane {
+    Ok(Command::Pane(PaneCommand::RespawnPane {
         target: o.value("-t").map(str::to_string),
         kill: o.has("-k"),
         cwd: o.value("-c").map(str::to_string),
         command: o.rest,
-    })
+    }))
 }
 
 const FIND_WINDOW: Spec = Spec {
@@ -709,13 +779,19 @@ const FIND_WINDOW: Spec = Spec {
 };
 
 fn find_window(name: &str, args: &[String]) -> Result<Command, String> {
-    let o = parse_opts(name, args, FIND_WINDOW)?;
-    if o.rest.is_empty() {
-        return Err(format!("{name}: need a pattern"));
-    }
-    Ok(Command::FindWindow {
+    let o = with_operands(name, args, FIND_WINDOW, "need a pattern")?;
+    Ok(Command::Window(WindowCommand::FindWindow {
         pattern: o.rest.join(" "),
-    })
+    }))
+}
+
+/// The options of `name`, which must be followed by operands; `missing` says what they are.
+fn with_operands(name: &str, args: &[String], spec: Spec, missing: &str) -> Result<Opts, String> {
+    let o = parse_opts(name, args, spec)?;
+    if o.rest.is_empty() {
+        return Err(format!("{name}: {missing}"));
+    }
+    Ok(o)
 }
 
 fn display_message(name: &str, args: &[String]) -> Result<Command, String> {
@@ -740,12 +816,15 @@ fn set_option(name: &str, args: &[String]) -> Result<Command, String> {
     if o.has("-p") {
         return Err(format!("{name}: mpx has no pane options"));
     }
+    let unset = o.has("-u");
+    if o.has("-s") && o.rest.first().is_some_and(|option| is_command_alias(option)) {
+        return alias_option(name, &o.rest[1..], unset).map(Command::Script);
+    }
     if o.has("-s") {
         return Err(format!(
             "{name}: mpx has no server options to set at run time"
         ));
     }
-    let unset = o.has("-u");
     let (option, value) = match o.rest.as_slice() {
         [option] if unset => (option, None),
         [option, value] if !unset => (option, Some(value.clone())),
@@ -772,6 +851,185 @@ fn set_option(name: &str, args: &[String]) -> Result<Command, String> {
     })
 }
 
+/// Whether a server option names the command aliases (`command-alias`, optionally `[N]`).
+fn is_command_alias(option: &str) -> bool {
+    option.split('[').next() == Some("command-alias")
+}
+
+/// `set -s command-alias[N] name=command` (the index is accepted: aliases are looked up by name),
+/// or `set -su command-alias name` to remove one.
+fn alias_option(name: &str, rest: &[String], unset: bool) -> Result<ScriptCommand, String> {
+    match (rest, unset) {
+        ([alias], true) => Ok(ScriptCommand::SetAlias {
+            name: alias.clone(),
+            command: None,
+        }),
+        ([pair], false) => match pair.split_once('=') {
+            Some((alias, command)) if !alias.is_empty() && !command.is_empty() => {
+                Ok(ScriptCommand::SetAlias {
+                    name: alias.to_string(),
+                    command: Some(command.to_string()),
+                })
+            }
+            _ => Err(format!("{name}: command-alias needs name=command")),
+        },
+        _ => Err(format!("{name}: command-alias needs name=command, or -u name")),
+    }
+}
+
+const RUN_SHELL: Spec = Spec {
+    bools: &["-b"],
+    values: &["-t", "-d"],
+    stop_at_arg: true,
+};
+const IF_SHELL: Spec = Spec {
+    bools: &["-b", "-F"],
+    values: &["-t"],
+    stop_at_arg: true,
+};
+const WAIT_FOR: Spec = Spec {
+    bools: &["-L", "-S", "-U"],
+    values: &[],
+    stop_at_arg: false,
+};
+const SET_HOOK: Spec = Spec {
+    bools: &["-a", "-g", "-R", "-u", "-w"],
+    values: &["-t"],
+    stop_at_arg: true,
+};
+const SOURCE_FILE: Spec = Spec {
+    bools: &["-q"],
+    values: &[],
+    stop_at_arg: false,
+};
+
+/// `run-shell [-b] [-t pane] [-d seconds] command`: the words after the flags form the command.
+fn run_shell(name: &str, args: &[String]) -> Result<ScriptCommand, String> {
+    let o = parse_opts(name, args, RUN_SHELL)?;
+    if o.rest.is_empty() {
+        return Err(format!("{name}: need a shell command"));
+    }
+    let delay_ms = o.value("-d").map(|raw| parse_delay(name, raw)).transpose()?;
+    Ok(ScriptCommand::RunShell {
+        background: o.has("-b"),
+        target: o.value("-t").map(str::to_string),
+        delay_ms,
+        command: o.rest.join(" "),
+    })
+}
+
+/// A delay in seconds as milliseconds; fractions are allowed.
+fn parse_delay(name: &str, raw: &str) -> Result<u64, String> {
+    match raw.parse::<f64>() {
+        Ok(secs) if secs.is_finite() && secs >= 0.0 => Ok((secs * 1000.0).round() as u64),
+        _ => Err(format!("{name}: invalid delay '{raw}'")),
+    }
+}
+
+/// `if-shell [-bF] [-t pane] shell-command command [command]`.
+fn if_shell(
+    name: &str,
+    args: &[String],
+    aliases: &BTreeMap<String, String>,
+) -> Result<ScriptCommand, String> {
+    let o = parse_opts(name, args, IF_SHELL)?;
+    let (condition, branches) = match o.rest.as_slice() {
+        [condition, branches @ ..] if matches!(branches.len(), 1 | 2) => (condition, branches),
+        _ => return Err(format!("{name}: need a condition and one or two commands")),
+    };
+    let then = parse_in(&branches[0], aliases)?;
+    let otherwise = branches
+        .get(1)
+        .map(|line| parse_in(line, aliases).map(Box::new))
+        .transpose()?;
+    Ok(ScriptCommand::IfShell {
+        background: o.has("-b"),
+        format: o.has("-F"),
+        target: o.value("-t").map(str::to_string),
+        condition: condition.clone(),
+        then: Box::new(then),
+        otherwise,
+    })
+}
+
+/// `wait-for [-L|-S|-U] channel`: `-S` signals, `-L` locks, `-U` unlocks; with none it waits.
+fn wait_for(name: &str, args: &[String]) -> Result<ScriptCommand, String> {
+    let o = parse_opts(name, args, WAIT_FOR)?;
+    let op = match (o.has("-L"), o.has("-S"), o.has("-U")) {
+        (false, false, false) => ChannelOp::Wait,
+        (true, false, false) => ChannelOp::Lock,
+        (false, true, false) => ChannelOp::Signal,
+        (false, false, true) => ChannelOp::Unlock,
+        _ => return Err(format!("{name}: use one of -L, -S or -U")),
+    };
+    match o.rest.as_slice() {
+        [channel] if !channel.is_empty() => Ok(ScriptCommand::WaitFor {
+            op,
+            channel: channel.clone(),
+        }),
+        [_] | [] => Err(format!("{name}: need a channel name")),
+        _ => Err(format!("{name}: too many arguments")),
+    }
+}
+
+/// `set-hook [-a] hook command`, `set-hook -u hook`, `set-hook -R hook`. Window and pane hooks
+/// (`-w`, `-t`) are refused: a hook applies to the whole session.
+fn set_hook(
+    name: &str,
+    args: &[String],
+    aliases: &BTreeMap<String, String>,
+) -> Result<ScriptCommand, String> {
+    let o = parse_opts(name, args, SET_HOOK)?;
+    if o.has("-w") || o.value("-t").is_some() {
+        return Err(format!(
+            "{name}: window and pane hooks are not supported; a hook applies to the whole session"
+        ));
+    }
+    let (hook, commands) = o
+        .rest
+        .split_first()
+        .ok_or_else(|| format!("{name}: need a hook name"))?;
+    if !HOOK_EVENTS.contains(&hook.as_str()) {
+        return Err(format!("{name}: unknown hook '{hook}'"));
+    }
+    if o.has("-R") || o.has("-u") {
+        if o.has("-R") && o.has("-u") {
+            return Err(format!("{name}: use one of -R or -u"));
+        }
+        if !commands.is_empty() {
+            return Err(format!("{name}: -R and -u take no command"));
+        }
+        return Ok(if o.has("-R") {
+            ScriptCommand::RunHook { name: hook.clone() }
+        } else {
+            ScriptCommand::SetHook {
+                name: hook.clone(),
+                command: None,
+                append: false,
+            }
+        });
+    }
+    if commands.is_empty() {
+        return Err(format!("{name}: need a command for hook {hook}"));
+    }
+    let line = crate::cmdline::command_line(commands);
+    parse_in(&line, aliases)?;
+    Ok(ScriptCommand::SetHook {
+        name: hook.clone(),
+        command: Some(line),
+        append: o.has("-a"),
+    })
+}
+
+/// `source-file [-q] path...`: the commands of each file, run in turn.
+fn source_file(name: &str, args: &[String]) -> Result<ScriptCommand, String> {
+    let o = with_operands(name, args, SOURCE_FILE, "need a file")?;
+    Ok(ScriptCommand::SourceFile {
+        paths: o.rest.clone(),
+        quiet: o.has("-q"),
+    })
+}
+
 fn show_options(name: &str, args: &[String]) -> Result<Command, String> {
     let o = parse_opts(name, args, SHOW_OPTIONS)?;
     if o.rest.len() > 1 {
@@ -785,7 +1043,7 @@ fn show_options(name: &str, args: &[String]) -> Result<Command, String> {
 }
 
 fn last_pane(name: &str, args: &[String]) -> Result<Command, String> {
-    bare(name, args, Command::LastPane)
+    bare(name, args, Command::Pane(PaneCommand::LastPane))
 }
 
 /// Option shape for one command: which flags are switches, which take a value, and whether
@@ -994,30 +1252,30 @@ fn split(name: &str, args: &[String], vertical_alias: bool) -> Result<Command, S
     let side_by_side = vertical_alias || o.has("-h");
     let cwd = o.value("-c").map(str::to_string);
     let detach = o.has("-d");
-    Ok(Command::SplitWindow {
+    Ok(Command::Pane(PaneCommand::SplitWindow {
         side_by_side,
         argv: o.rest,
         cwd,
         detach,
-    })
+    }))
 }
 
 fn new_window(name: &str, args: &[String]) -> Result<Command, String> {
     let o = parse_opts(name, args, NEW_WINDOW)?;
     let window = o.value("-n").map(str::to_string);
     let cwd = o.value("-c").map(str::to_string);
-    Ok(Command::NewWindow {
+    Ok(Command::Window(WindowCommand::NewWindow {
         name: window,
         argv: o.rest,
         cwd,
-    })
+    }))
 }
 
 fn kill_window(name: &str, args: &[String]) -> Result<Command, String> {
     let o = parse_opts(name, args, KILL_TARGET)?;
     o.no_rest(name)?;
     let index = o.value("-t").map(parse_index).transpose()?;
-    Ok(Command::KillWindow { index })
+    Ok(Command::Window(WindowCommand::KillWindow { index }))
 }
 
 fn rename_window(args: &[String]) -> Result<Command, String> {
@@ -1027,7 +1285,7 @@ fn rename_window(args: &[String]) -> Result<Command, String> {
     if name.trim().is_empty() {
         return Err("rename-window: missing name".to_string());
     }
-    Ok(Command::RenameWindow { name })
+    Ok(Command::Window(WindowCommand::RenameWindow { name }))
 }
 
 fn select_window(name: &str, args: &[String]) -> Result<Command, String> {
@@ -1037,19 +1295,19 @@ fn select_window(name: &str, args: &[String]) -> Result<Command, String> {
         .value("-t")
         .ok_or_else(|| format!("{name}: need -t <index>"))?;
     match parse_index(raw) {
-        Ok(index) => Ok(Command::SelectWindow { index }),
-        Err(_) => Ok(Command::SelectWindowNamed {
+        Ok(index) => Ok(Command::Window(WindowCommand::SelectWindow { index })),
+        Err(_) => Ok(Command::Window(WindowCommand::SelectWindowNamed {
             name: raw.rsplit(':').next().unwrap_or(raw).to_string(),
-        }),
+        })),
     }
 }
 
 fn kill_pane(name: &str, args: &[String]) -> Result<Command, String> {
     let o = parse_opts(name, args, KILL_TARGET)?;
     o.no_rest(name)?;
-    Ok(Command::KillPane {
+    Ok(Command::Pane(PaneCommand::KillPane {
         target: o.value("-t").map(str::to_string),
-    })
+    }))
 }
 
 fn select_pane(name: &str, args: &[String]) -> Result<Command, String> {
@@ -1059,33 +1317,33 @@ fn select_pane(name: &str, args: &[String]) -> Result<Command, String> {
         return Err(format!("{name}: -Z is not supported"));
     }
     if o.has("-M") {
-        return Ok(Command::ClearMark);
+        return Ok(Command::Pane(PaneCommand::ClearMark));
     }
     if o.has("-m") {
-        return Ok(Command::MarkPane {
+        return Ok(Command::Pane(PaneCommand::MarkPane {
             target: o.value("-t").map(str::to_string),
-        });
+        }));
     }
     if let Some(side) = direction_flag(&o) {
-        return Ok(Command::SelectPaneDir { side });
+        return Ok(Command::Pane(PaneCommand::SelectPaneDir { side }));
     }
     let target = o
         .value("-t")
         .ok_or_else(|| format!("{name}: need -t <target>, -m/-M, or -L/-R/-U/-D"))?;
-    Ok(Command::SelectPane {
+    Ok(Command::Pane(PaneCommand::SelectPane {
         target: target.to_string(),
-    })
+    }))
 }
 
 fn mark_pane(name: &str, args: &[String]) -> Result<Command, String> {
     let o = parse_opts(name, args, SELECT_PANE)?;
     o.no_rest(name)?;
     if o.has("-M") {
-        Ok(Command::ClearMark)
+        Ok(Command::Pane(PaneCommand::ClearMark))
     } else {
-        Ok(Command::MarkPane {
+        Ok(Command::Pane(PaneCommand::MarkPane {
             target: o.value("-t").map(str::to_string),
-        })
+        }))
     }
 }
 
@@ -1105,7 +1363,7 @@ fn resize_pane(name: &str, args: &[String]) -> Result<Command, String> {
             .parse::<u16>()
             .map_err(|_| format!("{name}: invalid cell count '{raw}'"))?,
     };
-    Ok(Command::ResizePane { side, cells })
+    Ok(Command::Pane(PaneCommand::ResizePane { side, cells }))
 }
 
 fn swap_pane(name: &str, args: &[String]) -> Result<Command, String> {
@@ -1115,25 +1373,25 @@ fn swap_pane(name: &str, args: &[String]) -> Result<Command, String> {
         return Err(format!("{name}: -Z is not supported"));
     }
     if o.has("-D") {
-        Ok(Command::SwapPane { next: true })
+        Ok(Command::Pane(PaneCommand::SwapPane { next: true }))
     } else if o.has("-U") {
-        Ok(Command::SwapPane { next: false })
+        Ok(Command::Pane(PaneCommand::SwapPane { next: false }))
     } else {
-        Ok(Command::SwapPaneMarked {
+        Ok(Command::Pane(PaneCommand::SwapPaneMarked {
             source: o.value("-s").map(str::to_string),
             target: o.value("-t").map(str::to_string),
-        })
+        }))
     }
 }
 
 fn select_layout(name: &str, args: &[String]) -> Result<Command, String> {
     let preset = match args {
-        [flag] if flag == "-E" => return Ok(Command::SpreadLayout),
+        [flag] if flag == "-E" => return Ok(Command::Pane(PaneCommand::SpreadLayout)),
         [] => None,
         [one] => Some(LayoutPreset::parse(one).ok_or_else(|| format!("unknown layout '{one}'"))?),
         _ => return Err(format!("{name}: too many arguments")),
     };
-    Ok(Command::SelectLayout { preset })
+    Ok(Command::Pane(PaneCommand::SelectLayout { preset }))
 }
 
 fn send_keys(name: &str, args: &[String]) -> Result<Command, String> {
@@ -1195,12 +1453,12 @@ fn target_or_first(
 
 fn switch_client(name: &str, args: &[String]) -> Result<Command, String> {
     let session = target_or_first(name, args, SWITCH, "need -t <session>")?;
-    Ok(Command::SwitchSession { name: session })
+    Ok(Command::Session(SessionCommand::SwitchSession { name: session }))
 }
 
 fn rename_session(name: &str, args: &[String]) -> Result<Command, String> {
     let session = target_or_first(name, args, RENAME, "need new name")?;
-    Ok(Command::RenameSession { name: session })
+    Ok(Command::Session(SessionCommand::RenameSession { name: session }))
 }
 fn command_prompt(name: &str, args: &[String]) -> Result<Command, String> {
     let o = parse_opts(name, args, COMMAND_PROMPT)?;

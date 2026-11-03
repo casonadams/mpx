@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use super::support::{connect, logs_until, pty, start, task};
+use super::support::{assert_refused, connect, fresh, logs_until, pty, start, task};
 use mpx::protocol::{StreamEvent, WaitCondition};
 
 /// (offset, next, data) of every output event, in arrival order.
@@ -66,13 +66,8 @@ async fn since_replays_the_tail_then_continues_live_without_gap_or_duplicates() 
 
 #[tokio::test]
 async fn since_without_a_node_name_is_an_error() {
-    let daemon = start().await;
-    let mut client = connect(&daemon.endpoint).await;
-    let err = client
-        .stream_logs(None, Some(0), |_| false)
-        .await
-        .unwrap_err();
-    assert!(err.contains("node name"), "error: {err}");
+    let (_daemon, mut client) = fresh().await;
+    assert_refused(client.stream_logs(None, Some(0), |_| false).await, "node name");
 }
 
 #[tokio::test]
