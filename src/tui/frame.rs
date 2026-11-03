@@ -6,16 +6,13 @@ use super::copy::{CopyState, SelectionKind};
 use super::labels::{clock_lines, label, label_rect, pane_numbers};
 use super::panes::PaneRect;
 use super::render::{
-    Compositor, DividerStyle, PaneColors, RenderPaneContext, SelectionRange, StatusBar, hud_rect,
+    Compositor, DividerStyle, PaneColors, RenderPaneContext, SelectionRange, hud_rect,
     parse_color,
 };
-use super::render::{draw_status_segments, get_current_time, status_right};
+use super::render::draw_status_segments;
 use super::status::{exit_badge, node_named};
-use super::status::{local_utc_offset, pane_items, tab_items};
-use super::statusline::{
-    DEFAULT_WINDOW_FORMAT, Item, Line, Seg, Target, compose, parse_styled, status_vars, strftime,
-    truncate,
-};
+use super::status::{local_utc_offset, pane_items};
+use super::statusline::{Item, Line, Seg, Target, compose, parse_styled, status_vars, strftime, truncate};
 use crate::layout::geometry::Rect;
 use crate::protocol::NodeInfo;
 use crate::format::expand;
@@ -281,14 +278,8 @@ fn status_line(app: &App, width: usize) -> Line {
         .map(|n| format_view(app, n));
     let vars = status_vars(&app.session, focused.as_ref(), tab, zoomed, base);
     let now = crate::node::now_ms();
-    let left = match &config.status_left {
-        None => vec![Seg::plain(format!("[{}] ", app.session))],
-        Some(fmt) => truncate(format_status(fmt, &vars, now), config.status_left_length),
-    };
-    let right = match &config.status_right {
-        None => vec![Seg::plain(built_in_right(app))],
-        Some(fmt) => truncate(format_status(fmt, &vars, now), config.status_right_length),
-    };
+    let left = truncate(format_status(&config.status_left, &vars, now), config.status_left_length);
+    let right = truncate(format_status(&config.status_right, &vars, now), config.status_right_length);
     let (items, separator) = window_items(app, zoomed);
     compose(width, left, items, &separator, right, config.status_justify)
 }
@@ -314,23 +305,15 @@ fn window_items(app: &App, zoomed: bool) -> (Vec<Item>, String) {
         let marked = app.layout.marked_pane_global();
         return (pane_items(&app.panes, zoomed, marked), String::new());
     }
-    let custom = config.window_status_format.is_some()
-        || config.window_status_current_format.is_some()
-        || config.window_status_separator.is_some();
-    if !custom {
-        return (tab_items(&app.layout.tabs, zoomed, base), String::new());
-    }
     let items = app
         .layout
         .tabs
         .iter()
         .map(|tab| {
-            let fmt = match (tab.is_active, &config.window_status_current_format) {
-                (true, Some(current)) => current.as_str(),
-                _ => config
-                    .window_status_format
-                    .as_deref()
-                    .unwrap_or(DEFAULT_WINDOW_FORMAT),
+            let fmt = if tab.is_active {
+                &config.window_status_current_format
+            } else {
+                &config.window_status_format
             };
             let focused = app
                 .nodes
@@ -344,11 +327,7 @@ fn window_items(app: &App, zoomed: bool) -> (Vec<Item>, String) {
             }
         })
         .collect();
-    let separator = config
-        .window_status_separator
-        .clone()
-        .unwrap_or_else(|| " ".to_string());
-    (items, separator)
+    (items, config.window_status_separator.clone())
 }
 
 /// The format view of `node`, numbered the way `#{window_index}` and `#{pane_index}` show it.
@@ -384,29 +363,6 @@ pub fn expand_active(app: &App, fmt: &str) -> String {
         app.config.base_index,
     );
     expand(fmt, &vars)
-}
-
-/// mpx's built-in right side: the copy-mode badge, the zoom flag and the clock.
-fn built_in_right(app: &App) -> String {
-    let copy_pane = match &app.mode {
-        Mode::Copy(_) => Some(app.active_pane.as_str()),
-        _ if app.parked_copy.contains_key(&app.active_pane) => Some(app.active_pane.as_str()),
-        _ => None,
-    };
-    let bar = StatusBar {
-        session: &app.session,
-        tabs: &app.layout.tabs,
-        panes: &app.panes,
-        prefix_active: false,
-        width: 0,
-        y: 0,
-        bg: None,
-        fg: None,
-        zoomed: app.zoomed(),
-        copy_pane,
-        marked_pane: None,
-    };
-    status_right(&bar, &get_current_time())
 }
 
 /// Places and shows (or hides) the terminal cursor where the frame wants it.

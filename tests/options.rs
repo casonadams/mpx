@@ -15,7 +15,7 @@ fn set_parses_each_kind_of_value() {
     assert_eq!(c.status_position, StatusPosition::Top);
     assert_eq!(c.status_justify, Justify::Centre);
     assert_eq!(c.mode_keys, ModeKeys::Emacs);
-    assert_eq!(c.status_left.as_deref(), Some("[#S] "));
+    assert_eq!(c.status_left, "[#S] ");
 }
 
 #[test]
@@ -41,7 +41,7 @@ fn unknown_and_daemon_options_are_told_apart() {
 fn unset_restores_the_default_including_an_empty_string() {
     let mut c = Config::default();
     options::set(&mut c, "status-left", "").unwrap();
-    assert_eq!(c.status_left.as_deref(), Some(""));
+    assert_eq!(c.status_left, "");
     options::unset(&mut c, "status-left").unwrap();
     options::unset(&mut c, "status").unwrap();
     assert_eq!(c, Config::default());

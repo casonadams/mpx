@@ -95,10 +95,10 @@ async fn top_status_line_takes_the_first_row_and_panes_start_below_it() {
 }
 
 #[tokio::test]
-async fn custom_status_left_and_right_replace_the_built_in_sides() {
+async fn custom_status_left_and_right_replace_the_defaults() {
     let mut h = start(Config {
-        status_left: Some("<#{session_name}>".into()),
-        status_right: Some("#[fg=red]right %Y".into()),
+        status_left: "<#{session_name}>".into(),
+        status_right: "#[fg=red]right %Y".into(),
         ..Config::default()
     })
     .await;
@@ -114,6 +114,20 @@ async fn custom_status_left_and_right_replace_the_built_in_sides() {
         "strftime expands %Y: {bar:?}"
     );
     assert!(!bar.contains("%Y"));
+}
+
+#[tokio::test]
+async fn default_status_bar_is_tmuxs_with_a_copy_badge() {
+    let mut h = start(Config::default()).await;
+    let bar = bottom(&h.frame().await);
+    assert!(bar.starts_with("[test] 0:main*"), "{bar:?}");
+    let right = bar.trim_end().rsplit_once('"').map(|(_, t)| t).unwrap_or_default();
+    let date = right.trim().rsplit(' ').next().unwrap_or_default();
+    assert_eq!(date.len(), 9, "%d-%b-%y at the right edge: {bar:?}");
+    assert!(!bar.contains("[copy]"), "{bar:?}");
+    h.prefixed_char('[').await;
+    let bar = bottom(&h.frame().await);
+    assert!(bar.contains("[copy] "), "{bar:?}");
 }
 
 #[tokio::test]

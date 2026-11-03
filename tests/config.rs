@@ -112,15 +112,21 @@ fn passthrough_follows_its_scope() {
 }
 
 #[test]
-fn defaults_keep_the_status_line_mpx_has_always_drawn() {
+fn defaults_are_tmux_status_formats() {
     let config = Config::default();
     assert_eq!((config.base_index, config.pane_base_index), (0, 0));
     assert!(config.mouse && config.status && config.set_clipboard);
     assert_eq!(config.status_position, mpx::config::StatusPosition::Bottom);
     assert_eq!(config.status_justify, mpx::config::Justify::Left);
     assert_eq!(config.mode_keys, mpx::config::ModeKeys::Vi);
-    assert_eq!(config.status_left, None);
-    assert_eq!(config.status_right, None);
+    assert_eq!(config.status_left, "[#{session_name}] ");
+    assert_eq!(
+        config.status_right,
+        "#{?pane_in_mode,[copy] ,}\"#{=21:pane_title}\" %H:%M %d-%b-%y"
+    );
+    assert_eq!(config.window_status_format, "#I:#W#{window_flags}");
+    assert_eq!(config.window_status_current_format, config.window_status_format);
+    assert_eq!(config.window_status_separator, " ");
     assert_eq!(config.display_time_ms, 3000);
 }
 
@@ -136,7 +142,7 @@ fn ui_options_read_from_the_config_file() {
     assert_eq!(config.status_position, mpx::config::StatusPosition::Top);
     assert_eq!(config.status_justify, mpx::config::Justify::Centre);
     assert_eq!(config.base_index, 1);
-    assert_eq!(config.status_left.as_deref(), Some("[a]"));
+    assert_eq!(config.status_left, "[a]");
 }
 
 #[test]

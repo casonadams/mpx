@@ -337,9 +337,6 @@ pub fn rows(screen_h: u16, status: bool, top: bool) -> Rows {
     }
 }
 
-/// tmux's default window tab format, used for tabs when only the separator or one format is set.
-pub const DEFAULT_WINDOW_FORMAT: &str = "#I:#W#{window_flags}";
-
 /// Whether a timed status redraw is due. `interval_s` is `status-interval`: 0 never redraws on a
 /// timer, 1 redraws on every tick, more waits that many seconds after the last frame.
 pub fn status_due(interval_s: u64, last: Option<Instant>, now: Instant) -> bool {

@@ -3,6 +3,14 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::str::FromStr;
 
+/// tmux's `status-left` default.
+pub const DEFAULT_STATUS_LEFT: &str = "[#{session_name}] ";
+/// tmux's `status-right` default, with a `[copy]` badge while the pane is in copy mode.
+pub const DEFAULT_STATUS_RIGHT: &str =
+    "#{?pane_in_mode,[copy] ,}\"#{=21:pane_title}\" %H:%M %d-%b-%y";
+/// tmux's `window-status-format` and `window-status-current-format` default.
+pub const DEFAULT_WINDOW_FORMAT: &str = "#I:#W#{window_flags}";
+
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
@@ -49,20 +57,20 @@ pub struct Config {
     pub status_position: StatusPosition,
     /// Seconds between timed status redraws (tmux `status-interval`); 0 redraws only on events.
     pub status_interval: u64,
-    /// Left side as a tmux format (tmux `status-left`); `None` keeps mpx's `[session]` label.
-    pub status_left: Option<String>,
-    /// Right side as a tmux format, strftime applies (tmux `status-right`); `None` keeps mpx's badges and clock.
-    pub status_right: Option<String>,
-    /// Width limit for a custom `status_left` (tmux `status-left-length`).
+    /// Left side as a tmux format (tmux `status-left`).
+    pub status_left: String,
+    /// Right side as a tmux format, strftime applies (tmux `status-right`).
+    pub status_right: String,
+    /// Width limit for `status_left` (tmux `status-left-length`).
     pub status_left_length: usize,
-    /// Width limit for a custom `status_right` (tmux `status-right-length`).
+    /// Width limit for `status_right` (tmux `status-right-length`).
     pub status_right_length: usize,
-    /// Window tab as a tmux format (tmux `window-status-format`); `None` keeps mpx's built-in tabs.
-    pub window_status_format: Option<String>,
-    /// Format of the active window tab (tmux `window-status-current-format`); `None` uses `window_status_format`.
-    pub window_status_current_format: Option<String>,
-    /// Text between window tabs (tmux `window-status-separator`); `None` is a single space.
-    pub window_status_separator: Option<String>,
+    /// Window tab as a tmux format (tmux `window-status-format`).
+    pub window_status_format: String,
+    /// Format of the active window tab (tmux `window-status-current-format`).
+    pub window_status_current_format: String,
+    /// Text between window tabs (tmux `window-status-separator`).
+    pub window_status_separator: String,
     /// Placement of the window list between the left and right sides (tmux `status-justify`).
     pub status_justify: Justify,
     /// Milliseconds a status-row message stays up (tmux `display-time`).
@@ -348,13 +356,13 @@ impl Default for Config {
             status: true,
             status_position: StatusPosition::Bottom,
             status_interval: 1,
-            status_left: None,
-            status_right: None,
+            status_left: DEFAULT_STATUS_LEFT.to_string(),
+            status_right: DEFAULT_STATUS_RIGHT.to_string(),
             status_left_length: 10,
             status_right_length: 40,
-            window_status_format: None,
-            window_status_current_format: None,
-            window_status_separator: None,
+            window_status_format: DEFAULT_WINDOW_FORMAT.to_string(),
+            window_status_current_format: DEFAULT_WINDOW_FORMAT.to_string(),
+            window_status_separator: " ".to_string(),
             status_justify: Justify::Left,
             display_time_ms: 3000,
             mode_keys: ModeKeys::Vi,

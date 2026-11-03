@@ -104,9 +104,9 @@ fallback = ["nvim", "-c", "silent! source Session.vim"]
 | `status` | bool | `true` | TUI | Show the status line. `false` gives its row to the panes; messages and prompts then use the bottom row. |
 | `status_position` | `"top"` or `"bottom"` | `"bottom"` | TUI | Row the status line occupies. |
 | `status_interval` | integer (seconds) | `1` | TUI | Seconds between timed status redraws, which keep the clock current. `0` redraws only on events. |
-| `status_left`, `status_right` | string (tmux format) | unset | TUI | Replace the left side (`[session]`) or the right side (copy badge, zoom flag and clock). Formats expand as in tmux; `#[fg=red,bold]`-style directives and strftime (`%H:%M %d-%b-%y`) apply. Unset keeps mpx's built-in side. |
-| `status_left_length`, `status_right_length` | integer | `10`, `40` | TUI | Widest a custom `status_left` / `status_right` may be; longer text is cut. The built-in sides are never cut. |
-| `window_status_format`, `window_status_current_format`, `window_status_separator` | string | unset | TUI | Format of each window tab, of the current window's tab, and the text between tabs (a single space when unset). Unset keeps mpx's built-in tabs. |
+| `status_left`, `status_right` | string (tmux format) | `"[#{session_name}] "`, `"#{?pane_in_mode,[copy] ,}\"#{=21:pane_title}\" %H:%M %d-%b-%y"` | TUI | The left and right sides of the status line. Formats expand as in tmux; `#[fg=red,bold]`-style directives and strftime apply. The defaults are tmux's, plus a `[copy]` badge while the pane is in copy mode. |
+| `status_left_length`, `status_right_length` | integer | `10`, `40` | TUI | Widest `status_left` / `status_right` may be; longer text is cut. |
+| `window_status_format`, `window_status_current_format`, `window_status_separator` | string | `"#I:#W#{window_flags}"`, same, `" "` | TUI | Format of each window tab, of the current window's tab, and the text between tabs. |
 | `status_justify` | `"left"`, `"centre"` or `"right"` | `"left"` | TUI | Where the window list sits between the two sides. |
 | `display_time_ms` | integer | `3000` | TUI | Milliseconds a message stays on the status row (tmux `display-time`). |
 | `mode_keys` | `"vi"` or `"emacs"` | `"vi"` | TUI | Copy-mode key table (tmux `mode-keys`); see [KEYBINDINGS.md](KEYBINDINGS.md#emacs-copy-mode-mode-keys-emacs). |
@@ -145,7 +145,7 @@ These tmux options are applied by the terminal UI.
 | `status on\|off` | `status`. Multi-line counts (`2` to `5`) are refused. | `on` |
 | `status-position top\|bottom` | `status_position`. | `bottom` |
 | `status-interval N` | `status_interval`. | `1` |
-| `status-left`, `status-right` | `status_left`, `status_right`. | `[#{session_name}] `, and mpx's clock |
+| `status-left`, `status-right` | `status_left`, `status_right`. | `[#{session_name}] `, and `"#{=21:pane_title}" %H:%M %d-%b-%y` (mpx adds `#{?pane_in_mode,[copy] ,}` in front) |
 | `status-left-length`, `status-right-length` | `status_left_length`, `status_right_length`. | `10`, `40` |
 | `window-status-format`, `window-status-current-format`, `window-status-separator` | `window_status_format`, `window_status_current_format`, `window_status_separator`. Tab flags follow tmux's order (`#`, `!`, `*`, `Z`, `-`, `M`). | `#I:#W#{window_flags}`, same, ` ` |
 | `status-justify left\|centre\|right` | `status_justify`. | `left` |

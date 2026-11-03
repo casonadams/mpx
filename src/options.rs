@@ -36,10 +36,6 @@ fn number<T: std::str::FromStr>(value: &str) -> Result<T, String> {
         .map_err(|_| format!("not a number: {value}"))
 }
 
-fn text(value: &Option<String>) -> String {
-    value.clone().unwrap_or_default()
-}
-
 fn quoted(value: String) -> String {
     let plain = !value.is_empty() && !value.contains(|c: char| c.is_whitespace() || "\"'#;".contains(c));
     if plain {
@@ -76,15 +72,15 @@ static OPTIONS: &[Opt] = &[
     option!("status", status, |v: &bool| on_off(*v), parse_switch),
     option!("status-interval", status_interval, |v: &u64| v.to_string(), number::<u64>),
     option!("status-justify", status_justify, |v: &crate::config::Justify| v.as_str().to_string(), |v: &str| v.parse()),
-    option!("status-left", status_left, |v: &Option<String>| quoted(text(v)), |v: &str| Ok::<_, String>(Some(v.to_string()))),
+    option!("status-left", status_left, |v: &String| quoted(v.clone()), |v: &str| Ok::<_, String>(v.to_string())),
     option!("status-left-length", status_left_length, |v: &usize| v.to_string(), number::<usize>),
     option!("status-position", status_position, |v: &crate::config::StatusPosition| v.as_str().to_string(), |v: &str| v.parse()),
-    option!("status-right", status_right, |v: &Option<String>| quoted(text(v)), |v: &str| Ok::<_, String>(Some(v.to_string()))),
+    option!("status-right", status_right, |v: &String| quoted(v.clone()), |v: &str| Ok::<_, String>(v.to_string())),
     option!("status-right-length", status_right_length, |v: &usize| v.to_string(), number::<usize>),
     option!("which-key-delay", which_key_delay_ms, |v: &u64| v.to_string(), number::<u64>),
-    option!("window-status-current-format", window_status_current_format, |v: &Option<String>| quoted(text(v)), |v: &str| Ok::<_, String>(Some(v.to_string()))),
-    option!("window-status-format", window_status_format, |v: &Option<String>| quoted(text(v)), |v: &str| Ok::<_, String>(Some(v.to_string()))),
-    option!("window-status-separator", window_status_separator, |v: &Option<String>| quoted(text(v)), |v: &str| Ok::<_, String>(Some(v.to_string()))),
+    option!("window-status-current-format", window_status_current_format, |v: &String| quoted(v.clone()), |v: &str| Ok::<_, String>(v.to_string())),
+    option!("window-status-format", window_status_format, |v: &String| quoted(v.clone()), |v: &str| Ok::<_, String>(v.to_string())),
+    option!("window-status-separator", window_status_separator, |v: &String| quoted(v.clone()), |v: &str| Ok::<_, String>(v.to_string())),
 ];
 
 fn find(name: &str) -> Result<&'static Opt, String> {
