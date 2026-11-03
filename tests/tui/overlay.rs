@@ -760,3 +760,26 @@ fn text_overlay_says_when_there_is_nothing_to_show() {
 fn program_output_is_shown_without_control_characters() {
     assert_eq!(printable("a\tb\x1b[0m"), "a b?[0m");
 }
+
+#[test]
+fn palette_rows_put_shortcuts_and_descriptions_in_columns() {
+    let view = sample_palette();
+    let drawn = draw_palette(&view, Rect::new(0, 0, 90, 30));
+    let column = |needle: &str| -> Vec<usize> {
+        drawn
+            .lines()
+            .filter(|l| l.contains('['))
+            .filter_map(|l| l.find(needle).map(|at| l[..at].chars().count()))
+            .collect()
+    };
+    let shortcuts: Vec<_> = drawn
+        .lines()
+        .filter(|l| l.contains(" · "))
+        .filter_map(|l| l.find('[').map(|at| l[..at].chars().count()))
+        .collect();
+    let dots = column(" · ");
+    assert!(shortcuts.len() > 5, "{drawn}");
+    assert!(shortcuts.windows(2).all(|w| w[0] == w[1]), "shortcuts {shortcuts:?}\n{drawn}");
+    assert!(dots.windows(2).all(|w| w[0] == w[1]), "descriptions {dots:?}\n{drawn}");
+    assert!(drawn.contains("…│"), "a description cut at the border ends in an ellipsis\n{drawn}");
+}

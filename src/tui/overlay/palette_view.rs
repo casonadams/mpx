@@ -8,13 +8,14 @@ use crate::layout::Rect;
 use crate::tui::command::{Command, PaletteTab};
 use crate::tui::overlay::nav::{ListState, fuzzy_match, has_ctrl};
 use crate::tui::overlay::tree_view::{TreePane, TreeSession, TreeWindow, load_session};
-use crate::tui::overlay::widgets::{
-    self, Span, Tone, put_row,
-};
+use crate::tui::overlay::widgets::{self, Span, Tone, fit, put_row};
 use crate::tui::overlay::{HelpEntry, OverlayAction, OverlayCtx};
 use crate::tui::prompt::PromptState;
 
 const HINTS: &str = "◄ ►/Tab: tabs  ▲ ▼/C-n/p: move  Enter: run  Esc: close";
+/// Widest title column and shortcut column of a row; longer ones are cut with `…`.
+const MAX_LABEL_WIDTH: usize = 30;
+const MAX_SHORTCUT_WIDTH: usize = 16;
 
 struct BuiltinEntry {
     cmd: &'static str,
@@ -523,43 +524,74 @@ impl PaletteView {
             );
         }
 
+        let (label_w, shortcut_w) = columns(&items);
         for (i, item) in items[range.clone()].iter().enumerate() {
             let selected = (range.start + i) == self.list.cursor;
-            let row_spans = self.item_spans(item, selected);
+            let row_spans = item_spans(item, selected, (label_w, shortcut_w), body.width as usize);
             put_row(out, body, 3 + i as u16, &row_spans, selected)?;
         }
         Ok(())
     }
+}
 
-    fn item_spans(&self, item: &PaletteItem, selected: bool) -> Vec<Span> {
-        let mut row_spans = Vec::new();
-        if selected {
-            row_spans.push(Span::bold("▶ ", Tone::Accent));
-        } else {
-            row_spans.push(Span::plain("  "));
-        }
+/// Widest title (with its badge) and widest `[shortcut]`, each capped, so rows line up in columns.
+fn columns(items: &[PaletteItem]) -> (usize, usize) {
+    let label = items.iter().map(|i| lead_width(i) + i.title.chars().count()).max();
+    let shortcut = items
+        .iter()
+        .filter_map(|i| i.shortcut.as_ref())
+        .map(|sc| sc.chars().count() + 2)
+        .max();
+    (
+        label.unwrap_or(0).min(MAX_LABEL_WIDTH),
+        shortcut.unwrap_or(0).min(MAX_SHORTCUT_WIDTH),
+    )
+}
 
-        if let Some(badge) = &item.badge {
-            row_spans.push(badge.clone());
-            row_spans.push(Span::plain(" "));
-        }
+/// Width of the badge and the space after it; 0 without a badge.
+fn lead_width(item: &PaletteItem) -> usize {
+    item.badge.as_ref().map_or(0, |b| b.text.chars().count() + 1)
+}
 
-        if selected {
-            row_spans.push(Span::bold(&item.title, Tone::Accent));
-        } else {
-            row_spans.push(Span::plain(&item.title));
-        }
-
-        if let Some(sc) = &item.shortcut {
-            row_spans.push(Span::plain("  "));
-            row_spans.push(Span::dim(format!("[{sc}]")));
-        }
-
-        if !item.subtitle.is_empty() {
-            row_spans.push(Span::plain("  ·  "));
-            row_spans.push(Span::dim(&item.subtitle));
-        }
-
-        row_spans
+fn item_spans(
+    item: &PaletteItem,
+    selected: bool,
+    (label_w, shortcut_w): (usize, usize),
+    width: usize,
+) -> Vec<Span> {
+    let mut row_spans = vec![if selected {
+        Span::bold("▶ ", Tone::Accent)
+    } else {
+        Span::plain("  ")
+    }];
+    let lead = lead_width(item);
+    if let Some(badge) = &item.badge {
+        row_spans.push(badge.clone());
+        row_spans.push(Span::plain(" "));
     }
+    let title = fit(&item.title, label_w.saturating_sub(lead));
+    row_spans.push(if selected {
+        Span::bold(title, Tone::Accent)
+    } else {
+        Span::plain(title)
+    });
+
+    if shortcut_w > 0 {
+        let shortcut = item.shortcut.as_ref().map(|sc| format!("[{sc}]")).unwrap_or_default();
+        row_spans.push(Span::plain("  "));
+        row_spans.push(Span::dim(fit(&shortcut, shortcut_w)));
+    }
+    if !item.subtitle.is_empty() {
+        let separator = "  ·  ";
+        let used: usize = row_spans.iter().map(|s| s.text.chars().count()).sum();
+        let room = width.saturating_sub(used + separator.chars().count());
+        let subtitle = if item.subtitle.chars().count() > room {
+            fit(&item.subtitle, room)
+        } else {
+            item.subtitle.clone()
+        };
+        row_spans.push(Span::plain(separator));
+        row_spans.push(Span::dim(subtitle));
+    }
+    row_spans
 }

@@ -231,16 +231,15 @@ pub fn draw_box<W: Write>(out: &mut W, area: Rect, title: &str, footer: &str) ->
 }
 
 fn write_span<W: Write>(out: &mut W, span: &Span, selected: bool, text: &str) -> io::Result<()> {
-    queue!(
-        out,
-        SetAttribute(Attribute::Reset),
-        SetForegroundColor(span.tone.color())
-    )?;
+    queue!(out, SetAttribute(Attribute::Reset))?;
     if selected {
+        // One reversed bar across the row: a tone or dimming per span would colour it in patches.
         queue!(out, SetAttribute(Attribute::Reverse))?;
-    }
-    if span.dim {
-        queue!(out, SetAttribute(Attribute::Dim))?;
+    } else {
+        queue!(out, SetForegroundColor(span.tone.color()))?;
+        if span.dim {
+            queue!(out, SetAttribute(Attribute::Dim))?;
+        }
     }
     if span.bold {
         queue!(out, SetAttribute(Attribute::Bold))?;

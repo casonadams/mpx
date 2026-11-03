@@ -44,3 +44,16 @@ async fn ctrl_space_palette_lifecycle_and_execution() {
     h.frame().await;
     assert_eq!(h.app.panes.len(), 2);
 }
+
+#[tokio::test]
+async fn the_shortcut_popup_goes_away_when_a_key_opens_the_palette() {
+    let mut h = Harness::idle().await;
+    h.app.config.which_key_delay_ms = 0;
+    h.ctrl('b').await;
+    assert!(h.frame().await.contains('╭'), "the popup shows while the prefix waits");
+
+    h.key(KeyCode::Char('?')).await;
+    let drawn = h.frame().await;
+    assert!(drawn.contains("mpx palette"), "{drawn}");
+    assert!(!drawn.contains('╭'), "the popup is gone under the palette\n{drawn}");
+}
