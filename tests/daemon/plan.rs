@@ -59,8 +59,7 @@ fn default_program_is_the_default_command_through_the_shell() {
         ("/bin/bash".to_string(), vec!["-c".to_string(), "echo hi".to_string()])
     );
     let (program, args) = plan::default_argv(None, None, None);
-    let fallback = if cfg!(windows) { "powershell.exe" } else { "/bin/sh" };
-    assert_eq!((program.as_str(), args.is_empty()), (fallback, true));
+    assert_eq!((program.as_str(), args.is_empty()), (plan::fallback_shell(), true));
 }
 
 #[test]

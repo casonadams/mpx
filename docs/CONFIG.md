@@ -135,7 +135,7 @@ These tmux options have an mpx file key; `mpx import-tmux` maps them. Each row n
 | `monitor-bell on\|off` | `monitor_bell`. Background windows get the `!` flag on a bell. | `on` |
 | `monitor-silence N` | `monitor_silence`: seconds without output after which a background window gets the `~` flag. `0` is off. | `0` |
 | `default-terminal` | `default_terminal`: `TERM` for panes started after the change. | `xterm-256color` |
-| `default-shell` | `default_shell`: program for panes started with no command. Must be an absolute path. | `$SHELL` |
+| `default-shell` | `default_shell`: program for panes started with no command, and the shell `run-shell`, `if-shell` and popups use. Must be an absolute path. On Windows, where `$SHELL` is usually unset, panes start `powershell.exe`; `run-shell` and `if-shell` need a POSIX `sh` on the `PATH` (Git for Windows provides one). | `$SHELL` (Windows: `powershell.exe`; `run-shell` and `if-shell`: `sh`) |
 | `default-command` | `default_command`: run through the default shell by panes started with no command. Empty means the shell. | empty |
 | `display-panes-time` | `display_panes_time_ms`. | `1000` |
 

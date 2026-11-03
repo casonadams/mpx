@@ -680,7 +680,8 @@ async fn break_pane(r: &Resolved, name: &str) -> Result<i32, String> {
 fn shell_command(argv: Vec<String>) -> (String, Vec<String>) {
     command_and_args(argv).unwrap_or_else(|| {
         (
-            std::env::var("SHELL").unwrap_or_else(|_| "sh".to_string()),
+            std::env::var("SHELL")
+                .unwrap_or_else(|_| crate::daemon::plan::fallback_shell().to_string()),
             Vec::new(),
         )
     })

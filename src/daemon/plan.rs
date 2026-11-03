@@ -29,9 +29,19 @@ pub fn validate_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// The shell a pane or popup runs when none is configured and `$SHELL` is unset: `powershell.exe`
+/// on Windows, `/bin/sh` elsewhere.
+pub fn fallback_shell() -> &'static str {
+    if cfg!(windows) {
+        "powershell.exe"
+    } else {
+        "/bin/sh"
+    }
+}
+
 /// Program and arguments for a pane started without a command: `default-command` run through the
 /// default shell with `-c`, or the default shell alone. The shell is the configured `default-shell`,
-/// else `$SHELL`, else `sh`.
+/// else `$SHELL`, else [`fallback_shell`].
 pub fn default_argv(
     shell: Option<&str>,
     env_shell: Option<&str>,
@@ -40,7 +50,7 @@ pub fn default_argv(
     let shell = shell
         .or(env_shell)
         .filter(|s| !s.is_empty())
-        .unwrap_or(if cfg!(windows) { "powershell.exe" } else { "/bin/sh" })
+        .unwrap_or(fallback_shell())
         .to_string();
     match command {
         Some(command) => (shell, vec!["-c".to_string(), command.to_string()]),

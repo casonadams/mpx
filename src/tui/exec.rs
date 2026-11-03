@@ -79,16 +79,17 @@ fn needs_confirm(cmd: &Command) -> Option<String> {
 }
 
 /// Pipes `text` to the shell `command` (`copy-pipe`). Its output is discarded and the TUI does not
-/// wait for it: the text is written and the child reaped on a thread of its own.
-fn pipe_text(command: &str, text: &str) {
-    let spawned = std::process::Command::new("sh")
+/// wait for it: the text is written and the child reaped on a thread of its own. Fails when the
+/// shell cannot start (on Windows, a POSIX `sh` must be on the `PATH`).
+fn pipe_text(command: &str, text: &str) -> Result<(), String> {
+    let mut child = std::process::Command::new("sh")
         .arg("-c")
         .arg(command)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .spawn();
-    let Ok(mut child) = spawned else { return };
+        .spawn()
+        .map_err(|e| format!("copy-pipe: cannot start sh: {e}"))?;
     let text = text.to_string();
     std::thread::spawn(move || {
         if let Some(mut stdin) = child.stdin.take() {
@@ -96,6 +97,7 @@ fn pipe_text(command: &str, text: &str) {
         }
         let _ = child.wait();
     });
+    Ok(())
 }
 
 impl App {
@@ -1198,7 +1200,7 @@ impl App {
             .default_shell
             .clone()
             .or_else(|| std::env::var("SHELL").ok())
-            .unwrap_or_else(|| "/bin/sh".to_string());
+            .unwrap_or_else(|| crate::daemon::plan::fallback_shell().to_string());
         let screen = (self.viewport.0, self.rows.screen_h);
         match PopupState::open(opts, screen, &shell, &self.config.session.default_terminal) {
             Ok(popup) => {
@@ -1654,8 +1656,10 @@ impl App {
             self.yank.yanks.push(text.clone());
             self.yank.last_copy = Some(text.clone());
         }
-        if let (Some(command), Some(text)) = (pipe, &text) {
-            pipe_text(&command, text);
+        if let (Some(command), Some(text)) = (pipe, &text)
+            && let Err(e) = pipe_text(&command, text)
+        {
+            self.say(e);
         }
         if exit {
             if active {
