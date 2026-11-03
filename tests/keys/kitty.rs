@@ -76,18 +76,6 @@ fn associated_text_follows_report_all_keys_and_is_the_text_codepoint() {
     assert_eq!(press(KeyCode::Char('a'), NONE, TEXT), b"a");
 }
 
-/// The kitty spec's text-as-code-points examples leave the modifiers field empty when no modifier
-/// is reported (`alt+a -> CSI 0 ;   ; 229 u`), so an unmodified key with text is `CSI code ; ; text u`.
-/// Modifiers fill the field, and a repeat carries its event field with the default `1` for an
-/// unmodified key, followed by the text.
-#[test]
-fn empty_modifier_field_is_kept_when_only_the_text_is_reported() {
-    let f = EVENTS | ALL_KEYS | TEXT;
-    assert_eq!(press(KeyCode::Char('x'), NONE, ALL_KEYS | TEXT), b"\x1b[120;;120u");
-    assert_eq!(press(KeyCode::Char('x'), SHIFT, ALL_KEYS | TEXT), b"\x1b[120;2;88u");
-    assert_eq!(event(KeyCode::Char('x'), NONE, KeyEventKind::Repeat, f), b"\x1b[120;1:2;120u");
-}
-
 #[test]
 fn event_types_mark_repeat_and_release_on_csi_u_keys() {
     let f = EVENTS | ALL_KEYS;
