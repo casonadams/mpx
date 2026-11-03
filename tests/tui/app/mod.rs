@@ -11,6 +11,8 @@ mod overlay_io;
 mod options;
 mod overlay_keys;
 mod passthrough;
+#[cfg(unix)]
+mod popups;
 mod prompt_cmds;
 mod reload;
 mod sessions;

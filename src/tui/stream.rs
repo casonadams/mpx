@@ -4,7 +4,7 @@
 use super::app::{App, Mode};
 use super::panes::{has_scrollback, load_pane};
 use crate::protocol::StreamEvent;
-use crate::vt::VtScreen;
+use crate::vt::{Alert, VtScreen};
 
 /// Largest gap a pane coming into view catches up on by reading it; well inside the 2 MB a pane's
 /// log keeps, so the bytes are still there. Larger gaps rebuild the pane from its log.
@@ -174,6 +174,9 @@ impl App {
             .entry(name.to_string())
             .or_insert_with(|| VtScreen::live(DEFAULT_SIZE.0 as usize, DEFAULT_SIZE.1 as usize));
         vt.feed(data.as_bytes());
+        if vt.take_alerts().contains(&Alert::Bell) {
+            self.bells.push(name.to_string());
+        }
         let pass = vt.take_passthroughs();
         if self.config.allow_passthrough.allows(name == self.active_pane) {
             for sequence in &pass {

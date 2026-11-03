@@ -17,7 +17,7 @@ use super::snapshot::{PaneRecord, build_snapshot};
 use super::stores::Stores;
 use crate::node::sleep_until_opt;
 use crate::config::Config;
-use crate::keys::{TermModes, encode_key_names, wrap_paste};
+use crate::keys::{KeyPolicy, TermModes, encode_key_names, wrap_paste};
 use crate::layout::{Direction, Workspace};
 use crate::node::pacing::Pacing;
 use crate::node::pane::{self, InputBuild, Notifier, PaneCtx, PaneHandle, PaneNotice, TermView};
@@ -505,13 +505,16 @@ impl Session {
                 name,
                 keys,
                 literal,
-            } => unit(
-                self.send(
-                    &name,
-                    Box::new(move |view: &TermView| key_bytes(&keys, literal, view)),
+            } => {
+                let policy = KeyPolicy::of(&self.config);
+                unit(
+                    self.send(
+                        &name,
+                        Box::new(move |view: &TermView| key_bytes(&keys, literal, view, policy)),
+                    )
+                    .await,
                 )
-                .await,
-            ),
+            }
             Request::Paste { name, text, submit } => unit(
                 self.send(
                     &name,
@@ -1320,11 +1323,11 @@ pub(super) fn reply<T>(result: Result<T, String>, ok: impl FnOnce(T) -> Response
     }
 }
 
-fn key_bytes(keys: &[String], literal: bool, view: &TermView) -> Vec<u8> {
+fn key_bytes(keys: &[String], literal: bool, view: &TermView, policy: KeyPolicy) -> Vec<u8> {
     if literal {
         keys.concat().into_bytes()
     } else {
-        encode_key_names(keys, &view.modes)
+        encode_key_names(keys, &view.modes, policy)
     }
 }
 

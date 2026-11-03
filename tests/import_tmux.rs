@@ -49,6 +49,12 @@ fn has_note(c: &Converted, line: usize) -> bool {
     c.notes.iter().any(|n| n.starts_with(&prefix))
 }
 
+fn parsed_clean(input: &str) -> Config {
+    let c = convert(input);
+    assert!(c.notes.is_empty(), "{:?}", c.notes);
+    parsed(&c)
+}
+
 #[test]
 fn empty_input_converts_to_default_config() {
     let c = convert("");
@@ -219,10 +225,9 @@ fn continuation_joins_physical_lines() {
 
 #[test]
 fn semicolon_separates_top_level_commands_and_escaped_semicolon_chains_binds() {
-    let c = convert(
+    let config = parsed_clean(
         "set -g prefix C-a; set -g history-limit 5\nbind x split-window \\; select-layout tiled\n",
     );
-    let config = parsed(&c);
     assert_eq!(config.prefix, "C-a");
     assert_eq!(config.scrollback_lines, 5);
     assert_eq!(config.history_limit, Config::default().history_limit);
@@ -230,18 +235,15 @@ fn semicolon_separates_top_level_commands_and_escaped_semicolon_chains_binds() {
         config.bind.get("x").map(String::as_str),
         Some("split-window ; select-layout tiled")
     );
-    assert!(c.notes.is_empty(), "{:?}", c.notes);
 }
 
 #[test]
 fn quoted_words_survive_into_mpx_command_lines() {
-    let c = convert("bind R command-prompt -I \"rename-session \"\n");
-    let config = parsed(&c);
+    let config = parsed_clean("bind R command-prompt -I \"rename-session \"\n");
     assert_eq!(
         config.bind.get("R").map(String::as_str),
         Some("command-prompt -I 'rename-session '")
     );
-    assert!(c.notes.is_empty(), "{:?}", c.notes);
 }
 
 #[test]
@@ -295,15 +297,30 @@ fn crlf_line_endings_are_accepted() {
 }
 
 #[test]
-fn new_options_map_to_their_config_keys() {
-    let c = convert(
-        "set -g remain-on-exit failed\nset -g allow-passthrough all\nset -g monitor-bell off\nset -g automatic-rename off\nset -g default-shell /bin/zsh\nset -g history-limit 2000\n",
+fn options_map_to_their_config_keys() {
+    let config = parsed_clean(
+        "set -g remain-on-exit failed\nset -g allow-passthrough all\nset -g monitor-bell off\nset -g automatic-rename off\nset -g default-shell /bin/zsh\nset -g history-limit 2000\nset -g focus-events on\nset -g extended-keys always\nset -g xterm-keys off\nset -g set-titles on\nset -g set-titles-string \"#S: #W\"\nset -g bell-action current\nset -g visual-bell on\nset -g visual-activity on\n",
     );
-    let config = parsed(&c);
     assert_eq!(config.remain_on_exit.as_str(), "failed");
     assert_eq!(config.allow_passthrough.as_str(), "all");
     assert!(!config.monitor_bell && !config.automatic_rename);
     assert_eq!(config.default_shell.as_deref(), Some("/bin/zsh"));
     assert_eq!(config.scrollback_lines, 2000);
-    assert!(c.notes.is_empty(), "{:?}", c.notes);
+    assert!(config.focus_events);
+    assert_eq!(config.extended_keys.as_str(), "always");
+    assert!(!config.xterm_keys);
+    assert!(config.set_titles);
+    assert_eq!(config.set_titles_string, "#S: #W");
+    assert_eq!(config.bell_action.as_str(), "current");
+    assert!(config.visual_bell && config.visual_activity);
+}
+
+#[test]
+fn bad_values_for_terminal_and_bell_options_are_noted_and_skipped() {
+    let c = convert("set -g extended-keys maybe\nset -g bell-action loud\nset -g focus-events sometimes\n");
+    let config = parsed(&c);
+    assert_eq!(config.extended_keys.as_str(), "off");
+    assert_eq!(config.bell_action.as_str(), "any");
+    assert!(!config.focus_events);
+    assert_eq!(c.notes.len(), 3, "{:?}", c.notes);
 }

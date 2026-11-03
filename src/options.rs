@@ -62,13 +62,18 @@ macro_rules! option {
 static OPTIONS: &[Opt] = &[
     option!("allow-passthrough", allow_passthrough, |v: &crate::config::Passthrough| v.as_str().to_string(), |v: &str| v.parse()),
     option!("base-index", base_index, |v: &usize| v.to_string(), number::<usize>),
+    option!("bell-action", bell_action, |v: &crate::config::BellAction| v.as_str().to_string(), |v: &str| v.parse()),
     option!("display-panes-time", display_panes_time_ms, |v: &u64| v.to_string(), number::<u64>),
     option!("display-time", display_time_ms, |v: &u64| v.to_string(), number::<u64>),
+    option!("extended-keys", extended_keys, |v: &crate::config::ExtendedKeys| v.as_str().to_string(), |v: &str| v.parse()),
+    option!("focus-events", focus_events, |v: &bool| on_off(*v), parse_switch),
     option!("mode-keys", mode_keys, |v: &crate::config::ModeKeys| v.as_str().to_string(), |v: &str| v.parse()),
     option!("mouse", mouse, |v: &bool| on_off(*v), parse_switch),
     option!("pane-base-index", pane_base_index, |v: &usize| v.to_string(), number::<usize>),
     option!("prefix", prefix, |v: &String| quoted(v.clone()), |v: &str| Ok::<_, String>(v.trim().to_string())),
     option!("set-clipboard", set_clipboard, |v: &bool| on_off(*v), parse_switch),
+    option!("set-titles", set_titles, |v: &bool| on_off(*v), parse_switch),
+    option!("set-titles-string", set_titles_string, |v: &String| quoted(v.clone()), |v: &str| Ok::<_, String>(v.to_string())),
     option!("status", status, |v: &bool| on_off(*v), parse_switch),
     option!("status-interval", status_interval, |v: &u64| v.to_string(), number::<u64>),
     option!("status-justify", status_justify, |v: &crate::config::Justify| v.as_str().to_string(), |v: &str| v.parse()),
@@ -77,10 +82,13 @@ static OPTIONS: &[Opt] = &[
     option!("status-position", status_position, |v: &crate::config::StatusPosition| v.as_str().to_string(), |v: &str| v.parse()),
     option!("status-right", status_right, |v: &String| quoted(v.clone()), |v: &str| Ok::<_, String>(v.to_string())),
     option!("status-right-length", status_right_length, |v: &usize| v.to_string(), number::<usize>),
+    option!("visual-activity", visual_activity, |v: &bool| on_off(*v), parse_switch),
+    option!("visual-bell", visual_bell, |v: &bool| on_off(*v), parse_switch),
     option!("which-key-delay", which_key_delay_ms, |v: &u64| v.to_string(), number::<u64>),
     option!("window-status-current-format", window_status_current_format, |v: &String| quoted(v.clone()), |v: &str| Ok::<_, String>(v.to_string())),
     option!("window-status-format", window_status_format, |v: &String| quoted(v.clone()), |v: &str| Ok::<_, String>(v.to_string())),
     option!("window-status-separator", window_status_separator, |v: &String| quoted(v.clone()), |v: &str| Ok::<_, String>(v.to_string())),
+    option!("xterm-keys", xterm_keys, |v: &bool| on_off(*v), parse_switch),
 ];
 
 fn find(name: &str) -> Result<&'static Opt, String> {

@@ -1,7 +1,8 @@
 use std::borrow::Cow;
 use vte::{Params, Perform};
 
-use super::grid::{Cell, CellStyle, Color, Grid};
+use super::grid::{Cell, CellStyle, Color, Grid, Underline};
+use super::link::LinkId;
 use crate::keys::TermModes;
 
 pub struct VtHandler {
@@ -10,6 +11,10 @@ pub struct VtHandler {
     pub passthroughs: Vec<Vec<u8>>,
     pub bg_color: Option<String>,
     modes: TermModes,
+    /// Kitty keyboard flags the program pushed (`CSI > n u`), restored by `CSI < n u`.
+    kitty_stack: Vec<u8>,
+    /// A synchronized update (DEC 2026) the program has begun and not ended.
+    sync_output: bool,
     title: Option<String>,
     alerts: Vec<Alert>,
     last_char: Option<char>,
@@ -24,6 +29,8 @@ impl VtHandler {
             passthroughs: Vec::new(),
             bg_color: None,
             modes: TermModes::default(),
+            kitty_stack: Vec::new(),
+            sync_output: false,
             title: None,
             alerts: Vec::new(),
             last_char: None,
@@ -52,7 +59,11 @@ impl VtHandler {
                         style.bg = Some(color);
                     }
                 }
-                58 => skip_extended_color(sub, &mut iter),
+                58 => {
+                    if let Some(color) = underline_color(sub, &mut iter) {
+                        style.underline_color = Some(color);
+                    }
+                }
                 _ => apply_sgr_code(style, code, sub),
             }
         }
@@ -89,6 +100,7 @@ impl VtHandler {
                 1006 => self.modes.mouse_sgr = set,
                 1004 => self.modes.focus_events = set,
                 2004 => self.modes.bracketed_paste = set,
+                2026 => self.sync_output = set,
                 _ => {}
             }
         }
@@ -135,10 +147,67 @@ impl VtHandler {
         self.grid.history = history;
         self.grid.history_limit = limit;
         self.modes = TermModes::default();
+        self.kitty_stack.clear();
+        self.sync_output = false;
         self.title = None;
         self.bg_color = None;
         self.dcs_buf = None;
         self.last_char = None;
+    }
+
+    /// CSI forms that set input modes: xterm modifyOtherKeys (`CSI > 4 ; n m`) and the kitty
+    /// keyboard protocol (`CSI > n u`, `CSI < n u`, `CSI = n ; m u`, `CSI ? u`). True when the
+    /// sequence was one of them.
+    fn keyboard_csi(&mut self, params: &Params, intermediates: &[u8], action: char) -> bool {
+        let arg = |i: usize, default: u16| params.iter().nth(i).map_or(default, |p| p[0]);
+        match (intermediates, action) {
+            ([b'>'], 'm') => {
+                if arg(0, 0) == 4 {
+                    self.modes.modify_other_keys = arg(1, 0).min(2) as u8;
+                }
+                true
+            }
+            ([b'>'], 'u') => {
+                if self.kitty_stack.len() == KITTY_STACK_DEPTH {
+                    self.kitty_stack.remove(0);
+                }
+                self.kitty_stack.push(self.modes.kitty_keys);
+                self.modes.kitty_keys = kitty_flags(arg(0, 0));
+                true
+            }
+            ([b'<'], 'u') => {
+                for _ in 0..arg(0, 1).max(1) {
+                    self.modes.kitty_keys = self.kitty_stack.pop().unwrap_or(0);
+                }
+                true
+            }
+            ([b'='], 'u') => {
+                let flags = kitty_flags(arg(0, 0));
+                let current = self.modes.kitty_keys;
+                self.modes.kitty_keys = match arg(1, 1) {
+                    2 => current | flags,
+                    3 => current & !flags,
+                    _ => flags,
+                };
+                true
+            }
+            ([b'?'], 'u') => {
+                self.responses
+                    .push(format!("\x1b[?{}u", self.modes.kitty_keys).into_bytes());
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// OSC 8: the text printed from now links to `rest` (`params;uri`); an empty URI ends the link.
+    fn set_hyperlink(&mut self, rest: &[&[u8]]) {
+        let uri_empty = rest.get(1).is_none_or(|uri| uri.is_empty());
+        self.grid.current_style.link = if uri_empty {
+            None
+        } else {
+            LinkId::intern(&join_osc(rest))
+        };
     }
 
     fn handle_csi_cursor_edit(&mut self, action: char, params: &Params) {
@@ -185,23 +254,35 @@ impl VtHandler {
     }
 }
 
-/// Consumes the arguments of an extended colour (`58;5;n`, `58;2;r;g;b`) whose value is unused.
-fn skip_extended_color<'a>(sub: &[u16], iter: &mut impl Iterator<Item = &'a [u16]>) {
+/// The colour a 58 underline selector sets, in colon or semicolon form.
+fn underline_color<'a>(sub: &[u16], iter: &mut impl Iterator<Item = &'a [u16]>) -> Option<Color> {
     if sub.len() > 1 {
-        return;
-    }
-    match iter.next().map(|s| s[0]) {
-        Some(5) => {
-            iter.next();
-        }
-        Some(2) => {
-            for _ in 0..3 {
-                iter.next();
-            }
-        }
-        _ => {}
+        colon_extended_color(sub)
+    } else {
+        semicolon_extended_color(iter)
     }
 }
+
+/// The underline style of SGR 4 (`4:n`); a bare 4 is a single underline, `4:0` none.
+fn underline_style(sub: &[u16]) -> Underline {
+    match sub.get(1) {
+        None | Some(1) => Underline::Single,
+        Some(0) => Underline::None,
+        Some(2) => Underline::Double,
+        Some(3) => Underline::Curly,
+        Some(4) => Underline::Dotted,
+        Some(5) => Underline::Dashed,
+        Some(_) => Underline::Single,
+    }
+}
+
+/// The kitty keyboard flags a program sets: the five defined bits, nothing else.
+fn kitty_flags(value: u16) -> u8 {
+    (value & 0x1f) as u8
+}
+
+/// Kitty keyboard pushes kept; the oldest is dropped past this, as terminals bound their stacks.
+const KITTY_STACK_DEPTH: usize = 16;
 
 const ANSI_COLORS: [Color; 16] = [
     Color::Black,
@@ -229,6 +310,7 @@ fn apply_sgr_code(style: &mut CellStyle, code: u16, sub: &[u16]) {
         1..=4 | 7 | 21 => set_attribute(style, code, sub),
         30..=37 | 39 | 90..=97 => style.fg = basic_color(code),
         40..=47 | 49 | 100..=107 => style.bg = basic_color(code),
+        59 => style.underline_color = None,
         _ => {}
     }
 }
@@ -238,9 +320,9 @@ fn set_attribute(style: &mut CellStyle, code: u16, sub: &[u16]) {
         1 => style.bold = true,
         2 => style.faint = true,
         3 => style.italic = true,
-        4 => style.underline = sub.get(1) != Some(&0),
+        4 => style.underline = underline_style(sub),
         7 => style.reverse = true,
-        21 => style.underline = true,
+        21 => style.underline = Underline::Double,
         _ => {}
     }
 }
@@ -253,7 +335,7 @@ fn reset_attribute(style: &mut CellStyle, code: u16) {
             style.faint = false;
         }
         23 => style.italic = false,
-        24 => style.underline = false,
+        24 => style.underline = Underline::None,
         27 => style.reverse = false,
         _ => {}
     }
@@ -381,6 +463,9 @@ impl Perform for VtHandler {
     }
 
     fn csi_dispatch(&mut self, params: &Params, intermediates: &[u8], _ignore: bool, action: char) {
+        if self.keyboard_csi(params, intermediates, action) {
+            return;
+        }
         // `CSI > 4;2 m` (modifyOtherKeys), `CSI > 1 u` (kitty keyboard), `CSI ? 6 n` and similar
         // private forms share finals with SGR, cursor restore and DSR but mean something else.
         if !intermediates.is_empty() && !matches!(action, 'c' | 'h' | 'l') {
@@ -546,6 +631,7 @@ impl Perform for VtHandler {
     fn osc_dispatch(&mut self, params: &[&[u8]], bell_terminated: bool) {
         match params {
             [b"0" | b"2", rest @ ..] => self.title = Some(join_osc(rest)),
+            [b"8", rest @ ..] => self.set_hyperlink(rest),
             // OSC 9;4 is ConEmu/Windows Terminal progress reporting, not a notification.
             [b"9", b"4", ..] => {}
             [b"9", rest @ ..] => self.push_notify(join_osc(rest)),
@@ -675,6 +761,11 @@ impl VtScreen {
     /// Takes on input modes set before the output this screen was fed, which it could not see.
     pub fn set_modes(&mut self, modes: TermModes) {
         self.handler.modes = modes;
+    }
+
+    /// Whether the program has begun a synchronized update (DEC 2026) that it has not ended.
+    pub fn sync_output(&self) -> bool {
+        self.handler.sync_output
     }
 
     /// Latest OSC 0/2 window title.

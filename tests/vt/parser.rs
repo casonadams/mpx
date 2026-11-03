@@ -1,6 +1,6 @@
 use mpx::keys::TermModes;
-use mpx::vt::grid::{CellStyle, Color};
-use mpx::vt::{Alert, VtScreen};
+use mpx::vt::grid::{CellStyle, Color, Underline};
+use mpx::vt::{Alert, LinkId, VtScreen};
 
 fn feed(vt: &mut VtScreen, bytes: &str) {
     vt.feed(bytes.as_bytes());
@@ -39,13 +39,10 @@ fn cup_moves_cursor_and_writes_at_position() {
 
 #[test]
 fn sgr_sets_style_and_reset_clears_it() {
-    let mut vt = VtScreen::new(20, 5);
-    feed(&mut vt, "\x1b[1;31mRED\x1b[0m");
-    let cell = vt.grid().get_cell(0, 0).unwrap();
-    assert_eq!(cell.c, 'R');
-    assert_eq!(cell.style.fg, Some(Color::Red));
-    assert!(cell.style.bold);
-    assert_eq!(vt.grid().current_style, CellStyle::default());
+    let style = styles_after("\x1b[1;31mRED\x1b[0mx");
+    assert_eq!(style[0].fg, Some(Color::Red));
+    assert!(style[0].bold);
+    assert_eq!(style[3], CellStyle::default());
 }
 
 /// The style of each cell in the top row after `input`.
@@ -94,7 +91,7 @@ fn modes_start_unset() {
 }
 
 #[test]
-fn private_modes_set_and_reset_input_flags() {
+fn private_modes_set_and_reset_their_flags() {
     let mut vt = VtScreen::new(20, 5);
 
     feed(&mut vt, "\x1b[?1h");
@@ -111,6 +108,11 @@ fn private_modes_set_and_reset_input_flags() {
     assert!(vt.modes().focus_events);
     feed(&mut vt, "\x1b[?1004l");
     assert!(!vt.modes().focus_events);
+
+    feed(&mut vt, "\x1b[?2026h");
+    assert!(vt.sync_output());
+    feed(&mut vt, "\x1b[?2026l");
+    assert!(!vt.sync_output());
 }
 
 #[test]
@@ -512,11 +514,8 @@ fn cleared_screens_and_scrolled_in_lines_take_the_current_background() {
 
 #[test]
 fn reverse_video_is_set_by_sgr_7_and_cleared_by_27_or_reset() {
-    let mut vt = VtScreen::new(10, 1);
-    feed(&mut vt, "\x1b[7ma\x1b[27mb\x1b[7mc\x1b[0md");
-    let reverse: Vec<bool> = (0..4)
-        .map(|x| vt.grid().get_cell(x, 0).expect("cell").style.reverse)
-        .collect();
+    let style = styles_after("\x1b[7ma\x1b[27mb\x1b[7mc\x1b[0md");
+    let reverse: Vec<bool> = style[..4].iter().map(|s| s.reverse).collect();
     assert_eq!(reverse, [true, false, true, false]);
 }
 
@@ -527,19 +526,76 @@ fn private_csi_forms_do_not_act_as_sgr_or_cursor_restore() {
     feed(&mut vt, "\x1b[>4;2m\x1b[>1u\x1b[<u\x1b[?6nX");
     let cell = vt.grid().get_cell(0, 0).unwrap();
     assert_eq!(cell.c, 'X');
-    assert!(!cell.style.underline);
+    assert!(!cell.style.is_underlined());
     assert_eq!(cursor(&vt), (1, 0));
     assert!(vt.take_responses().is_empty());
 }
 
 #[test]
-fn underline_sgr_honours_subparameters_and_ignores_underline_colour_arguments() {
-    let style = styles_after("\x1b[4:3mA\x1b[4:0mB\x1b[58;2;4;4;4mC\x1b[58;5;4mD\x1b[24m");
-    let underlined = |x: usize| style[x].underline;
-    assert!(underlined(0));
-    assert!(!underlined(1));
-    assert!(!underlined(2));
-    assert!(!underlined(3));
+fn underline_sgr_selects_a_style_and_underline_colour_is_kept() {
+    let style = styles_after(
+        "\x1b[4:3mA\x1b[4:0mB\x1b[4mC\x1b[21mD\x1b[24mE\x1b[4:2m\x1b[58;2;4;4;4mF\x1b[58:5:9mG\x1b[59mH",
+    );
+    assert_eq!(style[0].underline, Underline::Curly);
+    assert_eq!(style[1].underline, Underline::None);
+    assert_eq!(style[2].underline, Underline::Single);
+    assert_eq!(style[3].underline, Underline::Double);
+    assert_eq!(style[4].underline, Underline::None);
+    assert_eq!(style[5].underline, Underline::Double);
+    assert_eq!(style[5].underline_color, Some(Color::Rgb(4, 4, 4)));
+    assert_eq!(style[6].underline_color, Some(Color::Indexed(9)));
+    assert_eq!(style[7].underline_color, None);
+}
+
+fn link_body(style: &CellStyle) -> Option<String> {
+    style.link.map(|id| id.with_body(str::to_owned))
+}
+
+#[test]
+fn osc_8_links_the_text_printed_until_the_link_is_closed() {
+    let mut vt = VtScreen::new(10, 1);
+    feed(&mut vt, "a\x1b]8;id=1;https://x.test\x1b\\bc\x1b]8;;\x1b\\d");
+    let links: Vec<Option<String>> = (0..4)
+        .map(|x| link_body(&vt.grid().get_cell(x, 0).unwrap().style))
+        .collect();
+    assert_eq!(
+        links,
+        [
+            None,
+            Some("id=1;https://x.test".to_owned()),
+            Some("id=1;https://x.test".to_owned()),
+            None,
+        ]
+    );
+}
+
+#[test]
+fn osc_8_targets_keep_semicolons_and_equal_targets_share_an_id() {
+    let mut vt = VtScreen::new(10, 1);
+    feed(&mut vt, "\x1b]8;;https://x.test/a;b\x1b\\a\x1b]8;;\x1b\\\x1b]8;;https://x.test/a;b\x1b\\b");
+    let a = vt.grid().get_cell(0, 0).unwrap().style.link;
+    let b = vt.grid().get_cell(1, 0).unwrap().style.link;
+    assert_eq!(a.map(|id| id.with_body(str::to_owned)), Some(";https://x.test/a;b".to_owned()));
+    assert_eq!(a, b);
+    assert_ne!(a, None::<LinkId>);
+}
+
+#[test]
+fn keyboard_modes_follow_modify_other_keys_and_the_kitty_stack() {
+    let mut vt = VtScreen::new(10, 1);
+    assert_eq!(modes_after(&mut vt, "\x1b[>4;2m").modify_other_keys, 2);
+    assert_eq!(modes_after(&mut vt, "\x1b[>4;0m").modify_other_keys, 0);
+    assert_eq!(modes_after(&mut vt, "\x1b[>1u\x1b[>8u").kitty_keys, 8);
+    assert_eq!(modes_after(&mut vt, "\x1b[<u").kitty_keys, 1);
+    feed(&mut vt, "\x1b[?u");
+    assert_eq!(vt.take_responses(), vec![b"\x1b[?1u".to_vec()]);
+    assert_eq!(modes_after(&mut vt, "\x1b[=3;3u").kitty_keys, 0);
+}
+
+/// The input modes once `input` has been fed to `vt`.
+fn modes_after(vt: &mut VtScreen, input: &str) -> TermModes {
+    feed(vt, input);
+    vt.modes()
 }
 
 /// A 6x4 screen whose rows read `abcdef`, `ghijkl`, `mnopqr`, `stuvwx`.

@@ -17,6 +17,7 @@ use mpx::layout::geometry::Rect;
 use mpx::protocol::{NewWindowOpts, SpawnOpts, SplitOpts, WaitCondition, WaitOutcome};
 use mpx::tui::app::{App, AppOptions, Clipboard, Flow, Mode, StartView, StreamRx};
 use mpx::tui::frame;
+use mpx::tui::popup::{self, Popup};
 use mpx::vt::{Cursor, VtScreen};
 
 pub const SESSION: &str = "test";
@@ -156,6 +157,17 @@ pub fn two_lines() -> String {
 /// Prints 40 numbered lines, so the pane has scrollback.
 pub fn long_output() -> String {
     format!(r"for i in $(seq 1 40); do printf 'line %s\r\n' $i; done; {ECHO}")
+}
+
+/// The text of a popup's screen, one line per row.
+pub fn screen_text(popup: &Popup) -> String {
+    popup
+        .screen
+        .grid()
+        .screen_lines()
+        .map(|line| line.iter().map(|cell| cell.c).collect::<String>())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// An attached app plus the daemon state around it.
@@ -373,6 +385,26 @@ impl Harness {
             if let Ok(item) = tokio::time::timeout(left, self.rx.recv()).await {
                 let item = item.expect("event stream closed");
                 self.app.on_stream(Some(item), &mut self.rx).await;
+            }
+        }
+    }
+
+    /// Feeds the open popup's pty output to it until `ready` holds for the popup, bounded. Returns
+    /// early when the popup closes; callers check the mode.
+    pub async fn until_popup(&mut self, what: &str, mut ready: impl FnMut(&Popup) -> bool) {
+        let deadline = tokio::time::Instant::now() + WAIT;
+        loop {
+            match &self.app.mode {
+                Mode::Popup(popup) if ready(popup) => return,
+                Mode::Popup(_) => {}
+                _ => return,
+            }
+            let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+            assert!(!left.is_zero(), "popup never reached: {what}");
+            if let Ok(Some(event)) =
+                tokio::time::timeout(left, popup::next_event(&mut self.app.mode)).await
+            {
+                self.app.on_popup(event);
             }
         }
     }

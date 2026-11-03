@@ -2,7 +2,7 @@
 use std::io::{self, Write};
 
 use crate::layout::geometry::Rect;
-use crate::vt::{Cell, CellStyle, Color};
+use crate::vt::{Cell, CellStyle, Color, LinkId, Underline};
 
 /// Shadow of the layout area. `None` marks a cell whose on-screen content is unknown (never drawn,
 /// or hidden under an overlay), which forces the next frame to paint it.
@@ -86,6 +86,7 @@ impl Canvas {
         }
         let (top, bottom) = (region.y + 1, region.y + region.height);
         let verb = if lines > 0 { 'S' } else { 'T' };
+        self.end_link(out)?;
         // Default attributes first: the terminal fills scrolled-in cells with the current background.
         if full {
             write!(out, "\x1b[0m\x1b[{top};{bottom}r\x1b[{n}{verb}\x1b[r")?;
@@ -254,7 +255,11 @@ impl Canvas {
 
     fn write_cell<W: Write>(&mut self, out: &mut W, cell: Cell) -> io::Result<()> {
         if self.style != Some(cell.style) {
+            let open = self.style.and_then(|s| s.link);
             write_sgr(out, &cell.style)?;
+            if open != cell.style.link {
+                write_link(out, cell.style.link)?;
+            }
             self.style = Some(cell.style);
         }
         let mut utf8 = [0u8; 4];
@@ -270,8 +275,17 @@ impl Canvas {
         y as usize * self.width as usize + x as usize
     }
 
+    /// Ends the hyperlink the terminal is in, if any.
+    fn end_link<W: Write>(&self, out: &mut W) -> io::Result<()> {
+        match self.style.and_then(|s| s.link) {
+            Some(_) => write_link(out, None),
+            None => Ok(()),
+        }
+    }
+
     /// Ends the frame's cell writes on default attributes, so chrome drawn next starts clean.
     pub fn finish<W: Write>(&mut self, out: &mut W) -> io::Result<()> {
+        self.end_link(out)?;
         if self.style.is_some_and(|s| s != CellStyle::default()) {
             out.write_all(b"\x1b[0m")?;
         }
@@ -302,8 +316,13 @@ pub fn write_sgr<W: Write>(out: &mut W, style: &CellStyle) -> io::Result<()> {
     if style.italic {
         out.write_all(b";3")?;
     }
-    if style.underline {
-        out.write_all(b";4")?;
+    match style.underline {
+        Underline::None => {}
+        Underline::Single => out.write_all(b";4")?,
+        Underline::Double => out.write_all(b";4:2")?,
+        Underline::Curly => out.write_all(b";4:3")?,
+        Underline::Dotted => out.write_all(b";4:4")?,
+        Underline::Dashed => out.write_all(b";4:5")?,
     }
     if style.reverse {
         out.write_all(b";7")?;
@@ -314,7 +333,50 @@ pub fn write_sgr<W: Write>(out: &mut W, style: &CellStyle) -> io::Result<()> {
     if let Some(bg) = style.bg {
         write_color(out, bg, 40)?;
     }
+    if let Some(color) = style.underline_color {
+        write_underline_color(out, color)?;
+    }
     out.write_all(b"m")
+}
+
+/// OSC 8: starts the hyperlink `link`, or ends the current one when `None`.
+fn write_link<W: Write>(out: &mut W, link: Option<LinkId>) -> io::Result<()> {
+    match link {
+        Some(id) => id.with_body(|body| write!(out, "\x1b]8;{body}\x1b\\")),
+        None => out.write_all(b"\x1b]8;;\x1b\\"),
+    }
+}
+
+/// The colours SGR 30-37 and 90-97 name, in palette order.
+const NAMED_COLORS: [Color; 16] = [
+    Color::Black,
+    Color::Red,
+    Color::Green,
+    Color::Yellow,
+    Color::Blue,
+    Color::Magenta,
+    Color::Cyan,
+    Color::White,
+    Color::BrightBlack,
+    Color::BrightRed,
+    Color::BrightGreen,
+    Color::BrightYellow,
+    Color::BrightBlue,
+    Color::BrightMagenta,
+    Color::BrightCyan,
+    Color::BrightWhite,
+];
+
+/// An underline colour, in the colon forms terminals read as SGR 58 (`58:5:n`, `58:2::r:g:b`).
+fn write_underline_color<W: Write>(out: &mut W, color: Color) -> io::Result<()> {
+    match color {
+        Color::Rgb(r, g, b) => write!(out, ";58:2::{r}:{g}:{b}"),
+        Color::Indexed(i) => write!(out, ";58:5:{i}"),
+        named => {
+            let index = NAMED_COLORS.iter().position(|c| *c == named).unwrap_or(0);
+            write!(out, ";58:5:{index}")
+        }
+    }
 }
 
 /// `base` is 30 for foreground and 40 for background; bright colors use the 90/100 range.

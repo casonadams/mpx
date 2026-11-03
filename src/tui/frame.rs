@@ -50,13 +50,9 @@ pub fn send<W: Write>(out: &mut W, body: &[u8], cursor: &[u8]) -> io::Result<()>
     out.flush()
 }
 
-/// Everything a frame changes on screen but the cursor: nothing at all when no cell, chrome or
-/// overlay changed.
-pub fn draw_body<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
-    let screen_w = app.viewport.0;
-    let screen_h = app.rows.screen_h;
-    let hud = shortcut_popup(app, screen_w, screen_h);
-    let mut covered: Vec<Rect> = match &app.mode {
+/// The cells an open mode or the shortcut HUD covers: the canvas leaves them to the overlay.
+fn covered_by(app: &App, hud: Option<Rect>, screen_w: u16, screen_h: u16) -> Vec<Rect> {
+    match &app.mode {
         Mode::Overlay(overlay) => vec![overlay.footprint(overlay_area(screen_w, screen_h))],
         Mode::Clock { pane } => app
             .panes
@@ -65,8 +61,30 @@ pub fn draw_body<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
             .map(|(_, rect, _)| *rect)
             .collect(),
         Mode::Panes { .. } => number_boxes(app).into_iter().map(|(at, ..)| at).collect(),
+        Mode::Popup(popup) => vec![popup.rect],
+        Mode::Menu(menu) => vec![menu.rect],
         _ => hud.into_iter().collect(),
-    };
+    }
+}
+
+/// The mode's own drawing on top of the panes: pane numbers, the clock, a popup or a menu.
+fn draw_mode_overlay<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
+    match &app.mode {
+        Mode::Panes { .. } => draw_pane_numbers(app, out),
+        Mode::Clock { pane } => draw_clock(app, pane, out),
+        Mode::Popup(popup) => popup.render(out),
+        Mode::Menu(menu) => menu.render(out),
+        _ => Ok(()),
+    }
+}
+
+/// Everything a frame changes on screen but the cursor: nothing at all when no cell, chrome or
+/// overlay changed.
+pub fn draw_body<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
+    let screen_w = app.viewport.0;
+    let screen_h = app.rows.screen_h;
+    let hud = shortcut_popup(app, screen_w, screen_h);
+    let mut covered = covered_by(app, hud, screen_w, screen_h);
     if app.rows.status.is_none() && chrome_text(app).is_some() {
         covered.push(Rect::new(0, app.rows.prompt, screen_w, 1));
     }
@@ -99,11 +117,7 @@ pub fn draw_body<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
     }
     app.canvas.finish(out)?;
     draw_status_row(app, out)?;
-    match &app.mode {
-        Mode::Panes { .. } => draw_pane_numbers(app, out)?,
-        Mode::Clock { pane } => draw_clock(app, pane, out)?,
-        _ => {}
-    }
+    draw_mode_overlay(app, out)?;
     if hud.is_some() {
         Compositor::draw_shortcut_hud(out, screen_w, screen_h)?;
     }
@@ -181,6 +195,9 @@ fn draw_panes<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
     let crowd = (app.panes.len(), app.zoomed(), app.config.style.dim_inactive);
     let colors = PaneColors::new(&app.config.style, app.host_colors);
     for pane in &panes {
+        if app.sync_held(&pane.0) {
+            continue;
+        }
         let (_, rect, _) = pane;
         let vt = app
             .vt
@@ -390,6 +407,11 @@ pub fn place_cursor<W: Write>(app: &App, out: &mut W) -> io::Result<()> {
         Mode::Overlay(_) | Mode::Confirm(..) => {
             Compositor::position_cursor(out, Rect::new(0, 0, 1, 1), 0, 0, false)
         }
+        Mode::Popup(popup) => match popup.cursor() {
+            Some((x, y)) => Compositor::position_cursor(out, Rect::new(x, y, 1, 1), 0, 0, true),
+            None => Compositor::position_cursor(out, Rect::new(0, 0, 1, 1), 0, 0, false),
+        },
+        Mode::Menu(_) => Compositor::position_cursor(out, Rect::new(0, 0, 1, 1), 0, 0, false),
         Mode::Copy(cs) => place_pane_cursor(app, out, Some(cs)),
         _ => place_pane_cursor(app, out, app.parked_copy.get(&app.active_pane)),
     }

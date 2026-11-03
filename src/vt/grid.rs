@@ -1,6 +1,8 @@
 use std::borrow::Cow;
 use std::collections::VecDeque;
 
+use super::link::LinkId;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Color {
     Black,
@@ -24,6 +26,17 @@ pub enum Color {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Underline {
+    #[default]
+    None,
+    Single,
+    Double,
+    Curly,
+    Dotted,
+    Dashed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct CellStyle {
     /// Reverse video (SGR 7): the terminal swaps foreground and background when drawing.
     pub reverse: bool,
@@ -33,7 +46,18 @@ pub struct CellStyle {
     /// Faint (SGR 2): the terminal draws the text dimmer than its color.
     pub faint: bool,
     pub italic: bool,
-    pub underline: bool,
+    /// Underline style (SGR 4, 4:n, 21).
+    pub underline: Underline,
+    /// Underline color (SGR 58), `None` for the foreground color.
+    pub underline_color: Option<Color>,
+    /// OSC 8 hyperlink the cell's text links to.
+    pub link: Option<LinkId>,
+}
+
+impl CellStyle {
+    pub fn is_underlined(&self) -> bool {
+        self.underline != Underline::None
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,7 +76,9 @@ const BLANK: Cell = Cell {
         bold: false,
         faint: false,
         italic: false,
-        underline: false,
+        underline: Underline::None,
+        underline_color: None,
+        link: None,
     },
 };
 

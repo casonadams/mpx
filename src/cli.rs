@@ -13,7 +13,7 @@ pub use resolve::{
     parse_env_pairs, resolve, resolve_idempotency_key, wait_condition, wait_exit_code,
 };
 pub use sessions::{
-    RestoreOutcome, apply_key, daemon_args, ensure_session, restore_session, run_cli,
+    RestoreOutcome, apply_key, daemon_args, restore_session, run_cli,
 };
 
 /// Process entry point behind the `mpx` binary: tracing, clap parsing and dispatch.

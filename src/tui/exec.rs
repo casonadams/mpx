@@ -1,6 +1,9 @@
 //! Command execution: maps each `Command` onto daemon requests and TUI state.
 use super::app::{App, Flow, Mode};
 use super::command::{Command, CopyModeOpts, PromptSpec};
+use super::menu::{Menu, MenuItem};
+use super::placement::Offset;
+use super::popup::{Popup, PopupOpts};
 use super::copy::{CopyAction, CopyOutcome, CopyState, Motion, apply_action};
 use super::keymap;
 use super::overlay::{Overlay, OverlayCtx, buffer_summary};
@@ -211,6 +214,8 @@ impl App {
             Command::Confirm { prompt, then } => self.ask(prompt, *then),
             Command::DisplayPanes { duration_ms } => self.open_panes(duration_ms),
             Command::ClockMode { target } => self.open_clock(target),
+            Command::DisplayPopup(opts) => self.open_popup(opts),
+            Command::DisplayMenu { title, x, y, items } => self.open_menu(title, x, y, items),
             Command::ShowMessages => {
                 let lines = self.message_log.clone();
                 self.open_overlay(Overlay::text("messages", lines)).await
@@ -434,6 +439,50 @@ impl App {
         } else {
             self.say(format!("no pane {raw}"))
         }
+    }
+
+    /// `display-popup`: the command starts on a pty in a box over the panes. Its directory is `-d`,
+    /// else the directory of the `-t` pane, else the active pane's.
+    fn open_popup(&mut self, mut opts: PopupOpts) -> Flow {
+        if opts.cwd.is_none() {
+            let target = opts.target.clone().unwrap_or_else(|| self.active_pane.clone());
+            let pane = split_target(&target).1;
+            opts.cwd = self
+                .nodes
+                .iter()
+                .find(|node| node.name == pane)
+                .and_then(|node| node.cwd.clone());
+        }
+        let shell = self
+            .config
+            .default_shell
+            .clone()
+            .or_else(|| std::env::var("SHELL").ok())
+            .unwrap_or_else(|| "/bin/sh".to_string());
+        let screen = (self.viewport.0, self.rows.screen_h);
+        match Popup::open(opts, screen, &shell, &self.config.default_terminal) {
+            Ok(popup) => {
+                self.mode = Mode::Popup(Box::new(popup));
+                Flow::Continue
+            }
+            Err(e) => self.say(e),
+        }
+    }
+
+    /// `display-menu`: the menu opens over the panes; its title is a format, expanded now.
+    fn open_menu(
+        &mut self,
+        title: Option<String>,
+        x: Offset,
+        y: Offset,
+        items: Vec<MenuItem>,
+    ) -> Flow {
+        let title = title
+            .map(|raw| super::frame::expand_active(self, &raw))
+            .unwrap_or_default();
+        let screen = (self.viewport.0, self.rows.screen_h);
+        self.mode = Mode::Menu(Box::new(Menu::new(title, items, x, y, screen)));
+        Flow::Continue
     }
 
     /// `list-buffers`: one line per paste buffer, newest first.
@@ -867,8 +916,8 @@ impl App {
     }
 
     async fn send_prefix(&mut self) -> Flow {
-        let modes = self.modes_of(&self.active_pane.clone());
-        let bytes = self.keymap.prefix().encode(&modes);
+        let bytes =
+            self.encode_for_active(|modes, policy| self.keymap.prefix().encode(modes, policy));
         let result = self.write_active(&bytes).await;
         self.settle(result)
     }

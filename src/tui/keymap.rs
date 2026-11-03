@@ -92,6 +92,14 @@ const DEFAULT_BINDINGS: &[(&str, &str)] = &[
     ),
     ("(", "prev-session"),
     (")", "next-session"),
+    (
+        "<",
+        r##"display-menu -T "#I:#W" "Kill" X kill-window "Respawn" R "respawn-pane -k" "Mark" m "select-pane -m" "Rename" n "command-prompt -F -I #W \"rename-window -- '%%'\"" "" "" "" "New At End" W new-window"##,
+    ),
+    (
+        ">",
+        r##"display-menu -T "#P (#D)" "Go To Top" < "copy-mode ; send-keys -X history-top" "Go To Bottom" > "copy-mode ; send-keys -X history-bottom" "" "" "" "Zoom" z "resize-pane -Z" "Kill" x kill-pane "Break Out" ! break-pane "" "" "" "Mark" m "select-pane -m" "Respawn" R "respawn-pane -k""##,
+    ),
     ("C-Space", "palette"),
 ];
 

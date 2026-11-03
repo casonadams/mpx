@@ -1,5 +1,6 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use mpx::keys::{KeySpec, TermModes, encode_key, encode_key_names, focus_event, wrap_paste};
+use mpx::config::{Config, ExtendedKeys};
+use mpx::keys::{KeyPolicy, KeySpec, TermModes, encode_key, encode_key_names, focus_event, wrap_paste};
 
 const NONE: KeyModifiers = KeyModifiers::NONE;
 const CTRL: KeyModifiers = KeyModifiers::CONTROL;
@@ -18,12 +19,16 @@ fn app_cursor() -> TermModes {
 }
 
 fn enc(code: KeyCode, mods: KeyModifiers, modes: &TermModes) -> Vec<u8> {
-    encode_key(&KeyEvent::new(code, mods), modes)
+    enc_with(code, mods, modes, KeyPolicy::of(&Config::default()))
+}
+
+fn enc_with(code: KeyCode, mods: KeyModifiers, modes: &TermModes, policy: KeyPolicy) -> Vec<u8> {
+    encode_key(&KeyEvent::new(code, mods), modes, policy)
 }
 
 fn names(args: &[&str], modes: &TermModes) -> Vec<u8> {
     let owned: Vec<String> = args.iter().map(|s| (*s).to_owned()).collect();
-    encode_key_names(&owned, modes)
+    encode_key_names(&owned, modes, KeyPolicy::of(&Config::default()))
 }
 
 #[test]
@@ -148,9 +153,9 @@ fn key_names_honour_decckm_for_arrows() {
 #[test]
 fn key_spec_encode_matches_encode_key() {
     let up = KeySpec::parse("S-Up").unwrap();
-    assert_eq!(up.encode(&plain()), enc(KeyCode::Up, SHIFT, &plain()));
+    assert_eq!(up.encode(&plain(), default_policy()), enc(KeyCode::Up, SHIFT, &plain()));
     let ctrl_c = KeySpec::parse("C-c").unwrap();
-    assert_eq!(ctrl_c.encode(&plain()), b"\x03");
+    assert_eq!(ctrl_c.encode(&plain(), default_policy()), b"\x03");
 }
 
 #[test]
@@ -214,4 +219,80 @@ fn sgr_mouse_encoding_formats_clicks_and_wheel() {
 
     let disabled = TermModes::default();
     assert_eq!(encode_mouse_event(&disabled, MouseEventKind::Down(MouseButton::Left), 15, 5, NONE), None);
+}
+
+fn default_policy() -> KeyPolicy {
+    KeyPolicy::of(&Config::default())
+}
+
+fn modified(extended: ExtendedKeys, xterm_keys: bool) -> KeyPolicy {
+    KeyPolicy {
+        extended,
+        xterm_keys,
+    }
+}
+
+#[test]
+fn modify_other_keys_sends_ctrl_keys_and_modified_editing_keys_as_csi_27() {
+    let modes = TermModes {
+        modify_other_keys: 2,
+        ..TermModes::default()
+    };
+    let on = modified(ExtendedKeys::On, true);
+    assert_eq!(enc_with(KeyCode::Char('a'), CTRL, &modes, on), b"\x1b[27;5;97~");
+    assert_eq!(enc_with(KeyCode::Char('A'), CTRL | SHIFT, &modes, on), b"\x1b[27;6;65~");
+    assert_eq!(enc_with(KeyCode::Enter, SHIFT, &modes, on), b"\x1b[27;2;13~");
+    assert_eq!(enc_with(KeyCode::Esc, ALT, &modes, on), b"\x1b[27;3;27~");
+}
+
+#[test]
+fn modify_other_keys_separates_ctrl_i_from_tab_and_leaves_plain_keys_alone() {
+    let modes = TermModes {
+        modify_other_keys: 2,
+        ..TermModes::default()
+    };
+    let on = modified(ExtendedKeys::On, true);
+    assert_eq!(enc_with(KeyCode::Char('i'), CTRL, &modes, on), b"\x1b[27;5;105~");
+    assert_eq!(enc_with(KeyCode::Tab, NONE, &modes, on), b"\t");
+    assert_eq!(enc_with(KeyCode::Char('x'), NONE, &modes, on), b"x");
+    assert_eq!(enc_with(KeyCode::Char('A'), SHIFT, &modes, on), b"A");
+    assert_eq!(enc_with(KeyCode::Char('x'), ALT, &modes, on), b"\x1bx");
+    assert_eq!(enc_with(KeyCode::Enter, NONE, &modes, on), b"\r");
+}
+
+#[test]
+fn kitty_disambiguate_sends_ambiguous_keys_as_csi_u() {
+    let modes = TermModes {
+        kitty_keys: 1,
+        ..TermModes::default()
+    };
+    let on = modified(ExtendedKeys::On, true);
+    assert_eq!(enc_with(KeyCode::Esc, NONE, &modes, on), b"\x1b[27u");
+    assert_eq!(enc_with(KeyCode::Enter, SHIFT, &modes, on), b"\x1b[13;2u");
+    assert_eq!(enc_with(KeyCode::Char('i'), CTRL, &modes, on), b"\x1b[105;5u");
+    assert_eq!(enc_with(KeyCode::Char('A'), CTRL | SHIFT, &modes, on), b"\x1b[97;6u");
+    assert_eq!(enc_with(KeyCode::Tab, NONE, &modes, on), b"\t");
+    assert_eq!(enc_with(KeyCode::Enter, NONE, &modes, on), b"\r");
+    assert_eq!(enc_with(KeyCode::Char('A'), SHIFT, &modes, on), b"A");
+}
+
+#[test]
+fn extended_keys_policy_decides_whether_a_pane_request_counts() {
+    let asked = TermModes {
+        modify_other_keys: 2,
+        ..TermModes::default()
+    };
+    let plain_pane = TermModes::default();
+    assert_eq!(enc_with(KeyCode::Char('a'), CTRL, &plain_pane, modified(ExtendedKeys::On, true)), b"\x01");
+    assert_eq!(enc_with(KeyCode::Char('a'), CTRL, &asked, modified(ExtendedKeys::Off, true)), b"\x01");
+    assert_eq!(enc_with(KeyCode::Char('a'), CTRL, &asked, modified(ExtendedKeys::On, true)), b"\x1b[27;5;97~");
+    assert_eq!(enc_with(KeyCode::Char('a'), CTRL, &plain_pane, modified(ExtendedKeys::Always, true)), b"\x1b[27;5;97~");
+}
+
+#[test]
+fn xterm_keys_off_sends_function_and_cursor_keys_without_modifiers() {
+    let modes = TermModes::default();
+    assert_eq!(enc_with(KeyCode::Up, CTRL, &modes, modified(ExtendedKeys::Off, false)), b"\x1b[A");
+    assert_eq!(enc_with(KeyCode::F(5), SHIFT, &modes, modified(ExtendedKeys::Off, false)), b"\x1b[15~");
+    assert_eq!(enc_with(KeyCode::Up, CTRL, &modes, modified(ExtendedKeys::Off, true)), b"\x1b[1;5A");
 }

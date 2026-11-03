@@ -1,6 +1,7 @@
 //! Key encoding shared by the TUI (crossterm events), `send-keys` (tmux key names) and key binding specs.
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEventKind};
 use serde::{Deserialize, Serialize};
+use crate::config::{Config, ExtendedKeys};
 
 const ESC: u8 = 0x1b;
 const CR: u8 = b'\r';
@@ -23,6 +24,7 @@ pub enum MouseTracking {
 
 /// Terminal input modes requested by the program running inside a pane.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct TermModes {
     /// DECCKM (`CSI ? 1 h`): arrows/Home/End use SS3 (`ESC O A`).
     pub app_cursor: bool,
@@ -34,7 +36,32 @@ pub struct TermModes {
     pub mouse_tracking: MouseTracking,
     /// `CSI ? 1006 h`: SGR extended coordinates format.
     pub mouse_sgr: bool,
+    /// xterm modifyOtherKeys level the program set (`CSI > 4 ; n m`). Levels 1 and 2 send modified
+    /// keys as `CSI 27 ; m ; code ~`.
+    pub modify_other_keys: u8,
+    /// Kitty keyboard protocol flags the program set. Bit 1 (disambiguate) sends ambiguous keys as
+    /// `CSI code ; m u`.
+    pub kitty_keys: u8,
 }
+
+/// What the options allow for keys sent to panes: `extended-keys` and `xterm-keys`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KeyPolicy {
+    pub extended: ExtendedKeys,
+    pub xterm_keys: bool,
+}
+
+impl KeyPolicy {
+    pub fn of(config: &Config) -> Self {
+        Self {
+            extended: config.extended_keys,
+            xterm_keys: config.xterm_keys,
+        }
+    }
+}
+
+/// Kitty keyboard protocol flag 1: keys that are ambiguous in legacy encoding are sent as CSI u.
+const KITTY_DISAMBIGUATE: u8 = 0b1;
 
 /// A key with modifiers, parsed from tmux notation (`C-b`, `M-x`, `S-Tab`, `F5`, `h`, `H`, `Space`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -81,8 +108,8 @@ impl KeySpec {
         out
     }
 
-    pub fn encode(&self, modes: &TermModes) -> Vec<u8> {
-        encode_parts(self.code, self.mods, modes)
+    pub fn encode(&self, modes: &TermModes, policy: KeyPolicy) -> Vec<u8> {
+        encode_parts(self.code, self.mods, modes, policy)
     }
 }
 
@@ -210,24 +237,24 @@ fn base_name(code: KeyCode) -> String {
     name.to_owned()
 }
 
-/// xterm encoding of a crossterm key event, honouring modifiers and DECCKM.
-pub fn encode_key(ev: &KeyEvent, modes: &TermModes) -> Vec<u8> {
-    encode_parts(ev.code, ev.modifiers, modes)
+/// xterm encoding of a crossterm key event, honouring the pane's input modes and the key policy.
+pub fn encode_key(ev: &KeyEvent, modes: &TermModes, policy: KeyPolicy) -> Vec<u8> {
+    encode_parts(ev.code, ev.modifiers, modes, policy)
 }
 
 /// tmux `send-keys` semantics: each argument is a key name when it parses as one, otherwise literal text.
-pub fn encode_key_names(names: &[String], modes: &TermModes) -> Vec<u8> {
+pub fn encode_key_names(names: &[String], modes: &TermModes, policy: KeyPolicy) -> Vec<u8> {
     names
         .iter()
-        .flat_map(|name| encode_name(name, modes))
+        .flat_map(|name| encode_name(name, modes, policy))
         .collect()
 }
 
-fn encode_name(name: &str, modes: &TermModes) -> Vec<u8> {
+fn encode_name(name: &str, modes: &TermModes, policy: KeyPolicy) -> Vec<u8> {
     if name.chars().count() > 1
         && let Ok(spec) = KeySpec::parse(name)
     {
-        return spec.encode(modes);
+        return spec.encode(modes, policy);
     }
     name.as_bytes().to_vec()
 }
@@ -259,8 +286,22 @@ pub fn focus_event(focused: bool) -> &'static [u8] {
     if focused { b"\x1b[I" } else { b"\x1b[O" }
 }
 
-fn encode_parts(code: KeyCode, mods: KeyModifiers, modes: &TermModes) -> Vec<u8> {
+fn encode_parts(
+    code: KeyCode,
+    mods: KeyModifiers,
+    modes: &TermModes,
+    policy: KeyPolicy,
+) -> Vec<u8> {
+    let modes = effective_modes(modes, policy);
+    if let Some(bytes) = extended_key(code, mods, &modes) {
+        return bytes;
+    }
     let (code, mods) = normalize(code, mods);
+    let keyed = if policy.xterm_keys {
+        mods
+    } else {
+        KeyModifiers::NONE
+    };
     match code {
         KeyCode::Char(c) => encode_char(c, mods),
         KeyCode::Enter if mods.intersects(KeyModifiers::SHIFT | KeyModifiers::ALT) => vec![ESC, CR],
@@ -269,20 +310,79 @@ fn encode_parts(code: KeyCode, mods: KeyModifiers, modes: &TermModes) -> Vec<u8>
         KeyCode::Esc => prefix_alt(mods, vec![ESC]),
         KeyCode::Backspace if mods.contains(KeyModifiers::CONTROL) => prefix_alt(mods, vec![BS]),
         KeyCode::Backspace => prefix_alt(mods, vec![DEL]),
-        KeyCode::BackTab => csi_key(b'Z', mods),
-        KeyCode::Up => cursor_key(b'A', mods, modes.app_cursor),
-        KeyCode::Down => cursor_key(b'B', mods, modes.app_cursor),
-        KeyCode::Right => cursor_key(b'C', mods, modes.app_cursor),
-        KeyCode::Left => cursor_key(b'D', mods, modes.app_cursor),
-        KeyCode::Home => cursor_key(b'H', mods, modes.app_cursor),
-        KeyCode::End => cursor_key(b'F', mods, modes.app_cursor),
-        KeyCode::Insert => tilde_key(2, mods),
-        KeyCode::Delete => tilde_key(3, mods),
-        KeyCode::PageUp => tilde_key(5, mods),
-        KeyCode::PageDown => tilde_key(6, mods),
-        KeyCode::F(n) => function_key(n, mods),
+        KeyCode::BackTab => csi_key(b'Z', keyed),
+        KeyCode::Up => cursor_key(b'A', keyed, modes.app_cursor),
+        KeyCode::Down => cursor_key(b'B', keyed, modes.app_cursor),
+        KeyCode::Right => cursor_key(b'C', keyed, modes.app_cursor),
+        KeyCode::Left => cursor_key(b'D', keyed, modes.app_cursor),
+        KeyCode::Home => cursor_key(b'H', keyed, modes.app_cursor),
+        KeyCode::End => cursor_key(b'F', keyed, modes.app_cursor),
+        KeyCode::Insert => tilde_key(2, keyed),
+        KeyCode::Delete => tilde_key(3, keyed),
+        KeyCode::PageUp => tilde_key(5, keyed),
+        KeyCode::PageDown => tilde_key(6, keyed),
+        KeyCode::F(n) => function_key(n, keyed),
         _ => Vec::new(),
     }
+}
+
+/// The modes keys are encoded with under `policy`: `off` ignores what the pane asked for, and
+/// `always` sends modified keys as modifyOtherKeys unless the pane asked for the kitty protocol.
+fn effective_modes(modes: &TermModes, policy: KeyPolicy) -> TermModes {
+    match policy.extended {
+        ExtendedKeys::Off => TermModes {
+            modify_other_keys: 0,
+            kitty_keys: 0,
+            ..*modes
+        },
+        ExtendedKeys::On => *modes,
+        ExtendedKeys::Always if modes.kitty_keys == 0 => TermModes {
+            modify_other_keys: modes.modify_other_keys.max(2),
+            ..*modes
+        },
+        ExtendedKeys::Always => *modes,
+    }
+}
+
+/// The CSI form of a key a pane asked for: the kitty protocol for the keys it disambiguates, or
+/// xterm modifyOtherKeys for Ctrl-modified characters and modified Enter, Tab, Backspace and Esc.
+/// `None` when the legacy encoding applies.
+fn extended_key(code: KeyCode, mods: KeyModifiers, modes: &TermModes) -> Option<Vec<u8>> {
+    let any_mod = mods.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SHIFT);
+    let ctrl_or_alt = mods.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+    if modes.kitty_keys & KITTY_DISAMBIGUATE != 0 {
+        let key = match code {
+            KeyCode::Esc => Some(27),
+            KeyCode::Enter if any_mod => Some(13),
+            KeyCode::Tab if ctrl_or_alt => Some(9),
+            KeyCode::Backspace if any_mod => Some(127),
+            KeyCode::Char(c) if ctrl_or_alt => Some(u32::from(c.to_ascii_lowercase())),
+            _ => None,
+        };
+        if let Some(key) = key {
+            let m = modifier_param(mods);
+            let csi = if m == 1 {
+                format!("\x1b[{key}u")
+            } else {
+                format!("\x1b[{key};{m}u")
+            };
+            return Some(csi.into_bytes());
+        }
+    }
+    if modes.modify_other_keys > 0 {
+        let key = match code {
+            KeyCode::Char(c) if mods.contains(KeyModifiers::CONTROL) => Some(u32::from(c)),
+            KeyCode::Enter if any_mod => Some(13),
+            KeyCode::Tab if any_mod => Some(9),
+            KeyCode::Backspace if any_mod => Some(127),
+            KeyCode::Esc if any_mod => Some(27),
+            _ => None,
+        };
+        if let Some(key) = key {
+            return Some(format!("\x1b[27;{};{key}~", modifier_param(mods)).into_bytes());
+        }
+    }
+    None
 }
 
 fn encode_char(c: char, mods: KeyModifiers) -> Vec<u8> {

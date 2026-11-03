@@ -575,8 +575,7 @@ fn dividers_take_the_inactive_background_so_no_stripe_shows_between_panes() {
     assert!(String::from_utf8_lossy(&buf).contains(";48;2;30;40;50"));
 
     let host = HostColors { bg: Some(VtColor::Rgb(46, 52, 64)), ..HostColors::default() };
-    let mut style = mpx::config::StyleConfig::default();
-    style.dim_factor = 0.5;
+    let mut style = mpx::config::StyleConfig { dim_factor: 0.5, ..Default::default() };
     let colors = PaneColors::new(&style, host);
     assert_eq!(colors.inactive_default_bg(), Some(VtColor::Rgb(23, 26, 32)));
     style.inactive.bg = "#102030".into();

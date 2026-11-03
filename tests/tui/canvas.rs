@@ -1,6 +1,6 @@
 use mpx::layout::Rect;
 use mpx::tui::canvas::{Canvas, write_sgr};
-use mpx::vt::{Cell, CellStyle, Color};
+use mpx::vt::{Cell, CellStyle, Color, Underline};
 
 fn cell(c: char) -> Cell {
     Cell {
@@ -64,7 +64,7 @@ fn colors_keep_their_palette_slot_and_attributes_are_sent() {
     let attrs = CellStyle {
         bold: true,
         italic: true,
-        underline: true,
+        underline: Underline::Single,
         ..CellStyle::default()
     };
     assert_eq!(sgr(attrs), "\x1b[0;1;3;4m");

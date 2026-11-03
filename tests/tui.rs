@@ -11,6 +11,10 @@ mod tui {
     mod labels;
     mod overlay;
     mod panes;
+    mod hyperlinks;
+    mod menu;
+    mod placement;
+    mod popup_cmds;
     mod prompt;
     mod render;
     mod status;

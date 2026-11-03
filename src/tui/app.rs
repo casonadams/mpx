@@ -8,6 +8,8 @@ use tokio::task::JoinHandle;
 
 use super::canvas::Canvas;
 use super::command::Command;
+use super::menu::Menu;
+use super::popup::{Popup, PopupEvent};
 use super::copy::CopyState;
 use super::frame;
 use super::keymap::{self, Keymap};
@@ -19,7 +21,7 @@ use super::statusline::{self, Rows, Target};
 use super::status::{local_utc_offset, restored_notice, time_of_day};
 use super::terminal::TerminalGuard;
 use crate::client::Client;
-use crate::config::{Config, StatusPosition};
+use crate::config::{Config, ExtendedKeys, StatusPosition};
 use crate::node::sleep_until_opt;
 use crate::keys::TermModes;
 use crate::layout::geometry::Rect;
@@ -55,6 +57,10 @@ pub enum Mode {
     Clock {
         pane: String,
     },
+    /// display-popup: a command runs in a box over the panes; its keys go to it until it closes.
+    Popup(Box<Popup>),
+    /// display-menu: a menu of commands over the panes.
+    Menu(Box<Menu>),
 }
 
 /// Event-stream subscription for the attached session. Events tagged with an older
@@ -167,6 +173,16 @@ pub struct App {
     pub suspend_requested: bool,
     /// Where clock mode reads the time.
     pub clock: ClockSource,
+    /// Last outer-terminal title set (`set-titles`).
+    pub last_title: Option<String>,
+    /// The outer terminal should ring its bell with the next frame.
+    pub bell_pending: bool,
+    /// Panes that rang the bell since the last batch of output was applied.
+    pub bells: Vec<String>,
+    /// When each pane began a synchronized update (DEC 2026) that has not ended.
+    pub sync_since: HashMap<String, Instant>,
+    /// Windows already announced as having activity, by index.
+    pub activity_windows: Vec<usize>,
 }
 
 /// Where clock mode reads the time: the system clock, or a fixed time (for tests).
@@ -314,6 +330,11 @@ impl App {
             message_log: Vec::new(),
             suspend_requested: false,
             clock: ClockSource::default(),
+            last_title: None,
+            bell_pending: false,
+            bells: Vec::new(),
+            sync_since: HashMap::new(),
+            activity_windows: Vec::new(),
         }
     }
 
@@ -358,6 +379,7 @@ impl App {
             .map(|(name, ..)| name.clone())
             .unwrap_or_default();
         self.follow_focus(focused);
+        self.refresh_outer((w, h));
         let shown_before: Vec<String> = self.panes.iter().map(|(name, ..)| name.clone()).collect();
         self.panes = if self.zoomed() {
             // Zoomed: the focused pane alone fills the pane area.
@@ -432,11 +454,13 @@ impl App {
         self.focus_pane = Some(active);
     }
 
-    async fn send_focus(&mut self, name: &str, focused: bool) {
-        if self.modes_of(name).focus_events {
-            let text = String::from_utf8_lossy(crate::keys::focus_event(focused)).into_owned();
-            let _ = self.client.send_input(name, &text).await;
+    /// Reports focus in or out to pane `name`, when `focus-events` is on and the pane asked for reports.
+    pub(super) async fn send_focus(&mut self, name: &str, focused: bool) {
+        if name.is_empty() || !self.config.focus_events || !self.modes_of(name).focus_events {
+            return;
         }
+        let text = String::from_utf8_lossy(crate::keys::focus_event(focused)).into_owned();
+        let _ = self.client.send_input(name, &text).await;
     }
 
     /// Width and height of the area the panes are laid out in, right of the sidebar.
@@ -587,6 +611,7 @@ impl App {
 
     /// Work that follows every input or stream batch: copies made reach the paste buffers.
     async fn after_input(&mut self) {
+        self.ring_bells();
         for text in std::mem::take(&mut self.yanks) {
             if let Err(e) = self.client.set_buffer(None, &text).await {
                 self.say(format!("set-buffer: {e}"));
@@ -707,6 +732,8 @@ impl App {
             Mode::Panes { .. } => self.panes_key(key).await,
             // The mode is already back to normal: any key ends clock mode and is not forwarded.
             Mode::Clock { .. } => Flow::Continue,
+            Mode::Popup(popup) => self.popup_key(popup, key).await,
+            Mode::Menu(menu) => self.menu_key(menu, key).await,
         }
     }
 }
@@ -801,6 +828,8 @@ enum Wake {
     Tick,
     /// A delayed element is due: pane output's frame, the shortcut popup, or a sidebar switch.
     Due,
+    /// The command of the open popup produced output or ended.
+    Popup(PopupEvent),
 }
 
 /// Terminal input read on its own thread and handed over a channel. crossterm's async
@@ -882,7 +911,7 @@ impl Tui {
         app.canvas.set_lr_margins(report.margins);
         app.host_colors = super::render::HostColors::from_report(&report);
         app.host_original = app.host_colors;
-        Ok(Self {
+        let mut tui = Self {
             out: BufWriter::with_capacity(64 * 1024, stdout()),
             body: Vec::with_capacity(64 * 1024),
             cursor: Vec::new(),
@@ -897,7 +926,9 @@ impl Tui {
             guard,
             mouse_captured: true,
             redraw: true,
-        })
+        };
+        tui.sync_outer();
+        Ok(tui)
     }
 
     /// One pass of the event loop: draw if due, wait for a wake-up, handle it. Returns false
@@ -907,9 +938,10 @@ impl Tui {
             return false;
         }
         let wake = self.wait().await;
-        let output = matches!(wake, Wake::Stream(_));
+        let output = matches!(wake, Wake::Stream(_) | Wake::Popup(_));
         let ticked = matches!(wake, Wake::Tick);
         let flow = self.handle(wake).await;
+        self.sync_outer();
         let suspended = self.suspend_if_requested();
         sync_mouse_capture(
             &mut self.out,
@@ -918,7 +950,9 @@ impl Tui {
         );
         let forwarded = std::mem::take(&mut self.app.forwarded);
         self.redraw =
-            needs_redraw(output, forwarded, self.app.frame_due, Instant::now()) || suspended;
+            needs_redraw(output, forwarded, self.app.frame_due, Instant::now())
+                || suspended
+                || self.app.bell_pending;
         if ticked
             && self.app.live_message().is_none()
             && self.app.frame_due.is_none()
@@ -948,6 +982,7 @@ impl Tui {
             let _ = frame::send(&mut self.out, &self.body, &self.cursor);
             std::mem::swap(&mut self.cursor, &mut self.last_cursor);
         }
+        self.write_outer();
         self.app.drew(Instant::now());
         true
     }
@@ -957,6 +992,7 @@ impl Tui {
         let popup = self.app.hud_deadline().filter(|_| !self.app.hud_visible());
         let due = earliest([popup, self.app.frame_due, self.app.display_deadline()]);
         tokio::select! {
+            Some(event) = super::popup::next_event(&mut self.app.mode) => Wake::Popup(event),
             Some(event) = self.keys.recv() => Wake::Input(event),
             item = self.stream.recv() => Wake::Stream(item),
             _ = self.tick.tick() => Wake::Tick,
@@ -971,6 +1007,10 @@ impl Tui {
                 let flow = self.app.on_stream(item, &mut self.stream).await;
                 flush_passthroughs(&mut self.out, &mut self.app.passthroughs);
                 flow
+            }
+            Wake::Popup(event) => {
+                self.app.on_popup(event);
+                Flow::Continue
             }
             Wake::Tick => self.app.on_tick().await,
             Wake::Due => {
@@ -994,6 +1034,24 @@ impl Tui {
             self.mouse_captured = true;
         }
         suspended
+    }
+
+    /// Brings the outer terminal's focus reporting and keyboard protocol in line with the options.
+    fn sync_outer(&mut self) {
+        let keys = self.app.config.extended_keys != ExtendedKeys::Off;
+        let _ = self.guard.sync(&mut self.out, self.app.config.focus_events, keys);
+        let _ = self.out.flush();
+    }
+
+    /// Sends the outer terminal the title and bell that the frame just drew calls for.
+    fn write_outer(&mut self) {
+        if let Some(title) = self.app.outer_title() {
+            let _ = self.guard.set_title(&mut self.out, &title);
+        }
+        if self.app.take_bell() {
+            let _ = self.out.write_all(b"\x07");
+        }
+        let _ = self.out.flush();
     }
 }
 

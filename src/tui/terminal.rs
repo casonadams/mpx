@@ -2,7 +2,7 @@ use crossterm::{
     cursor::{Hide, Show},
     event::{
         DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
-        EnableFocusChange, EnableMouseCapture,
+        EnableMouseCapture,
     },
     queue,
     terminal::{
@@ -14,8 +14,15 @@ use std::io::{self, Write, stdout};
 
 use super::color::Palette;
 
-/// What the terminal is sent to show the TUI: the alternate screen, cleared, cursor hidden, mouse,
-/// paste and focus reporting on, autowrap off so the status bar never scrolls the screen.
+/// Focus reporting on (DEC 1004) and off: sent only when `focus-events` asks for it.
+const FOCUS_ON: &[u8] = b"\x1b[?1004h";
+const FOCUS_OFF: &[u8] = b"\x1b[?1004l";
+/// Kitty keyboard protocol: push the disambiguate flag, pop it on exit.
+const KEYBOARD_PUSH: &[u8] = b"\x1b[>1u";
+const KEYBOARD_POP: &[u8] = b"\x1b[<u";
+
+/// What the terminal is sent to show the TUI: the alternate screen, cleared, cursor hidden, mouse
+/// and paste reporting on, autowrap off so the status bar never scrolls the screen.
 pub fn enter_sequence() -> Vec<u8> {
     let mut out = Vec::new();
     let _ = queue!(
@@ -24,8 +31,7 @@ pub fn enter_sequence() -> Vec<u8> {
         Clear(ClearType::All),
         Hide,
         EnableMouseCapture,
-        EnableBracketedPaste,
-        EnableFocusChange
+        EnableBracketedPaste
     );
     out.extend_from_slice(b"\x1b[?7l");
     out
@@ -46,8 +52,17 @@ pub fn leave_sequence() -> Vec<u8> {
     out
 }
 
+/// The window title stack: the title the terminal had is saved before the TUI sets its own, and
+/// restored on exit.
+const TITLE_PUSH: &[u8] = b"\x1b[22;2t";
+const TITLE_POP: &[u8] = b"\x1b[23;2t";
+
+/// The terminal the TUI draws on. Focus reporting and the keyboard protocol are on while the
+/// options ask for them, and only then: `sync` writes each change once.
 pub struct TerminalGuard {
-    _private: (),
+    focus: bool,
+    keys: bool,
+    titled: bool,
 }
 
 impl TerminalGuard {
@@ -56,7 +71,34 @@ impl TerminalGuard {
         let mut out = stdout();
         out.write_all(&enter_sequence())?;
         out.flush()?;
-        Ok(Self { _private: () })
+        Ok(Self {
+            focus: false,
+            keys: false,
+            titled: false,
+        })
+    }
+
+    /// Turns focus reporting and the keyboard protocol on or off to match `focus` and `keys`, writing
+    /// only what changed.
+    pub fn sync<W: Write>(&mut self, out: &mut W, focus: bool, keys: bool) -> io::Result<()> {
+        if focus != self.focus {
+            self.focus = focus;
+            out.write_all(if focus { FOCUS_ON } else { FOCUS_OFF })?;
+        }
+        if keys != self.keys {
+            self.keys = keys;
+            out.write_all(if keys { KEYBOARD_PUSH } else { KEYBOARD_POP })?;
+        }
+        Ok(())
+    }
+
+    /// Sets the outer terminal's title, saving the one it had on first use.
+    pub fn set_title<W: Write>(&mut self, out: &mut W, title: &str) -> io::Result<()> {
+        if !self.titled {
+            self.titled = true;
+            out.write_all(TITLE_PUSH)?;
+        }
+        write!(out, "\x1b]2;{title}\x1b\\")
     }
 
     /// Stops the process as Ctrl-Z does: the shell gets its screen and cooked mode back, and the
@@ -64,11 +106,20 @@ impl TerminalGuard {
     pub fn suspend(&self) -> io::Result<()> {
         let mut out = stdout();
         out.write_all(&leave_sequence())?;
+        if self.keys {
+            out.write_all(KEYBOARD_POP)?;
+        }
         out.flush()?;
         disable_raw_mode()?;
         stop_process();
         enable_raw_mode()?;
         out.write_all(&enter_sequence())?;
+        if self.focus {
+            out.write_all(FOCUS_ON)?;
+        }
+        if self.keys {
+            out.write_all(KEYBOARD_PUSH)?;
+        }
         out.flush()
     }
 }
@@ -76,7 +127,13 @@ impl TerminalGuard {
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let mut out = stdout();
+        if self.keys {
+            let _ = out.write_all(KEYBOARD_POP);
+        }
         let _ = out.write_all(&leave_sequence());
+        if self.titled {
+            let _ = out.write_all(TITLE_POP);
+        }
         let _ = out.flush();
         let _ = disable_raw_mode();
     }
