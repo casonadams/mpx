@@ -84,25 +84,27 @@ Vim-style command line on the status row. Supports tab-completion, history (`Up`
 
 | Command | Aliases | Description |
 | :--- | :--- | :--- |
-| `split-window [-h] [-d] [-c dir] [cmd...]` | `split`, `sp`, `vsplit`, `vs` | Split active pane |
+| `split-window [-h] [-d] [-Z] [-c dir] [cmd...]` | `split`, `sp`, `vsplit`, `vs` | Split active pane (`-Z` keeps a zoomed window zoomed) |
 | `new-window [-n name] [-c dir] [cmd...]` | `new`, `tabnew` | Create window |
 | `rename-session NAME` | `rename` | Rename current session |
 | `reload-config` | `source-file` (without a file) | Re-read the config file into the TUI and the session's daemon |
 | `set-option [-g] [-u] [-q] NAME [VALUE]` | `set`, `set-window-option`, `setw` | Change a UI option of this terminal until the next `reload-config` (names and values in [Options at run time](CONFIG.md#options-at-run-time)) |
 | `show-options [-g] [-v] [-q] [NAME]` | `show`, `show-window-options`, `showw` | List the options, or show one on the status row |
-| `rotate-window [-D]` | `rotatew` | Move each pane to the layout slot before its own (`-D`: after) |
+| `rotate-window [-D\|-U] [-Z]` | `rotatew` | Move each pane to the layout slot before its own (`-D`: after); `-Z` keeps a zoomed window zoomed |
 | `move-window -t INDEX` | `movew` | Move the active window to INDEX |
 | `swap-window [-s INDEX] -t INDEX` | `swapw` | Exchange two windows (`-s` defaults to the active one) |
-| `join-pane [-h] [-s PANE] [-t PANE]` | `joinp` | Move PANE (default: the marked pane) next to the target (default: the active pane), stacked or side by side with `-h`; an emptied window goes away |
+| `join-pane [-dh] [-s PANE] [-t PANE]` | `joinp`, `move-pane`, `movep` | Move PANE (default: the marked pane) next to the target (default: the active pane), stacked or side by side with `-h`; `-d` keeps the active pane focused; an emptied window goes away |
 | `respawn-pane [-k] [-c DIR] [-t PANE] [CMD...]` | `respawnp` | Restart the pane's process in place; `-k` kills a running one first, otherwise only an exited pane is restarted |
+| `respawn-window [-k] [-c DIR] [-t INDEX] [CMD...]` | `respawnw` | Restart every pane of the window in place; refused while a pane still runs unless `-k` |
 | `find-window [-iNT] PATTERN` | `findw` | Open the sessions and windows palette filtered by PATTERN (names and titles; content search is not supported) |
 | `display-message [-p] [FORMAT]` | `display` | Show the expanded [format](CLI.md#formats) on the status row; without one, describe the current pane |
 | `rename-window NAME` | `renamew` | Rename active window |
 | `kill-pane [-t TARGET]` | `killp` | Close pane |
 | `kill-window [-t INDEX]` | `killw` | Close window |
 | `kill-server` | `qa` | Terminate session daemon |
-| `select-pane [-t TARGET] [-m\|-M] \| -L/-R/-U/-D` | `selectp` | Move pane focus |
+| `select-pane [-t TARGET] [-Z] [-m\|-M] \| -L/-R/-U/-D` | `selectp` | Move pane focus (`-Z` keeps a zoomed window zoomed) |
 | `resize-pane -L/-R/-U/-D [N]`, `resize-pane -Z` | `resizep` | Resize / zoom |
+| `link-window`, `unlink-window`, `resize-window` | | Refused: a window cannot be linked elsewhere, and a window has no size of its own (see [CLI.md](CLI.md#windows-and-layout)) |
 | `choose-tree` | | Interactive session/window tree |
 | `display-panes [-d ms]` | `displayp` | Number each pane large; a digit selects that pane, any other key dismisses. Stays `display-panes-time` ms (`-d 0`: until a key) |
 | `clock-mode [-t PANE]` | | Big clock filling the pane until a key is pressed |

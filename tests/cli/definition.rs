@@ -1,5 +1,5 @@
 use clap::{CommandFactory, Parser};
-use mpx::cli::{Cli, Commands};
+use mpx::cli::{Cli, Commands, WindowCommands};
 
 fn parse(args: &[&str]) -> Cli {
     Cli::try_parse_from(std::iter::once("mpx").chain(args.iter().copied())).expect("parses")
@@ -28,16 +28,19 @@ fn split_dash_h_means_side_by_side_like_tmux() {
     }
 }
 
-#[test]
-fn options_after_the_command_belong_to_the_command() {
-    let cli = parse(&["new-window", "sh", "-c", "echo hi"]);
-    match cli.command {
-        Some(Commands::NewWindow { cwd, argv, .. }) => {
-            assert_eq!(cwd, None);
-            assert_eq!(argv, ["sh", "-c", "echo hi"]);
-        }
+/// The `cwd` and `argv` of a parsed `new-window`.
+fn new_window_of(args: &[&str]) -> (Option<String>, Vec<String>) {
+    match parse(args).command {
+        Some(Commands::Window(WindowCommands::NewWindow { cwd, argv, .. })) => (cwd, argv),
         other => panic!("unexpected parse: {other:?}"),
     }
+}
+
+#[test]
+fn options_after_the_command_belong_to_the_command() {
+    let (cwd, argv) = new_window_of(&["new-window", "sh", "-c", "echo hi"]);
+    assert_eq!(cwd, None);
+    assert_eq!(argv, ["sh", "-c", "echo hi"]);
 }
 
 #[test]
@@ -65,23 +68,15 @@ fn options_before_the_command_still_apply() {
         }
         other => panic!("unexpected parse: {other:?}"),
     }
-    let cli = parse(&["new-window", "-c", "/tmp", "sh", "-c", "x"]);
-    match cli.command {
-        Some(Commands::NewWindow { cwd, argv, .. }) => {
-            assert_eq!(cwd.as_deref(), Some("/tmp"));
-            assert_eq!(argv, ["sh", "-c", "x"]);
-        }
-        other => panic!("unexpected parse: {other:?}"),
-    }
+    let (cwd, argv) = new_window_of(&["new-window", "-c", "/tmp", "sh", "-c", "x"]);
+    assert_eq!(cwd.as_deref(), Some("/tmp"));
+    assert_eq!(argv, ["sh", "-c", "x"]);
 }
 
 #[test]
 fn double_dash_still_ends_the_options() {
-    let cli = parse(&["new-window", "--", "sh", "-c", "x"]);
-    match cli.command {
-        Some(Commands::NewWindow { argv, .. }) => assert_eq!(argv, ["sh", "-c", "x"]),
-        other => panic!("unexpected parse: {other:?}"),
-    }
+    let (_, argv) = new_window_of(&["new-window", "--", "sh", "-c", "x"]);
+    assert_eq!(argv, ["sh", "-c", "x"]);
 }
 
 #[test]

@@ -191,6 +191,13 @@ fn sample_notes_name_the_skipped_command() {
 }
 
 #[test]
+fn wrap_search_imports_as_the_wrap_search_file_key() {
+    let c = convert("set -g wrap-search off\n");
+    assert!(c.toml.contains("wrap_search = false"), "{}", c.toml);
+    assert!(!parsed(&c).wrap_search);
+}
+
+#[test]
 fn unsupported_lines_are_also_commented_in_toml() {
     let c = convert(SAMPLE);
     assert!(c.toml.contains("# unsupported (line 33): "), "{}", c.toml);

@@ -111,6 +111,7 @@ fallback = ["nvim", "-c", "silent! source Session.vim"]
 | `display_time_ms` | integer | `3000` | TUI | Milliseconds a message stays on the status row (tmux `display-time`). |
 | `mode_keys` | `"vi"` or `"emacs"` | `"vi"` | TUI | Copy-mode key table (tmux `mode-keys`); see [KEYBINDINGS.md](KEYBINDINGS.md#emacs-copy-mode-mode-keys-emacs). |
 | `set_clipboard` | bool | `true` | TUI | `false` keeps copy-mode yanks off the system clipboard. They still go to the paste buffers. |
+| `wrap_search` | bool | `true` | TUI | `false` stops copy-mode searches at their first or last match instead of wrapping around the history (tmux `wrap-search`). |
 
 ### tmux option names
 
@@ -156,6 +157,7 @@ These tmux options are applied by the terminal UI.
 | `display-time N` | `display_time_ms`. | `3000` (tmux: `750`) |
 | `display-panes-time N` | `display_panes_time_ms`. | `1000` |
 | `set-clipboard on\|external\|off` | `set_clipboard`. `off` keeps copy-mode yanks off the system clipboard. Applications' OSC 52 requests are still governed by `allow-passthrough`. | `external` |
+| `wrap-search on\|off` | `wrap_search`. | `on` |
 | `escape-time N` | Stored and reported only: mpx reads Escape without a delay. | `500` (no effect) |
 | `focus-events`, `aggressive-resize`, `extended-keys`, `xterm-keys`, `status-keys` | Stored and reported only; they have no effect in mpx. | tmux defaults (no effect) |
 
@@ -205,7 +207,7 @@ vim.api.nvim_create_autocmd({ "VimLeavePre", "BufWritePost", "FocusLost" }, {
 
 `:set-option NAME VALUE` (alias `set`; `-g`, `-w` and `-s` are accepted and ignored) changes an option of the terminal you type it in, with tmux's option names and values. `-u` restores the default, `-q` ignores an unknown name, and `--` ends the flags for a value that starts with `-`. `:show-options [-v] [NAME]` lists the values. A change lasts until `reload-config`, which re-reads the file, and applies at once; a value that does not parse, or a `prefix` that does not resolve, is refused with a message and changes nothing.
 
-Settable: `allow-passthrough`, `base-index`, `display-panes-time`, `display-time`, `mode-keys`, `mouse`, `pane-base-index`, `prefix`, `set-clipboard`, `status`, `status-interval`, `status-justify`, `status-left`, `status-left-length`, `status-position`, `status-right`, `status-right-length`, `which-key-delay`, `window-status-current-format`, `window-status-format`, `window-status-separator`.
+Settable: `allow-passthrough`, `base-index`, `display-panes-time`, `display-time`, `mode-keys`, `mouse`, `pane-base-index`, `prefix`, `set-clipboard`, `status`, `status-interval`, `status-justify`, `status-left`, `status-left-length`, `status-position`, `status-right`, `status-right-length`, `which-key-delay`, `window-status-current-format`, `window-status-format`, `window-status-separator`, `wrap-search`.
 
 Options the daemon reads (`automatic-rename`, `default-command`, `default-shell`, `default-terminal`, `history-limit`, `monitor-activity`, `monitor-bell`, `remain-on-exit`, `restore`) are not settable this way: set them in the file and run `reload-config`.
 

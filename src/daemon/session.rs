@@ -390,7 +390,8 @@ impl Session {
             | Request::RotateWindow { .. }
             | Request::JoinPane { .. }
             | Request::SwapWindow { .. }
-            | Request::Respawn { .. }) => self.state_request(req),
+            | Request::Respawn { .. }
+            | Request::RespawnWindow { .. }) => self.state_request(req),
             req => self.target_request(req).await,
         }
     }
@@ -423,17 +424,29 @@ impl Session {
             Request::MoveWindow { from, to } => {
                 check(self.workspace.move_window(from, to), "No such window")
             }
-            Request::RotateWindow { down } => {
-                check(self.workspace.rotate_active(down), "No window")
-            }
-            Request::JoinPane { src, dst, side_by_side } => self.join_pane(&src, &dst, side_by_side),
+            Request::RotateWindow { down, keep_zoom } => check(
+                self.workspace.rotate_active(down, keep_zoom),
+                "No window",
+            ),
+            Request::JoinPane {
+                src,
+                dst,
+                side_by_side,
+                detach,
+            } => self.join_pane(&src, &dst, side_by_side, detach),
             Request::SwapWindow { a, b } => check(self.workspace.swap_windows(a, b), "No such window"),
             Request::Respawn { name, kill, cwd, command } => self.respawn(&name, kill, cwd, command),
+            Request::RespawnWindow {
+                index,
+                kill,
+                cwd,
+                command,
+            } => self.respawn_window(index, kill, cwd, command),
             other => Response::Error(format!("not a state request: {other:?}")),
         }
     }
 
-    fn join_pane(&mut self, src: &str, dst: &str, side_by_side: bool) -> Response {
+    fn join_pane(&mut self, src: &str, dst: &str, side_by_side: bool, detach: bool) -> Response {
         let (src, dst) = match (self.target_name(src), self.target_name(dst)) {
             (Ok(src), Ok(dst)) => (src, dst),
             (Err(e), _) | (_, Err(e)) => return Response::Error(e),
@@ -443,7 +456,7 @@ impl Session {
         } else {
             Direction::Vertical
         };
-        match self.workspace.join_pane(&src, &dst, dir) {
+        match self.workspace.join_pane(&src, &dst, dir, detach) {
             Ok(()) => Response::Ok,
             Err(e) => Response::Error(e),
         }
@@ -491,6 +504,36 @@ impl Session {
         }
         self.register(name.clone(), handle, opts);
         self.fanout(&StreamEvent::Respawned { name });
+        Response::Ok
+    }
+
+    /// Restarts every pane of window `index` (the active window when `None`), as tmux
+    /// `respawn-window`. Without `kill`, a window with a running pane is refused before any of its
+    /// panes restarts.
+    fn respawn_window(
+        &mut self,
+        index: Option<usize>,
+        kill: bool,
+        cwd: Option<String>,
+        command: Option<Vec<String>>,
+    ) -> Response {
+        let active = self.workspace.active_idx;
+        let Some(window) = self.workspace.windows.get(index.unwrap_or(active)) else {
+            return Response::Error("No such window".to_string());
+        };
+        let panes = window.leaves();
+        let running = panes
+            .iter()
+            .filter_map(|name| self.nodes.get(name))
+            .any(|entry| !entry.exited);
+        if running && !kill {
+            return Response::Error("window still active".to_string());
+        }
+        for name in panes {
+            if let Response::Error(e) = self.respawn(&name, kill, cwd.clone(), command.clone()) {
+                return Response::Error(e);
+            }
+        }
         Response::Ok
     }
 
@@ -777,18 +820,24 @@ impl Session {
             direction,
             percent,
             focus,
+            keep_zoom,
         } = opts;
         let target = match target.map(|t| self.target_name(&t)).transpose() {
             Ok(target) => target,
             Err(e) => return Response::Error(e),
         };
+        let zoomed = keep_zoom && self.workspace.zoomed_at(target.as_deref());
         let place = Placement::Split {
             target,
             dir: direction,
             percent,
             focus,
         };
-        node_reply(self.add_node(spawn, place).await)
+        let result = self.add_node(spawn, place).await;
+        if let (true, Ok(info)) = (zoomed, &result) {
+            self.workspace.zoom_window_of(&info.name);
+        }
+        node_reply(result)
     }
 
     async fn new_window(&mut self, mut opts: NewWindowOpts) -> Response {

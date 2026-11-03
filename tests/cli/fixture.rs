@@ -161,3 +161,21 @@ pub fn run_command(f: &Fixture, args: &[&str]) -> i32 {
             1
         })
 }
+
+/// Runs each `command line => exit code` line of `script` through `run_command`. A line's
+/// command is split on whitespace, so the commands take no quoted arguments.
+pub fn expect_exits(f: &Fixture, script: &str) {
+    for line in script.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        let (command, code) = line.rsplit_once("=>").expect("a `command => exit code` line");
+        let code: i32 = code.trim().parse().expect("an exit code");
+        let words: Vec<&str> = command.split_whitespace().collect();
+        assert_eq!(run_command(f, &words), code, "mpx {}", command.trim());
+    }
+}
+
+/// Starts a session whose node `name` runs `sh -c script`, and checks that the run succeeded.
+pub fn started_running(name: &str, script: &str) -> Fixture {
+    let f = Fixture::start();
+    assert_eq!(run_command(&f, &["run", "-n", name, "sh", "-c", script]), 0, "run {name}");
+    f
+}

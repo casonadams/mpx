@@ -127,6 +127,9 @@ pub struct SplitOpts {
     pub percent: Option<u8>,
     #[serde(default = "default_true")]
     pub focus: bool,
+    /// Keeps the window zoomed when it was zoomed (tmux `split-window -Z`).
+    #[serde(default)]
+    pub keep_zoom: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -208,7 +211,7 @@ pub struct WaitOutcome {
 
 /// Version of the client-daemon protocol. Bump it on any change an older peer cannot parse, so
 /// clients refuse an incompatible daemon instead of misreading it.
-pub const PROTOCOL: u32 = 9;
+pub const PROTOCOL: u32 = 10;
 
 fn first_protocol() -> u32 {
     1
@@ -428,12 +431,18 @@ pub enum Request {
     /// moves every pane to the slot after it. Pane names move, slots and focus stay.
     RotateWindow {
         down: bool,
+        /// Keeps a zoomed window zoomed (tmux `rotate-window -Z`).
+        #[serde(default)]
+        keep_zoom: bool,
     },
     /// Moves pane `src` next to `dst`, splitting `dst` side by side or stacked (tmux `join-pane`).
+    /// `detach` (tmux `-d`) keeps the pane that was active before the join active.
     JoinPane {
         src: String,
         dst: String,
         side_by_side: bool,
+        #[serde(default)]
+        detach: bool,
     },
     /// Exchanges the positions of two windows (tmux `swap-window`).
     SwapWindow {
@@ -445,6 +454,18 @@ pub enum Request {
     /// arguments) replace the pane's own for this and later respawns.
     Respawn {
         name: String,
+        #[serde(default)]
+        kill: bool,
+        #[serde(default)]
+        cwd: Option<String>,
+        #[serde(default)]
+        command: Option<Vec<String>>,
+    },
+    /// Restarts every pane of window `index` (the active window when `None`), as tmux
+    /// `respawn-window`. Fails while a pane still runs unless `kill` is set.
+    RespawnWindow {
+        #[serde(default)]
+        index: Option<usize>,
         #[serde(default)]
         kill: bool,
         #[serde(default)]

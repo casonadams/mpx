@@ -3,7 +3,7 @@ use super::render::{FollowStep, follow_step};
 use super::resolve::{Resolved, parse_env_pairs, wait_condition, wait_exit_code};
 use super::sessions::{apply_key, ensure_client};
 use super::windows;
-use crate::client::Client;
+use crate::client::{Client, LayoutTuple};
 use crate::layout::Direction;
 use crate::node::process::file_name;
 use crate::protocol::{NodeInfo, SpawnOpts, SplitOpts, StreamEvent};
@@ -17,6 +17,7 @@ pub struct SplitRequest {
     pub env: Vec<String>,
     pub pty: bool,
     pub detach: bool,
+    pub keep_zoom: bool,
     pub command: String,
     pub args: Vec<String>,
 }
@@ -45,6 +46,26 @@ pub fn command_and_args(argv: Vec<String>) -> Option<(String, Vec<String>)> {
 
 pub fn pid_label(pid: Option<u32>) -> String {
     pid.map(|p| p.to_string()).unwrap_or_else(|| "-".into())
+}
+
+/// The spawn request for a new node; its name defaults to the command's file name.
+pub fn spawn_opts(
+    name: Option<String>,
+    command: String,
+    args: Vec<String>,
+    pty: bool,
+    cwd: Option<String>,
+    env: &[String],
+) -> Result<SpawnOpts, String> {
+    Ok(SpawnOpts {
+        name: name.unwrap_or_else(|| default_node_name(&command)),
+        command,
+        args,
+        pty,
+        cwd,
+        env: parse_env_pairs(env)?,
+        remain_on_exit: None,
+    })
 }
 
 fn current_dir() -> Option<String> {
@@ -81,14 +102,83 @@ pub async fn resolve_name(client: &mut Client, target: Option<&str>) -> Result<S
         .ok_or_else(|| format!("can't find pane: {key}"))
 }
 
+/// `resolve_name` for an optional target: `None` stays `None` instead of meaning the focused pane.
+pub async fn resolve_optional(
+    client: &mut Client,
+    target: Option<&str>,
+) -> Result<Option<String>, String> {
+    match target {
+        Some(target) => resolve_name(client, Some(target)).await.map(Some),
+        None => Ok(None),
+    }
+}
+
 pub async fn focused_name(client: &mut Client) -> Result<String, String> {
-    let (w, h) = crossterm::terminal::size().unwrap_or((80, 24));
-    let (rects, _, _) = client.layout(w, h).await?;
+    let (rects, _, _) = current_layout(client).await?;
     rects
         .into_iter()
         .find(|r| r.2)
         .map(|r| r.0)
         .ok_or_else(|| "no focused pane".to_string())
+}
+
+/// The terminal size the CLI lays panes out for when it has no size of its own.
+pub fn terminal_size() -> (u16, u16) {
+    crossterm::terminal::size().unwrap_or((80, 24))
+}
+
+/// The layout the daemon reports for the current terminal size.
+pub async fn current_layout(client: &mut Client) -> Result<LayoutTuple, String> {
+    let (w, h) = terminal_size();
+    client.layout(w, h).await
+}
+
+/// Maps a failed daemon call to `"<what> error: <e>"`.
+pub fn daemon_result<T>(result: Result<T, String>, what: &str) -> Result<T, String> {
+    result.map_err(|e| format!("{what} error: {e}"))
+}
+
+/// Runs one daemon request on a connected client; a failure reads `"<what> error: <e>"`.
+pub async fn daemon_call(
+    r: &Resolved,
+    what: &str,
+    op: impl AsyncFnOnce(&mut Client) -> Result<(), String>,
+) -> Result<i32, String> {
+    let mut client = ensure_client(r).await?;
+    daemon_result(op(&mut client).await, what)?;
+    Ok(0)
+}
+
+/// A daemon client for a mutating command: the request's idempotency key is applied.
+pub async fn keyed_client(r: &Resolved) -> Result<Client, String> {
+    let mut client = ensure_client(r).await?;
+    apply_key(&mut client, r.idempotency_key.as_deref());
+    Ok(client)
+}
+
+/// `daemon_call` for a mutating request: the request's idempotency key is applied first.
+pub async fn keyed_call(
+    r: &Resolved,
+    what: &str,
+    op: impl AsyncFnOnce(&mut Client) -> Result<(), String>,
+) -> Result<i32, String> {
+    let mut client = keyed_client(r).await?;
+    daemon_result(op(&mut client).await, what)?;
+    Ok(0)
+}
+
+/// Resolves a pane target, then runs one mutating request on that node with the idempotency key
+/// applied. A failed lookup is returned as is; a failed request reads `"<what> error: <e>"`.
+pub async fn keyed_on_target(
+    r: &Resolved,
+    target: Option<&str>,
+    what: &str,
+    op: impl AsyncFnOnce(&mut Client, String) -> Result<(), String>,
+) -> Result<i32, String> {
+    let mut client = keyed_client(r).await?;
+    let name = resolve_name(&mut client, target).await?;
+    daemon_result(op(&mut client, name).await, what)?;
+    Ok(0)
 }
 
 pub async fn run(cmd: Commands, r: &Resolved) -> Result<i32, String> {
@@ -139,16 +229,7 @@ pub async fn run(cmd: Commands, r: &Resolved) -> Result<i32, String> {
             timeout,
             idle,
             pattern,
-        } => {
-            wait(
-                r,
-                &name,
-                timeout,
-                idle,
-                pattern.as_deref(),
-            )
-            .await
-        }
+        } => wait(r, &name, timeout, idle, pattern.as_deref()).await,
         Commands::Screen { name } => screen_node(r, &name).await,
         Commands::Split {
             target,
@@ -159,6 +240,7 @@ pub async fn run(cmd: Commands, r: &Resolved) -> Result<i32, String> {
             env,
             pty,
             detach,
+            keep_zoom,
             argv,
             ..
         } => {
@@ -172,6 +254,7 @@ pub async fn run(cmd: Commands, r: &Resolved) -> Result<i32, String> {
                 env,
                 pty,
                 detach,
+                keep_zoom,
                 command,
                 args,
             };
@@ -180,23 +263,19 @@ pub async fn run(cmd: Commands, r: &Resolved) -> Result<i32, String> {
         Commands::Focus { name } => focus_node(r, &name).await,
         Commands::Status { name } => status(r, &name).await,
         Commands::Layout { width, height } => layout(r, width, height).await,
-        other => windows::run(other, r).await,
+        Commands::Window(cmd) => windows::run(cmd, r).await,
+        _ => Err("command is not routed".to_string()),
     }
 }
 
 async fn run_node(r: &Resolved, req: RunRequest) -> Result<i32, String> {
     let mut client = ensure_client(r).await?;
-    let node_name = req.name.unwrap_or_else(|| default_node_name(&req.command));
     apply_key(&mut client, r.idempotency_key.as_deref());
+    let spawn = spawn_opts(req.name, req.command, req.args, req.pty, req.cwd, &req.env)?;
     let info = client
         .spawn(SpawnOpts {
-            name: node_name,
-            command: req.command,
-            args: req.args,
-            pty: req.pty,
-            cwd: req.cwd,
-            env: parse_env_pairs(&req.env)?,
             remain_on_exit: req.remain.then_some(true),
+            ..spawn
         })
         .await
         .map_err(|e| format!("Run error: {e}"))?;
@@ -232,32 +311,20 @@ async fn run_command(
 }
 
 async fn kill_node(r: &Resolved, name: &str) -> Result<i32, String> {
-    let mut client = ensure_client(r).await?;
-    apply_key(&mut client, r.idempotency_key.as_deref());
-    client
-        .kill(name)
-        .await
-        .map_err(|e| format!("Kill error: {e}"))?;
+    keyed_call(r, "Kill", async |c| c.kill(name).await).await?;
     println!("Node '{name}' terminated");
     Ok(0)
 }
 
 async fn screen_node(r: &Resolved, name: &str) -> Result<i32, String> {
     let mut client = ensure_client(r).await?;
-    let screen = client
-        .screen(name)
-        .await
-        .map_err(|e| format!("Screen error: {e}"))?;
+    let screen = daemon_result(client.screen(name).await, "Screen")?;
     print!("{screen}");
     Ok(0)
 }
 
 async fn focus_node(r: &Resolved, name: &str) -> Result<i32, String> {
-    let mut client = ensure_client(r).await?;
-    client
-        .focus(name)
-        .await
-        .map_err(|e| format!("Focus error: {e}"))?;
+    daemon_call(r, "Focus", async |c| c.focus(name).await).await?;
     println!("Focused pane '{name}'");
     Ok(0)
 }
@@ -345,17 +412,12 @@ fn print_flushed(data: &str) {
 }
 
 async fn send(r: &Resolved, name: &str, data: &str) -> Result<i32, String> {
-    let mut client = ensure_client(r).await?;
-    apply_key(&mut client, r.idempotency_key.as_deref());
     let payload = if data.ends_with('\n') {
         data.to_string()
     } else {
         format!("{data}\n")
     };
-    client
-        .send_input(name, &payload)
-        .await
-        .map_err(|e| format!("Send error: {e}"))?;
+    keyed_call(r, "Send", async |c| c.send_input(name, &payload).await).await?;
     println!("Input sent to '{name}'");
     Ok(0)
 }
@@ -366,14 +428,10 @@ async fn send_keys(
     literal: bool,
     keys: Vec<String>,
 ) -> Result<i32, String> {
-    let mut client = ensure_client(r).await?;
-    let name = resolve_name(&mut client, target).await?;
-    apply_key(&mut client, r.idempotency_key.as_deref());
-    client
-        .send_keys(&name, keys, literal)
-        .await
-        .map_err(|e| format!("send-keys error: {e}"))?;
-    Ok(0)
+    keyed_on_target(r, target, "send-keys", async |c, name| {
+        c.send_keys(&name, keys, literal).await
+    })
+    .await
 }
 
 async fn paste(
@@ -387,14 +445,10 @@ async fn paste(
     } else {
         text.to_string()
     };
-    let mut client = ensure_client(r).await?;
-    let name = resolve_name(&mut client, target).await?;
-    apply_key(&mut client, r.idempotency_key.as_deref());
-    client
-        .paste(&name, &text, submit)
-        .await
-        .map_err(|e| format!("Paste error: {e}"))?;
-    Ok(0)
+    keyed_on_target(r, target, "Paste", async |c, name| {
+        c.paste(&name, &text, submit).await
+    })
+    .await
 }
 
 async fn wait(
@@ -415,32 +469,29 @@ async fn wait(
 
 async fn split(r: &Resolved, req: SplitRequest) -> Result<i32, String> {
     let mut client = ensure_client(r).await?;
-    let target = match req.target.as_deref() {
-        Some(t) => Some(resolve_name(&mut client, Some(t)).await?),
-        None => None,
-    };
-    let node_name = req.name.unwrap_or_else(|| default_node_name(&req.command));
+    let target = resolve_optional(&mut client, req.target.as_deref()).await?;
     let direction = if req.vertical {
         Direction::Vertical
     } else {
         Direction::Horizontal
     };
     apply_key(&mut client, r.idempotency_key.as_deref());
+    let spawn = spawn_opts(
+        req.name,
+        req.command,
+        req.args,
+        req.pty,
+        current_dir(),
+        &req.env,
+    )?;
     let info = client
         .split(SplitOpts {
             target,
-            spawn: SpawnOpts {
-                name: node_name,
-                command: req.command,
-                args: req.args,
-                pty: req.pty,
-                cwd: current_dir(),
-                env: parse_env_pairs(&req.env)?,
-                remain_on_exit: None,
-            },
+            spawn,
             direction,
             percent: req.percent,
             focus: !req.detach,
+            keep_zoom: req.keep_zoom,
         })
         .await
         .map_err(|e| format!("Split error: {e}"))?;
@@ -472,7 +523,7 @@ async fn status(r: &Resolved, name: &str) -> Result<i32, String> {
 
 async fn layout(r: &Resolved, width: Option<u16>, height: Option<u16>) -> Result<i32, String> {
     let mut client = ensure_client(r).await?;
-    let (term_w, term_h) = crossterm::terminal::size().unwrap_or((80, 24));
+    let (term_w, term_h) = terminal_size();
     let w = width.unwrap_or(term_w);
     let h = height.unwrap_or(term_h);
     let (rects, _dividers, _tabs) = client

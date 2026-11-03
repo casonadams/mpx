@@ -79,6 +79,8 @@ pub struct Config {
     pub mode_keys: ModeKeys,
     /// Whether copy-mode yanks reach the system clipboard (tmux `set-clipboard`; `off` disables it).
     pub set_clipboard: bool,
+    /// Whether copy-mode searches wrap around the ends of the history (tmux `wrap-search`).
+    pub wrap_search: bool,
     /// Extra or overriding key bindings: key (tmux notation) -> command line.
     pub bind: BTreeMap<String, String>,
     /// Extra or overriding bindings for keys pressed without the prefix (tmux `bind -n`).
@@ -367,6 +369,7 @@ impl Default for Config {
             display_time_ms: 3000,
             mode_keys: ModeKeys::Vi,
             set_clipboard: true,
+            wrap_search: true,
             bind: BTreeMap::new(),
             bind_root: BTreeMap::new(),
             resume: default_resume_rules(),

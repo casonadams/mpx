@@ -113,6 +113,7 @@ async fn split_lays_out_two_panes_and_exit_collapses_the_layout() {
             direction: Direction::Horizontal,
             percent: None,
             focus: true,
+            keep_zoom: false,
         })
         .await
         .unwrap();
@@ -177,6 +178,7 @@ async fn new_window_reports_cwd_and_split_inherits_it() {
             direction: Direction::Horizontal,
             percent: None,
             focus: true,
+            keep_zoom: false,
         })
         .await
         .unwrap();

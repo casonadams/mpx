@@ -38,13 +38,19 @@ fn unknown_and_daemon_options_are_told_apart() {
 }
 
 #[test]
-fn unset_restores_the_default_including_an_empty_string() {
-    let mut c = Config::default();
-    options::set(&mut c, "status-left", "").unwrap();
-    assert_eq!(c.status_left, "");
-    options::unset(&mut c, "status-left").unwrap();
-    options::unset(&mut c, "status").unwrap();
-    assert_eq!(c, Config::default());
+fn set_then_unset_restores_the_default_for_switches_and_strings() {
+    assert_eq!(options::get(&Config::default(), "wrap-search").unwrap(), "on");
+    // (option, a value that changes it, how `get` shows that value)
+    for (name, value, shown) in [("wrap-search", "off", "off"), ("status-left", "", "\"\"")] {
+        let mut c = Config::default();
+        let default = options::get(&c, name).unwrap();
+        options::set(&mut c, name, value).unwrap();
+        assert_ne!(c, Config::default(), "{name} changed");
+        assert_eq!(options::get(&c, name).unwrap(), shown);
+        options::unset(&mut c, name).unwrap();
+        assert_eq!(c, Config::default(), "{name} restored");
+        assert_eq!(options::get(&c, name).unwrap(), default);
+    }
 }
 
 #[test]

@@ -81,6 +81,7 @@ static OPTIONS: &[Opt] = &[
     option!("window-status-current-format", window_status_current_format, |v: &String| quoted(v.clone()), |v: &str| Ok::<_, String>(v.to_string())),
     option!("window-status-format", window_status_format, |v: &String| quoted(v.clone()), |v: &str| Ok::<_, String>(v.to_string())),
     option!("window-status-separator", window_status_separator, |v: &String| quoted(v.clone()), |v: &str| Ok::<_, String>(v.to_string())),
+    option!("wrap-search", wrap_search, |v: &bool| on_off(*v), parse_switch),
 ];
 
 fn find(name: &str) -> Result<&'static Opt, String> {

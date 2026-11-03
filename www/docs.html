@@ -178,6 +178,7 @@ fallback = ["nvim", "-c", "silent! source Session.vim"]</code></pre>
             <tr><td><code>display_time_ms</code></td><td>integer</td><td><code>3000</code></td><td>TUI</td><td>Milliseconds a status message stays up (tmux <code>display-time</code>).</td></tr>
             <tr><td><code>mode_keys</code></td><td><code>"vi"</code> or <code>"emacs"</code></td><td><code>"vi"</code></td><td>TUI</td><td>Copy-mode key table (tmux <code>mode-keys</code>).</td></tr>
             <tr><td><code>set_clipboard</code></td><td>bool</td><td><code>true</code></td><td>TUI</td><td><code>false</code> keeps copy-mode yanks off the system clipboard.</td></tr>
+            <tr><td><code>wrap_search</code></td><td>bool</td><td><code>true</code></td><td>TUI</td><td><code>false</code> stops copy-mode searches at their first or last match (tmux <code>wrap-search</code>).</td></tr>
             <tr><td><code>resume</code></td><td>array of tables</td><td>defaults</td><td>Daemon</td><td>Rules for resuming processes across restarts (repeat <code>[[resume]]</code>).</td></tr>
           </tbody>
         </table>

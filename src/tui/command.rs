@@ -53,6 +53,7 @@ pub enum Command {
         argv: Vec<String>,
         cwd: Option<String>,
         detach: bool,
+        keep_zoom: bool,
     },
     NewWindow {
         name: Option<String>,
@@ -70,9 +71,12 @@ pub enum Command {
     },
     SelectPane {
         target: String,
+        /// `-Z`: a window that is zoomed stays zoomed.
+        keep_zoom: bool,
     },
     SelectPaneDir {
         side: Side,
+        keep_zoom: bool,
     },
     MarkPane {
         target: Option<String>,
@@ -85,9 +89,11 @@ pub enum Command {
     SelectWindowNamed {
         name: String,
     },
-    /// `rotate-window [-D]`: the active window's panes move through its layout slots.
+    /// `rotate-window [-DUZ]`: the active window's panes move through its layout slots; `-Z` keeps
+    /// the window zoomed.
     RotateWindow {
         down: bool,
+        keep_zoom: bool,
     },
     /// `move-window -t index`: moves the active window to that index.
     MoveWindow {
@@ -113,12 +119,13 @@ pub enum Command {
         value_only: bool,
         quiet: bool,
     },
-    /// `join-pane [-h] [-s src] [-t dst]`: moves `src` (default: the marked pane) next to `dst`
-    /// (default: the active pane), side by side with `-h`, else stacked.
+    /// `join-pane [-dh] [-s src] [-t dst]`: moves `src` (default: the marked pane) next to `dst`
+    /// (default: the active pane), side by side with `-h`, else stacked. `-d` keeps the active pane.
     JoinPane {
         src: Option<String>,
         dst: Option<String>,
         side_by_side: bool,
+        detach: bool,
     },
     /// `swap-window [-s src] -t dst`: exchanges two windows; `src` defaults to the active one.
     SwapWindow {
@@ -128,6 +135,13 @@ pub enum Command {
     /// `respawn-pane [-k] [-c dir] [-t target] [command...]`: restarts the pane's process.
     RespawnPane {
         target: Option<String>,
+        kill: bool,
+        cwd: Option<String>,
+        command: Vec<String>,
+    },
+    /// `respawn-window [-k] [-c dir] [-t index] [command...]`: restarts every pane of the window.
+    RespawnWindow {
+        target: Option<usize>,
         kill: bool,
         cwd: Option<String>,
         command: Vec<String>,
@@ -144,7 +158,9 @@ pub enum Command {
     PrevWindow,
     LastWindow,
     NextPane,
-    LastPane,
+    LastPane {
+        keep_zoom: bool,
+    },
     SwitchSession {
         name: String,
     },
@@ -165,10 +181,12 @@ pub enum Command {
     },
     SwapPane {
         next: bool,
+        keep_zoom: bool,
     },
     SwapPaneMarked {
         source: Option<String>,
         target: Option<String>,
+        keep_zoom: bool,
     },
     BreakPane,
     SelectLayout {
@@ -261,6 +279,7 @@ pub const COMMAND_NAMES: &[&str] = &[
     "list-buffers",
     "list-keys",
     "mark-pane",
+    "move-pane",
     "move-window",
     "new",
     "new-window",
@@ -282,6 +301,7 @@ pub const COMMAND_NAMES: &[&str] = &[
     "rename-window",
     "resize-pane",
     "respawn-pane",
+    "respawn-window",
     "rotate-window",
     "select-layout",
     "select-pane",
@@ -450,8 +470,22 @@ fn window_cmd(name: &str, args: &[String]) -> Option<Result<Command, String>> {
     let cmd = match name {
         "split-window" | "split" | "sp" => split(name, args, false),
         "vsplit" | "vs" => split(name, args, true),
-        "new-window" | "new" | "tabnew" => new_window(name, args),
+        "new-window" | "new" | "tabnew" => with_words(name, args, NEW_WINDOW, |o| Command::NewWindow {
+            name: o.value("-n").map(str::to_string),
+            cwd: o.value("-c").map(str::to_string),
+            argv: o.rest,
+        }),
         "kill-window" => kill_window(name, args),
+        "respawn-window" | "respawnw" => respawn_window(name, args),
+        "link-window" | "linkw" => Err(format!(
+            "{name}: not supported: a pane belongs to one window, so a window cannot be linked elsewhere"
+        )),
+        "unlink-window" | "unlinkw" => Err(format!(
+            "{name}: not supported: windows are never linked, so there is nothing to unlink"
+        )),
+        "resize-window" | "resizew" => Err(format!(
+            "{name}: not supported: a window's size is set by the attached terminal"
+        )),
         "rename-window" => rename_window(args),
         "select-window" => select_window(name, args),
         "next-window" if args == ["-a"] => Ok(Command::StepAlert { forward: true }),
@@ -468,18 +502,38 @@ fn window_cmd(name: &str, args: &[String]) -> Option<Result<Command, String>> {
 
 fn pane_cmd(name: &str, args: &[String]) -> Option<Result<Command, String>> {
     let cmd = match name {
-        "kill-pane" => kill_pane(name, args),
+        "kill-pane" => switches(name, args, KILL_TARGET, |o| Command::KillPane {
+            target: o.value("-t").map(str::to_string),
+        }),
         "mark-pane" => mark_pane(name, args),
         "select-pane" => select_pane(name, args),
         "send-keys" => send_keys(name, args),
-        "paste" => paste(name, args),
+        "paste" => with_words(name, args, PASTE, |o| Command::Paste {
+            target: o.value("-t").map(str::to_string),
+            text: o.rest.join(" "),
+            submit: o.has("--submit"),
+        }),
         "resize-pane" => resize_pane(name, args),
         "swap-pane" => swap_pane(name, args),
-        "join-pane" | "joinp" => join_pane(name, args),
-        "respawn-pane" | "respawnp" => respawn_pane(name, args),
+        "join-pane" | "joinp" | "move-pane" | "movep" => {
+            switches(name, args, JOIN_PANE, |o| Command::JoinPane {
+                src: o.value("-s").map(str::to_string),
+                dst: o.value("-t").map(str::to_string),
+                side_by_side: o.has("-h"),
+                detach: o.has("-d"),
+            })
+        }
+        "respawn-pane" | "respawnp" => with_words(name, args, RESPAWN_PANE, |o| Command::RespawnPane {
+            target: o.value("-t").map(str::to_string),
+            kill: o.has("-k"),
+            cwd: o.value("-c").map(str::to_string),
+            command: o.rest,
+        }),
         "find-window" | "findw" => find_window(name, args),
         "break-pane" => bare(name, args, Command::BreakPane),
-        "last-pane" => last_pane(name, args),
+        "last-pane" => switches(name, args, LAST_PANE, |o| Command::LastPane {
+            keep_zoom: o.has("-Z"),
+        }),
         "next-pane" => bare(name, args, Command::NextPane),
         "select-layout" => select_layout(name, args),
         "next-layout" => bare(name, args, Command::SelectLayout { preset: None }),
@@ -490,7 +544,16 @@ fn pane_cmd(name: &str, args: &[String]) -> Option<Result<Command, String>> {
 
 fn misc_cmd(name: &str, args: &[String]) -> Option<Result<Command, String>> {
     let cmd = match name {
-        "copy-mode" => copy_mode(name, args),
+        // `copy-mode [-eHMqu] [-t pane]`. `-H` (hide position) and `-M` (mouse) are accepted; mpx
+        // has no position indicator to hide and mouse drags always start copy mode.
+        "copy-mode" => switches(name, args, COPY_MODE, |o| {
+            Command::CopyMode(CopyModeOpts {
+                target: o.value("-t").map(str::to_string),
+                page_up: o.has("-u"),
+                exit_at_bottom: o.has("-e"),
+                quit: o.has("-q"),
+            })
+        }),
         "detach-client" | "detach" | "q" | "quit" => bare(name, args, Command::Detach),
         "kill-server" | "qa" => bare(
             name,
@@ -500,14 +563,19 @@ fn misc_cmd(name: &str, args: &[String]) -> Option<Result<Command, String>> {
                 then: Box::new(Command::KillServer),
             },
         ),
-        "rotate-window" | "rotatew" => rotate_window(name, args),
+        "rotate-window" | "rotatew" => switches(name, args, ROTATE, |o| Command::RotateWindow {
+            down: o.has("-D"),
+            keep_zoom: o.has("-Z"),
+        }),
         "move-window" | "movew" => move_window(name, args),
         "swap-window" | "swapw" => swap_window(name, args),
         "display-message" | "display" => display_message(name, args),
         "choose-tree" => choose_tree(name, args),
         "choose-buffer" => bare(name, args, Command::ChooseBuffer),
         "display-panes" | "displayp" => display_panes(name, args),
-        "clock-mode" => clock_mode(name, args),
+        "clock-mode" => switches(name, args, CLOCK_MODE, |o| Command::ClockMode {
+            target: o.value("-t").map(str::to_string),
+        }),
         "show-messages" | "showmsgs" => bare(name, args, Command::ShowMessages),
         "list-buffers" | "lsb" => bare(name, args, Command::ListBuffers),
         "suspend-client" | "suspendc" => bare(name, args, Command::SuspendClient),
@@ -539,8 +607,30 @@ fn bare(name: &str, args: &[String], cmd: Command) -> Result<Command, String> {
     }
 }
 
+/// Parses `args` with `spec`, rejecting stray words, and builds the command from the options.
+fn switches(
+    name: &str,
+    args: &[String],
+    spec: Spec,
+    build: impl FnOnce(&Opts) -> Command,
+) -> Result<Command, String> {
+    let o = parse_opts(name, args, spec)?;
+    o.no_rest(name)?;
+    Ok(build(&o))
+}
+
+/// Parses `args` with `spec`, keeping the words after the options (a command line or text).
+fn with_words(
+    name: &str,
+    args: &[String],
+    spec: Spec,
+    build: impl FnOnce(Opts) -> Command,
+) -> Result<Command, String> {
+    Ok(build(parse_opts(name, args, spec)?))
+}
+
 const ROTATE: Spec = Spec {
-    bools: &["-D", "-U"],
+    bools: &["-D", "-U", "-Z"],
     values: &[],
     stop_at_arg: false,
 };
@@ -549,12 +639,6 @@ const DISPLAY_MESSAGE: Spec = Spec {
     values: &[],
     stop_at_arg: true,
 };
-
-fn rotate_window(name: &str, args: &[String]) -> Result<Command, String> {
-    let o = parse_opts(name, args, ROTATE)?;
-    o.no_rest(name)?;
-    Ok(Command::RotateWindow { down: o.has("-D") })
-}
 
 fn move_window(name: &str, args: &[String]) -> Result<Command, String> {
     let o = parse_opts(name, args, KILL_TARGET)?;
@@ -567,7 +651,7 @@ fn move_window(name: &str, args: &[String]) -> Result<Command, String> {
 }
 
 const JOIN_PANE: Spec = Spec {
-    bools: &["-h", "-v"],
+    bools: &["-d", "-h", "-v"],
     values: &["-s", "-t"],
     stop_at_arg: false,
 };
@@ -581,16 +665,6 @@ const RESPAWN_PANE: Spec = Spec {
     values: &["-c", "-t"],
     stop_at_arg: true,
 };
-
-fn join_pane(name: &str, args: &[String]) -> Result<Command, String> {
-    let o = parse_opts(name, args, JOIN_PANE)?;
-    o.no_rest(name)?;
-    Ok(Command::JoinPane {
-        src: o.value("-s").map(str::to_string),
-        dst: o.value("-t").map(str::to_string),
-        side_by_side: o.has("-h"),
-    })
-}
 
 fn window_index(name: &str, raw: &str) -> Result<usize, String> {
     parse_index(raw).map_err(|_| format!("{name}: invalid window index '{raw}'"))
@@ -609,10 +683,17 @@ fn swap_window(name: &str, args: &[String]) -> Result<Command, String> {
     })
 }
 
-fn respawn_pane(name: &str, args: &[String]) -> Result<Command, String> {
-    let o = parse_opts(name, args, RESPAWN_PANE)?;
-    Ok(Command::RespawnPane {
-        target: o.value("-t").map(str::to_string),
+const RESPAWN_WINDOW: Spec = Spec {
+    bools: &["-k"],
+    values: &["-c", "-t"],
+    stop_at_arg: true,
+};
+
+fn respawn_window(name: &str, args: &[String]) -> Result<Command, String> {
+    let o = parse_opts(name, args, RESPAWN_WINDOW)?;
+    let target = o.value("-t").map(|raw| window_index(name, raw)).transpose()?;
+    Ok(Command::RespawnWindow {
+        target,
         kill: o.has("-k"),
         cwd: o.value("-c").map(str::to_string),
         command: o.rest,
@@ -682,9 +763,11 @@ fn show_options(name: &str, args: &[String]) -> Result<Command, String> {
     })
 }
 
-fn last_pane(name: &str, args: &[String]) -> Result<Command, String> {
-    bare(name, args, Command::LastPane)
-}
+const LAST_PANE: Spec = Spec {
+    bools: &["-Z"],
+    values: &[],
+    stop_at_arg: false,
+};
 
 /// Option shape for one command: which flags are switches, which take a value, and whether
 /// option parsing stops at the first positional word (for trailing command lines and keys).
@@ -696,7 +779,7 @@ struct Spec {
 }
 
 const SPLIT: Spec = Spec {
-    bools: &["-h", "-d"],
+    bools: &["-h", "-d", "-Z"],
     values: &["-c"],
     stop_at_arg: true,
 };
@@ -882,26 +965,12 @@ fn direction_flag(o: &Opts) -> Option<Side> {
 }
 
 fn split(name: &str, args: &[String], vertical_alias: bool) -> Result<Command, String> {
-    let o = parse_opts(name, args, SPLIT)?;
-    let side_by_side = vertical_alias || o.has("-h");
-    let cwd = o.value("-c").map(str::to_string);
-    let detach = o.has("-d");
-    Ok(Command::SplitWindow {
-        side_by_side,
+    with_words(name, args, SPLIT, |o| Command::SplitWindow {
+        side_by_side: vertical_alias || o.has("-h"),
+        cwd: o.value("-c").map(str::to_string),
+        detach: o.has("-d"),
+        keep_zoom: o.has("-Z"),
         argv: o.rest,
-        cwd,
-        detach,
-    })
-}
-
-fn new_window(name: &str, args: &[String]) -> Result<Command, String> {
-    let o = parse_opts(name, args, NEW_WINDOW)?;
-    let window = o.value("-n").map(str::to_string);
-    let cwd = o.value("-c").map(str::to_string);
-    Ok(Command::NewWindow {
-        name: window,
-        argv: o.rest,
-        cwd,
     })
 }
 
@@ -936,20 +1005,10 @@ fn select_window(name: &str, args: &[String]) -> Result<Command, String> {
     }
 }
 
-fn kill_pane(name: &str, args: &[String]) -> Result<Command, String> {
-    let o = parse_opts(name, args, KILL_TARGET)?;
-    o.no_rest(name)?;
-    Ok(Command::KillPane {
-        target: o.value("-t").map(str::to_string),
-    })
-}
-
 fn select_pane(name: &str, args: &[String]) -> Result<Command, String> {
     let o = parse_opts(name, args, SELECT_PANE)?;
     o.no_rest(name)?;
-    if o.has("-Z") {
-        return Err(format!("{name}: -Z is not supported"));
-    }
+    let keep_zoom = o.has("-Z");
     if o.has("-M") {
         return Ok(Command::ClearMark);
     }
@@ -959,13 +1018,14 @@ fn select_pane(name: &str, args: &[String]) -> Result<Command, String> {
         });
     }
     if let Some(side) = direction_flag(&o) {
-        return Ok(Command::SelectPaneDir { side });
+        return Ok(Command::SelectPaneDir { side, keep_zoom });
     }
     let target = o
         .value("-t")
         .ok_or_else(|| format!("{name}: need -t <target>, -m/-M, or -L/-R/-U/-D"))?;
     Ok(Command::SelectPane {
         target: target.to_string(),
+        keep_zoom,
     })
 }
 
@@ -1003,17 +1063,22 @@ fn resize_pane(name: &str, args: &[String]) -> Result<Command, String> {
 fn swap_pane(name: &str, args: &[String]) -> Result<Command, String> {
     let o = parse_opts(name, args, SWAP_PANE)?;
     o.no_rest(name)?;
-    if o.has("-Z") {
-        return Err(format!("{name}: -Z is not supported"));
-    }
+    let keep_zoom = o.has("-Z");
     if o.has("-D") {
-        Ok(Command::SwapPane { next: true })
+        Ok(Command::SwapPane {
+            next: true,
+            keep_zoom,
+        })
     } else if o.has("-U") {
-        Ok(Command::SwapPane { next: false })
+        Ok(Command::SwapPane {
+            next: false,
+            keep_zoom,
+        })
     } else {
         Ok(Command::SwapPaneMarked {
             source: o.value("-s").map(str::to_string),
             target: o.value("-t").map(str::to_string),
+            keep_zoom,
         })
     }
 }
@@ -1060,15 +1125,6 @@ fn send_keys(name: &str, args: &[String]) -> Result<Command, String> {
     Ok(Command::SendKeys {
         target,
         keys: o.rest,
-    })
-}
-
-fn paste(name: &str, args: &[String]) -> Result<Command, String> {
-    let o = parse_opts(name, args, PASTE)?;
-    Ok(Command::Paste {
-        target: o.value("-t").map(str::to_string),
-        text: o.rest.join(" "),
-        submit: o.has("--submit"),
     })
 }
 
@@ -1155,14 +1211,6 @@ fn display_panes(name: &str, args: &[String]) -> Result<Command, String> {
     Ok(Command::DisplayPanes { duration_ms })
 }
 
-fn clock_mode(name: &str, args: &[String]) -> Result<Command, String> {
-    let o = parse_opts(name, args, CLOCK_MODE)?;
-    o.no_rest(name)?;
-    Ok(Command::ClockMode {
-        target: o.value("-t").map(str::to_string),
-    })
-}
-
 fn palette_cmd(name: &str, args: &[String]) -> Result<Command, String> {
     let tab = match args.first().map(|s| s.as_str()) {
         None => None,
@@ -1172,19 +1220,6 @@ fn palette_cmd(name: &str, args: &[String]) -> Result<Command, String> {
         Some(other) => return Err(format!("{name}: unknown tab '{other}'")),
     };
     Ok(Command::OpenPalette { tab })
-}
-
-/// `copy-mode [-eHMqu] [-t pane]`. `-H` (hide position) and `-M` (mouse) are accepted; mpx has no
-/// position indicator to hide and mouse drags always start copy mode.
-fn copy_mode(name: &str, args: &[String]) -> Result<Command, String> {
-    let o = parse_opts(name, args, COPY_MODE)?;
-    o.no_rest(name)?;
-    Ok(Command::CopyMode(CopyModeOpts {
-        target: o.value("-t").map(str::to_string),
-        page_up: o.has("-u"),
-        exit_at_bottom: o.has("-e"),
-        quit: o.has("-q"),
-    }))
 }
 
 /// `choose-tree [-swZ]`: the tree overlay; the flags are accepted, the overlay opens the same way.

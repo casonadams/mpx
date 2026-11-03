@@ -81,6 +81,7 @@ impl App {
         let pane = self.active_rect.map_or((80, 24), |r| (r.width, r.height));
         let action = self.keymap.copy_action(self.config.mode_keys, &key);
         let grid = self.active_vt().map(|vt| vt.grid());
+        cs.wrap_search = self.config.wrap_search;
         let outcome = apply_bound_key(&mut cs, &key, action.as_ref(), grid, pane);
         let active = self.active_pane.clone();
         self.apply_copy_outcome(&active, true, cs, outcome);
@@ -128,7 +129,13 @@ impl App {
             .find(|(n, _)| *n == number as usize)
             .map(|(_, pane)| pane);
         match picked {
-            Some(target) => self.run(Command::SelectPane { target }).await,
+            Some(target) => {
+                self.run(Command::SelectPane {
+                    target,
+                    keep_zoom: false,
+                })
+                .await
+            }
             None => Flow::Continue,
         }
     }

@@ -34,6 +34,8 @@ fn fresh_at_origin() -> CopyState {
         search_prompt: None,
         last_search: None,
         wheel_exit: false,
+        mark: None,
+        wrap_search: true,
     }
 }
 
@@ -46,10 +48,14 @@ fn grid_with(text: &str) -> Grid {
 }
 
 #[test]
-fn character_selection_on_one_row_takes_the_span() {
+fn character_selection_takes_the_span_and_trims_trailing_blanks() {
     let lines = vec![row("hello world")];
     assert_eq!(char_selection_text(&lines, (0, 0), (4, 0)), "hello");
     assert_eq!(char_selection_text(&lines, (6, 0), (10, 0)), "world");
+    let padded = vec![row("abc   ")];
+    assert_eq!(char_selection_text(&padded, (0, 0), (5, 0)), "abc");
+    let two_rows = vec![row("ab  "), row("cd   ")];
+    assert_eq!(char_selection_text(&two_rows, (0, 0), (4, 1)), "ab\ncd");
 }
 
 #[test]
@@ -203,10 +209,10 @@ fn find_next_match_finds_forward_and_backward_across_lines() {
     for c in "second foo".chars() {
         grid.put_char(c);
     }
-    let down = find_next_match(&grid, "foo", (0, 0), SearchDirection::Down);
+    let down = find_next_match(&grid, "foo", (0, 0), SearchDirection::Down, true);
     assert_eq!(down, Some((7, 1)), "finds next foo on row 1");
 
-    let up = find_next_match(&grid, "foo", (7, 1), SearchDirection::Up);
+    let up = find_next_match(&grid, "foo", (7, 1), SearchDirection::Up, true);
     assert_eq!(up, Some((0, 0)), "finds foo on row 0");
 }
 
@@ -217,19 +223,32 @@ fn find_next_match_same_line_and_smart_case() {
         grid.put_char(c);
     }
     // Search forward from column 0: finds second foo at 8
-    let next1 = find_next_match(&grid, "foo", (0, 0), SearchDirection::Down);
+    let next1 = find_next_match(&grid, "foo", (0, 0), SearchDirection::Down, true);
     assert_eq!(next1, Some((8, 0)));
     // Search forward from column 8: finds third Foo at 16 (smart case matches uppercase)
-    let next2 = find_next_match(&grid, "foo", (8, 0), SearchDirection::Down);
+    let next2 = find_next_match(&grid, "foo", (8, 0), SearchDirection::Down, true);
     assert_eq!(next2, Some((16, 0)));
     // Exact case search for "Foo" does not match lowercase
-    let exact = find_next_match(&grid, "Foo", (0, 0), SearchDirection::Down);
+    let exact = find_next_match(&grid, "Foo", (0, 0), SearchDirection::Down, true);
     assert_eq!(exact, Some((16, 0)));
     // Backward search from 16 finds previous foo at 8
-    let prev = find_next_match(&grid, "foo", (16, 0), SearchDirection::Up);
+    let prev = find_next_match(&grid, "foo", (16, 0), SearchDirection::Up, true);
     assert_eq!(prev, Some((8, 0)));
 }
 
+#[test]
+fn searches_stop_at_the_ends_of_history_when_wrap_search_is_off() {
+    let mut grid = Grid::new(20, 2);
+    for c in "foo first".chars() {
+        grid.put_char(c);
+    }
+    assert_eq!(find_next_match(&grid, "foo", (1, 0), SearchDirection::Down, false), None);
+    assert_eq!(
+        find_next_match(&grid, "foo", (1, 0), SearchDirection::Down, true),
+        Some((0, 0))
+    );
+    assert_eq!(find_next_match(&grid, "foo", (0, 0), SearchDirection::Up, false), None);
+}
 
 #[test]
 fn line_matches_supports_smart_case() {

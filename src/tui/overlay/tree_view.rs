@@ -448,6 +448,7 @@ impl TreeView {
             }
             Node::Pane(s, w, p) => vec![Command::SelectPane {
                 target: self.pane_target(s, w, p),
+                keep_zoom: false,
             }],
         };
         if commands.is_empty() {

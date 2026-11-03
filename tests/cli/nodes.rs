@@ -1,6 +1,6 @@
 use mpx::protocol::NodeState;
 
-use super::fixture::{Fixture, run_command};
+use super::fixture::{Fixture, expect_exits, run_command, started_running};
 
 #[test]
 fn run_names_the_node_and_applies_cwd_and_env() {
@@ -59,11 +59,15 @@ fn run_rejects_a_malformed_env_entry_without_starting_anything() {
 #[test]
 fn send_delivers_a_line_to_the_node_input() {
     let f = Fixture::start();
-    assert_eq!(run_command(&f, &["run", "-n", "echo", "cat"]), 0);
-    assert_eq!(run_command(&f, &["send", "echo", "hello"]), 0);
-    let wait = ["wait", "echo", "--match", "hello", "--timeout", "5"];
-    assert_eq!(run_command(&f, &wait), 0);
-    assert_eq!(run_command(&f, &["send", "missing", "x"]), 1);
+    expect_exits(
+        &f,
+        r#"
+        run -n echo cat => 0
+        send echo hello => 0
+        wait echo --match hello --timeout 5 => 0
+        send missing x => 1
+        "#,
+    );
 }
 
 #[test]
@@ -141,23 +145,24 @@ fn wait_rejects_conflicting_or_unknown_conditions() {
 
 #[test]
 fn logs_reads_history_in_each_format_and_rejects_unknown_nodes() {
-    let f = Fixture::start();
-    let script = "echo one";
-    assert_eq!(run_command(&f, &["run", "-n", "l", "sh", "-c", script]), 0);
-    assert_eq!(run_command(&f, &["wait", "l", "--timeout", "5"]), 0);
-    assert_eq!(run_command(&f, &["logs", "l"]), 0);
-    assert_eq!(run_command(&f, &["logs", "l", "--plain", "-n", "1"]), 0);
-    assert_eq!(run_command(&f, &["logs", "l", "--json", "--since", "0"]), 0);
-    assert_eq!(run_command(&f, &["logs", "missing"]), 1);
+    let f = started_running("l", "echo one");
+    expect_exits(
+        &f,
+        r#"
+        wait l --timeout 5 => 0
+        logs l => 0
+        logs l --plain -n 1 => 0
+        logs l --json --since 0 => 0
+        logs missing => 1
+        "#,
+    );
     assert!(f.logs("l").contains("one"));
 }
 
 #[test]
 fn logs_follow_returns_once_the_process_has_exited() {
-    let f = Fixture::start();
-    let script = "echo first; sleep 0.2; echo second";
-    assert_eq!(run_command(&f, &["run", "-n", "fo", "sh", "-c", script]), 0);
-    assert_eq!(run_command(&f, &["logs", "fo", "--follow"]), 0);
+    let f = started_running("fo", "echo first; sleep 0.2; echo second");
+    expect_exits(&f, "logs fo --follow => 0");
     let output = f.logs("fo");
     assert!(
         output.contains("first") && output.contains("second"),
@@ -168,27 +173,35 @@ fn logs_follow_returns_once_the_process_has_exited() {
 #[test]
 fn status_reports_known_nodes_only() {
     let f = Fixture::start();
-    assert_eq!(run_command(&f, &["run", "-n", "job", "true"]), 0);
-    assert_eq!(run_command(&f, &["wait", "job", "--timeout", "5"]), 0);
-    assert_eq!(run_command(&f, &["status", "job"]), 0);
-    assert_eq!(run_command(&f, &["status", "missing"]), 1);
+    expect_exits(
+        &f,
+        r#"
+        run -n job true => 0
+        wait job --timeout 5 => 0
+        status job => 0
+        status missing => 1
+        "#,
+    );
 }
 
 #[test]
 fn kill_terminates_the_node_and_rejects_unknown_names() {
     let f = Fixture::start();
-    assert_eq!(run_command(&f, &["run", "-n", "k", "sleep", "30"]), 0);
-    assert_eq!(run_command(&f, &["kill", "k"]), 0);
-    assert_eq!(run_command(&f, &["wait", "k", "--timeout", "5"]), 0);
+    expect_exits(
+        &f,
+        r#"
+        kill missing => 1
+        run -n k cat => 0
+        kill k => 0
+        wait k --timeout 5 => 0
+        "#,
+    );
     assert_eq!(f.node("k").state, NodeState::Exited);
-    assert_eq!(run_command(&f, &["kill", "missing"]), 1);
 }
 
 #[test]
 fn run_passes_dash_c_to_the_command() {
-    let f = Fixture::start();
-    let script = "echo dash-c-reached";
-    assert_eq!(run_command(&f, &["run", "-n", "rc", "sh", "-c", script]), 0);
-    assert_eq!(run_command(&f, &["wait", "rc", "--timeout", "5"]), 0);
+    let f = started_running("rc", "echo dash-c-reached");
+    expect_exits(&f, "wait rc --timeout 5 => 0");
     assert!(f.logs("rc").contains("dash-c-reached"));
 }

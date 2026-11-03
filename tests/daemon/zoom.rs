@@ -3,7 +3,7 @@
 use super::support::{TestDaemon, split_right, started_with, task};
 use mpx::client::Client;
 use mpx::layout::WindowTab;
-use mpx::protocol::NewWindowOpts;
+use mpx::protocol::{NewWindowOpts, SplitOpts};
 
 /// A daemon with a `left` pane and a focused `right` pane split off it.
 async fn two_panes() -> (TestDaemon, Client) {
@@ -134,4 +134,29 @@ async fn the_tab_reports_the_focused_pane_and_the_zoom() {
     let tab = tabs(&mut client).await.remove(0);
     assert!(tab.zoomed);
     assert_eq!(tab.focused.as_deref(), Some("right"));
+}
+
+#[tokio::test]
+async fn split_keep_zoom_keeps_a_zoomed_window_zoomed() {
+    let (_daemon, mut client) = two_panes().await;
+    zoom(&mut client, None, Some(true)).await;
+    client
+        .split(SplitOpts {
+            keep_zoom: true,
+            ..split_right("right", "third")
+        })
+        .await
+        .unwrap();
+    assert_zoomed(&mut client, true, "split-window -Z keeps the zoom").await;
+    assert_eq!(focused(&mut client).await.as_deref(), Some("third"));
+}
+
+#[tokio::test]
+async fn rotate_keep_zoom_keeps_a_zoomed_window_zoomed() {
+    let (_daemon, mut client) = two_panes().await;
+    zoom(&mut client, None, Some(true)).await;
+    client.rotate_window(false, true).await.unwrap();
+    assert_zoomed(&mut client, true, "rotate-window -Z keeps the zoom").await;
+    client.rotate_window(false, false).await.unwrap();
+    assert_zoomed(&mut client, false, "rotate-window unzooms").await;
 }

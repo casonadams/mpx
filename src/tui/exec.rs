@@ -26,7 +26,7 @@ enum Simple {
     KillWindow(Option<usize>),
     RenameWindow(String),
     FocusNext,
-    FocusLast,
+    FocusLast(bool),
     BreakPane,
     SelectLayout(Option<LayoutPreset>),
     SpreadLayout,
@@ -99,7 +99,8 @@ impl App {
                 argv,
                 cwd,
                 detach,
-            } => self.split_window(side_by_side, argv, cwd, detach).await,
+                keep_zoom,
+            } => self.split_window(side_by_side, argv, cwd, detach, keep_zoom).await,
             Command::NewWindow { name, argv, cwd } => self.new_window(name, argv, cwd).await,
             Command::KillPane { target } => self.kill_pane(target).await,
             Command::KillWindow { index } => match index.map(|i| i.checked_sub(self.config.base_index)) {
@@ -120,8 +121,8 @@ impl App {
                 }
             }
             Command::StepAlert { forward } => self.step_alert(forward).await,
-            Command::RotateWindow { down } => {
-                let result = self.client.rotate_window(down).await;
+            Command::RotateWindow { down, keep_zoom } => {
+                let result = self.client.rotate_window(down, keep_zoom).await;
                 self.settle(result)
             }
             Command::MoveWindow { to } => self.move_window(to).await,
@@ -136,8 +137,12 @@ impl App {
             Command::BreakPane => self.simple(Simple::BreakPane).await,
             Command::SelectLayout { preset } => self.simple(Simple::SelectLayout(preset)).await,
             Command::SpreadLayout => self.simple(Simple::SpreadLayout).await,
-            Command::SwapPane { next } => self.swap(next).await,
-            Command::SwapPaneMarked { source, target } => self.swap_marked(source, target).await,
+            Command::SwapPane { next, keep_zoom } => self.swap(next, keep_zoom).await,
+            Command::SwapPaneMarked {
+                source,
+                target,
+                keep_zoom,
+            } => self.swap_marked(source, target, keep_zoom).await,
             Command::MarkPane { target } => self.mark_pane(target.as_deref()).await,
             Command::ClearMark => self.clear_mark().await,
             other => return Err(other),
@@ -148,10 +153,10 @@ impl App {
     /// Pane focus, keys, resize and agent operations. Other commands come back as `Err`.
     async fn run_panes(&mut self, cmd: Command) -> Result<Flow, Command> {
         let flow = match cmd {
-            Command::SelectPane { target } => self.select_pane(target).await,
-            Command::SelectPaneDir { side } => self.select_dir(side).await,
+            Command::SelectPane { target, keep_zoom } => self.select_pane(target, keep_zoom).await,
+            Command::SelectPaneDir { side, keep_zoom } => self.select_dir(side, keep_zoom).await,
             Command::NextPane => self.simple(Simple::FocusNext).await,
-            Command::LastPane => self.simple(Simple::FocusLast).await,
+            Command::LastPane { keep_zoom } => self.simple(Simple::FocusLast(keep_zoom)).await,
             Command::ResizePane { side, cells } => self.resize(side, cells).await,
             Command::SendKeys { target, keys } => self.send_keys(target, keys).await,
             Command::CopyCommand {
@@ -184,13 +189,22 @@ impl App {
             Command::ShowOptions { name, value_only, quiet } => {
                 self.show_options(name.as_deref(), value_only, quiet).await
             }
-            Command::JoinPane { src, dst, side_by_side } => {
-                self.join_pane(src, dst, side_by_side).await
-            }
+            Command::JoinPane {
+                src,
+                dst,
+                side_by_side,
+                detach,
+            } => self.join_pane(src, dst, side_by_side, detach).await,
             Command::SwapWindow { src, dst } => self.swap_window(src, dst).await,
             Command::RespawnPane { target, kill, cwd, command } => {
                 self.respawn_pane(target, kill, cwd, command).await
             }
+            Command::RespawnWindow {
+                target,
+                kill,
+                cwd,
+                command,
+            } => self.respawn_window(target, kill, cwd, command).await,
             Command::Bind { table, key, line } => self.bind_key(table, &key, &line).await,
             Command::FindWindow { pattern } => self.find_window(&pattern).await,
             Command::Sequence(commands) => Box::pin(self.run_sequence(commands)).await,
@@ -342,6 +356,26 @@ impl App {
         self.settle(result)
     }
 
+    /// `respawn-window`: restarts every pane of the window (the active window unless numbered).
+    async fn respawn_window(
+        &mut self,
+        target: Option<usize>,
+        kill: bool,
+        cwd: Option<String>,
+        command: Vec<String>,
+    ) -> Flow {
+        let index = match target {
+            None => None,
+            Some(number) => match number.checked_sub(self.config.base_index) {
+                Some(index) => Some(index),
+                None => return self.say(format!("can't find window: {number}")),
+            },
+        };
+        let command = (!command.is_empty()).then_some(command);
+        let result = self.client.respawn_window(index, kill, cwd, command).await;
+        self.settle(result)
+    }
+
     /// `find-window`: the sessions and windows palette with `pattern` typed into its filter.
     async fn find_window(&mut self, pattern: &str) -> Flow {
         let view = super::overlay::PaletteView::new(
@@ -355,12 +389,18 @@ impl App {
 
     /// `join-pane`: moves `src` (the marked pane unless named) next to `dst` (the active pane
     /// unless named).
-    async fn join_pane(&mut self, src: Option<String>, dst: Option<String>, side_by_side: bool) -> Flow {
+    async fn join_pane(
+        &mut self,
+        src: Option<String>,
+        dst: Option<String>,
+        side_by_side: bool,
+        detach: bool,
+    ) -> Flow {
         let Some(src) = src.or_else(|| self.layout.marked_pane_global().map(str::to_string)) else {
             return self.say("no marked pane");
         };
         let dst = dst.unwrap_or_else(|| self.active_pane.clone());
-        let result = self.client.join_pane(&src, &dst, side_by_side).await;
+        let result = self.client.join_pane(&src, &dst, side_by_side, detach).await;
         self.settle(result)
     }
 
@@ -521,7 +561,7 @@ impl App {
             Simple::KillWindow(index) => self.client.kill_window(index).await,
             Simple::RenameWindow(name) => self.client.rename_window(None, &name).await,
             Simple::FocusNext => self.client.next_pane().await,
-            Simple::FocusLast => self.client.focus_last().await,
+            Simple::FocusLast(keep_zoom) => self.client.focus_last_with(keep_zoom).await,
             Simple::BreakPane => {
                 let pane = self.active_pane.clone();
                 self.client.break_pane(&pane).await
@@ -550,7 +590,7 @@ impl App {
         }
     }
 
-    async fn select_pane(&mut self, target: String) -> Flow {
+    async fn select_pane(&mut self, target: String, keep_zoom: bool) -> Flow {
         let (session, pane) = split_target(&target);
         let (session, pane) = (session.map(str::to_string), pane.to_string());
         if let Some(other) = session.filter(|s| *s != self.session)
@@ -558,14 +598,14 @@ impl App {
         {
             return self.say(e);
         }
-        let result = self.client.focus(&pane).await;
+        let result = self.client.focus_with(&pane, keep_zoom).await;
         self.settle(result)
     }
 
-    async fn select_dir(&mut self, side: Side) -> Flow {
+    async fn select_dir(&mut self, side: Side, keep_zoom: bool) -> Flow {
         match find_directional(&self.panes, &self.active_pane, side) {
             Some(pane) => {
-                let result = self.client.focus(&pane).await;
+                let result = self.client.focus_with(&pane, keep_zoom).await;
                 self.settle(result)
             }
             None => Flow::Continue,
@@ -578,6 +618,7 @@ impl App {
         argv: Vec<String>,
         cwd: Option<String>,
         detach: bool,
+        keep_zoom: bool,
     ) -> Flow {
         let name = self.fresh_name("pane");
         let spawn = self.spawn_opts(name, argv, cwd).await;
@@ -591,6 +632,7 @@ impl App {
             },
             percent: None,
             focus: !detach,
+            keep_zoom,
         };
         let result = self.client.split(opts).await;
         self.settle(result)
@@ -673,22 +715,30 @@ impl App {
         self.settle(result)
     }
 
-    async fn swap(&mut self, next: bool) -> Flow {
+    async fn swap(&mut self, next: bool, keep_zoom: bool) -> Flow {
         let Some(other) = neighbor_pane(&self.layout.raw, &self.active_pane, next) else {
             return Flow::Continue;
         };
         let active = self.active_pane.clone();
-        let result = self.client.swap_pane(&active, &other).await;
+        let result = self
+            .client
+            .swap_pane_with(Some(active.as_str()), Some(other.as_str()), keep_zoom)
+            .await;
         self.settle(result)
     }
 
-    async fn swap_marked(&mut self, source: Option<String>, target: Option<String>) -> Flow {
+    async fn swap_marked(
+        &mut self,
+        source: Option<String>,
+        target: Option<String>,
+        keep_zoom: bool,
+    ) -> Flow {
         if source.is_none() && target.is_none() && self.layout.marked_pane_global().is_none() {
             return self.say("no marked pane");
         }
         let result = self
             .client
-            .swap_pane_targets(source.as_deref(), target.as_deref())
+            .swap_pane_targets(source.as_deref(), target.as_deref(), keep_zoom)
             .await;
         self.settle(result)
     }
@@ -797,6 +847,7 @@ impl App {
         let size = self.copy_pane_size(name);
         let grid = self.vt.get(name).map(|vt| vt.grid());
         let mut outcome = CopyOutcome::Stay;
+        cs.wrap_search = self.config.wrap_search;
         for _ in 0..count.max(1) {
             outcome = apply_action(&mut cs, action, grid, size);
             if outcome != CopyOutcome::Stay {

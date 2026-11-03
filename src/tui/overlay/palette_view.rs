@@ -327,7 +327,10 @@ fn collect_pane_row(
             subtitle: pane.program.clone(),
             shortcut: Some(format!("%{}", pane.id)),
             badge: None,
-            actions: vec![Command::SelectPane { target }],
+            actions: vec![Command::SelectPane {
+                target,
+                keep_zoom: false,
+            }],
         });
     }
 }

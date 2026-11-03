@@ -396,8 +396,9 @@ impl Client {
         &mut self,
         a: Option<&str>,
         b: Option<&str>,
+        keep_zoom: bool,
     ) -> Result<(), String> {
-        self.swap_pane_with(a, b, false).await
+        self.swap_pane_with(a, b, keep_zoom).await
     }
 
     /// `keep_zoom` (tmux `swap-pane -Z`) leaves a zoomed window zoomed.
@@ -443,8 +444,8 @@ impl Client {
     }
 
     /// Rotates the active window's panes through its layout slots (`rotate-window`).
-    pub async fn rotate_window(&mut self, down: bool) -> Result<(), String> {
-        self.call_ok("RotateWindow", Request::RotateWindow { down })
+    pub async fn rotate_window(&mut self, down: bool, keep_zoom: bool) -> Result<(), String> {
+        self.call_ok("RotateWindow", Request::RotateWindow { down, keep_zoom })
             .await
     }
 
@@ -521,13 +522,16 @@ impl Client {
     }
 
     /// Moves pane `src` next to `dst`, splitting it side by side or stacked.
-    pub async fn join_pane(&mut self, src: &str, dst: &str, side_by_side: bool) -> Result<(), String> {
-        let req = Request::JoinPane {
-            src: src.to_string(),
-            dst: dst.to_string(),
-            side_by_side,
-        };
-        self.call_ok("JoinPane", req).await
+    pub async fn join_pane(
+        &mut self,
+        src: &str,
+        dst: &str,
+        side_by_side: bool,
+        detach: bool,
+    ) -> Result<(), String> {
+        let src = src.into();
+        let dst = dst.into();
+        self.call_ok("JoinPane", Request::JoinPane { src, dst, side_by_side, detach }).await
     }
 
     pub async fn swap_window(&mut self, a: usize, b: usize) -> Result<(), String> {
@@ -549,6 +553,23 @@ impl Client {
             command,
         };
         self.call_ok("Respawn", req).await
+    }
+
+    /// Restarts every pane of a window (`respawn-window`); see `Request::RespawnWindow`.
+    pub async fn respawn_window(
+        &mut self,
+        index: Option<usize>,
+        kill: bool,
+        cwd: Option<String>,
+        command: Option<Vec<String>>,
+    ) -> Result<(), String> {
+        let req = Request::RespawnWindow {
+            index,
+            kill,
+            cwd,
+            command,
+        };
+        self.call_ok("RespawnWindow", req).await
     }
 
     /// Recreates the session from its last snapshot.
