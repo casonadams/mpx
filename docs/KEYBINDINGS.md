@@ -83,6 +83,24 @@ A popup (`display-popup [-E] [-w W] [-h H] [-x X] [-y Y] [-T title] [-d dir] [-t
 
 ---
 
+## Mouse
+
+These need `mouse = true` (the default). With `mouse = false` mpx ignores mouse events. In a read-only attach (`mpx attach -r`) right click opens no menu and middle click pastes nothing.
+
+- Left click focuses the pane under the pointer. Left drag selects text from the press point, and releasing copies it to the clipboard.
+- Drag a split border to resize the panes on either side of it.
+- Scroll wheel enters copy mode and scrolls the history.
+- Middle click pastes the top paste buffer into the pane under the pointer (`paste-buffer`), focusing that pane first.
+- Right click opens a menu for what is under the pointer. Its items are the same commands as the keys above, and a menu closes with `q` or Esc, as the popup menus below do:
+  - a pane (the pane is focused first): horizontal and vertical split, swap up and down, kill, respawn, mark or unmark, zoom or unzoom, disable or enable input (`select-pane -d`/`-e`), break out;
+  - a window tab (the window is selected first): rename, kill, respawn, new window;
+  - the session name in `status-left` or `status-right`: next and previous session, new window, choose tree, detach;
+  - a split border: the layouts (even horizontal and vertical, main horizontal and vertical, tiled, spread out).
+
+In copy mode the active pane keeps the mouse for its own selection, so a right click there opens no menu.
+
+---
+
 ## Changing bindings while running
 
 `:bind-key [-n] key command...` and `:unbind-key [-n] key` change the keymap of the running session at once, in every attached terminal; a terminal attaching later picks them up too. `-n` binds without the prefix. Chain commands with `\;` (`:bind r reload-config \; display-message reloaded`). Bindings last until the daemon stops; put lasting ones in `[bind]` / `[bind_root]` of `config.toml`. Only the commands in the table below are available; others fail with `unknown command`.
@@ -119,6 +137,7 @@ Vim-style command line on the status row. Supports tab-completion, history (`Up`
 | `kill-window [-t INDEX]` | `killw` | Close window |
 | `kill-server` | `qa` | Terminate session daemon |
 | `select-pane [-t TARGET] [-Z] [-m\|-M] \| -L/-R/-U/-D` | `selectp` | Move pane focus (`-Z` keeps a zoomed window zoomed) |
+| `select-pane [-t TARGET] -d\|-e` | `selectp` | Turn a pane's input off (`-d`: keys sent to it are dropped) or back on (`-e`) |
 | `resize-pane -L/-R/-U/-D [N]`, `resize-pane -Z` | `resizep` | Resize / zoom |
 | `link-window`, `unlink-window`, `resize-window` | | Refused: a window cannot be linked elsewhere, and a window has no size of its own (see [CLI.md](CLI.md#windows-and-layout)) |
 | `choose-tree` | | Interactive session/window tree |
