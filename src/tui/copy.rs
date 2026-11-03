@@ -195,6 +195,22 @@ impl CopyState {
         self.scroll_offset == 0
     }
 
+    /// Keeps the copy position through a resize of its pane (`grid` is the rebuilt screen, `old_hist`
+    /// the history it had): the view stays on the same lines, moved by the change in history (rows
+    /// pulled back from it, or pushed into it), and the cursor stays on the screen. A width change
+    /// reflows the lines, so the mark, a row number, no longer names its line and is dropped.
+    pub fn resized(&mut self, old_hist: usize, grid: &Grid, reflowed: bool) {
+        let hist = grid.history_len();
+        self.scroll_offset = (self.scroll_offset + hist).saturating_sub(old_hist).min(hist);
+        let last_col = grid.cols.saturating_sub(1);
+        self.cursor_x = self.cursor_x.min(last_col);
+        self.anchor_x = self.anchor_x.min(last_col);
+        self.cursor_y = self.cursor_y.min(grid.rows.saturating_sub(1));
+        if reflowed {
+            self.mark = None;
+        }
+    }
+
     pub fn scroll_to_match(
         &mut self,
         match_x: usize,

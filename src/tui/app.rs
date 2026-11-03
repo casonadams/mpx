@@ -556,6 +556,11 @@ impl App {
     }
 
     async fn sync_pane_sizes(&mut self) {
+        let before: HashMap<String, (usize, usize)> = self
+            .vt
+            .iter()
+            .map(|(name, vt)| (name.clone(), (vt.grid().history_len(), vt.grid().cols)))
+            .collect();
         sync_dims(
             &mut self.client,
             &self.panes,
@@ -564,6 +569,25 @@ impl App {
             &mut self.expected,
         )
         .await;
+        self.keep_copy_positions(&before);
+    }
+
+    /// Copy-mode positions of panes resized by `sync_pane_sizes` follow their lines through the
+    /// rebuilt screens; `before` holds each pane's history length and width before the resize.
+    fn keep_copy_positions(&mut self, before: &HashMap<String, (usize, usize)>) {
+        for (name, &(old_hist, old_cols)) in before {
+            let Some(grid) = self.vt.get(name).map(VtScreen::grid) else {
+                continue;
+            };
+            let reflowed = grid.cols != old_cols;
+            let copy = match &mut self.mode {
+                Mode::Copy(cs) if *name == self.active_pane => Some(cs),
+                _ => self.parked_copy.get_mut(name),
+            };
+            if let Some(cs) = copy {
+                cs.resized(old_hist, grid, reflowed);
+            }
+        }
     }
 
     /// A pane coming into focus gets its size checked: if something else resized its terminal,

@@ -272,3 +272,72 @@ async fn stdout_updating_in_copy_mode_anchors_viewport_and_selection() {
         "leaving copy mode shows live screen: {live_frame}"
     );
 }
+
+/// Runs `line` as typed at the `:` prompt, as `copy_commands` does.
+async fn run_line_as_typed(h: &mut Harness, line: &str) {
+    let cmd = mpx::tui::command::parse(line).expect("a command");
+    h.app.run(cmd).await;
+}
+
+/// Splits the main pane with a pane below it, then enters copy mode in the main pane at the top of
+/// its history.
+async fn copy_at_top_of_split_main(h: &mut Harness) {
+    split(&mut h.probe, MAIN, "below", Direction::Vertical).await;
+    h.frame().await;
+    h.prefixed_char('[').await;
+    for _ in 0..30 {
+        h.mouse(MouseEventKind::ScrollUp, 5, 5).await;
+    }
+}
+
+#[tokio::test]
+async fn a_copy_pane_that_grows_stays_at_the_top_of_its_history() {
+    let mut h = Harness::started(&long_output()).await;
+    h.frame().await;
+    copy_at_top_of_split_main(&mut h).await;
+    let before = history_of(&h);
+    let top = h.frame().await;
+    assert!(top.contains(&format!("COPY -{before}/{before}")), "{top}");
+
+    h.probe.kill("below").await.expect("kill below");
+    let frame = h.frame().await;
+    let after = history_of(&h);
+    assert!(after < before, "growing pulls history rows back onto the screen");
+    assert!(frame.contains(&format!("COPY -{after}/{after}")), "{frame}");
+}
+
+#[tokio::test]
+async fn a_mark_in_copy_mode_still_points_at_its_line_after_a_resize() {
+    let mut h = Harness::started(&long_output()).await;
+    h.frame().await;
+    copy_at_top_of_split_main(&mut h).await;
+    run_line_as_typed(&mut h, "send-keys -X set-mark").await;
+    h.probe.kill("below").await.expect("kill below");
+    h.frame().await;
+
+    let Mode::Copy(cs) = &h.app.mode else {
+        panic!("the pane is still in copy mode");
+    };
+    let grid = h.app.active_vt().expect("the pane's screen").grid();
+    let marked = cs
+        .mark
+        .and_then(|row| grid.abs_at(row))
+        .and_then(|line| grid.line_text(line));
+    assert_eq!(marked.as_deref().map(str::trim_end), Some("line 1"));
+}
+
+#[tokio::test]
+async fn a_mark_is_dropped_when_a_resize_reflows_the_copy_pane() {
+    let mut h = Harness::started(&long_output()).await;
+    h.frame().await;
+    h.prefixed_char('[').await;
+    run_line_as_typed(&mut h, "send-keys -X set-mark").await;
+    assert!(matches!(&h.app.mode, Mode::Copy(cs) if cs.mark.is_some()));
+
+    split(&mut h.probe, MAIN, "side", Direction::Horizontal).await;
+    h.frame().await;
+    assert!(
+        matches!(&h.app.mode, Mode::Copy(cs) if cs.mark.is_none()),
+        "a row number no longer names its line once the lines reflow"
+    );
+}
