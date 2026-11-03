@@ -149,6 +149,19 @@ pub fn terminal_name() -> String {
     )
 }
 
+/// The process id of this process's parent, the shell a client was started from: `attach -x` hangs
+/// it up. None on Windows, where there is no such signal.
+#[cfg(unix)]
+pub fn parent_pid() -> Option<u32> {
+    // SAFETY: getppid(2) only reads the process table entry of this process.
+    u32::try_from(unsafe { libc::getppid() }).ok()
+}
+
+#[cfg(not(unix))]
+pub fn parent_pid() -> Option<u32> {
+    None
+}
+
 #[cfg(unix)]
 fn tty_path(fd: i32) -> Option<String> {
     let mut buf = [0u8; 256];

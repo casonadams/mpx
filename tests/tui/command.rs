@@ -1,8 +1,11 @@
-use mpx::protocol::{LayoutPreset, Side};
+use std::collections::BTreeMap;
+
+use mpx::layout::LinkPlace;
+use mpx::protocol::{LayoutPreset, LinkOpts, ResizeOpts, Side, UnlinkOpts, WindowFit};
 use mpx::tui::command::{BufferCommand, EnvCommand};
 use mpx::tui::command::{
-    ClientCommand, Command, CopyModeOpts, PaneCommand, PromptSpec, SessionCommand, WindowCommand,
-    parse, split_words,
+    ClientCommand, Command, CopyModeOpts, JoinOpts, PaneCommand, PromptSpec, SessionCommand,
+    WindowCommand, parse, parse_scoped, split_words,
 };
 use mpx::tui::keymap::Table;
 use mpx::tui::prompt::PromptKind;
@@ -94,14 +97,21 @@ fn new_window_and_aliases() {
     }
 }
 
+/// `next-window` (`forward`) or `previous-window`, with `alert` for the `-a` form.
+fn step(forward: bool, alert: bool) -> Command {
+    Command::Window(WindowCommand::StepWindow { forward, alert })
+}
+
 #[test]
 fn window_navigation_names_and_aliases() {
-    assert_eq!(ok("next-window"), Command::Window(WindowCommand::NextWindow));
-    assert_eq!(ok("tabnext"), Command::Window(WindowCommand::NextWindow));
-    assert_eq!(ok("tabn"), Command::Window(WindowCommand::NextWindow));
-    assert_eq!(ok("previous-window"), Command::Window(WindowCommand::PrevWindow));
-    assert_eq!(ok("tabprevious"), Command::Window(WindowCommand::PrevWindow));
-    assert_eq!(ok("tabp"), Command::Window(WindowCommand::PrevWindow));
+    let next = step(true, false);
+    let prev = step(false, false);
+    assert_eq!(ok("next-window"), next);
+    assert_eq!(ok("tabnext"), next);
+    assert_eq!(ok("tabn"), next);
+    assert_eq!(ok("previous-window"), prev);
+    assert_eq!(ok("tabprevious"), prev);
+    assert_eq!(ok("tabp"), prev);
     assert_eq!(ok("last-window"), Command::Window(WindowCommand::LastWindow));
     assert_eq!(
         ok("select-window -t 3"),
@@ -430,11 +440,8 @@ fn select_window_by_name_resolves_against_the_window_tabs() {
 
 #[test]
 fn next_and_previous_window_with_a_step_to_an_alert() {
-    assert_eq!(ok("next-window -a"), Command::Window(WindowCommand::StepAlert { forward: true }));
-    assert_eq!(
-        ok("previous-window -a"),
-        Command::Window(WindowCommand::StepAlert { forward: false })
-    );
+    assert_eq!(ok("next-window -a"), step(true, true));
+    assert_eq!(ok("previous-window -a"), step(false, true));
 }
 
 #[test]
@@ -443,11 +450,63 @@ fn unknown_command_and_unknown_option_are_reported() {
     assert!(err("split-window -x").contains("unknown option -x"));
     assert!(err("kill-pane extra").contains("unexpected argument 'extra'"));
     assert!(err("   ").contains("empty command"));
-    assert!(err("link-window -s a -t 2").contains("not supported"));
-    assert!(err("unlink-window").contains("nothing to unlink"));
-    assert!(err("resize-window -x 10").contains("attached terminal"));
+    assert!(err("link-window -s a -t 2").contains("invalid window index 'a'"));
+    assert!(err("link-window -s other:1 -t 2").contains("another session"));
+    assert!(err("resize-window -a -A").contains("cannot be given together"));
 }
 
+#[test]
+fn link_unlink_and_resize_window_parse_their_flags() {
+    assert_eq!(
+        ok("unlink-window -k -t 2"),
+        Command::Window(WindowCommand::UnlinkWindow(UnlinkOpts {
+            index: Some(2),
+            kill: true,
+        }))
+    );
+    assert_eq!(
+        ok("link-window -s 1 -t 4 -a -k"),
+        Command::Window(WindowCommand::LinkWindow(LinkOpts {
+            src: Some(1),
+            dst: Some(4),
+            place: LinkPlace {
+                after: true,
+                before: false,
+                kill: true,
+                detached: false,
+            },
+        }))
+    );
+    assert!(matches!(
+        ok("resize-window -A -x 90 -y 30"),
+        Command::Window(WindowCommand::ResizeWindow(ResizeOpts { index: None, resize }))
+            if resize.width == Some(90)
+                && resize.height == Some(30)
+                && resize.fit == Some(WindowFit::Largest)
+    ));
+    assert!(matches!(
+        ok("resize-window -R 5"),
+        Command::Window(WindowCommand::ResizeWindow(ResizeOpts { resize, .. }))
+            if resize.side == Some(Side::Right) && resize.cells == Some(5)
+    ));
+}
+
+#[test]
+fn link_window_takes_this_sessions_name_and_refuses_others() {
+    let aliases = BTreeMap::new();
+    let linked = parse_scoped("link-window -s work:1 -t 2", &aliases, "work").unwrap();
+    assert_eq!(
+        linked,
+        Command::Window(WindowCommand::LinkWindow(LinkOpts {
+            src: Some(1),
+            dst: Some(2),
+            place: LinkPlace::default(),
+        }))
+    );
+    let refused = parse_scoped("link-window -s other:1", &aliases, "work").unwrap_err();
+    assert!(refused.contains("another session"), "{refused}");
+}
+ 
 #[test]
 fn split_words_honours_quotes_and_escapes() {
     assert_eq!(
@@ -704,26 +763,22 @@ fn show_options_takes_an_optional_name() {
     assert!(err("show a b").contains("too many"));
 }
 
+/// The `join-pane` command with the given source, destination and flags.
+fn joined(src: Option<&str>, dst: Option<&str>, side_by_side: bool, detach: bool) -> Command {
+    Command::Pane(PaneCommand::JoinPane(JoinOpts {
+        src: src.map(Into::into),
+        dst: dst.map(Into::into),
+        side_by_side,
+        detach,
+    }))
+}
+
 #[test]
 fn pane_and_window_moves_parse_their_flags() {
-    assert_eq!(
-        ok("join-pane -h -s a -t b"),
-        Command::Pane(PaneCommand::JoinPane {
-            src: Some("a".into()),
-            dst: Some("b".into()),
-            side_by_side: true,
-            detach: false,
-        })
-    );
-    assert_eq!(
-        ok("joinp"),
-        Command::Pane(PaneCommand::JoinPane {
-            src: None,
-            dst: None,
-            side_by_side: false,
-            detach: false,
-        })
-    );
+    assert_eq!(ok("join-pane -h -s a -t b"), joined(Some("a"), Some("b"), true, false));
+    assert_eq!(ok("joinp"), joined(None, None, false, false));
+    assert_eq!(ok("movep -d"), joined(None, None, false, true));
+    assert!(err("join-pane -b").contains("unknown option -b"));
     assert_eq!(
         ok("swap-window -t 2"),
         Command::Window(WindowCommand::SwapWindow { src: None, dst: 2 })
@@ -737,15 +792,35 @@ fn pane_and_window_moves_parse_their_flags() {
     );
     assert!(err("swap-window").contains("need -t"));
     assert!(err("swap-window -t x").contains("invalid window index"));
+    let hi = vec!["sh".into(), "-c".into(), "echo hi".into()];
     assert_eq!(
         ok("respawn-pane -k -c /tmp -t p sh -c 'echo hi'"),
         Command::Pane(PaneCommand::RespawnPane {
             target: Some("p".into()),
             kill: true,
             cwd: Some("/tmp".into()),
-            command: vec!["sh".into(), "-c".into(), "echo hi".into()],
+            command: hi.clone(),
         })
     );
+    assert_eq!(
+        ok("respawn-window -k -c /tmp -t 2 sh -c 'echo hi'"),
+        Command::Window(WindowCommand::RespawnWindow {
+            target: Some(2),
+            kill: true,
+            cwd: Some("/tmp".into()),
+            command: hi,
+        })
+    );
+    assert_eq!(
+        ok("respawnw"),
+        Command::Window(WindowCommand::RespawnWindow {
+            target: None,
+            kill: false,
+            cwd: None,
+            command: vec![],
+        })
+    );
+    assert!(err("respawn-window -t x").contains("invalid window index"));
     assert_eq!(
         ok("find-window -i vim"),
         Command::Window(WindowCommand::FindWindow {
@@ -886,50 +961,4 @@ fn capture_pane_and_environment_commands_parse() {
         env_of("show-environment FOO"),
         EnvCommand::ShowEnvironment { name: Some(n) } if n == "FOO"
     ));
-}
-
-#[test]
-fn move_pane_is_join_pane_and_join_pane_detaches_with_d() {
-    assert_eq!(
-        ok("move-pane -h -s a -t b"),
-        Command::Pane(PaneCommand::JoinPane {
-            src: Some("a".into()),
-            dst: Some("b".into()),
-            side_by_side: true,
-            detach: false,
-        })
-    );
-    assert_eq!(
-        ok("movep -d"),
-        Command::Pane(PaneCommand::JoinPane {
-            src: None,
-            dst: None,
-            side_by_side: false,
-            detach: true,
-        })
-    );
-    assert!(err("join-pane -b").contains("unknown option -b"));
-}
-
-#[test]
-fn respawn_window_takes_a_window_index_kill_cwd_and_command() {
-    assert_eq!(
-        ok("respawn-window -k -c /tmp -t 2 sh -c 'echo hi'"),
-        Command::Window(WindowCommand::RespawnWindow {
-            target: Some(2),
-            kill: true,
-            cwd: Some("/tmp".into()),
-            command: vec!["sh".into(), "-c".into(), "echo hi".into()],
-        })
-    );
-    assert_eq!(
-        ok("respawnw"),
-        Command::Window(WindowCommand::RespawnWindow {
-            target: None,
-            kill: false,
-            cwd: None,
-            command: vec![],
-        })
-    );
-    assert!(err("respawn-window -t x").contains("invalid window index"));
 }

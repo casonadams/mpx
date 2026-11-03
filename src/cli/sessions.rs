@@ -130,6 +130,7 @@ async fn session_command(command: Commands, r: Resolved) -> Result<i32, String> 
         } => {
             let attach_opts = AttachOpts {
                 exclusive: detach_others || exclusive,
+                hangup: exclusive,
                 read_only,
             };
             attach(&r, target, force, attach_opts).await

@@ -24,10 +24,10 @@ use crate::node::pane::{PaneHandle, ask_actor};
 use crate::node::sink::Sink;
 use crate::node::now_ms;
 use crate::node::pacing::{Backlog, CloseOnDrop, Pacing};
-use crate::protocol::{ClientInfo, DaemonMessage, Request, Response, StreamEvent};
+use crate::protocol::{DaemonMessage, Request, Response, StreamEvent};
 use crate::wire;
 use idempotency::Claim;
-use session::{Filter, HookMsg, Origin, SessionMsg};
+use session::{Filter, HookMsg, Origin, SessionMsg, Subscription};
 
 pub(super) const KILL_GRACE: Duration = Duration::from_secs(2);
 pub(super) const SESSION_GONE: &str = "Session is unavailable";
@@ -114,21 +114,9 @@ impl DaemonState {
         .await?
     }
 
-    async fn subscribe(
-        &self,
-        filter: Filter,
-        sink: Sink,
-        client: Option<ClientInfo>,
-        exclusive: bool,
-    ) -> Result<(), String> {
-        self.ask(|reply| SessionMsg::Subscribe {
-            filter,
-            sink,
-            client,
-            exclusive,
-            reply,
-        })
-        .await
+    async fn subscribe(&self, sub: Subscription, sink: Sink) -> Result<(), String> {
+        self.ask(|reply| SessionMsg::Subscribe { sub, sink, reply })
+            .await
     }
 
     async fn idem_begin(&self, key: &str) -> Result<Claim<Response>, String> {
@@ -277,6 +265,7 @@ async fn subscribe_node<S: AsyncStream>(
         layout,
         client,
         exclusive,
+        hangup,
     } = request
     else {
         return;
@@ -293,7 +282,19 @@ async fn subscribe_node<S: AsyncStream>(
         }
         (None, Some(_)) => Err("since requires a node name".to_string()),
         (Some(name), since) => state.subscribe_node(name, since, sink).await,
-        (None, None) => state.subscribe(session_wide, sink, client, exclusive).await,
+        (None, None) => {
+            state
+                .subscribe(
+                    Subscription {
+                        filter: session_wide,
+                        client,
+                        exclusive,
+                        hangup,
+                    },
+                    sink,
+                )
+                .await
+        }
     };
     let attached = terminal && registered.is_ok();
     if attached {

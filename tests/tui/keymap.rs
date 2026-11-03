@@ -213,7 +213,10 @@ fn config_bind_root_rebinds_and_an_empty_command_unbinds() {
     let keymap = resolve(&config).unwrap();
     assert_eq!(
         command_in(&keymap, Table::Root, &alt('n')),
-        Some(Command::Window(WindowCommand::NextWindow))
+        Some(Command::Window(WindowCommand::StepWindow {
+            forward: true,
+            alert: false,
+        }))
     );
     assert_eq!(command_of(&keymap, &key('.')), None, "unbound prefix key");
 }
@@ -354,7 +357,10 @@ fn tmux_default_resize_and_layout_keys_are_bound() {
     ));
     assert!(matches!(
         bound(alt('n')),
-        Some(Command::Window(WindowCommand::StepAlert { forward: true }))
+        Some(Command::Window(WindowCommand::StepWindow {
+            forward: true,
+            alert: true,
+        }))
     ));
 }
 

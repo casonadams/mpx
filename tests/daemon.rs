@@ -12,6 +12,7 @@ mod daemon {
     mod idempotent;
     mod input;
     mod layout;
+    mod links;
     mod lifecycle;
     mod logs;
     mod moves;

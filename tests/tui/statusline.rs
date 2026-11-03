@@ -27,6 +27,7 @@ fn tab(index: usize, name: &str, active: bool) -> WindowTab {
         zoomed: false,
         has_silence: false,
         synchronized: false,
+        linked: vec![index],
     }
 }
 

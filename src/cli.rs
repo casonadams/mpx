@@ -21,8 +21,8 @@ pub use sessions::{
     RestoreOutcome, apply_key, daemon_args, restore_session, run_cli,
 };
 pub use windows::{
-    PaneCommands, PaneMoveCommands, RespawnCommands, ResizeCommands, UnsupportedWindowCommands,
-    WindowCommands, WindowOrderCommands,
+    PaneCommands, PaneMoveCommands, RespawnCommands, ResizeCommands, WindowCommands,
+    WindowLinkCommands, WindowOrderCommands,
 };
 
 /// Process entry point behind the `mpx` binary: tracing, clap parsing and dispatch.
@@ -131,7 +131,7 @@ pub enum Commands {
         #[arg(short = 'd', long = "detach-others")]
         detach_others: bool,
 
-        /// Like -d (tmux -x; mpx does not signal the other clients' terminals)
+        /// Like -d, and on Unix send SIGHUP to the other clients' parent processes (tmux attach -x)
         #[arg(short = 'x', long = "exclusive")]
         exclusive: bool,
 
@@ -293,9 +293,9 @@ pub enum Commands {
     #[command(flatten)]
     WindowOrder(WindowOrderCommands),
 
-    /// Window commands mpx refuses (link-window, unlink-window, resize-window)
+    /// Window links and window sizes (link-window, unlink-window, resize-window)
     #[command(flatten)]
-    Unsupported(UnsupportedWindowCommands),
+    WindowLink(WindowLinkCommands),
 
     /// Focus a specific pane
     Focus {

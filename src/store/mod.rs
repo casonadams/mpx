@@ -58,6 +58,10 @@ pub struct WindowSnapshot {
     pub layout: LayoutNode,
     pub focused: Option<String>,
     pub panes: Vec<PaneSnapshot>,
+    /// The entry whose window this index shows, when the window is linked at several indices. Such
+    /// an entry saves no panes: they are the earlier entry's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shares: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -103,4 +107,7 @@ pub struct WindowPlan {
     /// Pane name -> the command line to type into its shell once it starts. A tool that ran inside
     /// a shell resumes this way, so quitting it leaves the shell, as it did before.
     pub startup_input: std::collections::BTreeMap<String, String>,
+    /// The index into `RestorePlan::windows` of the window this index shows, when it is linked at
+    /// several indices. Such a plan spawns nothing: the window is restored once, there.
+    pub shares: Option<usize>,
 }

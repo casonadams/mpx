@@ -53,6 +53,8 @@ pub struct PaneView {
     pub rect: Option<Rect>,
     pub window_active: bool,
     pub window_last: bool,
+    /// The indices the window is linked at, in number order; one entry unless it is linked elsewhere.
+    pub window_links: Vec<usize>,
     pub window_activity: bool,
     pub window_bell: bool,
     /// The window holds the marked pane.
@@ -663,7 +665,14 @@ fn terminal_vars(p: &PaneView, vars: &mut Vars) {
 /// The variables of a session with no pane to describe: its name, times and the host's.
 pub fn session_vars(session: &str, times: SessionTimes, attached: usize) -> Vars {
     let mut vars = Vars::from([("session_name", session.to_string())]);
-    shared_vars(&mut vars, &SessionScope { session, times, attached });
+    shared_vars(
+        &mut vars,
+        &SessionScope {
+            session,
+            times,
+            attached,
+        },
+    );
     vars
 }
 
@@ -702,6 +711,8 @@ fn pane_window_vars(p: &PaneView, vars: &mut Vars) {
     vars.insert("window_bell_flag", flag(p.window_bell));
     vars.insert("window_silence_flag", flag(p.window_silence));
     vars.insert("window_last_flag", flag(p.window_last));
+    vars.insert("window_linked", flag(p.window_links.len() > 1));
+    vars.insert("window_linked_sessions_list", linked_sessions(p));
     vars.insert("window_marked_flag", flag(p.window_marked));
     vars.insert("pane_synchronized", flag(p.synchronized));
 }
@@ -831,6 +842,16 @@ impl From<&PaneView> for WindowFlags {
     }
 }
 
+/// `window_linked_sessions_list`: the names of the sessions a window is linked into, each once. This
+/// daemon has one session, so it is that session's name while the window has an index, else empty.
+fn linked_sessions(p: &PaneView) -> String {
+    if p.window_links.is_empty() {
+        String::new()
+    } else {
+        p.session.clone()
+    }
+}
+
 fn window_flags(p: &PaneView) -> String {
     WindowFlags::from(p).render()
 }
@@ -853,6 +874,7 @@ fn apply_tab(view: &mut PaneView, tab: Option<&WindowTab>) {
     view.window_zoomed = tab.is_some_and(|t| t.zoomed);
     view.window_silence = tab.is_some_and(|t| t.has_silence);
     view.synchronized = tab.is_some_and(|t| t.synchronized);
+    view.window_links = tab.map(|t| t.linked.clone()).unwrap_or_default();
 }
 
 /// View of one pane from its node position, the current layout rectangles and the window tabs.
@@ -882,7 +904,9 @@ pub fn pane_view(
         path: node.cwd.clone().unwrap_or_default(),
         width,
         height,
-        active: tab.map_or(layout_active, |t| t.focused.as_deref() == Some(node.name.as_str())),
+        active: tab.map_or(layout_active, |t| {
+            t.focused.as_deref() == Some(node.name.as_str())
+        }),
         dead: !node.is_running(),
         marked,
         marked_set: tabs.iter().any(|t| t.has_marked) || marked,

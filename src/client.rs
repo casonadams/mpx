@@ -3,12 +3,13 @@ use tokio::sync::mpsc;
 use tokio_util::codec::{Framed, FramedParts, LengthDelimitedCodec, LinesCodec};
 
 use crate::ipc::{IpcStream, connect_stream};
-use crate::layout::{Divider, Rect, WindowTab};
+use crate::layout::{Divider, LinkPlace, Rect, WindowTab};
 use crate::protocol::{
     Buffer, BufferRequest, ClientInfo, ClientRequest, ClientTarget, DaemonMessage, EnvChange,
-    EnvEntry, LayoutPreset, NewWindowOpts, NodeInfo, NodeRequest, PROTOCOL, PaneRequest,
-    PasteBufferOpts, Request, Response, ScriptRequest, SessionInfo, SessionRequest, Side,
-    SpawnOpts, SplitOpts, StreamEvent, WaitCondition, WaitOutcome, WindowRequest,
+    EnvEntry, LayoutPreset, LinkOpts, NewWindowOpts, NodeInfo, NodeRequest, PROTOCOL,
+    PaneRequest, PasteBufferOpts, Request, ResizeOpts, Response, ScriptRequest, SessionInfo,
+    SessionRequest, Side, SpawnOpts, SplitOpts, StreamEvent, UnlinkOpts, WaitCondition,
+    WaitOutcome, WindowRequest, WindowResize,
 };
 use crate::vt::capture::CaptureSpec;
 use crate::wire;
@@ -73,6 +74,7 @@ fn json_subscription(name: Option<String>, since: Option<u64>) -> Request {
         layout: false,
         client: None,
         exclusive: false,
+        hangup: false,
     }
 }
 
@@ -733,6 +735,39 @@ impl Client {
             .await
     }
 
+    /// Links window `src` at index `dst` as well (`link-window`); see `WindowRequest::LinkWindow`.
+    pub async fn link_window(
+        &mut self,
+        src: Option<usize>,
+        dst: Option<usize>,
+        place: LinkPlace,
+    ) -> Result<(), String> {
+        let req = Request::Window(WindowRequest::LinkWindow(LinkOpts { src, dst, place }));
+        self.call_ok("LinkWindow", req).await
+    }
+
+    /// Removes index `index` of its window (`unlink-window`); see `WindowRequest::UnlinkWindow`.
+    pub async fn unlink_window(&mut self, index: Option<usize>, kill: bool) -> Result<(), String> {
+        self.call_ok(
+            "UnlinkWindow",
+            Request::Window(WindowRequest::UnlinkWindow(UnlinkOpts { index, kill })),
+        )
+        .await
+    }
+
+    /// Sizes window `index` by hand (`resize-window`); see `WindowRequest::ResizeWindow`.
+    pub async fn resize_window(
+        &mut self,
+        index: Option<usize>,
+        resize: WindowResize,
+    ) -> Result<(), String> {
+        self.call_ok(
+            "ResizeWindow",
+            Request::Window(WindowRequest::ResizeWindow(ResizeOpts { index, resize })),
+        )
+        .await
+    }
+
     /// Restarts a pane's process in place (`respawn-pane`); see `Request::Node(NodeRequest::Respawn)`.
     pub async fn respawn(
         &mut self,
@@ -871,17 +906,20 @@ impl Client {
             layout: active_window,
             client: None,
             exclusive: false,
+            hangup: false,
         };
         self.stream_subscription(req, tx, wrap).await
     }
 
     /// Subscribes as the terminal `info`: the session registers it as a client and sends it the
     /// session's events, with its window laid out and its size counted. With `exclusive` the
-    /// session first detaches the clients attached before it (`attach -d`).
+    /// session first detaches the clients attached before it (`attach -d`); with `hangup` too, it
+    /// hangs up their parents (`attach -x`).
     pub async fn stream_as_client<T>(
         self,
         info: ClientInfo,
         exclusive: bool,
+        hangup: bool,
         tx: mpsc::Sender<T>,
         wrap: impl Fn(StreamEvent) -> T,
     ) -> Result<(), String> {
@@ -893,6 +931,7 @@ impl Client {
             layout: true,
             client: Some(info),
             exclusive,
+            hangup,
         };
         self.stream_subscription(req, tx, wrap).await
     }

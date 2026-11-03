@@ -341,11 +341,13 @@ pub struct AppOptions {
     pub client_name: Option<String>,
 }
 
-/// How a client attaches: `exclusive` detaches the session's other clients (`attach -d`), and
-/// `read_only` keeps every key and paste from reaching the panes (`attach -r`).
+/// How a client attaches: `exclusive` detaches the session's other clients (`attach -d`), `hangup`
+/// (with `exclusive`) also hangs up their parents (`attach -x`), and `read_only` keeps every key and
+/// paste from reaching the panes (`attach -r`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct AttachOpts {
     pub exclusive: bool,
+    pub hangup: bool,
     pub read_only: bool,
 }
 
@@ -376,13 +378,14 @@ impl App {
     ) -> Result<(Self, StreamRx), String> {
         let keymap = keymap::resolve(&opts.config)?;
         let exclusive = opts.attach.exclusive;
+        let hangup = opts.attach.hangup;
         let mut client = Client::connect(endpoint).await?;
         let sub_client = Client::connect(endpoint).await?;
         let started = ensure_running_window(&mut client).await;
         let (tx, rx) = mpsc::channel(STREAM_QUEUE);
         let mut app = Self::new(endpoint, session, client, keymap, tx, opts);
         app.report("new-window", started);
-        app.subscribe_as(sub_client, exclusive);
+        app.subscribe_as(sub_client, exclusive, hangup);
         app.refresh_attached().await;
         app.apply_bindings().await;
         app.refresh_nodes().await;
@@ -459,12 +462,13 @@ impl App {
 
     /// Replaces the event subscription with one bound to `client`'s session, as this client.
     pub fn subscribe(&mut self, client: Client) {
-        self.subscribe_as(client, false);
+        self.subscribe_as(client, false, false);
     }
 
     /// Replaces the event subscription with one bound to `client`'s session, registered as this
-    /// client (with `exclusive`, the session's other clients are detached first).
-    fn subscribe_as(&mut self, client: Client, exclusive: bool) {
+    /// client (with `exclusive`, the session's other clients are detached first, and with `hangup`
+    /// their parents are hung up).
+    fn subscribe_as(&mut self, client: Client, exclusive: bool, hangup: bool) {
         if let Some(task) = self.sub.task.take() {
             task.abort();
         }
@@ -474,7 +478,9 @@ impl App {
         let terminal = self.attachment.terminal.clone();
         self.sub.task = Some(tokio::spawn(async move {
             let _ = client
-                .stream_as_client(terminal, exclusive, tx, move |event| (generation, event))
+                .stream_as_client(terminal, exclusive, hangup, tx, move |event| {
+                    (generation, event)
+                })
                 .await;
         }));
     }
@@ -482,7 +488,8 @@ impl App {
     /// Fetches the layout and pane sizes for the next frame. Returns false when nothing is left to show.
     pub async fn prepare_frame(&mut self) -> bool {
         let (w, h) = self
-            .launch.fixed_size
+            .launch
+            .fixed_size
             .unwrap_or_else(|| crossterm::terminal::size().unwrap_or((80, 24)));
         let status_lines = if self.config.status {
             self.config.status_lines
@@ -727,7 +734,8 @@ impl App {
         // once, whatever other panes are flooding, for a few frames per keypress.
         let typing = echo
             && self.pacing.key_frames > 0
-            && self.pacing
+            && self
+                .pacing
                 .last_key
                 .is_some_and(|at| now.saturating_duration_since(at) < TYPING_WINDOW);
         if typing {
@@ -839,7 +847,8 @@ impl App {
 
     /// The live message, if one was set within the last few seconds.
     pub fn live_message(&self) -> Option<&str> {
-        self.interaction.message
+        self.interaction
+            .message
             .as_ref()
             .filter(|(_, at)| at.elapsed() < Duration::from_millis(self.config.display_time_ms))
             .map(|(text, _)| text.as_str())
@@ -855,7 +864,8 @@ impl App {
     }
 
     pub fn repeating(&self) -> bool {
-        self.interaction.repeat_until
+        self.interaction
+            .repeat_until
             .is_some_and(|until| Instant::now() < until)
     }
 
@@ -958,6 +968,7 @@ fn terminal_info(session: &str, client_name: Option<String>, read_only: bool) ->
         readonly: read_only,
         created_ms: now,
         activity_ms: now,
+        parent_pid: crate::clients::parent_pid(),
     }
 }
 
@@ -1217,7 +1228,11 @@ impl Tui {
     /// Waits for input, stream output, the tick or a delayed element coming due.
     async fn wait(&mut self) -> Wake {
         let popup = self.app.hud_deadline().filter(|_| !self.app.hud_visible());
-        let due = earliest([popup, self.app.pacing.frame_due, self.app.display_deadline()]);
+        let due = earliest([
+            popup,
+            self.app.pacing.frame_due,
+            self.app.display_deadline(),
+        ]);
         tokio::select! {
             Some(event) = super::popup::next_event(&mut self.app.mode) => Wake::Popup(event),
             Some(event) = self.keys.recv() => Wake::Input(event),

@@ -223,11 +223,15 @@ mpx split -h -d -- htop          # Split side by side without focus (tmux flags)
 mpx logs --plain --tail 50 &lt;name&gt; # Rendered scrollback
 mpx send-keys -t %1 C-c          # tmux key names
 mpx attach -r                   # Read-only: keys and paste stay out of the panes
-mpx attach -d                    # Detach the session's other clients first (-x is the same)
+mpx attach -d                    # Detach the session's other clients first
+mpx attach -x                    # As -d, and SIGHUP their parent shells (Unix)
 mpx list-clients                 # Attached clients across sessions (tmux list-clients)
 mpx detach-client -t CLIENT      # Detach one client (-a: the others of its session)
 mpx refresh-client -C 120x40     # Redraw a client, giving it a size (tmux refresh-client)
 mpx switch-client -t SESSION     # Switch a client to another session (-l, -n, -p)
+mpx link-window --source 0 -t 3  # Show window 0 at index 3 as well (-a, -b, -k, -d)
+mpx unlink-window -t 3           # Remove one index (the last needs -k)
+mpx resize-window -x 100 -y 30   # Give a window its own size (-A, -a, -L/-R/-U/-D)
 mpx new-session -t GROUP         # Refused: each session owns its panes in its own daemon
 mpx paste -t %1 --submit "text"  # Bracketed paste + Enter
 mpx capture-pane -p -S - -t %1   # Scrollback and screen as text

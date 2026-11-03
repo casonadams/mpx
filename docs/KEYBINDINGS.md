@@ -139,7 +139,9 @@ Vim-style command line on the status row. Supports tab-completion, history (`Up`
 | `select-pane [-t TARGET] [-Z] [-m\|-M] \| -L/-R/-U/-D` | `selectp` | Move pane focus (`-Z` keeps a zoomed window zoomed) |
 | `select-pane [-t TARGET] -d\|-e` | `selectp` | Turn a pane's input off (`-d`: keys sent to it are dropped) or back on (`-e`) |
 | `resize-pane -L/-R/-U/-D [N]`, `resize-pane -Z` | `resizep` | Resize / zoom |
-| `link-window`, `unlink-window`, `resize-window` | | Refused: a window cannot be linked elsewhere, and a window has no size of its own (see [CLI.md](CLI.md#windows-and-layout)) |
+| `link-window [-s src] [-t dst] [-a\|-b] [-k] [-d]` | | Show window `src` (default: the active one) at index `dst` as well (default: the lowest free index); `-a`/`-b` put it after or before `dst`, `-k` unlinks what is there first, `-d` keeps the active index. A window of another session is refused (see [Shared windows](CLI.md#shared-windows)) |
+| `unlink-window [-k] [-t index]` | | Remove one index of a window; the window stays at its other indices. Its only index needs `-k`, which kills the window |
+| `resize-window [-aA] [-LRUD] [-x W] [-y H] [-t index] [cells]` | | Give a window a size of its own, overriding the clients' size: `-x`/`-y` set it, `-A`/`-a` take the largest or smallest attached client, `-L`/`-R`/`-U`/`-D` move a border by `cells` (see [CLI.md](CLI.md#windows-and-layout)) |
 | `choose-tree` | | Interactive session/window tree |
 | `display-panes [-d ms]` | `displayp` | Number each pane large; a digit selects that pane, any other key dismisses. Stays `display-panes-time` ms (`-d 0`: until a key) |
 | `clock-mode [-t PANE]` | | Big clock filling the pane until a key is pressed |

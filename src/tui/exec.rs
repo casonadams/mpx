@@ -2,7 +2,7 @@
 use super::app::{App, Flow, Mode};
 use super::command::{
     BufferCommand, ClientCommand, Command, CopyModeOpts, EnvCommand, PaneCommand, PopupCommand,
-    PromptSpec, ScriptCommand, SessionCommand, WindowCommand, parse_in,
+    PromptSpec, ScriptCommand, SessionCommand, WindowCommand, parse_scoped,
 };
 use super::copy::{CopyAction, CopyOutcome, CopyState, Motion, apply_action};
 use super::frame;
@@ -19,10 +19,10 @@ use super::session::{pick, split_target};
 use crate::config::Config;
 use crate::format::{buffer_vars, expand};
 use crate::ipc;
-use crate::layout::Direction;
+use crate::layout::{Direction, LinkPlace};
 use crate::protocol::{
     LayoutPreset, NewWindowOpts, PasteBufferOpts, Request, Response, ScriptRequest, Side,
-    SpawnOpts, SplitOpts,
+    SpawnOpts, SplitOpts, WindowResize,
 };
 use crate::vt::capture::CaptureSpec;
 use std::collections::VecDeque;
@@ -168,7 +168,9 @@ impl App {
             Command::Window(WindowCommand::SelectWindowNamed { name }) => {
                 self.select_window_named(name).await
             }
-            Command::Window(WindowCommand::StepAlert { forward }) => self.step_alert(forward).await,
+            Command::Window(WindowCommand::StepWindow { forward, alert: true }) => {
+                self.step_alert(forward).await
+            }
             Command::DisplayMessage { format } => {
                 let format = format.as_deref().unwrap_or(DEFAULT_DISPLAY_MESSAGE);
                 let text = super::frame::expand_active(self, format);
@@ -206,8 +208,17 @@ impl App {
     /// Pane, window-navigation and layout operations. Other commands come back as `Err`.
     async fn run_pane(&mut self, cmd: Command) -> Result<Flow, Command> {
         let flow = match cmd {
-            Command::Window(WindowCommand::NextWindow) => self.simple(Simple::NextWindow).await,
-            Command::Window(WindowCommand::PrevWindow) => self.simple(Simple::PrevWindow).await,
+            Command::Window(WindowCommand::StepWindow {
+                forward,
+                alert: false,
+            }) => {
+                let op = if forward {
+                    Simple::NextWindow
+                } else {
+                    Simple::PrevWindow
+                };
+                self.simple(op).await
+            }
             Command::Window(WindowCommand::LastWindow) => self.simple(Simple::LastWindow).await,
             Command::Pane(PaneCommand::BreakPane) => self.simple(Simple::BreakPane).await,
             Command::Pane(PaneCommand::SelectLayout { preset }) => {
@@ -257,15 +268,18 @@ impl App {
         Ok(flow)
     }
 
-    /// Sessions, modes, overlays and the remaining commands.
-    async fn run_ui(&mut self, cmd: Command) -> Flow {
-        match cmd {
+    /// Sessions, server commands and session options. Other commands come back as `Err`.
+    async fn run_session(&mut self, cmd: Command) -> Result<Flow, Command> {
+        let flow = match cmd {
             Command::Session(SessionCommand::SwitchSession { name }) => {
                 self.go_session(&name).await
             }
             Command::Session(SessionCommand::NextSession) => self.step_session(true).await,
             Command::Session(SessionCommand::PrevSession) => self.step_session(false).await,
             Command::Session(SessionCommand::LastSession) => self.last_session().await,
+            Command::Session(SessionCommand::RenameSession { name }) => {
+                self.rename_session_cmd(name).await
+            }
             Command::KillServer => self.kill_server().await,
             Command::ReloadConfig => self.reload_config().await,
             Command::SetOption {
@@ -279,12 +293,28 @@ impl App {
                 value_only,
                 quiet,
             } => self.show_options(name.as_deref(), value_only, quiet).await,
-            Command::Pane(PaneCommand::JoinPane {
-                src,
-                dst,
-                side_by_side,
-                detach,
-            }) => self.join_pane(src, dst, side_by_side, detach).await,
+            other => return Err(other),
+        };
+        Ok(flow)
+    }
+
+    /// Joins, links, unlinks, resizes, swaps and respawns windows and panes, and finds windows.
+    /// Other commands come back as `Err`.
+    async fn run_links(&mut self, cmd: Command) -> Result<Flow, Command> {
+        let flow = match cmd {
+            Command::Pane(PaneCommand::JoinPane(join)) => {
+                self.join_pane(join.src, join.dst, join.side_by_side, join.detach)
+                    .await
+            }
+            Command::Window(WindowCommand::LinkWindow(req)) => {
+                self.link_window(req.src, req.dst, req.place).await
+            }
+            Command::Window(WindowCommand::UnlinkWindow(req)) => {
+                self.unlink_window(req.index, req.kill).await
+            }
+            Command::Window(WindowCommand::ResizeWindow(req)) => {
+                self.resize_window(req.index, req.resize).await
+            }
             Command::Window(WindowCommand::SwapWindow { src, dst }) => {
                 self.swap_window(src, dst).await
             }
@@ -294,18 +324,31 @@ impl App {
                 cwd,
                 command,
             }) => self.respawn_pane(target, kill, cwd, command).await,
-            Command::Bind { table, key, line } => self.bind_key(table, &key, &line).await,
             Command::Window(WindowCommand::FindWindow { pattern }) => {
                 self.find_window(&pattern).await
             }
+            other => return Err(other),
+        };
+        Ok(flow)
+    }
+
+    /// Bindings, sequences, modes, overlays and the remaining commands.
+    async fn run_ui(&mut self, cmd: Command) -> Flow {
+        let cmd = match self.run_session(cmd).await {
+            Ok(flow) => return flow,
+            Err(cmd) => cmd,
+        };
+        let cmd = match self.run_links(cmd).await {
+            Ok(flow) => return flow,
+            Err(cmd) => cmd,
+        };
+        match cmd {
+            Command::Bind { table, key, line } => self.bind_key(table, &key, &line).await,
             Command::Sequence(commands) => Box::pin(self.run_sequence(commands)).await,
             Command::Zoom => self.toggle_zoom().await,
             Command::SetSynchronize { all, on } => self.set_synchronize(all, on).await,
             Command::CopyMode(opts) => self.copy_mode_cmd(opts).await,
             Command::Detach => Flow::Quit,
-            Command::Session(SessionCommand::RenameSession { name }) => {
-                self.rename_session_cmd(name).await
-            }
             Command::Buffer(cmd) => self.buffer_command(cmd).await,
             Command::Environment(cmd) => self.environment_command(cmd).await,
             Command::Client(cmd) => self.client_command(cmd).await,
@@ -646,6 +689,51 @@ impl App {
         self.settle(result)
     }
 
+    /// A window number the user typed (in `base-index` numbering) as the daemon's: `None` for the
+    /// active window, which the daemon picks. A number below the base is refused with a message.
+    fn daemon_window(&mut self, number: Option<usize>) -> Result<Option<usize>, Flow> {
+        let index = match number {
+            Some(n) => n.checked_sub(self.config.base_index).map(Some),
+            None => Some(None),
+        };
+        index.ok_or_else(|| self.say("can't find window"))
+    }
+
+    /// `link-window`, `unlink-window` and `resize-window` on the daemon's numbers.
+    async fn link_window(
+        &mut self,
+        src: Option<usize>,
+        dst: Option<usize>,
+        place: LinkPlace,
+    ) -> Flow {
+        let (src, dst) = match (self.daemon_window(src), self.daemon_window(dst)) {
+            (Ok(src), Ok(dst)) => (src, dst),
+            (Err(flow), _) | (_, Err(flow)) => return flow,
+        };
+        let result = self.client.link_window(src, dst, place).await;
+        self.settle(result)
+    }
+
+    async fn unlink_window(&mut self, index: Option<usize>, kill: bool) -> Flow {
+        match self.daemon_window(index) {
+            Ok(index) => {
+                let result = self.client.unlink_window(index, kill).await;
+                self.settle(result)
+            }
+            Err(flow) => flow,
+        }
+    }
+
+    async fn resize_window(&mut self, index: Option<usize>, resize: WindowResize) -> Flow {
+        match self.daemon_window(index) {
+            Ok(index) => {
+                let result = self.client.resize_window(index, resize).await;
+                self.settle(result)
+            }
+            Err(flow) => flow,
+        }
+    }
+
     /// The next (or previous) window with activity or a bell, wrapping around.
     async fn step_alert(&mut self, forward: bool) -> Flow {
         let tabs = &self.layout.tabs;
@@ -901,7 +989,7 @@ impl App {
                 }
             };
             for (line, text) in lines {
-                match parse_in(&text, &self.config.alias) {
+                match parse_scoped(&text, &self.config.alias, &self.session) {
                     Ok(command) => {
                         if self.run_sequence(vec![command]).await == Flow::Quit {
                             return Flow::Quit;

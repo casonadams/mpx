@@ -46,6 +46,12 @@ Each pane gets `MPX_ENDPOINT`, `MPX_SESSION`, `MPX_PANE`, `MPX_PANE_ID`, `TMUX`,
 
 A pane's exit is reported only after its output has been fully read, so `wait` on exit never races the last bytes a command printed.
 
+## Windows, links and sessions
+
+A session's layout is a list of **indices** (`Link`s), each showing a **window** (its panes, split tree, focus and size). A window can be shown at several indices of the same session (`link-window`), and every such index shows the same panes: the panes belong to the window, not to the index. The session saves a window linked at several indices once, and the other indices point at that entry (`shares`); restore spawns its panes once and shows the window at each saved index.
+
+Windows never cross sessions. Each session is its own daemon, with its own panes, state directory and socket, so a window of one session cannot be shown in another. `link-window`, `link-window -t`, and the window arguments of `unlink-window` and `resize-window` accept `N` or `session:N` of the session the command runs in and refuse any other session (`window ... is in another session`). Session groups (`new-session -t`) are refused for the same reason.
+
 ---
 
 ## 3. Event Stream
