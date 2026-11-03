@@ -3,7 +3,7 @@ use std::fmt::Write as _;
 
 use serde::{Deserialize, Serialize};
 
-use super::grid::{Cell, CellStyle, Color, Grid};
+use super::grid::{Cell, CellStyle, Color, Grid, Underline};
 
 /// A line named by `capture-pane -S` or `-E`, in tmux's numbering: 0 is the first visible line,
 /// negative numbers count lines back into history.
@@ -90,12 +90,14 @@ fn push_sgr(out: &mut String, style: CellStyle) {
         (style.bold, "1"),
         (style.faint, "2"),
         (style.italic, "3"),
-        (style.underline, "4"),
         (style.reverse, "7"),
     ] {
         if on {
             params.push(code.to_string());
         }
+    }
+    if let Some(code) = underline_code(style.underline) {
+        params.push(code.to_string());
     }
     if let Some(fg) = style.fg {
         params.push(color_param(fg, 30));
@@ -103,31 +105,61 @@ fn push_sgr(out: &mut String, style: CellStyle) {
     if let Some(bg) = style.bg {
         params.push(color_param(bg, 40));
     }
+    if let Some(color) = style.underline_color {
+        params.push(underline_color_param(color));
+    }
     let _ = write!(out, "\x1b[{}m", params.join(";"));
+}
+
+/// The SGR parameter for an underline style: `4` for a single line, `4:n` for the others.
+fn underline_code(underline: Underline) -> Option<&'static str> {
+    match underline {
+        Underline::None => None,
+        Underline::Single => Some("4"),
+        Underline::Double => Some("4:2"),
+        Underline::Curly => Some("4:3"),
+        Underline::Dotted => Some("4:4"),
+        Underline::Dashed => Some("4:5"),
+    }
+}
+
+/// The SGR 58 parameters that set an underline colour: `58;5;n` for palette entries and
+/// `58;2;r;g;b` for truecolour.
+fn underline_color_param(color: Color) -> String {
+    match color {
+        Color::Indexed(_) | Color::Rgb(..) => extended_param(color, 58),
+        named => extended_param(Color::Indexed(slot_of(named)), 58),
+    }
 }
 
 /// SGR parameters for a color: `base` 30 for foreground, 40 for background.
 fn color_param(color: Color, base: u8) -> String {
-    let named = |index: u8| (base + index).to_string();
-    let bright = |index: u8| (base + 60 + index).to_string();
     match color {
-        Color::Black => named(0),
-        Color::Red => named(1),
-        Color::Green => named(2),
-        Color::Yellow => named(3),
-        Color::Blue => named(4),
-        Color::Magenta => named(5),
-        Color::Cyan => named(6),
-        Color::White => named(7),
-        Color::BrightBlack => bright(0),
-        Color::BrightRed => bright(1),
-        Color::BrightGreen => bright(2),
-        Color::BrightYellow => bright(3),
-        Color::BrightBlue => bright(4),
-        Color::BrightMagenta => bright(5),
-        Color::BrightCyan => bright(6),
-        Color::BrightWhite => bright(7),
-        Color::Indexed(n) => format!("{};5;{n}", base + 8),
-        Color::Rgb(r, g, b) => format!("{};2;{r};{g};{b}", base + 8),
+        Color::Indexed(_) | Color::Rgb(..) => extended_param(color, base + 8),
+        named => {
+            let slot = slot_of(named);
+            let code = if slot < 8 {
+                base + slot
+            } else {
+                base + 60 + slot - 8
+            };
+            code.to_string()
+        }
     }
+}
+
+/// `38`, `48` or `58` followed by a palette index (`5;n`) or truecolour (`2;r;g;b`).
+fn extended_param(color: Color, code: u8) -> String {
+    match color {
+        Color::Indexed(n) => format!("{code};5;{n}"),
+        Color::Rgb(r, g, b) => format!("{code};2;{r};{g};{b}"),
+        named => unreachable!("{named:?} has no extended form"),
+    }
+}
+
+/// The slot of a colour known to be named: callers route only named colours here.
+fn slot_of(named: Color) -> u8 {
+    named
+        .named_slot()
+        .unwrap_or_else(|| unreachable!("{named:?} is a named colour"))
 }

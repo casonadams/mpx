@@ -1,7 +1,7 @@
 //! Typed keys, pastes, focus reports and the prefix key reaching the active pane.
 use crossterm::event::{Event, KeyCode};
 
-use mpx::config::Config;
+use mpx::config::{Config, TerminalOptions};
 use mpx::layout::Direction;
 
 use super::support::{ECHO, Harness, MAIN, split, wait_for};
@@ -46,7 +46,14 @@ async fn paste_is_bracketed_only_for_panes_that_enabled_it() {
 
 #[tokio::test]
 async fn focus_reports_reach_only_panes_that_requested_them() {
-    let mut h = Harness::start(Config::default(), &focus_script()).await;
+    let config = Config {
+        terminal: TerminalOptions {
+            focus_events: true,
+            ..TerminalOptions::default()
+        },
+        ..Config::default()
+    };
+    let mut h = Harness::start(config, &focus_script()).await;
     split(&mut h.probe, MAIN, "plain", Direction::Horizontal).await;
     h.frame().await;
     h.until("focus events enabled", |app| {
@@ -73,6 +80,23 @@ async fn focus_reports_reach_only_panes_that_requested_them() {
 }
 
 #[tokio::test]
+async fn focus_reports_stay_off_unless_focus_events_is_set() {
+    // `focus-events` is off by default: the pane still asks, but the outer terminal's focus
+    // changes are not forwarded.
+    let mut h = Harness::start(Config::default(), &focus_script()).await;
+    h.frame().await;
+    h.until("focus events requested", |app| {
+        app.modes_of(MAIN).focus_events
+    })
+    .await;
+    h.event(Event::FocusGained).await;
+    h.event(Event::FocusLost).await;
+    h.frame().await;
+    let logs = h.logs(MAIN).await;
+    assert!(!logs.contains("\x1b[I") && !logs.contains("\x1b[O"));
+}
+
+#[tokio::test]
 async fn prefix_twice_sends_the_prefix_byte() {
     let mut h = Harness::idle().await;
     h.ctrl('b').await;
@@ -86,7 +110,14 @@ async fn focus_reports_survive_output_beyond_what_the_log_keeps() {
     // the screen rebuilt from the log alone would not know about it.
     let flood = r"head -c 2500000 /dev/zero | tr '\0' x";
     let script = format!(r"printf '\033[?1004h'; {flood}; {ECHO}");
-    let mut h = Harness::start(Config::default(), &script).await;
+    let config = Config {
+        terminal: TerminalOptions {
+            focus_events: true,
+            ..TerminalOptions::default()
+        },
+        ..Config::default()
+    };
+    let mut h = Harness::start(config, &script).await;
     h.frame().await;
     assert!(h.app.modes_of(MAIN).focus_events);
     wait_for(&mut h.probe, MAIN, "\x1b[I").await;

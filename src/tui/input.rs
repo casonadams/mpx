@@ -6,9 +6,11 @@ use super::command::{self, COMMAND_NAMES, Command, PaneCommand};
 use super::copy::{CopyState, apply_bound_key};
 use super::keymap::Table;
 use super::labels;
+use super::menu::{MenuAction, MenuState};
 use super::overlay::{Overlay, OverlayAction};
+use super::popup::{PopupEvent, PopupState};
 use super::prompt::{PromptKind, PromptRun, PromptState};
-use crate::keys::encode_key;
+use crate::keys::{KeyPolicy, TermModes, encode_key};
 
 /// What happens to an overlay after it handled a key.
 #[derive(Debug, Clone, PartialEq)]
@@ -45,7 +47,10 @@ impl App {
         }
         if self.repeating()
             && let Some(binding) = self.keymap.lookup(Table::Prefix, &key)
-            && matches!(binding.command, Command::Pane(PaneCommand::ResizePane { .. }))
+            && matches!(
+                binding.command,
+                Command::Pane(PaneCommand::ResizePane { .. })
+            )
         {
             let cmd = binding.command.clone();
             self.arm_repeat();
@@ -230,11 +235,19 @@ impl App {
 
     /// Sends a key to the active pane, encoded with that pane's own input modes.
     pub async fn forward_key(&mut self, key: &KeyEvent) {
-        let modes = self.modes_of(&self.active_pane.clone());
-        let bytes = encode_key(key, &modes);
+        let bytes = self.encode_for_active(|modes, policy| encode_key(key, modes, policy));
         if !bytes.is_empty() {
             let _ = self.write_typed(&bytes).await;
         }
+    }
+
+    /// Encodes with the active pane's terminal modes and the configured key policy.
+    pub fn encode_for_active(
+        &self,
+        encode: impl FnOnce(&TermModes, KeyPolicy) -> Vec<u8>,
+    ) -> Vec<u8> {
+        let modes = self.modes_of(&self.active_pane);
+        encode(&modes, KeyPolicy::of(&self.config))
     }
 
     /// Writes bytes to the active pane (focus reports, the prefix key).
@@ -296,11 +309,53 @@ impl App {
         self.settle(result)
     }
 
+    /// The terminal's own focus changed: the active pane hears it when `focus-events` is on.
     pub async fn on_focus(&mut self, focused: bool) -> Flow {
-        if self.modes_of(&self.active_pane.clone()).focus_events {
-            let bytes = crate::keys::focus_event(focused);
-            let _ = self.write_active(bytes).await;
+        let active = self.active_pane.clone();
+        self.send_focus(&active, focused).await;
+        Flow::Continue
+    }
+
+    /// A key while a popup is open goes to its command. Once the command has ended, any key closes
+    /// the popup (`on_key` has already returned the mode to normal).
+    pub async fn popup_key(&mut self, mut popup: Box<PopupState>, key: KeyEvent) -> Flow {
+        if !popup.exited {
+            let _ = popup.send_key(&key, KeyPolicy::of(&self.config));
+            self.mode = Mode::Popup(popup);
         }
         Flow::Continue
+    }
+
+    /// Output of the open popup's command, or its end: without `-E` the popup then waits for a key.
+    pub fn on_popup(&mut self, event: PopupEvent) {
+        let closes = match (&mut self.mode, event) {
+            (Mode::Popup(popup), PopupEvent::Output(bytes)) => {
+                popup.feed(&bytes);
+                false
+            }
+            (Mode::Popup(popup), PopupEvent::Exited(_)) => {
+                popup.exited = true;
+                popup.close_on_exit()
+            }
+            _ => false,
+        };
+        if closes {
+            self.mode = Mode::Normal;
+        }
+    }
+
+    /// A key while a menu is open: its item key or the arrows pick, Esc and `q` close.
+    pub async fn menu_key(&mut self, mut menu: Box<MenuState>, key: KeyEvent) -> Flow {
+        match menu.handle_key(key) {
+            MenuAction::Stay => {
+                self.mode = Mode::Menu(menu);
+                Flow::Continue
+            }
+            MenuAction::Close => Flow::Continue,
+            MenuAction::Run(line) => match command::parse(&line) {
+                Ok(cmd) => self.dispatch(cmd).await,
+                Err(e) => self.say(e),
+            },
+        }
     }
 }

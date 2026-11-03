@@ -53,9 +53,10 @@ fn color_answers_are_found_among_the_other_replies_whatever_ends_them() {
 #[test]
 fn entering_the_tui_switches_screens_and_leaving_hands_the_shell_its_own_back() {
     let enter = String::from_utf8(enter_sequence()).unwrap();
-    for wanted in ["\x1b[?1049h", "\x1b[?25l", "\x1b[?2004h", "\x1b[?1004h", "\x1b[?7l"] {
+    for wanted in ["\x1b[?1049h", "\x1b[?25l", "\x1b[?2004h", "\x1b[?7l"] {
         assert!(enter.contains(wanted), "enter lacks {wanted:?}");
     }
+    assert!(!enter.contains("\x1b[?1004h"), "focus reports wait for focus-events");
     let leave = String::from_utf8(leave_sequence()).unwrap();
     for wanted in ["\x1b[?1049l", "\x1b[?25h", "\x1b[?2004l", "\x1b[?1004l", "\x1b[?7h"] {
         assert!(leave.contains(wanted), "leave lacks {wanted:?}");

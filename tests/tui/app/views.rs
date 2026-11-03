@@ -123,13 +123,12 @@ async fn show_messages_lists_the_status_row_messages() {
     h.app.say("first note");
     h.app.say("second note");
 
-    let shown = h.command_frame("show-messages").await;
-    assert!(
-        shown.contains("first note") && shown.contains("second note"),
-        "{shown}"
-    );
-    h.closes_with(|mode| matches!(mode, Mode::Overlay(_)), KeyCode::Char('q'))
-        .await;
+    h.command_shows_then_closes(
+        "show-messages",
+        &["first note", "second note"],
+        KeyCode::Char('q'),
+    )
+    .await;
 }
 
 #[tokio::test]

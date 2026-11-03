@@ -147,25 +147,6 @@ async fn dispatch(command: Commands, r: Resolved) -> Result<i32, String> {
     }
 }
 
-/// Connects to `session` in `socket_dir`, starting its daemon when it is not running. `state_dir`
-/// overrides where the daemon keeps its snapshot; `no_restore` starts it empty.
-pub async fn ensure_session(
-    session: &str,
-    socket_dir: &Path,
-    state_dir: Option<PathBuf>,
-    no_restore: bool,
-) -> Result<Client, String> {
-    let mut r = resolve(Some(session), None, None, None, socket_dir);
-    r.config = load_config(None)?;
-    if let Some(dir) = state_dir {
-        r.state_dir = dir;
-    }
-    if no_restore {
-        r.no_restore = true;
-        r.config.session.restore = false;
-    }
-    ensure_client(&r).await
-}
 
 /// Connects to the session, starting its daemon when it is not running.
 pub async fn ensure_client(r: &Resolved) -> Result<Client, String> {

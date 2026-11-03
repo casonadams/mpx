@@ -73,6 +73,11 @@ pub struct Config {
     pub mode_keys: ModeKeys,
     /// Whether copy-mode yanks reach the system clipboard (tmux `set-clipboard`; `off` disables it).
     pub set_clipboard: bool,
+    /// Terminal options: focus events, extended keys, the outer terminal's titles and bells, and
+    /// the visual alternatives to bells. Flattened into `Config`, so each key stays top-level in the
+    /// config file.
+    #[serde(flatten)]
+    pub terminal: TerminalOptions,
     /// Whether copy-mode searches wrap around the ends of the history (tmux `wrap-search`).
     pub wrap_search: bool,
     /// Extra or overriding key bindings: key (tmux notation) -> command line.
@@ -159,6 +164,46 @@ impl Default for SessionOptions {
             default_command: None,
             detach_on_destroy: true,
             restore: true,
+        }
+    }
+}
+
+/// Terminal options: input modes the panes may ask for, focus reports, and the outer terminal's
+/// title and bell. Flattened into `Config`, so each key stays top-level in the config file.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct TerminalOptions {
+    /// Modified keys sent to panes as CSI u or modifyOtherKeys sequences (tmux `extended-keys`):
+    /// `on` when a pane asks for them, `always` regardless, `off` never.
+    pub extended_keys: ExtendedKeys,
+    /// Function and cursor keys with modifiers keep their modifiers (tmux `xterm-keys`); `off` sends
+    /// them unmodified.
+    pub xterm_keys: bool,
+    /// Focus in and out reach the panes that asked for focus reports (tmux `focus-events`).
+    pub focus_events: bool,
+    /// Set the outer terminal's title from `set_titles_string` (tmux `set-titles`).
+    pub set_titles: bool,
+    /// Outer terminal title as a tmux format (tmux `set-titles-string`).
+    pub set_titles_string: String,
+    /// Which windows' bells ring the outer terminal (tmux `bell-action`).
+    pub bell_action: BellAction,
+    /// Show a status-row message instead of ringing the outer terminal (tmux `visual-bell`).
+    pub visual_bell: bool,
+    /// Show a status-row message when a window with monitored output changes (tmux `visual-activity`).
+    pub visual_activity: bool,
+}
+
+impl Default for TerminalOptions {
+    fn default() -> Self {
+        Self {
+            extended_keys: ExtendedKeys::Off,
+            xterm_keys: true,
+            focus_events: false,
+            set_titles: false,
+            set_titles_string: "#S:#I:#W - \"#T\"".to_string(),
+            bell_action: BellAction::Any,
+            visual_bell: false,
+            visual_activity: false,
         }
     }
 }
@@ -317,6 +362,28 @@ pub enum IdSource {
     Omp,
 }
 
+/// Declares a word-valued enum: `FromStr` accepts any of a variant's words (after trimming), and
+/// `as_str` gives its first word.
+macro_rules! word_choice {
+    ($ty:ident { $($variant:ident => [$($word:literal),+]),+ $(,)? }) => {
+        impl FromStr for $ty {
+            type Err = String;
+
+            fn from_str(value: &str) -> Result<Self, String> {
+                choice(value, &[$((&[$($word),+], Self::$variant)),+])
+            }
+        }
+
+        impl $ty {
+            pub fn as_str(self) -> &'static str {
+                match self {
+                    $(Self::$variant => [$($word),+][0],)+
+                }
+            }
+        }
+    };
+}
+
 /// Row of the screen the status line occupies (tmux `status-position`).
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
@@ -326,20 +393,10 @@ pub enum StatusPosition {
     Bottom,
 }
 
-impl FromStr for StatusPosition {
-    type Err = String;
-
-    fn from_str(value: &str) -> Result<Self, String> {
-        choice(value, &[(&["top"], Self::Top), (&["bottom"], Self::Bottom)])
-    }
-}
-
-impl StatusPosition {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Top => "top",
-            Self::Bottom => "bottom",
-        }
+word_choice! {
+    StatusPosition {
+        Top => ["top"],
+        Bottom => ["bottom"],
     }
 }
 
@@ -353,28 +410,11 @@ pub enum Justify {
     Right,
 }
 
-impl FromStr for Justify {
-    type Err = String;
-
-    fn from_str(value: &str) -> Result<Self, String> {
-        choice(
-            value,
-            &[
-                (&["left"], Self::Left),
-                (&["centre", "center"], Self::Centre),
-                (&["right"], Self::Right),
-            ],
-        )
-    }
-}
-
-impl Justify {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Left => "left",
-            Self::Centre => "centre",
-            Self::Right => "right",
-        }
+word_choice! {
+    Justify {
+        Left => ["left"],
+        Centre => ["centre", "center"],
+        Right => ["right"],
     }
 }
 
@@ -388,19 +428,64 @@ pub enum ModeKeys {
     Emacs,
 }
 
-impl FromStr for ModeKeys {
-    type Err = String;
-
-    fn from_str(value: &str) -> Result<Self, String> {
-        choice(value, &[(&["vi"], Self::Vi), (&["emacs"], Self::Emacs)])
+word_choice! {
+    ModeKeys {
+        Vi => ["vi"],
+        Emacs => ["emacs"],
     }
 }
 
-impl ModeKeys {
-    pub fn as_str(self) -> &'static str {
+/// Modified keys sent to panes (tmux `extended-keys`).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ExtendedKeys {
+    #[default]
+    Off,
+    On,
+    Always,
+}
+
+word_choice! {
+    ExtendedKeys {
+        Off => ["off"],
+        On => ["on"],
+        Always => ["always"],
+    }
+}
+
+/// Which windows' bells reach the outer terminal (tmux `bell-action`).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum BellAction {
+    /// No bell reaches the outer terminal.
+    None,
+    /// Every window's bell reaches it.
+    #[default]
+    Any,
+    /// Only the bell of the window that is shown.
+    Current,
+    /// Only the bells of windows that are not shown.
+    Other,
+}
+
+word_choice! {
+    BellAction {
+        None => ["none"],
+        Any => ["any"],
+        Current => ["current"],
+        Other => ["other"],
+    }
+}
+
+impl BellAction {
+    /// Whether a bell in a window reaches the outer terminal; `shown` is whether that window is the
+    /// one on screen.
+    pub fn rings(self, shown: bool) -> bool {
         match self {
-            Self::Vi => "vi",
-            Self::Emacs => "emacs",
+            Self::None => false,
+            Self::Any => true,
+            Self::Current => shown,
+            Self::Other => !shown,
         }
     }
 }
@@ -505,6 +590,7 @@ impl Default for Config {
             mode_keys: ModeKeys::Vi,
             set_clipboard: true,
             wrap_search: true,
+            terminal: TerminalOptions::default(),
             bind: BTreeMap::new(),
             bind_root: BTreeMap::new(),
             alias: BTreeMap::new(),

@@ -1,15 +1,18 @@
 //! Command execution: maps each `Command` onto daemon requests and TUI state.
 use super::app::{App, Flow, Mode};
 use super::command::{
-    BufferCommand, ClientCommand, Command, CopyModeOpts, EnvCommand, PaneCommand, PromptSpec,
-    ScriptCommand, SessionCommand, WindowCommand, parse_in,
+    BufferCommand, ClientCommand, Command, CopyModeOpts, EnvCommand, PaneCommand, PopupCommand,
+    PromptSpec, ScriptCommand, SessionCommand, WindowCommand, parse_in,
 };
 use super::copy::{CopyAction, CopyOutcome, CopyState, Motion, apply_action};
 use super::frame;
 use super::job::{self, Job, Work};
 use super::keymap;
+use super::menu::{MenuItem, MenuState};
 use super::overlay::{Overlay, OverlayCtx, buffer_summary};
 use super::panes::{find_directional, neighbor_pane};
+use super::placement::Offset;
+use super::popup::{PopupOpts, PopupState};
 use super::prompt::{PromptRun, Question};
 use super::session::neighbor_session;
 use super::session::{pick, split_target};
@@ -211,7 +214,9 @@ impl App {
                 self.simple(Simple::SelectLayout(preset)).await
             }
             Command::Pane(PaneCommand::SpreadLayout) => self.simple(Simple::SpreadLayout).await,
-            Command::Pane(PaneCommand::SwapPane { next, keep_zoom }) => self.swap(next, keep_zoom).await,
+            Command::Pane(PaneCommand::SwapPane { next, keep_zoom }) => {
+                self.swap(next, keep_zoom).await
+            }
             Command::Pane(PaneCommand::SwapPaneMarked {
                 source,
                 target,
@@ -329,6 +334,10 @@ impl App {
             Command::Confirm { prompt, then } => self.ask(prompt, *then),
             Command::DisplayPanes { duration_ms } => self.open_panes(duration_ms),
             Command::ClockMode { target } => self.open_clock(target),
+            Command::Popup(PopupCommand::Display(opts)) => self.open_popup(opts),
+            Command::Popup(PopupCommand::Menu { title, x, y, items }) => {
+                self.open_menu(title, x, y, items)
+            }
             Command::ShowMessages => {
                 let lines = self.message_log.clone();
                 self.open_overlay(Overlay::text("messages", lines)).await
@@ -712,7 +721,11 @@ impl App {
                     background,
                     delay: delay_ms.map(Duration::from_millis),
                 };
-                if background { Step::Background(work) } else { Step::Wait(work) }
+                if background {
+                    Step::Background(work)
+                } else {
+                    Step::Wait(work)
+                }
             }
             Command::Script(ScriptCommand::IfShell {
                 background,
@@ -729,7 +742,11 @@ impl App {
                     then,
                     otherwise,
                 };
-                if background { Step::Background(work) } else { Step::Wait(work) }
+                if background {
+                    Step::Background(work)
+                } else {
+                    Step::Wait(work)
+                }
             }
             Command::Script(ScriptCommand::WaitFor { op, channel }) => {
                 Step::Wait(Work::Wait { op, channel })
@@ -750,7 +767,9 @@ impl App {
         match script {
             ScriptCommand::RunShell { .. }
             | ScriptCommand::IfShell { .. }
-            | ScriptCommand::WaitFor { .. } => self.run_sequence(vec![Command::Script(script)]).await,
+            | ScriptCommand::WaitFor { .. } => {
+                self.run_sequence(vec![Command::Script(script)]).await
+            }
             ScriptCommand::SetHook {
                 name,
                 command,
@@ -802,7 +821,11 @@ impl App {
     }
 
     async fn show_hooks(&mut self) -> Flow {
-        let lines = match self.client.call(Request::Script(ScriptRequest::ShowHooks)).await {
+        let lines = match self
+            .client
+            .call(Request::Script(ScriptRequest::ShowHooks))
+            .await
+        {
             Ok(Response::Hooks(hooks)) => Ok(hooks
                 .into_iter()
                 .map(|(name, command)| format!("{name} {command}"))
@@ -908,15 +931,17 @@ impl App {
 
     /// `list-buffers`: one line per paste buffer, newest first, each rendered by `format`.
     async fn list_buffers(&mut self, format: Option<String>) -> Flow {
-        let lines: Result<Vec<String>, String> = self.client.list_buffers().await.map(|buffers| {
-            match format {
-                Some(format) => buffers
-                    .iter()
-                    .map(|buffer| expand(&format, &buffer_vars(buffer)))
-                    .collect(),
-                None => buffers.iter().map(buffer_summary).collect(),
-            }
-        });
+        let lines: Result<Vec<String>, String> =
+            self.client
+                .list_buffers()
+                .await
+                .map(|buffers| match format {
+                    Some(format) => buffers
+                        .iter()
+                        .map(|buffer| expand(&format, &buffer_vars(buffer)))
+                        .collect(),
+                    None => buffers.iter().map(buffer_summary).collect(),
+                });
         self.show_lines("list-buffers", lines).await
     }
 
@@ -1047,6 +1072,54 @@ impl App {
         }
     }
 
+    /// `display-popup`: the command starts on a pty in a box over the panes. Its directory is `-d`,
+    /// else the directory of the `-t` pane, else the active pane's.
+    fn open_popup(&mut self, mut opts: PopupOpts) -> Flow {
+        if opts.cwd.is_none() {
+            let target = opts
+                .target
+                .clone()
+                .unwrap_or_else(|| self.active_pane.clone());
+            let pane = split_target(&target).1;
+            opts.cwd = self
+                .nodes
+                .iter()
+                .find(|node| node.name == pane)
+                .and_then(|node| node.cwd.clone());
+        }
+        let shell = self
+            .config
+            .session
+            .default_shell
+            .clone()
+            .or_else(|| std::env::var("SHELL").ok())
+            .unwrap_or_else(|| "/bin/sh".to_string());
+        let screen = (self.viewport.0, self.rows.screen_h);
+        match PopupState::open(opts, screen, &shell, &self.config.session.default_terminal) {
+            Ok(popup) => {
+                self.mode = Mode::Popup(Box::new(popup));
+                Flow::Continue
+            }
+            Err(e) => self.say(e),
+        }
+    }
+
+    /// `display-menu`: the menu opens over the panes; its title is a format, expanded now.
+    fn open_menu(
+        &mut self,
+        title: Option<String>,
+        x: Offset,
+        y: Offset,
+        items: Vec<MenuItem>,
+    ) -> Flow {
+        let title = title
+            .map(|raw| super::frame::expand_active(self, &raw))
+            .unwrap_or_default();
+        let screen = (self.viewport.0, self.rows.screen_h);
+        self.mode = Mode::Menu(Box::new(MenuState::new(title, items, x, y, screen)));
+        Flow::Continue
+    }
+
     /// `suspend-client`: the event loop stops the process once the command has run.
     fn suspend_client(&mut self) -> Flow {
         if cfg!(unix) {
@@ -1168,7 +1241,12 @@ impl App {
         }
     }
 
-    async fn split_window(&mut self, flags: SplitFlags, argv: Vec<String>, cwd: Option<String>) -> Flow {
+    async fn split_window(
+        &mut self,
+        flags: SplitFlags,
+        argv: Vec<String>,
+        cwd: Option<String>,
+    ) -> Flow {
         let name = self.fresh_name("pane");
         let spawn = self.spawn_opts(name, argv, cwd).await;
         let opts = SplitOpts {
@@ -1486,8 +1564,8 @@ impl App {
     }
 
     async fn send_prefix(&mut self) -> Flow {
-        let modes = self.modes_of(&self.active_pane.clone());
-        let bytes = self.keymap.prefix().encode(&modes);
+        let bytes =
+            self.encode_for_active(|modes, policy| self.keymap.prefix().encode(modes, policy));
         let result = self.write_active(&bytes).await;
         self.settle(result)
     }

@@ -92,19 +92,6 @@ fn fill(template: &[String], id: &str) -> Vec<String> {
     template.iter().map(|s| s.replace("{id}", id)).collect()
 }
 
-/// A word as a POSIX shell reads it back unchanged.
-fn shell_word(word: &str) -> String {
-    let plain = !word.is_empty()
-        && word
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || "_@%+=:,./-".contains(c));
-    if plain {
-        word.to_string()
-    } else {
-        format!("'{}'", word.replace('\'', "'\\''"))
-    }
-}
-
 /// What to spawn for a pane, and a command line to type into it once its shell is up. A pane whose
 /// own process is a resumable tool is respawned as the resumed tool; a tool that ran inside a shell
 /// resumes in a fresh shell, so quitting it leaves the shell.
@@ -143,7 +130,7 @@ fn plan_pane(pane: &PaneSnapshot, rules: &[ResumeRule]) -> (SpawnOpts, Option<St
     };
 
     if hosted {
-        let line: Vec<String> = argv.iter().map(|word| shell_word(word)).collect();
+        let line: Vec<String> = argv.iter().map(|word| crate::cmdline::shell_word(word)).collect();
         return (original, Some(format!("{}\r", line.join(" "))));
     }
     match argv.split_first() {

@@ -2,7 +2,11 @@
 //! Targets use `[session:]pane` where pane is a node name or `%id`.
 use super::copy::CopyAction;
 use super::keymap::Table;
+use super::menu::MenuItem;
+use super::placement::{Extent, Offset};
+use super::popup::PopupOpts;
 use super::prompt::PromptKind;
+use crate::keys::KeySpec;
 use crate::protocol::{ChannelOp, EnvChange, HOOK_EVENTS, LayoutPreset, PasteBufferOpts, Side};
 use crate::vt::capture::CaptureSpec;
 use std::collections::BTreeMap;
@@ -133,6 +137,8 @@ pub enum Command {
     /// The client commands: listing, detaching, refreshing and choosing attached terminals, and
     /// suspending this one. See `ClientCommand`.
     Client(ClientCommand),
+    /// The popup and menu commands: see `PopupCommand`.
+    Popup(PopupCommand),
     /// The script commands: `run-shell`, `if-shell`, `wait-for`, hooks, `command-alias` and
     /// `source-file`.
     Script(ScriptCommand),
@@ -358,6 +364,21 @@ pub enum ClientCommand {
     Suspend,
 }
 
+/// The popup and menu commands: popups run a command over the panes, menus show command lines.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PopupCommand {
+    /// `display-popup [-E] [-w W] [-h H] [-x X] [-y Y] [-d dir] [-T title] [-t pane] [command]`: the
+    /// command runs on a pty drawn in a box over the panes; its keys go to it.
+    Display(PopupOpts),
+    /// `display-menu [-T title] [-x X] [-y Y] name key command ...`: a menu of command lines.
+    Menu {
+        title: Option<String>,
+        x: Offset,
+        y: Offset,
+        items: Vec<MenuItem>,
+    },
+}
+
 /// Command names and aliases accepted by `parse`; used for `:` completion.
 pub const COMMAND_NAMES: &[&str] = &[
     "bind-key",
@@ -376,6 +397,8 @@ pub const COMMAND_NAMES: &[&str] = &[
     "detach-client",
     "display-message",
     "display-panes",
+    "display-menu",
+    "display-popup",
     "find-window",
     "help",
     "if-shell",
@@ -685,6 +708,8 @@ fn misc_cmd(
         "move-window" | "movew" => move_window(name, args),
         "swap-window" | "swapw" => swap_window(name, args),
         "display-message" | "display" => display_message(name, args),
+        "display-menu" | "menu" => display_menu(name, args),
+        "display-popup" | "popup" => display_popup(name, args),
         "choose-tree" => choose_tree(name, args),
         "choose-buffer" => bare(name, args, Command::ChooseBuffer),
         "display-panes" | "displayp" => display_panes(name, args),
@@ -1660,6 +1685,101 @@ fn clock_mode(name: &str, args: &[String]) -> Result<Command, String> {
     o.no_rest(name)?;
     Ok(Command::ClockMode {
         target: o.value("-t").map(str::to_string),
+    })
+}
+
+const DISPLAY_POPUP: Spec = Spec {
+    bools: &["-E"],
+    values: &["-w", "-h", "-x", "-y", "-d", "-T", "-t"],
+    stop_at_arg: true,
+};
+const DISPLAY_MENU: Spec = Spec {
+    bools: &[],
+    values: &["-T", "-x", "-y"],
+    stop_at_arg: true,
+};
+
+fn display_popup(name: &str, args: &[String]) -> Result<Command, String> {
+    let o = parse_opts(name, args, DISPLAY_POPUP)?;
+    let mut opts = PopupOpts {
+        close_on_exit: o.has("-E"),
+        title: o.value("-T").map(str::to_string),
+        cwd: o.value("-d").map(str::to_string),
+        target: o.value("-t").map(str::to_string),
+        command: (!o.rest.is_empty()).then(|| crate::cmdline::command_line(&o.rest)),
+        ..PopupOpts::default()
+    };
+    if let Some(raw) = o.value("-w") {
+        opts.width = Extent::parse(raw).map_err(|e| format!("{name}: -w: {e}"))?;
+    }
+    if let Some(raw) = o.value("-h") {
+        opts.height = Extent::parse(raw).map_err(|e| format!("{name}: -h: {e}"))?;
+    }
+    if let Some(raw) = o.value("-x") {
+        opts.x = Offset::parse(raw).map_err(|e| format!("{name}: -x: {e}"))?;
+    }
+    if let Some(raw) = o.value("-y") {
+        opts.y = Offset::parse(raw).map_err(|e| format!("{name}: -y: {e}"))?;
+    }
+    Ok(Command::Popup(PopupCommand::Display(opts)))
+}
+
+fn display_menu(name: &str, args: &[String]) -> Result<Command, String> {
+    let o = parse_opts(name, args, DISPLAY_MENU)?;
+    if o.rest.is_empty() || o.rest.len() % 3 != 0 {
+        return Err(format!(
+            "{name}: items are a name, a key and a command, three words each"
+        ));
+    }
+    let items = o
+        .rest
+        .chunks(3)
+        .map(|item| menu_item(name, item))
+        .collect::<Result<Vec<_>, _>>()?;
+    let place = |flag: &str| {
+        o.value(flag)
+            .map_or(Ok(Offset::Centre), Offset::parse)
+            .map_err(|e| format!("{name}: {flag}: {e}"))
+    };
+    Ok(Command::Popup(PopupCommand::Menu {
+        title: o.value("-T").map(str::to_string),
+        x: place("-x")?,
+        y: place("-y")?,
+        items,
+    }))
+}
+
+/// One `display-menu` item from its name, key and command. A name starting with `-` is shown
+/// disabled; an empty name is a separator.
+fn menu_item(name: &str, item: &[String]) -> Result<MenuItem, String> {
+    let [label, key, line] = item else {
+        return Err(format!("{name}: items are a name, a key and a command"));
+    };
+    if label.is_empty() {
+        return Ok(MenuItem {
+            name: String::new(),
+            disabled: false,
+            key: None,
+            line: None,
+        });
+    }
+    let (disabled, label) = match label.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, label.as_str()),
+    };
+    let key = (!key.is_empty()).then(|| key.clone());
+    if let Some(spec) = &key {
+        KeySpec::parse(spec).map_err(|e| format!("{name}: {label}: key {spec}: {e}"))?;
+    }
+    let line = (!line.is_empty()).then(|| line.clone());
+    if let Some(text) = &line {
+        parse(text).map_err(|e| format!("{name}: {label}: {e}"))?;
+    }
+    Ok(MenuItem {
+        name: label.to_string(),
+        disabled,
+        key,
+        line,
     })
 }
 

@@ -72,6 +72,14 @@ If you pause after the prefix, a shortcut popup lists common action keys after `
 | `t` | `clock-mode` | Big clock in the active pane |
 | `i` | `display-message` | Describe the current pane on the status row |
 | `~` | `show-messages` | Log of status messages |
+| `<` | `display-menu` | Menu of window commands: rename, respawn, mark, kill, new window at the end |
+| `>` | `display-menu` | Menu of pane commands: go to top or bottom of history, zoom, kill, break out, mark, respawn |
+
+### Popups and menus
+
+A menu lists its items with their keys. `j`/`k` or the arrows move the selection, Enter runs the selected item, an item's key runs that item at once, and `q` or Esc closes it. Disabled items (`-` before the name in the command) are shown but never run; separators are drawn as lines. Menus are placed with `-x`/`-y`: a cell offset, `N%`, `C` (centred, the default) or `R` (far edge).
+
+A popup (`display-popup [-E] [-w W] [-h H] [-x X] [-y Y] [-T title] [-d dir] [-t pane] [command]`) runs its command on a pty of its own in a box over the panes, 80% of the screen by default. Keys go to the popup's command. Without `-E` the popup stays up after the command exits, and the next key closes it; with `-E` it closes as soon as the command exits.
 
 ---
 

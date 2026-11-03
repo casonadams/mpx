@@ -101,3 +101,13 @@ fn escapes_keep_the_colors_of_the_cells_and_reset_at_the_end_of_the_line() {
     assert_eq!(text(&vt, escaped), "\x1b[0;31mred\x1b[0m\n");
     assert_eq!(text(&vt, CaptureSpec::default()), "red\n");
 }
+
+#[test]
+fn escapes_keep_the_underline_style_and_colour() {
+    let vt = screen(3, 1, "\x1b[4:3m\x1b[58:2::1:2:3mW\x1b[0m");
+    let escaped = CaptureSpec {
+        escapes: true,
+        ..CaptureSpec::default()
+    };
+    assert_eq!(text(&vt, escaped), "\x1b[0;4:3;58;2;1;2;3mW\x1b[0m\n");
+}

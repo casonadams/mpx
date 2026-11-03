@@ -17,6 +17,7 @@ use mpx::layout::geometry::Rect;
 use mpx::protocol::{NewWindowOpts, SpawnOpts, SplitOpts, WaitCondition, WaitOutcome};
 use mpx::tui::app::{App, AppOptions, AttachOpts, Clipboard, Flow, Mode, StartView, StreamRx};
 use mpx::tui::frame;
+use mpx::tui::popup::{self, PopupState};
 use mpx::vt::{Cursor, VtScreen};
 
 pub const SESSION: &str = "test";
@@ -135,8 +136,14 @@ pub async fn wait_for(client: &mut Client, pane: &str, needle: &str) -> String {
 
 /// Opens a focused window named `name` whose pane runs `script`, and waits until it prints READY.
 pub async fn window(client: &mut Client, name: &str, script: &str) {
-    client.new_window(window_opts(name, script)).await.expect("new window");
-    client.rename_window(None, name).await.expect("rename window");
+    client
+        .new_window(window_opts(name, script))
+        .await
+        .expect("new window");
+    client
+        .rename_window(None, name)
+        .await
+        .expect("rename window");
     wait_for(client, name, "READY").await;
 }
 
@@ -150,7 +157,10 @@ fn window_opts(name: &str, script: &str) -> NewWindowOpts {
 
 /// Splits `target` with an unfocused pane `name` running `ECHO`, and waits until it prints READY.
 pub async fn split(client: &mut Client, target: &str, name: &str, direction: Direction) {
-    client.split(split_opts(target, name, direction)).await.expect("split");
+    client
+        .split(split_opts(target, name, direction))
+        .await
+        .expect("split");
     wait_for(client, name, "READY").await;
 }
 
@@ -167,8 +177,16 @@ fn split_opts(target: &str, name: &str, direction: Direction) -> SplitOpts {
 
 /// Waits (bounded) for `name` to exit and returns its exit code.
 pub async fn exited(client: &mut Client, name: &str) -> Option<i32> {
-    match client.wait(name, WaitCondition::Exit, Some(2_000)).await.expect("wait") {
-        WaitOutcome { satisfied: true, exit_code, .. } => exit_code,
+    match client
+        .wait(name, WaitCondition::Exit, Some(2_000))
+        .await
+        .expect("wait")
+    {
+        WaitOutcome {
+            satisfied: true,
+            exit_code,
+            ..
+        } => exit_code,
         WaitOutcome { .. } => panic!("{name} did not exit in time"),
     }
 }
@@ -192,6 +210,17 @@ pub fn active_window(h: &Harness) -> String {
         .find(|t| t.is_active)
         .map(|t| t.name.clone())
         .unwrap_or_default()
+}
+
+/// The text of a popup's screen, one line per row.
+pub fn screen_text(popup: &PopupState) -> String {
+    popup
+        .screen
+        .grid()
+        .screen_lines()
+        .map(|line| line.iter().map(|cell| cell.c).collect::<String>())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// An attached app plus the daemon state around it.
@@ -318,7 +347,34 @@ impl Harness {
     pub async fn closes_with(&mut self, shows: impl Fn(&Mode) -> bool, close: KeyCode) {
         assert!(shows(&self.app.mode), "no overlay open before {close:?}");
         self.key(close).await;
-        assert!(self.mode_is_normal(), "{close:?} did not return to normal mode");
+        assert!(
+            self.mode_is_normal(),
+            "{close:?} did not return to normal mode"
+        );
+    }
+
+    /// Asserts that `drawn` shows every `needle`, then that `close` dismisses the overlay on screen.
+    pub async fn shown_then_closed(&mut self, drawn: &str, needles: &[&str], close: KeyCode) {
+        for needle in needles {
+            assert!(drawn.contains(needle), "{needle:?} is not shown\n{drawn}");
+        }
+        assert!(!self.mode_is_normal(), "no overlay open before {close:?}");
+        self.key(close).await;
+        assert!(
+            self.mode_is_normal(),
+            "{close:?} did not return to normal mode"
+        );
+    }
+
+    /// Runs `line`, then asserts its frame shows every `needle` and that `close` dismisses it.
+    pub async fn command_shows_then_closes(
+        &mut self,
+        line: &str,
+        needles: &[&str],
+        close: KeyCode,
+    ) {
+        let drawn = self.command_frame(line).await;
+        self.shown_then_closed(&drawn, needles, close).await;
     }
 
     /// Runs `line` at the `:` prompt, draws a frame and returns the text it shows.
@@ -364,7 +420,9 @@ impl Harness {
         let pane = pane.to_string();
         let wanted = marker.to_string();
         self.until(marker, move |app| {
-            app.vt.get(&pane).is_some_and(|vt| vt.snapshot().contains(&wanted))
+            app.vt
+                .get(&pane)
+                .is_some_and(|vt| vt.snapshot().contains(&wanted))
         })
         .await;
     }
@@ -421,6 +479,26 @@ impl Harness {
             if let Ok(item) = tokio::time::timeout(left, self.rx.recv()).await {
                 let item = item.expect("event stream closed");
                 self.app.on_stream(Some(item), &mut self.rx).await;
+            }
+        }
+    }
+
+    /// Feeds the open popup's pty output to it until `ready` holds for the popup, bounded. Returns
+    /// early when the popup closes; callers check the mode.
+    pub async fn until_popup(&mut self, what: &str, mut ready: impl FnMut(&PopupState) -> bool) {
+        let deadline = tokio::time::Instant::now() + WAIT;
+        loop {
+            match &self.app.mode {
+                Mode::Popup(popup) if ready(popup) => return,
+                Mode::Popup(_) => {}
+                _ => return,
+            }
+            let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+            assert!(!left.is_zero(), "popup never reached: {what}");
+            if let Ok(Some(event)) =
+                tokio::time::timeout(left, popup::next_event(&mut self.app.mode)).await
+            {
+                self.app.on_popup(event);
             }
         }
     }

@@ -326,6 +326,26 @@ impl Conv {
                 }
                 _ => self.note(line, format!("mode-keys '{value}' is not vi or emacs")),
             },
+            "focus-events" => self.flag(line, name, "focus_events", value),
+            "xterm-keys" => self.flag(line, name, "xterm_keys", value),
+            "visual-bell" => self.flag(line, name, "visual_bell", value),
+            "visual-activity" => self.flag(line, name, "visual_activity", value),
+            "set-titles" => self.flag(line, name, "set_titles", value),
+            "set-titles-string" => {
+                self.top.insert("set_titles_string", toml_str(value));
+            }
+            "extended-keys" => match value.parse::<crate::config::ExtendedKeys>() {
+                Ok(mode) => {
+                    self.top.insert("extended_keys", toml_str(mode.as_str()));
+                }
+                Err(e) => self.note(line, format!("extended-keys: {e}")),
+            },
+            "bell-action" => match value.parse::<crate::config::BellAction>() {
+                Ok(action) => {
+                    self.top.insert("bell_action", toml_str(action.as_str()));
+                }
+                Err(e) => self.note(line, format!("bell-action: {e}")),
+            },
             _ => return false,
         }
         true

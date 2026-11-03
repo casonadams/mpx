@@ -1,6 +1,8 @@
 use std::borrow::Cow;
 use std::collections::VecDeque;
 
+use super::link::LinkId;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Color {
     Black,
@@ -23,6 +25,42 @@ pub enum Color {
     Rgb(u8, u8, u8),
 }
 
+impl Color {
+    /// The palette slot (0-15) of a named ANSI colour, `None` for indexed and RGB colours.
+    pub fn named_slot(self) -> Option<u8> {
+        Some(match self {
+            Color::Black => 0,
+            Color::Red => 1,
+            Color::Green => 2,
+            Color::Yellow => 3,
+            Color::Blue => 4,
+            Color::Magenta => 5,
+            Color::Cyan => 6,
+            Color::White => 7,
+            Color::BrightBlack => 8,
+            Color::BrightRed => 9,
+            Color::BrightGreen => 10,
+            Color::BrightYellow => 11,
+            Color::BrightBlue => 12,
+            Color::BrightMagenta => 13,
+            Color::BrightCyan => 14,
+            Color::BrightWhite => 15,
+            Color::Indexed(_) | Color::Rgb(..) => return None,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Underline {
+    #[default]
+    None,
+    Single,
+    Double,
+    Curly,
+    Dotted,
+    Dashed,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct CellStyle {
     /// Reverse video (SGR 7): the terminal swaps foreground and background when drawing.
@@ -33,7 +71,18 @@ pub struct CellStyle {
     /// Faint (SGR 2): the terminal draws the text dimmer than its color.
     pub faint: bool,
     pub italic: bool,
-    pub underline: bool,
+    /// Underline style (SGR 4, 4:n, 21).
+    pub underline: Underline,
+    /// Underline color (SGR 58), `None` for the foreground color.
+    pub underline_color: Option<Color>,
+    /// OSC 8 hyperlink the cell's text links to.
+    pub link: Option<LinkId>,
+}
+
+impl CellStyle {
+    pub fn is_underlined(&self) -> bool {
+        self.underline != Underline::None
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,7 +101,9 @@ const BLANK: Cell = Cell {
         bold: false,
         faint: false,
         italic: false,
-        underline: false,
+        underline: Underline::None,
+        underline_color: None,
+        link: None,
     },
 };
 

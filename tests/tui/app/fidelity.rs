@@ -8,10 +8,10 @@ use mpx::clients::WindowSize;
 use mpx::config::{Config, WindowOptions};
 use mpx::layout::Direction;
 use mpx::layout::Rect;
-use mpx::tui::app::{AttachOpts, ClockSource};
+use mpx::tui::app::{AttachOpts, ClockSource, Mode};
 use mpx::tui::labels::{label, label_rect, pane_numbers};
 
-use super::support::{ECHO, Harness, MAIN, SESSION, SIZE, open_app, split};
+use super::support::{ECHO, Harness, MAIN, SESSION, SIZE, open_app, screen_text, split};
 
 /// Whether the cell at (`x`, `y`) lies inside `area`.
 fn inside(area: Rect, x: u16, y: u16) -> bool {
@@ -313,4 +313,57 @@ async fn a_window_laid_out_smaller_than_this_client_blanks_the_rest() {
         }
     }
     assert!(blank_cells > 0, "the smaller window leaves cells uncovered");
+}
+
+#[tokio::test]
+async fn links_underlines_sync_and_overlays_keep_the_terminal_identical() {
+    let config = Config {
+        which_key_delay_ms: 0,
+        ..Config::default()
+    };
+    let mut h = Harness::start(config, ECHO).await;
+    h.app.canvas.set_lr_margins(true);
+    split(&mut h.probe, MAIN, "side", Direction::Horizontal).await;
+    check(&mut h, "after split").await;
+
+    // Hyperlinks (OSC 8), underline styles and underline colours reach the terminal as the pane
+    // holds them.
+    let styled = concat!(
+        "\x1b]8;;https://fid.test/a\x1b\\LINK\x1b]8;;\x1b\\ ",
+        "\x1b[4:3mcurly\x1b[0m \x1b[4:2mdouble\x1b[0m ",
+        "\x1b[58;5;196m\x1b[4mred\x1b[0m \x1b[58;2;1;2;3m\x1b[4:5mcolour\x1b[0m STYLE-DONE",
+    );
+    h.emit(MAIN, styled, "STYLE-DONE").await;
+    check(&mut h, "links and underline styles").await;
+
+    // A synchronized update holds the pane's drawing: the frame keeps the last complete state
+    // until the program ends the update.
+    h.probe.send_input(MAIN, "\x1b[?2026hHELD-TEXT").await.expect("send");
+    h.until("update begun", |app| app.vt.get(MAIN).is_some_and(|vt| vt.sync_output())).await;
+    let held = h.frame().await;
+    assert!(!held.contains("HELD-TEXT"), "a synchronized update is held\n{held}");
+    h.emit(MAIN, "\x1b[?2026l SYNC-END", "SYNC-END").await;
+    check(&mut h, "synchronized update ended").await;
+
+    // A popup covers its box of the panes; the panes outside it still match their screens.
+    h.command("display-popup -E -w 40 -h 10 'printf POPUP-OUT; read x'").await;
+    h.until_popup("popup printed", |popup| screen_text(popup).contains("POPUP-OUT")).await;
+    let popup = match &h.app.mode {
+        Mode::Popup(popup) => popup.rect,
+        _ => panic!("popup should be open"),
+    };
+    check_masked(&mut h, "popup overlay", &[popup]).await;
+    h.key(KeyCode::Enter).await;
+    h.until_popup("popup closed", |_| false).await;
+    check(&mut h, "popup closed").await;
+
+    // A menu covers its own box the same way.
+    h.command("display-menu -x 5 -y 5 Zoom z 'resize-pane -Z'").await;
+    let menu = match &h.app.mode {
+        Mode::Menu(menu) => menu.rect,
+        _ => panic!("menu should be open"),
+    };
+    check_masked(&mut h, "menu overlay", &[menu]).await;
+    h.key(KeyCode::Esc).await;
+    check(&mut h, "menu closed").await;
 }

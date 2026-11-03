@@ -89,7 +89,8 @@ macro_rules! text_option {
     };
 }
 
-static OPTIONS: &[Opt] = &[
+/// Session behaviour: input, mouse, prefix, timing and the search wrap.
+static GENERAL_OPTIONS: &[Opt] = &[
     option!(
         "allow-passthrough",
         allow_passthrough,
@@ -114,8 +115,6 @@ static OPTIONS: &[Opt] = &[
         |v: &u64| v.to_string(),
         number::<u64>
     ),
-    style_option!("message-command-style", message_command_style),
-    style_option!("message-style", message_style),
     option!(
         "mode-keys",
         mode_keys,
@@ -123,14 +122,6 @@ static OPTIONS: &[Opt] = &[
         |v: &str| v.parse()
     ),
     option!("mouse", mouse, |v: &bool| on_off(*v), parse_switch),
-    style_option!("pane-active-border-style", pane_active_border_style),
-    option!(
-        "pane-base-index",
-        window.pane_base_index,
-        |v: &usize| v.to_string(),
-        number::<usize>
-    ),
-    style_option!("pane-border-style", pane_border_style),
     option!(
         "prefix",
         prefix,
@@ -143,6 +134,83 @@ static OPTIONS: &[Opt] = &[
         |v: &bool| on_off(*v),
         parse_switch
     ),
+    option!(
+        "which-key-delay",
+        which_key_delay_ms,
+        |v: &u64| v.to_string(),
+        number::<u64>
+    ),
+    option!(
+        "wrap-search",
+        wrap_search,
+        |v: &bool| on_off(*v),
+        parse_switch
+    ),
+];
+
+/// Pane placement and border styles.
+static PANE_OPTIONS: &[Opt] = &[
+    option!(
+        "pane-base-index",
+        window.pane_base_index,
+        |v: &usize| v.to_string(),
+        number::<usize>
+    ),
+    style_option!("pane-active-border-style", pane_active_border_style),
+    style_option!("pane-border-style", pane_border_style),
+];
+
+/// Terminal emulation: bell, titles, key encoding, focus and visual alerts.
+static TERMINAL_OPTIONS: &[Opt] = &[
+    option!(
+        "bell-action",
+        terminal.bell_action,
+        |v: &crate::config::BellAction| v.as_str().to_string(),
+        |v: &str| v.parse()
+    ),
+    option!(
+        "extended-keys",
+        terminal.extended_keys,
+        |v: &crate::config::ExtendedKeys| v.as_str().to_string(),
+        |v: &str| v.parse()
+    ),
+    option!(
+        "focus-events",
+        terminal.focus_events,
+        |v: &bool| on_off(*v),
+        parse_switch
+    ),
+    option!(
+        "set-titles",
+        terminal.set_titles,
+        |v: &bool| on_off(*v),
+        parse_switch
+    ),
+    text_option!("set-titles-string", terminal.set_titles_string),
+    option!(
+        "visual-activity",
+        terminal.visual_activity,
+        |v: &bool| on_off(*v),
+        parse_switch
+    ),
+    option!(
+        "visual-bell",
+        terminal.visual_bell,
+        |v: &bool| on_off(*v),
+        parse_switch
+    ),
+    option!(
+        "xterm-keys",
+        terminal.xterm_keys,
+        |v: &bool| on_off(*v),
+        parse_switch
+    ),
+];
+
+/// The status line and the messages shown on it.
+static STATUS_OPTIONS: &[Opt] = &[
+    style_option!("message-command-style", message_command_style),
+    style_option!("message-style", message_style),
     Opt {
         name: "status",
         get: |c| {
@@ -202,12 +270,10 @@ static OPTIONS: &[Opt] = &[
         number::<usize>
     ),
     style_option!("status-style", status_style),
-    option!(
-        "which-key-delay",
-        which_key_delay_ms,
-        |v: &u64| v.to_string(),
-        number::<u64>
-    ),
+];
+
+/// Window tabs in the status line: their formats and styles.
+static WINDOW_OPTIONS: &[Opt] = &[
     style_option!("window-status-activity-style", window_status_activity_style),
     style_option!("window-status-bell-style", window_status_bell_style),
     text_option!("window-status-current-format", window_status_current_format),
@@ -216,11 +282,23 @@ static OPTIONS: &[Opt] = &[
     style_option!("window-status-last-style", window_status_last_style),
     text_option!("window-status-separator", window_status_separator),
     style_option!("window-status-style", window_status_style),
-    option!("wrap-search", wrap_search, |v: &bool| on_off(*v), parse_switch),
 ];
 
+/// Every table of settable options.
+fn tables() -> impl Iterator<Item = &'static Opt> {
+    [
+        GENERAL_OPTIONS,
+        PANE_OPTIONS,
+        TERMINAL_OPTIONS,
+        STATUS_OPTIONS,
+        WINDOW_OPTIONS,
+    ]
+    .into_iter()
+    .flatten()
+}
+
 fn find(name: &str) -> Result<&'static Opt, String> {
-    if let Some(opt) = OPTIONS.iter().find(|o| o.name == name) {
+    if let Some(opt) = tables().find(|o| o.name == name) {
         return Ok(opt);
     }
     if DAEMON_OPTIONS.contains(&name) {
@@ -248,7 +326,7 @@ pub fn unset(config: &mut Config, name: &str) -> Result<(), String> {
 
 /// Whether `name` is a tmux option mpx knows, settable here or read by the daemon.
 pub fn is_known(name: &str) -> bool {
-    OPTIONS.iter().any(|o| o.name == name) || DAEMON_OPTIONS.contains(&name)
+    tables().any(|o| o.name == name) || DAEMON_OPTIONS.contains(&name)
 }
 
 /// The value of option `name` as `show-options` prints it.
@@ -258,5 +336,7 @@ pub fn get(config: &Config, name: &str) -> Result<String, String> {
 
 /// Every settable option as `(name, value)`, sorted by name.
 pub fn list(config: &Config) -> Vec<(&'static str, String)> {
-    OPTIONS.iter().map(|o| (o.name, (o.get)(config))).collect()
+    let mut all: Vec<_> = tables().map(|o| (o.name, (o.get)(config))).collect();
+    all.sort_by_key(|(name, _)| *name);
+    all
 }

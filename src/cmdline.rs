@@ -100,3 +100,16 @@ pub fn command_line(words: &[String]) -> String {
         many => join_words(many),
     }
 }
+
+/// A word as a POSIX shell reads it back unchanged.
+pub fn shell_word(word: &str) -> String {
+    let plain = !word.is_empty()
+        && word
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "_@%+=:,./-".contains(c));
+    if plain {
+        word.to_string()
+    } else {
+        format!("'{}'", word.replace('\'', "'\\''"))
+    }
+}

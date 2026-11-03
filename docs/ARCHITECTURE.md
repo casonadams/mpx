@@ -76,3 +76,5 @@ State that outlives the daemon lives in the state directory (`$XDG_STATE_HOME/mp
 - **DEC 2026 Synchronized Updates**: zero-flicker redraws.
 - **Vi Copy Mode**: 100k-line scrollback, regex search, visual selection, and OSC 52 system clipboard synchronization.
 - **Command Palette (`Ctrl-Space`)**: instant fuzzy search across Commands, Sessions & Windows, and Keybindings.
+- **Popups and menus**: `display-popup` runs a command on its own pty in a box over the panes; `display-menu` opens window and pane menus on `Prefix <` and `Prefix >`.
+- **Outer terminal**: focus events, titles (`set-titles`) and bells (`bell-action`, `visual-bell`) follow their options (see [CONFIG.md](CONFIG.md)); hyperlinks (OSC 8), underline styles and synchronized output pass through.

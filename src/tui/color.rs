@@ -20,34 +20,13 @@ const ANSI_RGB: [(u8, u8, u8); 16] = [
     (255, 255, 255),
 ];
 
-/// Position of a named ANSI colour in [`ANSI_RGB`], `None` for indexed and RGB colours.
-fn named_index(color: VtColor) -> Option<usize> {
-    Some(match color {
-        VtColor::Black => 0,
-        VtColor::Red => 1,
-        VtColor::Green => 2,
-        VtColor::Yellow => 3,
-        VtColor::Blue => 4,
-        VtColor::Magenta => 5,
-        VtColor::Cyan => 6,
-        VtColor::White => 7,
-        VtColor::BrightBlack => 8,
-        VtColor::BrightRed => 9,
-        VtColor::BrightGreen => 10,
-        VtColor::BrightYellow => 11,
-        VtColor::BrightBlue => 12,
-        VtColor::BrightMagenta => 13,
-        VtColor::BrightCyan => 14,
-        VtColor::BrightWhite => 15,
-        VtColor::Indexed(_) | VtColor::Rgb(..) => return None,
-    })
-}
-
 pub fn color_to_rgb(color: VtColor) -> (u8, u8, u8) {
     match color {
         VtColor::Indexed(i) => indexed_to_rgb(i),
         VtColor::Rgb(r, g, b) => (r, g, b),
-        named => named_index(named).map_or((0, 0, 0), |i| ANSI_RGB[i]),
+        named => named
+            .named_slot()
+            .map_or((0, 0, 0), |i| ANSI_RGB[usize::from(i)]),
     }
 }
 
@@ -118,7 +97,7 @@ impl Palette {
 pub fn from_terminal_palette(color: VtColor, palette: &Palette) -> VtColor {
     let index = match color {
         VtColor::Indexed(i) => Some(usize::from(i)),
-        other => named_index(other),
+        other => other.named_slot().map(usize::from),
     };
     match index.and_then(|i| palette.get(i)) {
         Some((r, g, b)) => VtColor::Rgb(r, g, b),

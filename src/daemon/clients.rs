@@ -18,10 +18,15 @@ pub(super) fn list(subs: &[Subscriber], session: &str) -> Vec<ClientInfo> {
 
 /// The live clients as registered (the session name is filled in by the caller).
 pub(super) fn live(subs: &[Subscriber]) -> Vec<ClientInfo> {
-    subs.iter()
-        .filter(|s| !s.sink.is_closed())
-        .filter_map(|s| s.client.clone())
-        .collect()
+    let mut clients = Vec::new();
+    for s in subs {
+        if let Some(client) = &s.client
+            && !s.sink.is_closed()
+        {
+            clients.push(client.clone());
+        }
+    }
+    clients
 }
 
 /// Whether a client's subscription has ended since it attached.

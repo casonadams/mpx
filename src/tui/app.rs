@@ -12,15 +12,18 @@ use super::copy::CopyState;
 use super::frame;
 use super::job::Job;
 use super::keymap::{self, Keymap};
+use super::menu::MenuState;
+use super::outer::OuterTerminal;
 use super::overlay::Overlay;
 use super::panes::{BorderGrab, LayoutCache, PaneRect, resized_elsewhere, sync_dims};
+use super::popup::{PopupEvent, PopupState};
 use super::prompt::PromptRun;
 use super::render::copy_to_clipboard;
 use super::status::{local_utc_offset, restored_notice, time_of_day};
 use super::statusline::{self, Rows, Target};
 use super::terminal::TerminalGuard;
 use crate::client::Client;
-use crate::config::{Config, StatusPosition};
+use crate::config::{Config, ExtendedKeys, StatusPosition};
 use crate::keys::TermModes;
 use crate::layout::geometry::Rect;
 use crate::node::sleep_until_opt;
@@ -56,6 +59,10 @@ pub enum Mode {
     Clock {
         pane: String,
     },
+    /// display-popup: a command runs in a box over the panes; its keys go to it until it closes.
+    Popup(Box<PopupState>),
+    /// display-menu: a menu of commands over the panes.
+    Menu(Box<MenuState>),
 }
 
 /// Event-stream subscription for the attached session. Events tagged with an older
@@ -177,6 +184,8 @@ pub struct App {
     pub attached: usize,
     /// The session this client was attached to before the current one (`switch-client -l`).
     pub previous_session: Option<String>,
+    /// What this client shows on the outer terminal beyond the panes: title, bells, activity.
+    pub outer: OuterTerminal,
 }
 
 /// Where clock mode reads the time: the system clock, or a fixed time (for tests).
@@ -356,6 +365,7 @@ impl App {
             terminal,
             attached: 0,
             previous_session: None,
+            outer: OuterTerminal::default(),
         }
     }
 
@@ -417,6 +427,7 @@ impl App {
             .map(|(name, ..)| name.clone())
             .unwrap_or_default();
         self.follow_focus(focused);
+        self.refresh_outer((w, h));
         let shown_before: Vec<String> = self.panes.iter().map(|(name, ..)| name.clone()).collect();
         self.panes = if self.zoomed() {
             // Zoomed: the focused pane alone fills the pane area.
@@ -494,11 +505,17 @@ impl App {
         self.focus_pane = Some(active);
     }
 
-    async fn send_focus(&mut self, name: &str, focused: bool) {
-        if self.modes_of(name).focus_events && !self.terminal.readonly {
-            let text = String::from_utf8_lossy(crate::keys::focus_event(focused)).into_owned();
-            let _ = self.client.send_input(name, &text).await;
+    /// Reports focus in or out to pane `name`, when `focus-events` is on and the pane asked for reports.
+    pub(super) async fn send_focus(&mut self, name: &str, focused: bool) {
+        if name.is_empty()
+            || !self.config.terminal.focus_events
+            || !self.modes_of(name).focus_events
+            || self.terminal.readonly
+        {
+            return;
         }
+        let text = String::from_utf8_lossy(crate::keys::focus_event(focused)).into_owned();
+        let _ = self.client.send_input(name, &text).await;
     }
 
     /// Width and height of the area the panes are laid out in, right of the sidebar.
@@ -662,6 +679,7 @@ impl App {
 
     /// Work that follows every input or stream batch: copies made reach the paste buffers.
     async fn after_input(&mut self) {
+        self.ring_bells();
         for text in std::mem::take(&mut self.yanks) {
             if let Err(e) = self.client.set_buffer(None, &text, false).await {
                 self.say(format!("set-buffer: {e}"));
@@ -782,6 +800,8 @@ impl App {
             Mode::Panes { .. } => self.panes_key(key).await,
             // The mode is already back to normal: any key ends clock mode and is not forwarded.
             Mode::Clock { .. } => Flow::Continue,
+            Mode::Popup(popup) => self.popup_key(popup, key).await,
+            Mode::Menu(menu) => self.menu_key(menu, key).await,
         }
     }
 }
@@ -910,6 +930,8 @@ enum Wake {
     Due,
     /// A command that waited on the daemon finished.
     Job(Job),
+    /// The command of the open popup produced output or ended.
+    Popup(PopupEvent),
 }
 
 /// Terminal input read on its own thread and handed over a channel. crossterm's async
@@ -991,7 +1013,7 @@ impl Tui {
         app.canvas.set_lr_margins(report.margins);
         app.host_colors = super::render::HostColors::from_report(&report);
         app.host_original = app.host_colors;
-        Ok(Self {
+        let mut tui = Self {
             out: BufWriter::with_capacity(64 * 1024, stdout()),
             body: Vec::with_capacity(64 * 1024),
             cursor: Vec::new(),
@@ -1006,7 +1028,9 @@ impl Tui {
             guard,
             mouse_captured: true,
             redraw: true,
-        })
+        };
+        tui.sync_outer();
+        Ok(tui)
     }
 
     /// One pass of the event loop: draw if due, wait for a wake-up, handle it. Returns false
@@ -1016,9 +1040,10 @@ impl Tui {
             return false;
         }
         let wake = self.wait().await;
-        let output = matches!(wake, Wake::Stream(_));
+        let output = matches!(wake, Wake::Stream(_) | Wake::Popup(_));
         let ticked = matches!(wake, Wake::Tick);
         let flow = self.handle(wake).await;
+        self.sync_outer();
         let suspended = self.suspend_if_requested();
         sync_mouse_capture(
             &mut self.out,
@@ -1026,8 +1051,9 @@ impl Tui {
             &mut self.mouse_captured,
         );
         let forwarded = std::mem::take(&mut self.app.forwarded);
-        self.redraw =
-            needs_redraw(output, forwarded, self.app.frame_due, Instant::now()) || suspended;
+        self.redraw = needs_redraw(output, forwarded, self.app.frame_due, Instant::now())
+            || suspended
+            || self.app.outer.bell_pending;
         if ticked
             && self.app.live_message().is_none()
             && self.app.frame_due.is_none()
@@ -1057,6 +1083,7 @@ impl Tui {
             let _ = frame::send(&mut self.out, &self.body, &self.cursor);
             std::mem::swap(&mut self.cursor, &mut self.last_cursor);
         }
+        self.write_outer();
         self.app.drew(Instant::now());
         true
     }
@@ -1066,6 +1093,7 @@ impl Tui {
         let popup = self.app.hud_deadline().filter(|_| !self.app.hud_visible());
         let due = earliest([popup, self.app.frame_due, self.app.display_deadline()]);
         tokio::select! {
+            Some(event) = super::popup::next_event(&mut self.app.mode) => Wake::Popup(event),
             Some(event) = self.keys.recv() => Wake::Input(event),
             item = self.stream.recv() => Wake::Stream(item),
             _ = self.tick.tick() => Wake::Tick,
@@ -1081,6 +1109,10 @@ impl Tui {
                 let flow = self.app.on_stream(item, &mut self.stream).await;
                 flush_passthroughs(&mut self.out, &mut self.app.passthroughs);
                 flow
+            }
+            Wake::Popup(event) => {
+                self.app.on_popup(event);
+                Flow::Continue
             }
             Wake::Tick => self.app.on_tick().await,
             Wake::Job(job) => self.app.finish_job(job).await,
@@ -1105,6 +1137,26 @@ impl Tui {
             self.mouse_captured = true;
         }
         suspended
+    }
+
+    /// Brings the outer terminal's focus reporting and keyboard protocol in line with the options.
+    fn sync_outer(&mut self) {
+        let keys = self.app.config.terminal.extended_keys != ExtendedKeys::Off;
+        let _ = self
+            .guard
+            .sync(&mut self.out, self.app.config.terminal.focus_events, keys);
+        let _ = self.out.flush();
+    }
+
+    /// Sends the outer terminal the title and bell that the frame just drew calls for.
+    fn write_outer(&mut self) {
+        if let Some(title) = self.app.outer_title() {
+            let _ = self.guard.set_title(&mut self.out, &title);
+        }
+        if self.app.take_bell() {
+            let _ = self.out.write_all(b"\x07");
+        }
+        let _ = self.out.flush();
     }
 }
 
