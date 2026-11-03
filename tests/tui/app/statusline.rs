@@ -7,7 +7,7 @@ use crossterm::event::{KeyCode, MouseButton, MouseEventKind};
 use mpx::config::{Config, ModeKeys, StatusPosition};
 use mpx::tui::app::{Mode, sync_mouse_capture};
 
-use super::support::{ECHO, Harness, SESSION, SIZE, connect, window};
+use super::support::{ECHO, Harness, SESSION, SIZE, active_window, connect, window};
 
 async fn start(config: Config) -> Harness {
     Harness::start(config, ECHO).await
@@ -28,17 +28,6 @@ fn row(drawn: &str, index: usize) -> String {
 
 fn bottom(drawn: &str) -> String {
     row(drawn, SIZE.1 as usize - 1)
-}
-
-/// Name of the window the app shows as current.
-fn active_window(h: &Harness) -> String {
-    h.app
-        .layout
-        .tabs
-        .iter()
-        .find(|t| t.is_active)
-        .map(|t| t.name.clone())
-        .unwrap_or_default()
 }
 
 /// Opens a second window `work`, which becomes the current one.

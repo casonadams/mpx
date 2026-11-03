@@ -78,8 +78,12 @@ impl App {
             return Err(format!("session '{name}' has no panes"));
         }
         let sub = Client::connect(endpoint).await.map_err(|_| not_running())?;
+        if self.session != name {
+            self.previous_session = Some(self.session.clone());
+        }
         self.endpoint = endpoint.to_string();
         self.session = name.to_string();
+        self.terminal.session = name.to_string();
         self.client = client;
         self.reset_view();
         self.subscribe(sub);

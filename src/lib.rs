@@ -1,4 +1,5 @@
 pub mod buffer;
+pub mod clients;
 pub mod cli;
 pub mod client;
 pub mod cmdline;

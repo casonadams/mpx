@@ -239,20 +239,25 @@ impl App {
 
     /// Writes bytes to the active pane (focus reports, the prefix key).
     pub async fn write_active(&mut self, bytes: &[u8]) -> Result<(), String> {
-        if self.active_pane.is_empty() {
-            return Ok(());
-        }
-        let text = String::from_utf8_lossy(bytes).into_owned();
-        let pane = self.active_pane.clone();
-        self.client.send_input(&pane, &text).await
+        let active = [self.active_pane.clone()];
+        self.send_to(&active, bytes).await
     }
 
     /// Writes typed bytes to the active pane, or to every running pane of its window while
     /// `synchronize-panes` is on for that window.
     async fn write_typed(&mut self, bytes: &[u8]) -> Result<(), String> {
+        let targets = self.typed_targets();
+        self.send_to(&targets, bytes).await
+    }
+
+    /// Sends `bytes` to each named pane. A read-only client sends nothing; an empty name is no pane.
+    async fn send_to(&mut self, panes: &[String], bytes: &[u8]) -> Result<(), String> {
+        if self.terminal.readonly {
+            return Ok(());
+        }
         let text = String::from_utf8_lossy(bytes).into_owned();
-        for pane in self.typed_targets() {
-            self.client.send_input(&pane, &text).await?;
+        for pane in panes.iter().filter(|p| !p.is_empty()) {
+            self.client.send_input(pane, &text).await?;
         }
         Ok(())
     }
@@ -274,6 +279,9 @@ impl App {
     }
 
     pub async fn on_paste(&mut self, text: &str) -> Flow {
+        if self.terminal.readonly {
+            return Flow::Continue;
+        }
         if let Mode::Prompt(prompt) = &mut self.mode {
             for c in text.chars().filter(|c| !c.is_control()) {
                 prompt.line.insert(c);

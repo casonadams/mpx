@@ -1,7 +1,7 @@
 //! Config the daemon acts on: exit policy, scrollback, window naming, and the default program and
 //! terminal of new panes.
 use mpx::client::Client;
-use mpx::config::{Config, RemainOnExit};
+use mpx::config::{Config, RemainOnExit, SessionOptions, WindowOptions};
 use mpx::protocol::{NewWindowOpts, SpawnOpts};
 
 use super::support::{connect, exit_code, logs_until, pty, start_with, task};
@@ -38,7 +38,10 @@ async fn remain_on_exit_failed_keeps_only_panes_that_exit_non_zero() {
 #[tokio::test]
 async fn scrollback_lines_limits_the_history_a_pane_keeps() {
     let daemon = start_with(Config {
-        scrollback_lines: 3,
+        session: SessionOptions {
+            scrollback_lines: 3,
+            ..SessionOptions::default()
+        },
         ..Config::default()
     })
     .await;
@@ -60,7 +63,10 @@ async fn scrollback_lines_limits_the_history_a_pane_keeps() {
 #[tokio::test]
 async fn automatic_rename_off_keeps_the_name_a_window_was_created_with() {
     let daemon = start_with(Config {
-        automatic_rename: false,
+        window: WindowOptions {
+            automatic_rename: false,
+            ..WindowOptions::default()
+        },
         ..Config::default()
     })
     .await;
@@ -80,9 +86,12 @@ async fn automatic_rename_off_keeps_the_name_a_window_was_created_with() {
 #[tokio::test]
 async fn default_shell_command_and_terminal_apply_to_panes_started_without_a_command() {
     let daemon = start_with(Config {
-        default_terminal: "screen-256color".to_string(),
-        default_shell: Some("/bin/sh".to_string()),
-        default_command: Some("printf 'READY %s' \"$TERM\"; sleep 30".to_string()),
+        session: SessionOptions {
+            default_terminal: "screen-256color".to_string(),
+            default_shell: Some("/bin/sh".to_string()),
+            default_command: Some("printf 'READY %s' \"$TERM\"; sleep 30".to_string()),
+            ..SessionOptions::default()
+        },
         ..Config::default()
     })
     .await;

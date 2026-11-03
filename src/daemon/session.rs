@@ -13,12 +13,15 @@ use tracing::warn;
 
 use super::SESSION_GONE;
 use super::channels::Channels;
+use super::clients;
 use super::hooks::{self, HookTable, Tx};
 use super::idempotency::{Claim, IdemCache};
 use super::plan::{self, PaneIdentity};
 use super::snapshot::{PaneRecord, build_snapshot};
 use super::stores::{Stores, no_buffer};
+use crate::clients::effective_size;
 use crate::config::Config;
+use crate::format::{self, Vars};
 use crate::keys::{TermModes, encode_key_names, wrap_paste};
 use crate::layout::{Direction, Workspace, window_not_found};
 use crate::node::pacing::Pacing;
@@ -27,15 +30,14 @@ use crate::node::process::basename;
 use crate::node::sink::Sink;
 use crate::node::sleep_until_opt;
 use crate::node::{SpawnSpec, now_ms};
-use crate::format::{self, Vars};
 use crate::protocol::{
-    BufferRequest, ChannelOp, HOOK_EVENTS, NewWindowOpts, NodeInfo, NodeRequest, PaneId,
-    PaneRequest, Request, Response, ScriptRequest, SessionInfo, SessionRequest, SpawnOpts,
-    SplitOpts, StreamEvent, WindowRequest,
+    BufferRequest, ChannelOp, ClientInfo, ClientRequest, HOOK_EVENTS, NewWindowOpts, NodeInfo,
+    NodeRequest, PaneId, PaneRequest, Request, Response, ScriptRequest, SessionInfo,
+    SessionRequest, SpawnOpts, SplitOpts, StreamEvent, WindowRequest,
 };
 use crate::protocol::{EnvEntry, PasteBufferOpts};
-use crate::tui::command::{Command, parse_in};
 use crate::store::{SessionSnapshot, SnapshotStore, WindowPlan, plan_restore};
+use crate::tui::command::{Command, parse_in};
 use crate::vt::capture::CaptureSpec;
 
 pub(super) type Reply<T> = oneshot::Sender<T>;
@@ -56,6 +58,8 @@ pub(super) async fn ask_req(
 }
 
 const SAVE_DEBOUNCE: Duration = Duration::from_millis(400);
+/// How often the session drops clients whose connection ended, so the others see the new size.
+const CLIENT_CHECK: Duration = Duration::from_secs(1);
 
 /// Where a request came from. A hook's own requests fire no hooks, so a hook cannot loop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,6 +98,8 @@ pub(super) enum SessionMsg {
     Subscribe {
         filter: Filter,
         sink: Sink,
+        client: Option<ClientInfo>,
+        exclusive: bool,
         reply: Reply<()>,
     },
     SubscribeNode {
@@ -181,6 +187,13 @@ impl Filter {
     }
 }
 
+/// A session-wide subscriber: what it receives, where events go, and the terminal it is, if any.
+pub(super) struct Subscriber {
+    pub(super) filter: Filter,
+    pub(super) sink: Sink,
+    pub(super) client: Option<ClientInfo>,
+}
+
 /// Everything the session needs at startup.
 pub(super) struct Boot {
     pub session: String,
@@ -223,6 +236,7 @@ enum Next {
     Msg(SessionMsg),
     Save,
     Silence,
+    Clients,
     Closed,
 }
 
@@ -243,7 +257,7 @@ struct Session {
     /// Exited panes removed from the layout; oldest first, capped by `history_limit`.
     history: VecDeque<Entry>,
     next_pane_id: PaneId,
-    filters: Vec<(Filter, Sink)>,
+    filters: Vec<Subscriber>,
     /// Shared with every pane: whether output must be relayed here (session-wide subscribers exist).
     relay: Arc<AtomicBool>,
     pacing: Arc<Pacing>,
@@ -272,8 +286,8 @@ pub(super) async fn run(boot: Boot, mut rx: mpsc::UnboundedReceiver<SessionMsg>)
         let _ = tx.send(SessionMsg::Notice(notice));
     });
     let mut workspace = Workspace::new(session.clone());
-    workspace.set_renumber_windows(config.renumber_windows);
-    workspace.set_synchronize_new(config.synchronize_panes);
+    workspace.set_renumber_windows(config.window.renumber_windows);
+    workspace.set_synchronize_new(config.window.synchronize_panes);
     let mut session = Session {
         session: session.clone(),
         endpoint,
@@ -301,8 +315,9 @@ pub(super) async fn run(boot: Boot, mut rx: mpsc::UnboundedReceiver<SessionMsg>)
     session.startup_restore();
     let _ = ready.send(());
 
+    let mut client_check = tokio::time::interval(CLIENT_CHECK);
     loop {
-        let next = next_event(&session, &mut rx).await;
+        let next = next_event(&session, &mut rx, &mut client_check).await;
         match next {
             Next::Msg(msg) => session.handle(msg).await,
             Next::Save => {
@@ -310,17 +325,23 @@ pub(super) async fn run(boot: Boot, mut rx: mpsc::UnboundedReceiver<SessionMsg>)
                 session.save(false).await;
             }
             Next::Silence => session.expire_silence(),
+            Next::Clients => session.check_clients(),
             Next::Closed => break,
         }
     }
 }
 
-/// Waits for the next message, the save deadline, or the silence deadline.
-async fn next_event(session: &Session, rx: &mut mpsc::UnboundedReceiver<SessionMsg>) -> Next {
+/// Waits for the next message, the save deadline, the silence deadline or the client check.
+async fn next_event(
+    session: &Session,
+    rx: &mut mpsc::UnboundedReceiver<SessionMsg>,
+    client_check: &mut tokio::time::Interval,
+) -> Next {
     tokio::select! {
         msg = rx.recv() => msg.map_or(Next::Closed, Next::Msg),
         () = sleep_until_opt(session.save_due) => Next::Save,
         () = sleep_until_opt(session.silence_due()) => Next::Silence,
+        _ = client_check.tick() => Next::Clients,
     }
 }
 
@@ -348,10 +369,11 @@ impl Session {
             SessionMsg::Subscribe {
                 filter,
                 sink,
+                client,
+                exclusive,
                 reply,
             } => {
-                self.filters.push((filter, sink));
-                self.sync_relay();
+                self.subscribe(filter, sink, client, exclusive);
                 let _ = reply.send(());
             }
             SessionMsg::SubscribeNode {
@@ -375,7 +397,7 @@ impl Session {
 
     /// When the next background window goes quiet, if `monitor-silence` is on.
     fn silence_due(&self) -> Option<tokio::time::Instant> {
-        let secs = self.config.monitor_silence;
+        let secs = self.config.window.monitor_silence;
         if secs == 0 {
             return None;
         }
@@ -387,8 +409,15 @@ impl Session {
     fn expire_silence(&mut self) {
         if self
             .workspace
-            .expire_silence(self.config.monitor_silence, std::time::Instant::now())
+            .expire_silence(self.config.window.monitor_silence, std::time::Instant::now())
         {
+            self.fanout(&StreamEvent::Layout);
+        }
+    }
+
+    /// Re-reports the layout when a client that sized a window has gone.
+    fn check_clients(&mut self) {
+        if clients::gone(&self.filters) {
             self.fanout(&StreamEvent::Layout);
         }
     }
@@ -479,10 +508,10 @@ impl Session {
     /// Fires the bell and activity alerts an output event raises, then relays the event.
     fn pane_event(&mut self, event: StreamEvent) {
         if let StreamEvent::Output { name, data, .. } = &event {
-            if self.config.monitor_bell && data.contains('\x07') && self.workspace.mark_bell(name) {
+            if self.config.window.monitor_bell && data.contains('\x07') && self.workspace.mark_bell(name) {
                 self.fire("alert-bell", Some(name.clone()));
             }
-            if self.config.monitor_activity && self.workspace.mark_activity(name) {
+            if self.config.window.monitor_activity && self.workspace.mark_activity(name) {
                 self.fire("alert-activity", Some(name.clone()));
             }
             self.workspace.note_output(name, std::time::Instant::now());
@@ -562,6 +591,7 @@ impl Session {
     async fn shell_env(&self, target: Option<String>) -> Result<(String, Option<String>), String> {
         let program = self
             .config
+            .session
             .default_shell
             .clone()
             .or_else(|| std::env::var("SHELL").ok())
@@ -591,6 +621,7 @@ impl Session {
             Some(target) => Some(self.target_name(&target)?),
             None => self.active_pane(),
         };
+        let attached = clients::live(&self.filters).len();
         let mut vars = match name {
             Some(name) => {
                 let node = self.info_of(&name, true).await?;
@@ -604,10 +635,11 @@ impl Session {
                 let tabs = self.workspace.window_tabs();
                 let mut view = format::pane_view(&self.session, slot, &node, &[], &tabs);
                 view.window_base = self.config.base_index;
-                view.pane_base = self.config.pane_base_index;
+                view.pane_base = self.config.window.pane_base_index;
+                view.session_attached = attached;
                 format::pane_vars(&view)
             }
-            None => format::session_vars(&self.session),
+            None => format::session_vars(&self.session, attached),
         };
         if let Some(event) = hook {
             let pane_id = vars.get("pane_id").cloned().unwrap_or_default();
@@ -652,11 +684,92 @@ impl Session {
         Response::Ok
     }
 
+    /// Adds a session-wide subscriber. A terminal (`client`) is registered with this session; with
+    /// `exclusive` (`attach -d`) it first detaches the clients attached before it. Its arrival or
+    /// departure can change the window size the policy picks, so every subscriber lays out again.
+    fn subscribe(
+        &mut self,
+        filter: Filter,
+        sink: Sink,
+        client: Option<ClientInfo>,
+        exclusive: bool,
+    ) {
+        let client = client.map(|info| ClientInfo {
+            session: self.session.clone(),
+            activity_ms: now_ms(),
+            ..info
+        });
+        if let (true, Some(info)) = (exclusive, &client) {
+            clients::detach_others(&mut self.filters, &info.name);
+        }
+        let terminal = client.is_some();
+        self.filters.push(Subscriber {
+            filter,
+            sink,
+            client,
+        });
+        self.sync_relay();
+        if terminal {
+            self.fanout(&StreamEvent::Layout);
+        }
+    }
+
+    /// The attached clients of this session, and the requests that detach, resize or message them.
+    fn client_request(&mut self, req: ClientRequest) -> Response {
+        match req {
+            ClientRequest::List => Response::Clients(clients::list(&self.filters, &self.session)),
+            ClientRequest::Detach { target } => match clients::detach(&mut self.filters, &target) {
+                Ok(_) => {
+                    self.fanout(&StreamEvent::Layout);
+                    Response::Ok
+                }
+                Err(e) => Response::Error(e),
+            },
+            ClientRequest::Activity { name } => unit(clients::touch(&mut self.filters, &name)),
+            ClientRequest::Resized {
+                name,
+                width,
+                height,
+            } => match clients::resize(&mut self.filters, &name, width, height) {
+                Ok(true) => {
+                    self.fanout(&StreamEvent::Layout);
+                    Response::Ok
+                }
+                Ok(false) => Response::Ok,
+                Err(e) => Response::Error(e),
+            },
+            ClientRequest::Refresh { name, size } => {
+                match clients::refresh(&mut self.filters, &name, size) {
+                    Ok(true) => {
+                        self.fanout(&StreamEvent::Layout);
+                        Response::Ok
+                    }
+                    Ok(false) => Response::Ok,
+                    Err(e) => Response::Error(e),
+                }
+            }
+            ClientRequest::Command { name, line } => {
+                unit(clients::send(&mut self.filters, &name, StreamEvent::Run { line }))
+            }
+        }
+    }
+
+    /// The size the window is laid out for: the window-size policy over the attached clients, or
+    /// `requested` when none is attached.
+    fn window_size(&self, requested: (u16, u16)) -> (u16, u16) {
+        effective_size(
+            self.config.window.window_size,
+            self.config.window.default_size,
+            &clients::live(&self.filters),
+            requested,
+        )
+    }
+
     /// Panes relay output to the session only while session-wide subscribers exist: relaying every
     /// chunk of every pane costs a flood about half its speed, and an attached terminal subscribes
     /// anyway.
     fn sync_relay(&self) {
-        let subscribed = self.filters.iter().any(|(filter, _)| filter.session_wide());
+        let subscribed = self.filters.iter().any(|sub| sub.filter.session_wide());
         self.relay.store(subscribed, Ordering::Relaxed);
     }
 
@@ -665,13 +778,13 @@ impl Session {
         let workspace = &self.workspace;
         let shown = |name: &str| workspace.active_window().is_some_and(|w| w.contains(name));
         let mut accepted = 0;
-        self.filters.retain_mut(|(filter, sink)| {
-            if filter.accepts(event, shown) {
-                let kept = sink.push(event.clone());
+        self.filters.retain_mut(|sub| {
+            if sub.filter.accepts(event, shown) {
+                let kept = sub.sink.push(event.clone());
                 accepted += usize::from(kept);
                 kept
             } else {
-                !sink.is_closed()
+                !sub.sink.is_closed()
             }
         });
         self.sync_relay();
@@ -689,6 +802,7 @@ impl Session {
             Request::Buffer(req) => self.buffer_request(req).await,
             Request::Session(req) => self.session_request(req).await,
             Request::Script(req) => self.script_request(req).await,
+            Request::Client(req) => self.client_request(req),
             Request::Shutdown | Request::Idempotent { .. } | Request::Subscribe { .. } => {
                 Response::Error("Request is handled by the connection".to_string())
             }
@@ -733,8 +847,8 @@ impl Session {
             SessionRequest::ReloadConfig { path } => {
                 match Config::load_at(path.as_deref().map(std::path::Path::new)) {
                     Ok(config) => {
-                        self.workspace.set_renumber_windows(config.renumber_windows);
-                        self.workspace.set_synchronize_new(config.synchronize_panes);
+                        self.workspace.set_renumber_windows(config.window.renumber_windows);
+                        self.workspace.set_synchronize_new(config.window.synchronize_panes);
                         self.config = config;
                         self.sync_relay();
                         Response::Ok
@@ -1287,12 +1401,13 @@ impl Session {
 
     async fn layout(&mut self, width: u16, height: u16) -> Response {
         self.refresh_window_names().await;
+        let (width, height) = self.window_size((width, height));
         let (rects, dividers) = self.workspace.compute_layout_with_dividers(width, height);
         Response::Layout(rects, dividers, self.workspace.window_tabs())
     }
 
     async fn refresh_window_names(&mut self) {
-        if !self.config.automatic_rename {
+        if !self.config.window.automatic_rename {
             return;
         }
         let windows: Vec<(usize, Option<String>)> = self
@@ -1415,9 +1530,9 @@ impl Session {
         }
         let env_shell = std::env::var("SHELL").ok();
         let (command, args) = plan::default_argv(
-            self.config.default_shell.as_deref(),
+            self.config.session.default_shell.as_deref(),
             env_shell.as_deref(),
-            self.config.default_command.as_deref(),
+            self.config.session.default_command.as_deref(),
         );
         opts.command = command;
         opts.args = args;
@@ -1447,8 +1562,8 @@ impl Session {
             cwd,
             env,
             env_remove,
-            term: self.config.default_terminal.clone(),
-            scrollback: self.config.scrollback_lines,
+            term: self.config.session.default_terminal.clone(),
+            scrollback: self.config.session.scrollback_lines,
         };
         let ctx = PaneCtx {
             notify: Arc::clone(&self.notifier),
@@ -1537,7 +1652,7 @@ impl Session {
                 self.history.push_back(entry);
             }
             self.workspace.remove(name);
-            while self.history.len() > self.config.history_limit {
+            while self.history.len() > self.config.session.history_limit {
                 self.history.pop_front();
             }
         }
@@ -1604,7 +1719,7 @@ impl Session {
     }
 
     fn startup_restore(&mut self) {
-        if !self.config.restore {
+        if !self.config.session.restore {
             return;
         }
         match self.snapshots.load() {
@@ -1793,6 +1908,14 @@ fn is_read_only(req: &Request) -> bool {
                     | SessionRequest::GetBindings
                     | SessionRequest::ShowEnvironment { .. }
                     | SessionRequest::Layout { .. }
+            )
+            | Request::Client(
+                ClientRequest::List
+                    | ClientRequest::Detach { .. }
+                    | ClientRequest::Activity { .. }
+                    | ClientRequest::Resized { .. }
+                    | ClientRequest::Refresh { .. }
+                    | ClientRequest::Command { .. }
             )
     )
 }

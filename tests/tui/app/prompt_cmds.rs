@@ -4,7 +4,7 @@ use crossterm::event::{Event, KeyCode};
 use mpx::config::Config;
 use mpx::tui::app::Mode;
 
-use super::support::{ECHO, Harness, MAIN, wait_for, window};
+use super::support::{ECHO, Harness, MAIN, active_window, wait_for, window};
 
 fn echo_line(command: &str) -> String {
     format!("{command} sh -c '{ECHO}'")
@@ -118,16 +118,6 @@ async fn empty_prompt_submits_nothing() {
     assert!(h.mode_is_normal());
     assert!(h.app.live_message().is_none());
     assert_eq!(h.windows().await, [MAIN]);
-}
-
-fn active_window(h: &Harness) -> String {
-    h.app
-        .layout
-        .tabs
-        .iter()
-        .find(|t| t.is_active)
-        .map(|t| t.name.clone())
-        .unwrap_or_default()
 }
 
 #[tokio::test]

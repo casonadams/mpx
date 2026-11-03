@@ -68,6 +68,12 @@ impl App {
                 self.resync_all().await;
                 true
             }
+            StreamEvent::Refresh => {
+                self.canvas.invalidate();
+                true
+            }
+            // `on_stream` ends the TUI or runs the command before events reach here.
+            StreamEvent::Detached | StreamEvent::Run { .. } => false,
         }
     }
 

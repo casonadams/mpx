@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use super::support::{connect, exit_code, pty, start, start_on, start_with, task, logs_until};
-use mpx::config::Config;
+use mpx::config::{Config, SessionOptions};
 use mpx::protocol::{NodeState, SpawnOpts};
 
 #[tokio::test]
@@ -118,7 +118,10 @@ async fn a_cleanly_stopped_session_comes_back_on_the_next_start_unless_restore_i
     client.shutdown().await.unwrap();
 
     let off = Config {
-        restore: false,
+        session: SessionOptions {
+            restore: false,
+            ..SessionOptions::default()
+        },
         ..Config::default()
     };
     assert!(names_after_restart(state.path(), off).await.is_empty());
@@ -154,7 +157,10 @@ async fn reload_config_changes_defaults_for_later_panes_and_rejects_bad_files() 
 #[tokio::test]
 async fn exited_history_is_capped_and_evicts_oldest() {
     let daemon = start_with(Config {
-        history_limit: 2,
+        session: SessionOptions {
+            history_limit: 2,
+            ..SessionOptions::default()
+        },
         ..Config::default()
     })
     .await;

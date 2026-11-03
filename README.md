@@ -121,6 +121,10 @@ mpx rename-session -t 0 dev
 
 `Prefix s` and `Prefix w` open the interactive session and window tree chooser (`choose-tree`).
 
+Several terminals can attach to one session. `Prefix D` (`choose-client`) lists every attached client and detaches the one you pick. From the shell, `mpx list-clients` lists the attached clients across sessions, `mpx detach-client -t CLIENT` detaches one, and `mpx refresh-client -C 120x40` gives a client a size. `mpx attach -r` attaches read-only: keys, paste and mouse reports stay out of the panes, while navigation, copy mode and detach still work. `mpx attach -d` (or `-x`) detaches the session's other clients first.
+
+The window is laid out for the clients the `window_size` option names: `latest` (the default) follows the most recently active client, `smallest` lays it out so every client sees all of it, `largest` for the biggest client, and `manual` uses `default_size`. Session groups (`new-session -t`) are refused: each session owns its panes in its own daemon, so windows cannot be shared between sessions.
+
 ---
 
 ## Survives Crashes and Reboots (`mpx restore`)

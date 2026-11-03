@@ -1,5 +1,6 @@
 //! Full-screen popups drawn over the panes: agent manager, session/window/pane tree, key help.
 pub mod buffer_view;
+pub mod client_view;
 pub mod help_view;
 pub mod nav;
 pub mod palette_view;
@@ -16,6 +17,7 @@ use crate::config::Config;
 use crate::layout::Rect;
 use crate::tui::command::Command;
 use buffer_view::BufferView;
+use client_view::ClientView;
 use text_view::TextView;
 
 pub use buffer_view::buffer_summary;
@@ -55,7 +57,22 @@ pub enum Overlay {
     Help(HelpView),
     Palette(PaletteView),
     Buffers(BufferView),
+    Clients(ClientView),
     Text(TextView),
+}
+
+/// Runs `$call` on the view inside `$self`, whichever overlay it is.
+macro_rules! each_view {
+    ($self:expr, $view:ident => $call:expr) => {
+        match $self {
+            Overlay::Tree($view) => $call,
+            Overlay::Help($view) => $call,
+            Overlay::Palette($view) => $call,
+            Overlay::Buffers($view) => $call,
+            Overlay::Clients($view) => $call,
+            Overlay::Text($view) => $call,
+        }
+    };
 }
 
 impl Overlay {
@@ -80,6 +97,10 @@ impl Overlay {
         Overlay::Buffers(BufferView::default())
     }
 
+    pub fn clients() -> Self {
+        Overlay::Clients(ClientView::default())
+    }
+
     /// Reload data; called on open, once per second while open, and after actions.
     pub async fn refresh(&mut self, ctx: &mut OverlayCtx<'_>) {
         match self {
@@ -87,6 +108,7 @@ impl Overlay {
             Overlay::Help(_) => {}
             Overlay::Palette(view) => view.refresh(ctx).await,
             Overlay::Buffers(view) => view.refresh(ctx).await,
+            Overlay::Clients(view) => view.refresh(ctx).await,
             Overlay::Text(_) => {}
         }
     }
@@ -101,24 +123,12 @@ impl Overlay {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> OverlayAction {
-        match self {
-            Overlay::Tree(view) => view.handle_key(key),
-            Overlay::Help(view) => view.handle_key(key),
-            Overlay::Palette(view) => view.handle_key(key),
-            Overlay::Buffers(view) => view.handle_key(key),
-            Overlay::Text(view) => view.handle_key(key),
-        }
+        each_view!(self, view => view.handle_key(key))
     }
 
     /// Draw inside `area` (the app passes a centered rect; the overlay draws its own border).
     pub fn render<W: Write>(&self, out: &mut W, area: Rect) -> io::Result<()> {
-        match self {
-            Overlay::Tree(view) => view.render(out, area),
-            Overlay::Help(view) => view.render(out, area),
-            Overlay::Palette(view) => view.render(out, area),
-            Overlay::Buffers(view) => view.render(out, area),
-            Overlay::Text(view) => view.render(out, area),
-        }
+        each_view!(self, view => view.render(out, area))
     }
 
     /// The cells `render` draws inside `area`; the rest of `area` is left to what is underneath.

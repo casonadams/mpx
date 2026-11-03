@@ -1,8 +1,8 @@
 //! Command execution: maps each `Command` onto daemon requests and TUI state.
 use super::app::{App, Flow, Mode};
 use super::command::{
-    BufferCommand, Command, CopyModeOpts, EnvCommand, PaneCommand, PromptSpec, ScriptCommand,
-    SessionCommand, WindowCommand, parse_in,
+    BufferCommand, ClientCommand, Command, CopyModeOpts, EnvCommand, PaneCommand, PromptSpec,
+    ScriptCommand, SessionCommand, WindowCommand, parse_in,
 };
 use super::copy::{CopyAction, CopyOutcome, CopyState, Motion, apply_action};
 use super::frame;
@@ -112,6 +112,9 @@ impl App {
 
     /// Runs a command without the interactive confirmation step (used once confirmed).
     pub async fn run(&mut self, cmd: Command) -> Flow {
+        if self.terminal.readonly && !super::command::read_only_allowed(&cmd) {
+            return self.say("read-only client: this command would change the session");
+        }
         let cmd = match self.run_windows(cmd).await {
             Ok(flow) => return flow,
             Err(cmd) => cmd,
@@ -256,6 +259,7 @@ impl App {
             }
             Command::Session(SessionCommand::NextSession) => self.step_session(true).await,
             Command::Session(SessionCommand::PrevSession) => self.step_session(false).await,
+            Command::Session(SessionCommand::LastSession) => self.last_session().await,
             Command::KillServer => self.kill_server().await,
             Command::ReloadConfig => self.reload_config().await,
             Command::SetOption {
@@ -298,12 +302,20 @@ impl App {
             }
             Command::Buffer(cmd) => self.buffer_command(cmd).await,
             Command::Environment(cmd) => self.environment_command(cmd).await,
-            Command::SuspendClient => self.suspend_client(),
+            Command::Client(cmd) => self.client_command(cmd).await,
             Command::Script(script) => self.run_script(script).await,
             other => match self.run_overlay(other).await {
                 Ok(flow) => flow,
                 Err(cmd) => self.say(format!("unhandled command: {cmd:?}")),
             },
+        }
+    }
+
+    /// Switches to the session that was current before this one, if there was one.
+    async fn last_session(&mut self) -> Flow {
+        match self.previous_session.clone() {
+            Some(name) => self.go_session(&name).await,
+            None => self.say("no last session"),
         }
     }
 
@@ -385,6 +397,22 @@ impl App {
                 self.settle(result)
             }
             EnvCommand::ShowEnvironment { name } => self.show_environment(name).await,
+        }
+    }
+
+    async fn client_command(&mut self, cmd: ClientCommand) -> Flow {
+        match cmd {
+            ClientCommand::Suspend => self.suspend_client(),
+            ClientCommand::ListClients { target, format } => {
+                self.list_clients(target, format).await
+            }
+            ClientCommand::DetachClients { target, all_others } => {
+                self.detach_clients(target, all_others).await
+            }
+            ClientCommand::RefreshClient { target, size } => {
+                self.refresh_client(target, size).await
+            }
+            ClientCommand::ChooseClient => self.open_overlay(Overlay::clients()).await,
         }
     }
 
@@ -814,7 +842,7 @@ impl App {
     /// `source-file`: runs the commands of each file, in order. A line that does not parse is
     /// reported and skipped; a missing file is reported unless `-q` silences it.
     async fn source_file(&mut self, paths: Vec<String>, quiet: bool) -> Flow {
-        let vars = crate::format::session_vars(&self.session);
+        let vars = crate::format::session_vars(&self.session, self.attached);
         for path in paths {
             let text = match std::fs::read_to_string(&path) {
                 Ok(text) => text,

@@ -85,7 +85,7 @@ fn sample_output_parses_and_maps_settings() {
     let c = convert(SAMPLE);
     let config = parsed(&c);
     assert_eq!(config.prefix, "C-a");
-    assert_eq!(config.scrollback_lines, 10000);
+    assert_eq!(config.session.scrollback_lines, 10000);
     assert_eq!(config.remain_on_exit.as_str(), "on");
     assert_eq!(config.allow_passthrough.as_str(), "off");
     assert_eq!(config.style.status_style, "bg=colour235, fg=colour250");
@@ -250,8 +250,8 @@ fn semicolon_separates_top_level_commands_and_escaped_semicolon_chains_binds() {
     );
     let config = parsed(&c);
     assert_eq!(config.prefix, "C-a");
-    assert_eq!(config.scrollback_lines, 5);
-    assert_eq!(config.history_limit, Config::default().history_limit);
+    assert_eq!(config.session.scrollback_lines, 5);
+    assert_eq!(config.session.history_limit, Config::default().session.history_limit);
     assert_eq!(
         config.bind.get("x").map(String::as_str),
         Some("split-window ; select-layout tiled")
@@ -317,7 +317,7 @@ fn invalid_prefix_and_colours_keep_defaults_and_are_noted() {
 fn crlf_line_endings_are_accepted() {
     let config = parsed(&convert("set -g prefix C-a\r\nset -g history-limit 7\r\n"));
     assert_eq!(config.prefix, "C-a");
-    assert_eq!(config.scrollback_lines, 7);
+    assert_eq!(config.session.scrollback_lines, 7);
 }
 
 #[test]
@@ -328,9 +328,9 @@ fn new_options_map_to_their_config_keys() {
     let config = parsed(&c);
     assert_eq!(config.remain_on_exit.as_str(), "failed");
     assert_eq!(config.allow_passthrough.as_str(), "all");
-    assert!(!config.monitor_bell && !config.automatic_rename);
-    assert_eq!(config.default_shell.as_deref(), Some("/bin/zsh"));
-    assert_eq!(config.scrollback_lines, 2000);
+    assert!(!config.window.monitor_bell && !config.window.automatic_rename);
+    assert_eq!(config.session.default_shell.as_deref(), Some("/bin/zsh"));
+    assert_eq!(config.session.scrollback_lines, 2000);
     assert!(c.notes.is_empty(), "{:?}", c.notes);
 }
 
@@ -341,7 +341,7 @@ fn style_strings_and_monitor_silence_convert() {
     ));
     assert_eq!(config.style.status_style, "bg=colour235,fg=white,bold");
     assert_eq!(config.style.window_status_current_style, "reverse");
-    assert_eq!(config.monitor_silence, 30);
+    assert_eq!(config.window.monitor_silence, 30);
 }
 
 #[test]

@@ -1,7 +1,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use mpx::config::Config;
 use mpx::protocol::Side;
-use mpx::tui::command::{Command, PaneCommand, WindowCommand};
+use mpx::tui::command::{ClientCommand, Command, PaneCommand, WindowCommand};
 use mpx::tui::keymap::{Table, default_table, resolve};
 
 fn key(c: char) -> KeyEvent {
@@ -295,7 +295,10 @@ fn tmux_default_prefix_keys_are_bound_to_their_tmux_commands() {
         bound(alt('o')),
         Some(Command::Window(WindowCommand::RotateWindow { down: true, .. }))
     ));
-    assert!(matches!(bound(ctrl('z')), Some(Command::SuspendClient)));
+    assert!(matches!(
+        bound(ctrl('z')),
+        Some(Command::Client(ClientCommand::Suspend))
+    ));
     assert!(
         matches!(bound(key('q')), Some(Command::DisplayPanes { .. })),
         "q shows pane numbers, d detaches"

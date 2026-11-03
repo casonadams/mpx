@@ -130,8 +130,9 @@ pub enum Command {
     Buffer(BufferCommand),
     /// `set-environment` and `show-environment`: see `EnvCommand`.
     Environment(EnvCommand),
-    /// `suspend-client`: stop the process as Ctrl-Z does; the TUI resumes on SIGCONT.
-    SuspendClient,
+    /// The client commands: listing, detaching, refreshing and choosing attached terminals, and
+    /// suspending this one. See `ClientCommand`.
+    Client(ClientCommand),
     /// The script commands: `run-shell`, `if-shell`, `wait-for`, hooks, `command-alias` and
     /// `source-file`.
     Script(ScriptCommand),
@@ -228,6 +229,8 @@ pub enum SessionCommand {
     SwitchSession { name: String },
     NextSession,
     PrevSession,
+    /// `switch-client -l`: the session this client was attached to before the current one.
+    LastSession,
     RenameSession { name: String },
 }
 
@@ -329,12 +332,39 @@ pub enum EnvCommand {
     ShowEnvironment { name: Option<String> },
 }
 
+/// The client commands: the terminals attached to this session, and this one's suspension.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ClientCommand {
+    /// `list-clients [-F format] [-t session]`: the attached clients, one line each, in an overlay.
+    ListClients {
+        target: Option<String>,
+        format: Option<String>,
+    },
+    /// `detach-client [-a] [-t client]`: detaches `target`, or with `all_others` every other client
+    /// of this session. Plain `detach-client` is `Detach`.
+    DetachClients {
+        target: Option<String>,
+        all_others: bool,
+    },
+    /// `refresh-client [-S] [-C WxH] [-t client]`: redraws `target` (this client when `None`), first
+    /// giving it `size` when one is set.
+    RefreshClient {
+        target: Option<String>,
+        size: Option<(u16, u16)>,
+    },
+    /// `choose-client`: the attached clients; Enter detaches the highlighted one.
+    ChooseClient,
+    /// `suspend-client`: stop the process as Ctrl-Z does; the TUI resumes on SIGCONT.
+    Suspend,
+}
+
 /// Command names and aliases accepted by `parse`; used for `:` completion.
 pub const COMMAND_NAMES: &[&str] = &[
     "bind-key",
     "break-pane",
     "capture-pane",
     "choose-buffer",
+    "choose-client",
     "choose-tree",
     "clock-mode",
     "command-palette",
@@ -356,6 +386,7 @@ pub const COMMAND_NAMES: &[&str] = &[
     "last-pane",
     "last-window",
     "list-buffers",
+    "list-clients",
     "list-keys",
     "load-buffer",
     "mark-pane",
@@ -377,6 +408,7 @@ pub const COMMAND_NAMES: &[&str] = &[
     "qa",
     "quit",
     "reload-config",
+    "refresh-client",
     "rename",
     "rename-session",
     "rename-window",
@@ -639,7 +671,8 @@ fn misc_cmd(
 ) -> Option<Result<Command, String>> {
     let cmd = match name {
         "copy-mode" => copy_mode(name, args),
-        "detach-client" | "detach" | "q" | "quit" => bare(name, args, Command::Detach),
+        "detach" | "q" | "quit" => bare(name, args, Command::Detach),
+        "detach-client" => detach_client(name, args),
         "kill-server" | "qa" => bare(
             name,
             args,
@@ -671,7 +704,10 @@ fn misc_cmd(
         "capture-pane" | "capturep" => capture_pane(name, args),
         "set-environment" | "setenv" => set_environment(name, args),
         "show-environment" | "showenv" => show_environment(name, args),
-        "suspend-client" | "suspendc" => bare(name, args, Command::SuspendClient),
+        "list-clients" | "lsc" => list_clients(name, args),
+        "refresh-client" | "refresh" => refresh_client(name, args),
+        "choose-client" => bare(name, args, Command::Client(ClientCommand::ChooseClient)),
+        "suspend-client" | "suspendc" => bare(name, args, Command::Client(ClientCommand::Suspend)),
         "set-option" | "set" | "set-window-option" | "setw" => set_option(name, args),
         "show-options" | "show" | "show-window-options" | "showw" => show_options(name, args),
         "list-keys" | "help" => bare(name, args, Command::OpenHelp),
@@ -1155,8 +1191,23 @@ const PASTE: Spec = Spec {
     stop_at_arg: true,
 };
 const SWITCH: Spec = Spec {
-    bools: &[],
+    bools: &["-l", "-n", "-p"],
+    values: &["-c", "-t"],
+    stop_at_arg: false,
+};
+const DETACH_CLIENT: Spec = Spec {
+    bools: &["-a"],
     values: &["-t"],
+    stop_at_arg: false,
+};
+const LIST_CLIENTS: Spec = Spec {
+    bools: &[],
+    values: &["-F", "-t"],
+    stop_at_arg: false,
+};
+const REFRESH_CLIENT: Spec = Spec {
+    bools: &["-S"],
+    values: &["-C", "-t"],
     stop_at_arg: false,
 };
 const RENAME: Spec = Spec {
@@ -1510,8 +1561,32 @@ fn target_or_first(
         .ok_or_else(|| format!("{name}: {missing}"))
 }
 
+/// `switch-client [-l | -n | -p] [-t session]`: switches this client to the named session, or to the
+/// last, next or previous one.
 fn switch_client(name: &str, args: &[String]) -> Result<Command, String> {
-    let session = target_or_first(name, args, SWITCH, "need -t <session>")?;
+    let o = parse_opts(name, args, SWITCH)?;
+    if o.value("-c").is_some() {
+        return Err(format!(
+            "{name}: -c runs from the command line (mpx switch-client -c CLIENT ...)"
+        ));
+    }
+    let step = [
+        ("-l", SessionCommand::LastSession),
+        ("-n", SessionCommand::NextSession),
+        ("-p", SessionCommand::PrevSession),
+    ]
+    .into_iter()
+    .find(|(flag, _)| o.has(flag))
+    .map(|(_, cmd)| cmd);
+    if let Some(cmd) = step {
+        o.no_rest(name)?;
+        return Ok(Command::Session(cmd));
+    }
+    let session = o
+        .value("-t")
+        .map(str::to_string)
+        .or_else(|| o.rest.first().cloned())
+        .ok_or_else(|| format!("{name}: need -t <session>"))?;
     Ok(Command::Session(SessionCommand::SwitchSession { name: session }))
 }
 
@@ -1822,4 +1897,110 @@ fn show_environment(name: &str, args: &[String]) -> Result<Command, String> {
         };
         Ok(EnvCommand::ShowEnvironment { name: var })
     })
+}
+/// `detach-client [-a] [-t client]`: plain `detach-client` detaches this client.
+fn detach_client(name: &str, args: &[String]) -> Result<Command, String> {
+    let o = parse_opts(name, args, DETACH_CLIENT)?;
+    o.no_rest(name)?;
+    let target = o.value("-t").map(str::to_string);
+    let all_others = o.has("-a");
+    if target.is_none() && !all_others {
+        return Ok(Command::Detach);
+    }
+    Ok(Command::Client(ClientCommand::DetachClients {
+        target,
+        all_others,
+    }))
+}
+
+/// Parses `args` against `spec`, refuses positional arguments, and builds the command from the
+/// options.
+fn with_flags(
+    name: &str,
+    args: &[String],
+    spec: Spec,
+    build: impl FnOnce(&Opts) -> Command,
+) -> Result<Command, String> {
+    let o = parse_opts(name, args, spec)?;
+    o.no_rest(name)?;
+    Ok(build(&o))
+}
+
+/// `list-clients [-F format] [-t session]`.
+fn list_clients(name: &str, args: &[String]) -> Result<Command, String> {
+    with_flags(name, args, LIST_CLIENTS, |o| {
+        Command::Client(ClientCommand::ListClients {
+            target: o.value("-t").map(str::to_string),
+            format: o.value("-F").map(str::to_string),
+        })
+    })
+}
+
+/// `refresh-client [-S] [-C WxH] [-t client]`. The whole client is redrawn, which includes its
+/// status line, so `-S` changes nothing.
+fn refresh_client(name: &str, args: &[String]) -> Result<Command, String> {
+    let o = parse_opts(name, args, REFRESH_CLIENT)?;
+    o.no_rest(name)?;
+    let size = o
+        .value("-C")
+        .map(str::parse::<crate::clients::Size>)
+        .transpose()
+        .map_err(|e| format!("{name}: {e}"))?;
+    Ok(Command::Client(ClientCommand::RefreshClient {
+        target: o.value("-t").map(str::to_string),
+        size: size.map(|s| (s.width, s.height)),
+    }))
+}
+
+/// Whether a client attached read-only (`-r`) may run `cmd`: viewing, navigating, copying and
+/// leaving. Anything that sends keys to a pane or changes windows, panes, layout, options or other
+/// clients is refused.
+pub fn read_only_allowed(cmd: &Command) -> bool {
+    match cmd {
+        Command::Sequence(cmds) => cmds.iter().all(read_only_allowed),
+        Command::Confirm { then, .. } => read_only_allowed(then),
+        _ => matches!(
+            cmd,
+            Command::Detach
+                | Command::CopyMode(_)
+                | Command::CopyCommand { .. }
+                | Command::OpenTree
+                | Command::OpenHelp
+                | Command::OpenPalette { .. }
+                | Command::CommandPrompt(_)
+                | Command::ShowMessages
+                | Command::ShowOptions { .. }
+                | Command::ChooseBuffer
+                | Command::DisplayMessage { .. }
+                | Command::DisplayPanes { .. }
+                | Command::ClockMode { .. }
+                | Command::Buffer(BufferCommand::ListBuffers { .. })
+                | Command::Client(
+                    ClientCommand::ListClients { .. }
+                        | ClientCommand::ChooseClient
+                        | ClientCommand::RefreshClient { .. }
+                        | ClientCommand::Suspend
+                )
+                | Command::Window(
+                    WindowCommand::NextWindow
+                        | WindowCommand::PrevWindow
+                        | WindowCommand::LastWindow
+                        | WindowCommand::StepAlert { .. }
+                        | WindowCommand::SelectWindow { .. }
+                        | WindowCommand::SelectWindowNamed { .. }
+                )
+                | Command::Pane(
+                    PaneCommand::NextPane
+                        | PaneCommand::LastPane { .. }
+                        | PaneCommand::SelectPane { .. }
+                        | PaneCommand::SelectPaneDir { .. }
+                )
+                | Command::Session(
+                    SessionCommand::SwitchSession { .. }
+                        | SessionCommand::NextSession
+                        | SessionCommand::PrevSession
+                        | SessionCommand::LastSession
+                )
+        ),
+    }
 }

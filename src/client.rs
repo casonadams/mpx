@@ -5,10 +5,10 @@ use tokio_util::codec::{Framed, FramedParts, LengthDelimitedCodec, LinesCodec};
 use crate::ipc::{IpcStream, connect_stream};
 use crate::layout::{Divider, Rect, WindowTab};
 use crate::protocol::{
-    Buffer, BufferRequest, DaemonMessage, EnvChange, EnvEntry, LayoutPreset, NewWindowOpts,
-    NodeInfo, NodeRequest, PROTOCOL, PaneRequest, PasteBufferOpts, Request, Response, ScriptRequest,
-    SessionInfo, SessionRequest, Side, SpawnOpts, SplitOpts, StreamEvent, WaitCondition, WaitOutcome,
-    WindowRequest,
+    Buffer, BufferRequest, ClientInfo, ClientRequest, ClientTarget, DaemonMessage, EnvChange,
+    EnvEntry, LayoutPreset, NewWindowOpts, NodeInfo, NodeRequest, PROTOCOL, PaneRequest,
+    PasteBufferOpts, Request, Response, ScriptRequest, SessionInfo, SessionRequest, Side,
+    SpawnOpts, SplitOpts, StreamEvent, WaitCondition, WaitOutcome, WindowRequest,
 };
 use crate::vt::capture::CaptureSpec;
 use crate::wire;
@@ -63,6 +63,29 @@ fn shell_reply(resp: Response) -> Result<Option<ShellOutput>, String> {
     }
 }
 
+/// The request for a JSON event stream of `name` (every pane when `None`), from byte offset `since`.
+fn json_subscription(name: Option<String>, since: Option<u64>) -> Request {
+    Request::Subscribe {
+        name,
+        since,
+        binary: false,
+        active_window: false,
+        layout: false,
+        client: None,
+        exclusive: false,
+    }
+}
+
+/// Sends a request and yields the payload of the response variant `$variant` picks out; any other
+/// response is an error for `$op`.
+macro_rules! request {
+    ($self:ident, $op:expr, $req:expr, $variant:pat => $value:expr) => {
+        match $self.call($req).await? {
+            $variant => Ok($value),
+            other => Err(unexpected($op, other)),
+        }
+    };
+}
 impl Client {
     pub async fn connect(endpoint: &str) -> Result<Self, String> {
         let stream = connect_stream(endpoint)
@@ -106,17 +129,11 @@ impl Client {
     }
 
     pub async fn call_ok(&mut self, op: &str, req: Request) -> Result<(), String> {
-        match self.call(req).await? {
-            Response::Ok => Ok(()),
-            other => Err(unexpected(op, other)),
-        }
+        request!(self, op, req, Response::Ok => ())
     }
 
     async fn call_node(&mut self, op: &str, req: Request) -> Result<NodeInfo, String> {
-        match self.call(req).await? {
-            Response::Node(info) => Ok(info),
-            other => Err(unexpected(op, other)),
-        }
+        request!(self, op, req, Response::Node(info) => info)
     }
 
     /// Sends `req` and takes the payload of its response with `take`; another response is an error.
@@ -131,17 +148,11 @@ impl Client {
     }
 
     pub async fn ping(&mut self) -> Result<(), String> {
-        match self.call(Request::Ping).await? {
-            Response::Pong => Ok(()),
-            other => Err(unexpected("Ping", other)),
-        }
+        request!(self, "Ping", Request::Ping, Response::Pong => ())
     }
 
     pub async fn info(&mut self) -> Result<SessionInfo, String> {
-        match self.call(Request::Info).await? {
-            Response::Session(info) => Ok(info),
-            other => Err(unexpected("Info", other)),
-        }
+        request!(self, "Info", Request::Info, Response::Session(info) => info)
     }
 
     /// Checks that the daemon speaks this client's protocol. Must be the first request.
@@ -194,10 +205,12 @@ impl Client {
     }
 
     pub async fn list(&mut self) -> Result<Vec<NodeInfo>, String> {
-        match self.call(Request::Node(NodeRequest::List)).await? {
-            Response::NodeList(list) => Ok(list),
-            other => Err(unexpected("List", other)),
-        }
+        request!(
+            self,
+            "List",
+            Request::Node(NodeRequest::List),
+            Response::NodeList(list) => list
+        )
     }
 
     /// Returns `(data, next_offset)`.
@@ -279,15 +292,13 @@ impl Client {
     }
 
     pub async fn screen(&mut self, name: &str) -> Result<String, String> {
-        match self
-            .call(Request::Node(NodeRequest::Screen {
-                name: name.to_string(),
-            }))
-            .await?
-        {
-            Response::Screen(text) => Ok(text),
-            other => Err(unexpected("Screen", other)),
-        }
+        let name = name.to_string();
+        request!(
+            self,
+            "Screen",
+            Request::Node(NodeRequest::Screen { name }),
+            Response::Screen(text) => text
+        )
     }
 
     pub async fn split(&mut self, opts: SplitOpts) -> Result<NodeInfo, String> {
@@ -296,13 +307,12 @@ impl Client {
     }
 
     pub async fn layout(&mut self, width: u16, height: u16) -> Result<LayoutTuple, String> {
-        match self
-            .call(Request::Session(SessionRequest::Layout { width, height }))
-            .await?
-        {
-            Response::Layout(rects, dividers, tabs) => Ok((rects, dividers, tabs)),
-            other => Err(unexpected("Layout", other)),
-        }
+        request!(
+            self,
+            "Layout",
+            Request::Session(SessionRequest::Layout { width, height }),
+            Response::Layout(rects, dividers, tabs) => (rects, dividers, tabs)
+        )
     }
 
     pub async fn new_window(&mut self, opts: NewWindowOpts) -> Result<NodeInfo, String> {
@@ -551,13 +561,12 @@ impl Client {
 
     /// The runtime key bindings, sorted by name.
     pub async fn get_bindings(&mut self) -> Result<Vec<(String, String)>, String> {
-        match self
-            .call(Request::Session(SessionRequest::GetBindings))
-            .await?
-        {
-            Response::Bindings(bindings) => Ok(bindings),
-            other => Err(unexpected("GetBindings", other)),
-        }
+        request!(
+            self,
+            "GetBindings",
+            Request::Session(SessionRequest::GetBindings),
+            Response::Bindings(bindings) => bindings
+        )
     }
 
     /// Runs `command` through the daemon's shell (see `Request::Script(ScriptRequest::RunShell)`). A
@@ -605,18 +614,17 @@ impl Client {
         let req = Request::Buffer(BufferRequest::Get {
             name: name.map(str::to_string),
         });
-        match self.call(req).await? {
-            Response::Buffer(buffer) => Ok(buffer),
-            other => Err(unexpected("GetBuffer", other)),
-        }
+        request!(self, "GetBuffer", req, Response::Buffer(buffer) => buffer)
     }
 
     /// Paste buffers, newest first.
     pub async fn list_buffers(&mut self) -> Result<Vec<Buffer>, String> {
-        match self.call(Request::Buffer(BufferRequest::List)).await? {
-            Response::Buffers(buffers) => Ok(buffers),
-            other => Err(unexpected("ListBuffers", other)),
-        }
+        request!(
+            self,
+            "ListBuffers",
+            Request::Buffer(BufferRequest::List),
+            Response::Buffers(buffers) => buffers
+        )
     }
 
     pub async fn delete_buffer(&mut self, name: Option<&str>) -> Result<(), String> {
@@ -753,6 +761,70 @@ impl Client {
         self.call_ok("Restore", Request::Restore).await
     }
 
+    /// The clients attached to this session.
+    pub async fn list_clients(&mut self) -> Result<Vec<ClientInfo>, String> {
+        request!(
+            self,
+            "ListClients",
+            Request::Client(ClientRequest::List),
+            Response::Clients(clients) => clients
+        )
+    }
+
+    /// Detaches the clients `target` selects.
+    pub async fn detach_clients(&mut self, target: ClientTarget) -> Result<(), String> {
+        self.call_ok(
+            "DetachClients",
+            Request::Client(ClientRequest::Detach { target }),
+        )
+        .await
+    }
+
+    /// Redraws client `name`, first giving it `size` (cols, rows) when one is asked for.
+    pub async fn refresh_client(
+        &mut self,
+        name: &str,
+        size: Option<(u16, u16)>,
+    ) -> Result<(), String> {
+        let req = Request::Client(ClientRequest::Refresh {
+            name: name.to_string(),
+            size,
+        });
+        self.call_ok("RefreshClient", req).await
+    }
+
+    /// Records that client `name` gave input.
+    pub async fn client_activity(&mut self, name: &str) -> Result<(), String> {
+        let req = Request::Client(ClientRequest::Activity {
+            name: name.to_string(),
+        });
+        self.call_ok("ClientActivity", req).await
+    }
+
+    /// Records client `name`'s terminal size.
+    pub async fn client_resized(
+        &mut self,
+        name: &str,
+        width: u16,
+        height: u16,
+    ) -> Result<(), String> {
+        let req = Request::Client(ClientRequest::Resized {
+            name: name.to_string(),
+            width,
+            height,
+        });
+        self.call_ok("ClientResized", req).await
+    }
+
+    /// Sends the command line `line` to client `name` to run there.
+    pub async fn client_command(&mut self, name: &str, line: &str) -> Result<(), String> {
+        let req = Request::Client(ClientRequest::Command {
+            name: name.to_string(),
+            line: line.to_string(),
+        });
+        self.call_ok("ClientCommand", req).await
+    }
+
     /// Streams node events; the handler returns false to stop. With `name` and `since`, output from
     /// that byte offset is replayed first without a gap.
     pub async fn stream_logs<F>(
@@ -764,14 +836,7 @@ impl Client {
     where
         F: FnMut(StreamEvent) -> bool,
     {
-        let req = Request::Subscribe {
-            name,
-            since,
-            binary: false,
-            active_window: false,
-            layout: false,
-        };
-        self.stream(req, handler).await
+        self.stream(json_subscription(name, since), handler).await
     }
 
     /// Like `stream_logs`, but hands each event, wrapped by `wrap`, to `tx` and waits while it is
@@ -781,7 +846,7 @@ impl Client {
     /// window's panes (a daemon that predates it sends all), and `Layout` events come when windows
     /// or panes are rearranged. Ends when the daemon or `tx`'s receiver goes away.
     pub async fn stream_logs_into<T>(
-        mut self,
+        self,
         (name, since): (Option<String>, Option<u64>),
         active_window: bool,
         tx: mpsc::Sender<T>,
@@ -793,17 +858,47 @@ impl Client {
             binary: true,
             active_window,
             layout: active_window,
+            client: None,
+            exclusive: false,
         };
+        self.stream_subscription(req, tx, wrap).await
+    }
+
+    /// Subscribes as the terminal `info`: the session registers it as a client and sends it the
+    /// session's events, with its window laid out and its size counted. With `exclusive` the
+    /// session first detaches the clients attached before it (`attach -d`).
+    pub async fn stream_as_client<T>(
+        self,
+        info: ClientInfo,
+        exclusive: bool,
+        tx: mpsc::Sender<T>,
+        wrap: impl Fn(StreamEvent) -> T,
+    ) -> Result<(), String> {
+        let req = Request::Subscribe {
+            name: None,
+            since: None,
+            binary: true,
+            active_window: true,
+            layout: true,
+            client: Some(info),
+            exclusive,
+        };
+        self.stream_subscription(req, tx, wrap).await
+    }
+
+    async fn stream_subscription<T>(
+        mut self,
+        req: Request,
+        tx: mpsc::Sender<T>,
+        wrap: impl Fn(StreamEvent) -> T,
+    ) -> Result<(), String> {
         match self.call(req).await? {
             Response::BinaryStream => return self.forward_frames(tx, wrap).await,
             Response::Ok => {}
             other => return Err(unexpected("Subscribe", other)),
         }
-        while let Some(line_res) = self.framed.next().await {
-            let line = line_res.map_err(|e| e.to_string())?;
-            if let Ok(DaemonMessage::Event(event)) = serde_json::from_str(&line)
-                && tx.send(wrap(event)).await.is_err()
-            {
+        while let Some(event) = self.next_event().await? {
+            if tx.send(wrap(event)).await.is_err() {
                 break;
             }
         }
@@ -839,22 +934,28 @@ impl Client {
         }
         Ok(())
     }
+
     async fn stream<F>(&mut self, req: Request, mut handler: F) -> Result<(), String>
     where
         F: FnMut(StreamEvent) -> bool,
     {
-        match self.call(req).await? {
-            Response::Ok => {}
-            other => return Err(unexpected("Subscribe", other)),
-        }
-        while let Some(line_res) = self.framed.next().await {
-            let line = line_res.map_err(|e| e.to_string())?;
-            if let Ok(DaemonMessage::Event(event)) = serde_json::from_str(&line)
-                && !handler(event)
-            {
+        request!(self, "Subscribe", req, Response::Ok => ())?;
+        while let Some(event) = self.next_event().await? {
+            if !handler(event) {
                 break;
             }
         }
         Ok(())
+    }
+
+    /// The next event of a JSON stream; other lines are skipped. `None` once the connection ends.
+    async fn next_event(&mut self) -> Result<Option<StreamEvent>, String> {
+        while let Some(line) = self.framed.next().await {
+            let line = line.map_err(|e| e.to_string())?;
+            if let Ok(DaemonMessage::Event(event)) = serde_json::from_str(&line) {
+                return Ok(Some(event));
+            }
+        }
+        Ok(None)
     }
 }

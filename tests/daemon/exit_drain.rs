@@ -1,5 +1,5 @@
 use super::support::{connect, pty, start_with, task};
-use mpx::config::Config;
+use mpx::config::{Config, SessionOptions};
 use mpx::protocol::{SpawnOpts, WaitCondition};
 
 /// Every short-lived child's output must be present when its `Exit` is observed, for PTY and task
@@ -7,7 +7,10 @@ use mpx::protocol::{SpawnOpts, WaitCondition};
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn output_of_fast_children_is_present_when_exit_is_observed() {
     let daemon = start_with(Config {
-        history_limit: 1_000,
+        session: SessionOptions {
+            history_limit: 1_000,
+            ..SessionOptions::default()
+        },
         ..Config::default()
     })
     .await;

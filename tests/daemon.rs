@@ -1,4 +1,5 @@
 mod daemon {
+    mod clients;
     mod basics;
     mod capture;
     mod config_policy;

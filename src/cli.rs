@@ -6,6 +6,7 @@ mod buffers;
 mod environment;
 mod hooks;
 mod panes;
+mod clients;
 pub mod render;
 mod resolve;
 mod sessions;
@@ -125,6 +126,18 @@ pub enum Commands {
         /// Attach even when running inside an mpx pane
         #[arg(long)]
         force: bool,
+
+        /// Detach the session's other clients first (tmux attach -d)
+        #[arg(short = 'd', long = "detach-others")]
+        detach_others: bool,
+
+        /// Like -d (tmux -x; mpx does not signal the other clients' terminals)
+        #[arg(short = 'x', long = "exclusive")]
+        exclusive: bool,
+
+        /// Attach read-only: keys and paste do not reach the panes (tmux attach -r)
+        #[arg(short = 'r', long = "read-only")]
+        read_only: bool,
     },
 
     /// Create a new session, named by the next free number unless -s gives a name (tmux new-session)
@@ -133,6 +146,10 @@ pub enum Commands {
         /// Create the session without attaching to it
         #[arg(short = 'd', long = "detach")]
         detach: bool,
+
+        /// Session group target: refused, sessions cannot share windows (tmux new-session -t)
+        #[arg(short = 't', long = "group-target")]
+        target: Option<String>,
 
         /// Attach even when running inside an mpx pane
         #[arg(long)]
@@ -324,4 +341,8 @@ pub enum Commands {
     /// Daemon-side commands: run-shell, if-shell, wait-for, set-hook and show-hooks
     #[command(flatten)]
     Hooks(hooks::HookCommands),
+
+    /// Attached clients: list them, detach or redraw them, and switch them to another session
+    #[command(flatten)]
+    Clients(clients::ClientCommands),
 }

@@ -2,6 +2,7 @@ pub mod app;
 pub mod canvas;
 pub mod color;
 pub mod command;
+pub mod clients;
 pub mod copy;
 pub mod frame;
 pub mod input;

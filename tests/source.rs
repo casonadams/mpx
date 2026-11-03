@@ -3,8 +3,10 @@ use mpx::source::lines;
 
 /// The config evaluator with formats expanded as a session with no pane would expand them.
 fn run(text: &str) -> Result<Vec<String>, String> {
-    lines(text, |fmt| expand(fmt, &mpx::format::session_vars("main")))
-        .map(|lines| lines.into_iter().map(|(_, text)| text).collect())
+    lines(text, |fmt| {
+        expand(fmt, &mpx::format::session_vars("main", 0))
+    })
+    .map(|lines| lines.into_iter().map(|(_, text)| text).collect())
 }
 
 #[test]

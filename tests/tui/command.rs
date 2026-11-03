@@ -1,8 +1,8 @@
 use mpx::protocol::{LayoutPreset, Side};
 use mpx::tui::command::{BufferCommand, EnvCommand};
 use mpx::tui::command::{
-    Command, CopyModeOpts, PaneCommand, PromptSpec, SessionCommand, WindowCommand, parse,
-    split_words,
+    ClientCommand, Command, CopyModeOpts, PaneCommand, PromptSpec, SessionCommand, WindowCommand,
+    parse, split_words,
 };
 use mpx::tui::keymap::Table;
 use mpx::tui::prompt::PromptKind;
@@ -608,8 +608,14 @@ fn buffer_and_message_commands_parse_bare() {
         ok("lsb"),
         Command::Buffer(BufferCommand::ListBuffers { format: None })
     ));
-    assert!(matches!(ok("suspend-client"), Command::SuspendClient));
-    assert!(matches!(ok("suspendc"), Command::SuspendClient));
+    assert!(matches!(
+        ok("suspend-client"),
+        Command::Client(ClientCommand::Suspend)
+    ));
+    assert!(matches!(
+        ok("suspendc"),
+        Command::Client(ClientCommand::Suspend)
+    ));
 }
 
 #[test]

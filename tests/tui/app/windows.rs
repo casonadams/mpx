@@ -7,7 +7,9 @@ use mpx::tui::app::{Flow, Mode};
 
 use mpx::layout::Direction;
 
-use super::support::{ECHO, Harness, MAIN, SESSION, SIZE, connect, split, wait_for, window};
+use super::support::{
+    ECHO, Harness, MAIN, SESSION, SIZE, active_window, connect, split, wait_for, window,
+};
 
 /// Default bindings that would spawn the user's shell, rebound to run `ECHO`.
 fn echo_config() -> Config {
@@ -398,31 +400,21 @@ async fn prefix_space_cycles_layouts_and_prefix_e_spreads_panes() {
     assert!(h.rect_of(MAIN).height.abs_diff(h.rect_of("side").height) <= 1);
 }
 
-fn active_tab(h: &Harness) -> String {
-    h.app
-        .layout
-        .tabs
-        .iter()
-        .find(|t| t.is_active)
-        .map(|t| t.name.clone())
-        .expect("an active window")
-}
-
 #[tokio::test]
 async fn select_window_finds_a_window_by_name() {
     let mut h = start().await;
     let first = h.windows().await.remove(0);
     window(&mut h.probe, "logs", ECHO).await;
     h.frame().await;
-    assert_eq!(active_tab(&h), "logs");
+    assert_eq!(active_window(&h), "logs");
 
     h.command(&format!("select-window -t ':{first}'")).await;
     h.frame().await;
-    assert_eq!(active_tab(&h), first);
+    assert_eq!(active_window(&h), first);
 
     h.command("select-window -t ':nosuch'").await;
     assert!(h.app.message.as_ref().is_some_and(|(m, _)| m.contains("can't find window: nosuch")));
-    assert_eq!(active_tab(&h), first);
+    assert_eq!(active_window(&h), first);
 }
 
 #[tokio::test]
@@ -456,14 +448,14 @@ async fn next_window_with_a_steps_to_the_window_that_has_activity() {
     window(&mut h.probe, "bg", ECHO).await;
     h.probe.select_window(0).await.expect("back to the first window");
     h.frame().await;
-    let first = active_tab(&h);
+    let first = active_window(&h);
 
     h.command("next-window -a").await;
     assert!(
         h.app.message.as_ref().is_some_and(|(m, _)| m.contains("no next window with an alert")),
         "no window has an alert yet"
     );
-    assert_eq!(active_tab(&h), first);
+    assert_eq!(active_window(&h), first);
 
     h.probe.send_input("bg", "x\n").await.expect("input");
     for _ in 0..100 {
@@ -477,7 +469,7 @@ async fn next_window_with_a_steps_to_the_window_that_has_activity() {
     assert!(h.app.layout.tabs.iter().any(|t| t.name == "bg" && t.has_activity));
     h.command("next-window -a").await;
     h.frame().await;
-    assert_eq!(active_tab(&h), "bg");
+    assert_eq!(active_window(&h), "bg");
 
     h.command("previous-window -a").await;
     assert!(

@@ -4,7 +4,7 @@ use mpx::config::{Config, Passthrough, RemainOnExit};
 fn partial_file_keeps_defaults_for_missing_keys() {
     let cfg = Config::parse("prefix = \"C-a\"\nhistory_limit = 128\n").unwrap();
     assert_eq!(cfg.prefix, "C-a");
-    assert_eq!(cfg.history_limit, 128);
+    assert_eq!(cfg.session.history_limit, 128);
 }
 
 #[test]
@@ -133,7 +133,7 @@ fn passthrough_follows_its_scope() {
 #[test]
 fn defaults_are_tmux_status_formats() {
     let config = Config::default();
-    assert_eq!((config.base_index, config.pane_base_index), (0, 0));
+    assert_eq!((config.base_index, config.window.pane_base_index), (0, 0));
     assert!(config.mouse && config.status && config.set_clipboard);
     assert_eq!(config.status_position, mpx::config::StatusPosition::Bottom);
     assert_eq!(config.status_justify, mpx::config::Justify::Left);

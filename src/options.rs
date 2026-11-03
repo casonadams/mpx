@@ -49,15 +49,15 @@ fn quoted(value: String) -> String {
 }
 
 macro_rules! option {
-    ($name:literal, $field:ident, $show:expr, $parse:expr) => {
+    ($name:literal, $($field:ident).+, $show:expr, $parse:expr) => {
         Opt {
             name: $name,
-            get: |c| $show(&c.$field),
+            get: |c| $show(&c.$($field).+),
             set: |c, v| {
-                c.$field = $parse(v)?;
+                c.$($field).+ = $parse(v)?;
                 Ok(())
             },
-            reset: |c| c.$field = Config::default().$field,
+            reset: |c| c.$($field).+ = Config::default().$($field).+,
         }
     };
 }
@@ -79,10 +79,10 @@ macro_rules! style_option {
 
 /// A free-text option: shown quoted, set as typed.
 macro_rules! text_option {
-    ($name:literal, $field:ident) => {
+    ($name:literal, $($field:ident).+) => {
         option!(
             $name,
-            $field,
+            $($field).+,
             |v: &String| quoted(v.clone()),
             |v: &str| Ok::<_, String>(v.to_string())
         )
@@ -126,7 +126,7 @@ static OPTIONS: &[Opt] = &[
     style_option!("pane-active-border-style", pane_active_border_style),
     option!(
         "pane-base-index",
-        pane_base_index,
+        window.pane_base_index,
         |v: &usize| v.to_string(),
         number::<usize>
     ),

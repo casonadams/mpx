@@ -75,6 +75,7 @@ const DEFAULT_BINDINGS: &[(&str, &str)] = &[
     ("[", "copy-mode"),
     ("]", "paste"),
     ("d", "detach-client"),
+    ("D", "choose-client"),
     ("q", "display-panes"),
     (":", "command-prompt"),
     ("r", "reload-config"),

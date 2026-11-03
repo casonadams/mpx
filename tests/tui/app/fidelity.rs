@@ -4,13 +4,14 @@
 //! sequences that broke rendering before (scroll regions, insert/delete line, alternate screen).
 use crossterm::event::KeyCode;
 
-use mpx::config::Config;
+use mpx::clients::WindowSize;
+use mpx::config::{Config, WindowOptions};
 use mpx::layout::Direction;
 use mpx::layout::Rect;
-use mpx::tui::app::ClockSource;
+use mpx::tui::app::{AttachOpts, ClockSource};
 use mpx::tui::labels::{label, label_rect, pane_numbers};
 
-use super::support::{ECHO, Harness, MAIN, SIZE, split};
+use super::support::{ECHO, Harness, MAIN, SESSION, SIZE, open_app, split};
 
 /// Whether the cell at (`x`, `y`) lies inside `area`.
 fn inside(area: Rect, x: u16, y: u16) -> bool {
@@ -258,4 +259,58 @@ async fn two_status_lines_keep_each_pane_identical_to_its_screen() {
     check(&mut h, "after split above two status lines").await;
     h.emit("side", "side text", "side text").await;
     check(&mut h, "two panes above two status lines").await;
+}
+
+/// A window laid out for a smaller client than this one leaves the rest of this client's pane area
+/// empty: every cell no pane covers is blank, and the panes still show their own screens.
+#[tokio::test]
+async fn a_window_laid_out_smaller_than_this_client_blanks_the_rest() {
+    let config = Config {
+        window: WindowOptions {
+            window_size: WindowSize::Smallest,
+            ..WindowOptions::default()
+        },
+        which_key_delay_ms: 0,
+        ..Config::default()
+    };
+    let mut h = Harness::start(config, ECHO).await;
+    check(&mut h, "attach").await;
+    let fill = format!("{}FILL-DONE", numbered_lines("main", 40));
+    h.emit(MAIN, &fill, "FILL-DONE").await;
+    check(&mut h, "full window").await;
+
+    let small_config = Config {
+        window: WindowOptions {
+            window_size: WindowSize::Smallest,
+            ..WindowOptions::default()
+        },
+        which_key_delay_ms: 0,
+        ..Config::default()
+    };
+    let (mut small, _events) = open_app(
+        &h.sandbox,
+        SESSION,
+        small_config,
+        AttachOpts::default(),
+        Some("small".into()),
+    )
+    .await;
+    small.report_size(60, 20).await;
+    let _ = h.app.on_tick().await;
+    check(&mut h, "window smaller than this client").await;
+
+    let (w, height) = h.app.viewport;
+    let top = h.app.rows.pane_top;
+    let mut blank_cells = 0;
+    for y in top..top + height {
+        for x in 0..w {
+            if h.app.panes.iter().any(|(_, r, _)| r.contains(x, y)) {
+                continue;
+            }
+            let cell = h.terminal.grid().get_cell(x as usize, y as usize);
+            assert_eq!(cell.map(|c| c.c), Some(' '), "uncovered cell ({x},{y})");
+            blank_cells += 1;
+        }
+    }
+    assert!(blank_cells > 0, "the smaller window leaves cells uncovered");
 }

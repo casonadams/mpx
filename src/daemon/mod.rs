@@ -1,6 +1,7 @@
 pub mod channels;
 mod dispatch;
 pub mod hooks;
+mod clients;
 pub mod idempotency;
 pub mod plan;
 mod session;
@@ -12,7 +13,7 @@ use futures_util::{SinkExt, StreamExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::codec::{Framed, LinesCodec};
 use tracing::{error, info, warn};
@@ -23,7 +24,7 @@ use crate::node::pane::{PaneHandle, ask_actor};
 use crate::node::sink::Sink;
 use crate::node::now_ms;
 use crate::node::pacing::{Backlog, CloseOnDrop, Pacing};
-use crate::protocol::{DaemonMessage, Request, Response, StreamEvent};
+use crate::protocol::{ClientInfo, DaemonMessage, Request, Response, StreamEvent};
 use crate::wire;
 use idempotency::Claim;
 use session::{Filter, HookMsg, Origin, SessionMsg};
@@ -113,10 +114,18 @@ impl DaemonState {
         .await?
     }
 
-    async fn subscribe(&self, filter: Filter, sink: Sink) -> Result<(), String> {
+    async fn subscribe(
+        &self,
+        filter: Filter,
+        sink: Sink,
+        client: Option<ClientInfo>,
+        exclusive: bool,
+    ) -> Result<(), String> {
         self.ask(|reply| SessionMsg::Subscribe {
             filter,
             sink,
+            client,
+            exclusive,
             reply,
         })
         .await
@@ -204,7 +213,20 @@ async fn stream_frames<S: AsyncStream>(
     backlog: Option<&Backlog>,
 ) {
     let mut buf = Vec::with_capacity(64 * 1024);
-    while let Some(first) = rx.recv().await {
+    let mut probe = [0u8; 64];
+    loop {
+        // A subscriber sends nothing after subscribing: input, or the end of its connection, means
+        // it left, and the stream ends even when no event is due to show it.
+        let first = tokio::select! {
+            event = rx.recv() => match event {
+                Some(event) => event,
+                None => return,
+            },
+            read = io.read(&mut probe) => match read {
+                Ok(0) | Err(_) => return,
+                Ok(_) => continue,
+            },
+        };
         buf.clear();
         let mut count = 0;
         let mut next = Some(first);
@@ -253,19 +275,25 @@ async fn subscribe_node<S: AsyncStream>(
         binary,
         active_window,
         layout,
+        client,
+        exclusive,
     } = request
     else {
         return;
     };
     let session_wide = Filter::subscriber(active_window, layout);
+    let names_pane = name.is_some() || since.is_some();
     // A session-wide subscriber is an attached terminal: its backlog paces pane output.
-    let backlog = (name.is_none() && since.is_none()).then(|| state.pacing.track(now_ms()));
+    let backlog = (!names_pane).then(|| state.pacing.track(now_ms()));
     let (sink, rx) = Sink::channel(backlog.clone());
     let terminal = name.is_none() && active_window;
     let registered = match (name, since) {
+        _ if client.is_some() && names_pane => {
+            Err("a client subscribes to the whole session".to_string())
+        }
         (None, Some(_)) => Err("since requires a node name".to_string()),
         (Some(name), since) => state.subscribe_node(name, since, sink).await,
-        (None, None) => state.subscribe(session_wide, sink).await,
+        (None, None) => state.subscribe(session_wide, sink, client, exclusive).await,
     };
     let attached = terminal && registered.is_ok();
     if attached {
@@ -276,6 +304,7 @@ async fn subscribe_node<S: AsyncStream>(
         state.event("client-detached");
     }
 }
+
 
 pub async fn handle_client<S: AsyncStream>(state: Arc<DaemonState>, stream: S) {
     let mut framed = Framed::new(stream, LinesCodec::new());

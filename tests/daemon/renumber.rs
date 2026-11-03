@@ -1,6 +1,6 @@
 //! Window numbers with `renumber-windows` on (the default) and off, and `move-window -r`.
 use mpx::client::Client;
-use mpx::config::Config;
+use mpx::config::{Config, WindowOptions};
 use mpx::protocol::NewWindowOpts;
 
 use super::support::{connect, start, start_with, tabs, task};
@@ -15,7 +15,10 @@ fn window(label: &str) -> NewWindowOpts {
 
 fn numbers_off() -> Config {
     Config {
-        renumber_windows: false,
+        window: WindowOptions {
+            renumber_windows: false,
+            ..WindowOptions::default()
+        },
         ..Config::default()
     }
 }

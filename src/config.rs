@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use crate::clients::{Size, WindowSize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -19,41 +20,21 @@ pub struct Config {
     /// Keep panes on screen after their process exits: `on`, `off`, or `failed` (only panes that
     /// exited without status 0). A file may also say `true` or `false`.
     pub remain_on_exit: RemainOnExit,
-    /// Number of exited, removed nodes whose logs stay readable.
-    pub history_limit: usize,
-    /// Lines of scrollback each pane keeps for captures (tmux `history-limit`).
-    pub scrollback_lines: usize,
+    /// Session options: the default terminal, shell and command, detaching, history and restore.
+    #[serde(flatten)]
+    pub session: SessionOptions,
     /// Terminal passthrough sequences (DCS tmux, OSC 4/10/11/12/52): `on` from the active pane,
     /// `all` from every pane the terminal shows, `off` never.
     pub allow_passthrough: Passthrough,
-    /// Rename windows after their foreground process (tmux `automatic-rename`).
-    pub automatic_rename: bool,
-    /// Flag windows with output the user has not seen (tmux `monitor-activity`).
-    pub monitor_activity: bool,
-    /// Flag windows that rang the bell (tmux `monitor-bell`).
-    pub monitor_bell: bool,
-    /// Seconds without output after which a background window is flagged `~` (tmux `monitor-silence`); 0 is off.
-    pub monitor_silence: u64,
-    /// TERM exported to panes (tmux `default-terminal`).
-    pub default_terminal: String,
-    /// Program run by a pane started without a command (tmux `default-shell`); unset uses `$SHELL`.
-    pub default_shell: Option<String>,
-    /// Command run by a pane started without one, through the default shell (tmux `default-command`).
-    pub default_command: Option<String>,
-    /// After a crash or reboot, recreate the last session layout and resume its processes on start.
-    pub restore: bool,
+    /// Window options: how windows are named, monitored, numbered and sized (tmux window options).
+    #[serde(flatten)]
+    pub window: WindowOptions,
     /// Milliseconds after the prefix key before the shortcut popup appears; 0 shows it at once.
     pub which_key_delay_ms: u64,
     /// Milliseconds the display-panes numbers stay up (tmux `display-panes-time`); 0 waits for a key.
     pub display_panes_time_ms: u64,
     /// Window number of the first window (tmux `base-index`); the daemon numbers from 0, the TUI translates.
     pub base_index: usize,
-    /// Whether closing a window renumbers the windows after it (tmux `renumber-windows`); off keeps gaps.
-    pub renumber_windows: bool,
-    /// Whether windows start with their panes synchronized, so typed input reaches every pane of the window (tmux `synchronize-panes`); `set-option -w` changes a window afterwards.
-    pub synchronize_panes: bool,
-    /// Pane number of the first pane of a window (tmux `pane-base-index`), as `#{pane_index}` shows it.
-    pub pane_base_index: usize,
     /// Mouse input (tmux `mouse`). Off: the terminal's mouse reporting is turned off and mpx ignores mouse events.
     pub mouse: bool,
     /// Whether the status line is shown (tmux `status`). Off: the status row belongs to the panes.
@@ -103,6 +84,83 @@ pub struct Config {
     /// Rules for resuming processes (AI CLI tools, editors, watchers) across restarts.
     pub resume: Vec<ResumeRule>,
     pub style: StyleConfig,
+}
+
+/// Window options: how windows are named, monitored, numbered and sized (tmux window options).
+/// Flattened into `Config`, so each key stays top-level in the config file.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct WindowOptions {
+    /// Rename windows after their foreground process (tmux `automatic-rename`).
+    pub automatic_rename: bool,
+    /// Flag windows with output the user has not seen (tmux `monitor-activity`).
+    pub monitor_activity: bool,
+    /// Flag windows that rang the bell (tmux `monitor-bell`).
+    pub monitor_bell: bool,
+    /// Seconds without output after which a background window is flagged `~` (tmux `monitor-silence`); 0 is off.
+    pub monitor_silence: u64,
+    /// Whether closing a window renumbers the windows after it (tmux `renumber-windows`); off keeps gaps.
+    pub renumber_windows: bool,
+    /// Whether windows start with their panes synchronized, so typed input reaches every pane of the window (tmux `synchronize-panes`); `set-option -w` changes a window afterwards.
+    pub synchronize_panes: bool,
+    /// Pane number of the first pane of a window (tmux `pane-base-index`), as `#{pane_index}` shows it.
+    pub pane_base_index: usize,
+    /// Which attached clients the window is sized for (tmux `window-size`).
+    pub window_size: WindowSize,
+    /// Window size under `window-size manual` (tmux `default-size`).
+    pub default_size: Size,
+}
+
+impl Default for WindowOptions {
+    fn default() -> Self {
+        Self {
+            automatic_rename: true,
+            monitor_activity: true,
+            monitor_bell: true,
+            monitor_silence: 0,
+            renumber_windows: true,
+            synchronize_panes: false,
+            pane_base_index: 0,
+            window_size: WindowSize::default(),
+            default_size: Size::default(),
+        }
+    }
+}
+
+/// Session options: the default terminal, shell and command, detaching, history and restore.
+/// Flattened into `Config`, so each key stays top-level in the config file.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct SessionOptions {
+    /// Number of exited, removed nodes whose logs stay readable.
+    pub history_limit: usize,
+    /// Lines of scrollback each pane keeps for captures (tmux `history-limit`).
+    pub scrollback_lines: usize,
+    /// TERM exported to panes (tmux `default-terminal`).
+    pub default_terminal: String,
+    /// Program run by a pane started without a command (tmux `default-shell`); unset uses `$SHELL`.
+    pub default_shell: Option<String>,
+    /// Command run by a pane started without one, through the default shell (tmux `default-command`).
+    pub default_command: Option<String>,
+    /// Whether a terminal whose session ends is detached (tmux `detach-on-destroy on`); `false`
+    /// switches it to another running session instead.
+    pub detach_on_destroy: bool,
+    /// After a crash or reboot, recreate the last session layout and resume its processes on start.
+    pub restore: bool,
+}
+
+impl Default for SessionOptions {
+    fn default() -> Self {
+        Self {
+            history_limit: 64,
+            scrollback_lines: 100_000,
+            default_terminal: "xterm-256color".to_string(),
+            default_shell: None,
+            default_command: None,
+            detach_on_destroy: true,
+            restore: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -423,23 +481,12 @@ impl Default for Config {
         Self {
             prefix: "C-b".to_string(),
             remain_on_exit: RemainOnExit::Off,
-            history_limit: 64,
-            scrollback_lines: 100_000,
+            session: SessionOptions::default(),
             allow_passthrough: Passthrough::On,
-            automatic_rename: true,
-            monitor_activity: true,
-            monitor_bell: true,
-            monitor_silence: 0,
-            default_terminal: "xterm-256color".to_string(),
-            default_shell: None,
-            default_command: None,
-            restore: true,
+            window: WindowOptions::default(),
             which_key_delay_ms: 300,
             display_panes_time_ms: 1000,
             base_index: 0,
-            renumber_windows: true,
-            synchronize_panes: false,
-            pane_base_index: 0,
             mouse: true,
             status: true,
             status_lines: 1,
