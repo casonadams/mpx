@@ -164,6 +164,7 @@ async fn paste_buffer_pastes_into_a_pane_and_deletes_the_buffer_with_d() {
     };
     assert!(client.paste_buffer(paste("gone")).await.is_err());
     client.paste_buffer(paste("k")).await.unwrap();
-    logs_until(&mut client, "t", "hi\nthere").await;
+    let logs = logs_until(&mut client, "t", "there").await;
+    assert!(logs.contains("hi\nthere"), "{logs:?}");
     assert!(client.get_buffer(Some("k")).await.is_err());
 }
