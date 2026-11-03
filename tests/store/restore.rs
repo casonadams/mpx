@@ -180,6 +180,14 @@ fn agent_without_resume_template_uses_fallback() {
 }
 
 #[test]
+fn nvim_pane_restores_with_a_session_file_sourced_only_when_present() {
+    let rules = mpx::config::default_resume_rules();
+    let spawn = restore_agent(tool_pane("editor", "nvim", None), &rules);
+    assert_spawn(&spawn, "nvim", &["-c", "silent! source Session.vim"]);
+    assert_eq!(spawn.cwd, Some("/work".into()));
+}
+
+#[test]
 fn agent_with_unknown_harness_keeps_its_original_command() {
     let spawn = restore_agent(tool_pane("ghost", "unknown-tool", Some("abc")), &[claude()]);
     assert_spawn(&spawn, "unknown-tool", &[]);

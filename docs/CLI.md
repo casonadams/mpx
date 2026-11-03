@@ -144,7 +144,7 @@ Panes restore in their recorded working directory (`cwd`):
 - Tools matching `[[resume]]` rules in `config.toml` expand their resume command or fallback:
   - Claude Code: `claude --resume {id}` or `claude --continue`
   - oh-my-pi: `omp --resume {id}` or `omp --continue`
-  - Neovim: `nvim -S Session.vim`
+  - Neovim: `nvim -c 'silent! source Session.vim'` (starts empty when there is no `Session.vim`)
 
 ---
 

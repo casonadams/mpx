@@ -318,7 +318,7 @@ pub fn default_resume_rules() -> Vec<ResumeRule> {
             name: "nvim".into(),
             detect: vec!["nvim".into()],
             resume: Vec::new(),
-            fallback: vec!["nvim".into(), "-S".into(), "Session.vim".into()],
+            fallback: vec!["nvim".into(), "-c".into(), "silent! source Session.vim".into()],
             env_id: None,
             id_source: None,
         },

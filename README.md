@@ -132,7 +132,7 @@ The daemon continuously and atomically snapshots your workspace. Every time a se
   - Claude Code: resumes with `claude --resume {id}` or `claude --continue`.
   - oh-my-pi: resumes with `omp --resume {id}` or `omp --continue`.
   - Codex / rho / Antigravity / OpenCode: resumes conversation state.
-  - Neovim: resumes with `nvim -S Session.vim`.
+  - Neovim: sources `Session.vim` from the pane's directory when it exists, and starts empty otherwise.
 
 Run `mpx --no-restore` to start a session with a brand new state instead.
 
@@ -148,7 +148,7 @@ fallback = ["claude", "--continue"]
 [[resume]]
 name = "nvim"
 detect = ["nvim"]
-fallback = ["nvim", "-S", "Session.vim"]
+fallback = ["nvim", "-c", "silent! source Session.vim"]
 ```
 
 ---

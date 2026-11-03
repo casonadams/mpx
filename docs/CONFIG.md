@@ -75,7 +75,7 @@ env_id = "OMP_SESSION_ID"
 [[resume]]
 name = "nvim"
 detect = ["nvim"]
-fallback = ["nvim", "-S", "Session.vim"]
+fallback = ["nvim", "-c", "silent! source Session.vim"]
 ```
 
 ## Configuration Reference
@@ -165,7 +165,7 @@ These tmux options are applied by the terminal UI.
 Off by default. With `dim_inactive = true` and several panes visible, every pane but the focused one is dimmed, as tmux's `dim=` does: every color channel is scaled down by `dim_factor` (`0.0` leaves it alone, `1.0` is black, default `0.5`), and bold is dropped. Colors keep their hue; mpx no longer desaturates toward grey.
 
 - Cells with an explicit color (the ANSI palette, 256-color, truecolor; syntax highlighting, diffs, selections) are dimmed, text and background alike.
-- Cells in the terminal's default colors are dimmed too. At attach, mpx asks the terminal for its default foreground and background (`OSC 10` / `OSC 11`) and for its 256 palette colors (`OSC 4`). A terminal that does not answer the first leaves default-colored cells untouched, and one that does not answer the second dims ANSI colors from a built-in palette, which may differ from your theme. Colors are read at attach and then follow the color sequences panes send to the terminal (`OSC 4`, `10`, `11` and their resets, as a theme switcher such as walh-shell emits), as long as `allow_passthrough` lets them through; a theme changed from the terminal's own menu is only seen at the next attach.
+- Cells in the terminal's default colors are dimmed too. With `dim_inactive = true`, mpx asks the terminal at attach for its default foreground and background (`OSC 10` / `OSC 11`) and for its 256 palette colors (`OSC 4`); with it off it asks for neither, which keeps attach quick. Turning it on with `reload-config` does not query the terminal, so attach again. A terminal that does not answer the first leaves default-colored cells untouched, and one that does not answer the second dims ANSI colors from a built-in palette, which may differ from your theme. Colors are read at attach and then follow the color sequences panes send to the terminal (`OSC 4`, `10`, `11` and their resets, as a theme switcher such as walh-shell emits), as long as `allow_passthrough` lets them through; a theme changed from the terminal's own menu is only seen at the next attach.
 - `[style.active] fg` / `bg` replace the terminal's colors as the default to dim. `[style.inactive] fg` / `bg` replace the result: an inactive pane then shows exactly that color for default-colored cells.
 - Removed: `color_mode`, `factor` and `dim_content_bg` (under `[style]` or `[style.inactive]`). The config now fails to load with an unknown-key error if they are present; use `dim_factor` instead.
 
@@ -185,6 +185,21 @@ Rules that dictate how tools (AI CLIs, editors, background tasks) are resumed wh
 A tool that was running inside a shell is resumed by typing its command into a fresh shell in the same directory, so quitting the tool leaves that shell, as it did before the restore. A pane whose own process is the tool (for example `mpx new-window claude`) is respawned as the tool, and quitting it closes the pane.
 
 `mpx` ships with built-in defaults for `claude`, `omp`, `codex`, `rho`, `antigravity`, `opencode`, and `nvim`. `claude` and `omp` use `id_source`. A `[[resume]]` list in `config.toml` replaces the defaults, so repeat every rule you want to keep.
+
+#### Neovim sessions
+
+The `nvim` rule only replays a `Session.vim`; mpx never writes one. Create it once in a project root with `:mksession`, then keep it current from your `init.lua`. This snippet rewrites only a `Session.vim` that already exists, so no other directory gets one, and it saves on write, on focus loss and on exit so a crash or reboot loses at most your last edit:
+
+```lua
+vim.api.nvim_create_autocmd({ "VimLeavePre", "BufWritePost", "FocusLost" }, {
+  group = vim.api.nvim_create_augroup("mpx_session", { clear = true }),
+  callback = function()
+    if vim.fn.filereadable("Session.vim") == 1 then
+      vim.cmd("silent! mksession!")
+    end
+  end,
+})
+```
 
 ## Options at run time
 
