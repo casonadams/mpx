@@ -120,4 +120,12 @@ impl Overlay {
             Overlay::Text(view) => view.render(out, area),
         }
     }
+
+    /// The cells `render` draws inside `area`; the rest of `area` is left to what is underneath.
+    pub fn footprint(&self, area: Rect) -> Rect {
+        match self {
+            Overlay::Palette(_) => PaletteView::box_area(area),
+            _ => area,
+        }
+    }
 }

@@ -451,12 +451,17 @@ impl PaletteView {
         }
     }
 
-    pub fn render<W: Write>(&self, out: &mut W, area: Rect) -> io::Result<()> {
+    /// The palette's box: at most 86 by 26 cells, centered in `area`.
+    pub fn box_area(area: Rect) -> Rect {
         let w = area.width.min(86);
         let h = area.height.min(26);
         let x = area.x + (area.width.saturating_sub(w)) / 2;
         let y = area.y + (area.height.saturating_sub(h)) / 2;
-        let box_area = Rect::new(x, y, w, h);
+        Rect::new(x, y, w, h)
+    }
+
+    pub fn render<W: Write>(&self, out: &mut W, area: Rect) -> io::Result<()> {
+        let box_area = Self::box_area(area);
 
         widgets::draw_panel(out, box_area, "mpx palette", HINTS)?;
         let body = widgets::inner(box_area);

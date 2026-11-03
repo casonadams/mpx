@@ -3,6 +3,7 @@ use crossterm::event::KeyCode;
 
 use mpx::config::Config;
 use mpx::tui::app::Mode;
+use mpx::vt::VtScreen;
 
 use super::support::{ECHO, Harness, MAIN};
 
@@ -47,13 +48,17 @@ async fn ctrl_space_palette_lifecycle_and_execution() {
 
 #[tokio::test]
 async fn the_shortcut_popup_goes_away_when_a_key_opens_the_palette() {
+    // Taller than the palette's 26 rows, so the popup sits below the palette's box but inside the
+    // overlay area.
     let mut h = Harness::idle().await;
+    h.app.fixed_size = Some((100, 80));
+    h.terminal = VtScreen::new(100, 80);
     h.app.config.which_key_delay_ms = 0;
     h.ctrl('b').await;
-    assert!(h.frame().await.contains('╭'), "the popup shows while the prefix waits");
+    assert!(h.frame().await.contains("find window/pane"), "the popup shows while the prefix waits");
 
-    h.key(KeyCode::Char('?')).await;
+    h.key(KeyCode::Char('s')).await;
     let drawn = h.frame().await;
     assert!(drawn.contains("mpx palette"), "{drawn}");
-    assert!(!drawn.contains('╭'), "the popup is gone under the palette\n{drawn}");
+    assert!(!drawn.contains("find window/pane"), "the popup is gone under the palette\n{drawn}");
 }

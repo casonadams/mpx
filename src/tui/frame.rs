@@ -60,7 +60,7 @@ pub fn draw_body<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
     let screen_h = app.rows.screen_h;
     let hud = shortcut_popup(app, screen_w, screen_h);
     let mut covered: Vec<Rect> = match &app.mode {
-        Mode::Overlay(_) => vec![overlay_area(screen_w, screen_h)],
+        Mode::Overlay(overlay) => vec![overlay.footprint(overlay_area(screen_w, screen_h))],
         Mode::Clock { pane } => app
             .panes
             .iter()
