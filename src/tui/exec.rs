@@ -865,7 +865,7 @@ impl App {
     /// `source-file`: runs the commands of each file, in order. A line that does not parse is
     /// reported and skipped; a missing file is reported unless `-q` silences it.
     async fn source_file(&mut self, paths: Vec<String>, quiet: bool) -> Flow {
-        let vars = crate::format::session_vars(&self.session, self.attached);
+        let vars = crate::format::session_vars(&self.session, self.times, self.attached);
         for path in paths {
             let text = match std::fs::read_to_string(&path) {
                 Ok(text) => text,

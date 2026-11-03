@@ -622,6 +622,10 @@ impl Session {
             None => self.active_pane(),
         };
         let attached = clients::live(&self.filters).len();
+        let times = format::SessionTimes {
+            started_ms: self.created_ms,
+            restored_ms: self.restored_ms,
+        };
         let mut vars = match name {
             Some(name) => {
                 let node = self.info_of(&name, true).await?;
@@ -634,12 +638,13 @@ impl Session {
                     .unwrap_or(0);
                 let tabs = self.workspace.window_tabs();
                 let mut view = format::pane_view(&self.session, slot, &node, &[], &tabs);
+                view.times = times;
                 view.window_base = self.config.base_index;
                 view.pane_base = self.config.window.pane_base_index;
                 view.session_attached = attached;
                 format::pane_vars(&view)
             }
-            None => format::session_vars(&self.session, attached),
+            None => format::session_vars(&self.session, times, attached),
         };
         if let Some(event) = hook {
             let pane_id = vars.get("pane_id").cloned().unwrap_or_default();

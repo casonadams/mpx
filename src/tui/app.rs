@@ -182,6 +182,8 @@ pub struct App {
     pub terminal: ClientInfo,
     /// Clients attached to this session, counted every tick (`session_attached`).
     pub attached: usize,
+    /// When the session's daemon started and whether it restored a snapshot, for the time variables.
+    pub times: crate::format::SessionTimes,
     /// The session this client was attached to before the current one (`switch-client -l`).
     pub previous_session: Option<String>,
     /// What this client shows on the outer terminal beyond the panes: title, bells, activity.
@@ -272,6 +274,10 @@ impl App {
         app.refresh_nodes().await;
         if let Ok(info) = app.client.info().await {
             // The daemon's name wins over the socket's: `rename-session` changes one, not the other.
+            app.times = crate::format::SessionTimes {
+                started_ms: info.created_ms,
+                restored_ms: info.restored_ms,
+            };
             app.session = info.name;
             if let Some(restored_ms) = info.restored_ms {
                 app.say(restored_notice(restored_ms, local_utc_offset(restored_ms)));
@@ -364,6 +370,7 @@ impl App {
             job_rx,
             terminal,
             attached: 0,
+            times: crate::format::SessionTimes::default(),
             previous_session: None,
             outer: OuterTerminal::default(),
         }

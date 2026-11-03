@@ -1,7 +1,7 @@
 //! Format expansion (`#{...}`) and the variables panes and sessions provide.
 use mpx::format::{
-    DEFAULT_BUFFER_FORMAT, Lists, PaneView, Vars, buffer_sample, buffer_vars, expand, expand_with,
-    pane_vars, pane_view,
+    DEFAULT_BUFFER_FORMAT, Lists, PaneView, SessionTimes, Vars, buffer_sample, buffer_vars, expand,
+    expand_with, pane_vars, pane_view, session_vars,
 };
 use mpx::layout::{Rect, WindowTab};
 use mpx::protocol::{Buffer, NodeInfo};
@@ -272,6 +272,49 @@ fn pane_identity_and_fixed_session_values_expand() {
     let short = expand("#{host_short}", &v);
     assert!(!short.contains('.'));
     assert!(host.starts_with(&short));
+}
+
+#[test]
+fn session_time_variables_come_from_the_daemon_start_and_restore() {
+    let started = 1_700_000_123_456;
+    let fresh = PaneView {
+        times: SessionTimes {
+            started_ms: started,
+            restored_ms: None,
+        },
+        ..pane_view("dev", 0, &node("p", 1), &[], &[])
+    };
+    assert_eq!(
+        expand(
+            "#{session_id} #{session_created} #{start_time}",
+            &pane_vars(&fresh)
+        ),
+        "$1700000123456 1700000123 1700000123"
+    );
+    let restored = PaneView {
+        times: SessionTimes {
+            started_ms: started,
+            restored_ms: Some(1_700_000_999_999),
+        },
+        ..pane_view("dev", 0, &node("p", 1), &[], &[])
+    };
+    assert_eq!(
+        expand("#{session_created} #{start_time}", &pane_vars(&restored)),
+        "1700000999 1700000123"
+    );
+}
+
+#[test]
+fn session_time_variables_expand_with_no_pane() {
+    let times = SessionTimes {
+        started_ms: 5_000,
+        restored_ms: None,
+    };
+    let v = session_vars("dev", times, 0);
+    assert_eq!(
+        expand("#{session_id} #{session_created} #{start_time}", &v),
+        "$5000 5 5"
+    );
 }
 
 #[test]

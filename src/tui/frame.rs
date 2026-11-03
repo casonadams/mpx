@@ -523,6 +523,7 @@ fn format_view(app: &App, node: &crate::protocol::NodeInfo) -> crate::format::Pa
         .position(|n| n.id == node.id)
         .unwrap_or(0);
     let mut view = crate::format::pane_view(&app.session, slot, node, &app.panes, &app.layout.tabs);
+    view.times = app.times;
     view.session_attached = app.attached;
     view.in_mode = app.parked_copy.contains_key(&node.name)
         || (matches!(app.mode, Mode::Copy(_)) && node.name == app.active_pane);

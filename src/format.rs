@@ -77,6 +77,9 @@ pub struct PaneView {
     pub pane_base: usize,
     /// Clients attached to the pane's session (`#{session_attached}`).
     pub session_attached: usize,
+    /// When the session's daemon started and whether it restored a snapshot (`session_id`,
+    /// `session_created`, `start_time`).
+    pub times: SessionTimes,
 }
 
 /// Expands `#{...}` formats, the aliases `#S #I #P #W #T #D`, and the escapes `##`, `#,`, `#}`.
@@ -610,11 +613,41 @@ fn host_name() -> String {
     }
 }
 
+/// When a session's daemon started and whether it restored a snapshot: what the session's time
+/// variables show.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SessionTimes {
+    /// Unix ms the daemon started.
+    pub started_ms: u64,
+    /// Unix ms the snapshot was restored, when it was.
+    pub restored_ms: Option<u64>,
+}
+
+impl SessionTimes {
+    /// `session_id`: `$` and the daemon's start in ms, the same for as long as the daemon runs.
+    pub fn id(&self) -> String {
+        format!("${}", self.started_ms)
+    }
+
+    /// `session_created`: the unix seconds the session was made; a restored session's is the restore.
+    pub fn created(&self) -> u64 {
+        self.restored_ms.unwrap_or(self.started_ms) / 1000
+    }
+
+    /// `start_time`: the unix seconds the daemon started.
+    pub fn start_time(&self) -> u64 {
+        self.started_ms / 1000
+    }
+}
+
 /// Variables that do not depend on the pane or session being described.
-fn shared_vars(vars: &mut Vars, session: &str, attached: usize) {
+fn shared_vars(vars: &mut Vars, session: &str, times: SessionTimes, attached: usize) {
     let host = host_name();
     let host_short = host.split('.').next().unwrap_or_default().to_string();
     vars.insert("client_session", session.to_string());
+    vars.insert("session_id", times.id());
+    vars.insert("session_created", times.created().to_string());
+    vars.insert("start_time", times.start_time().to_string());
     vars.insert("session_attached", attached.to_string());
     vars.insert("host", host);
     vars.insert("host_short", host_short);
@@ -633,10 +666,10 @@ fn terminal_vars(p: &PaneView, vars: &mut Vars) {
     }
 }
 
-/// The variables of a session with no pane to describe: its name and the host's.
-pub fn session_vars(session: &str, attached: usize) -> Vars {
+/// The variables of a session with no pane to describe: its name, times and the host's.
+pub fn session_vars(session: &str, times: SessionTimes, attached: usize) -> Vars {
     let mut vars = Vars::from([("session_name", session.to_string())]);
-    shared_vars(&mut vars, session, attached);
+    shared_vars(&mut vars, session, times, attached);
     vars
 }
 
@@ -693,7 +726,7 @@ pub fn pane_vars(p: &PaneView) -> Vars {
     vars.insert("pane_at_right", flag(p.edges[2]));
     vars.insert("pane_at_bottom", flag(p.edges[3]));
     terminal_vars(p, &mut vars);
-    shared_vars(&mut vars, &p.session, p.session_attached);
+    shared_vars(&mut vars, &p.session, p.times, p.session_attached);
     vars
 }
 
@@ -812,6 +845,7 @@ pub fn pane_view(
     let edges = at_edges(rect, rects);
     PaneView {
         session: session.to_string(),
+        times: SessionTimes::default(),
         id: node.id,
         index,
         pid: node.pid,
