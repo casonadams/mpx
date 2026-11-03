@@ -28,8 +28,12 @@ Commands that take a pane accept its name or its stable id `%N` (tmux style). TU
 
 | Command | Description |
 | :--- | :--- |
-| `mpx` / `mpx attach [-t session] [--force]` | Start the daemon if needed and attach the TUI. Refuses to nest inside an mpx pane unless `--force`. |
-| `mpx new-session [-d] [-s name]` (`new`) | Create a session with no restored state: the next free number (`1`, `2`, ...) unless `-s` names it; `duplicate session` if it is already running. `-d` creates it without attaching. |
+| `mpx` / `mpx attach [-t session] [-d] [-x] [-r] [--force]` | Start the daemon if needed and attach the TUI. `-d` (and `-x`, which mpx treats the same) detaches the session's other clients first. `-r` attaches read-only: keys, paste and mouse reports do not reach panes; only navigation, copy mode, overlays and detach are allowed. Refuses to nest inside an mpx pane unless `--force`. |
+| `mpx new-session [-d] [-s name]` (`new`) | Create a session with no restored state: the next free number (`1`, `2`, ...) unless `-s` names it; `duplicate session` if it is already running. `-d` creates it without attaching. `-t` (session groups) is refused: each session owns its panes in its own daemon, so windows cannot be shared between sessions. |
+| `mpx list-clients [-t session] [-F format]` (`lsc`) | One line per attached client across sessions, or the clients of `-t`. Format variables: `client_name`, `client_tty`, `client_width`, `client_height`, `client_session`, `client_readonly`, `client_created`, `client_activity`, `session_attached` (clients of the client's session). Default `#{client_name}: #{client_session} [WxH]`. |
+| `mpx detach-client [-t client] [-a]` | Detach `client`, or with `-a` the other clients of its session. Without `-t` the most recently active client is detached. Pick a session first with `mpx -s name detach-client`. |
+| `mpx refresh-client [-t client] [-C WxH] [-S]` | Redraw clients (all when `-t` is absent). `-C` gives the client a size for the window-size policy until its terminal reports a new size. `-S` is accepted; the whole client is redrawn either way. |
+| `mpx switch-client [-c client] (-t session \| -l \| -n \| -p)` (`switchc`) | Switch a client to a session, or to the last, next or previous one. The command runs inside the client, so the client must be attached. `-c` defaults to the most recently active client. |
 | `mpx list-sessions` (`ls`) `[--json]` | List sessions with window and pane counts. |
 | `mpx has-session [-t session]` | Exit 0 if the session's daemon answers, 1 otherwise. |
 | `mpx rename-session [-t target] <name>` (`rename`) | Rename a session. |
@@ -168,7 +172,7 @@ Variables:
 
 - Pane: `pane_id`, `pane_index`, `pane_pid`, `pane_title`, `pane_current_command`, `pane_current_path`, `pane_width`, `pane_height`, `pane_active`, `pane_dead`, `pane_marked`, `pane_marked_set`, `pane_in_mode` and `pane_mode`, `pane_tty`, `pane_start_command`. `pane_left`, `pane_top`, `pane_right` and `pane_bottom` come from the current layout and are empty for a pane that is not laid out.
 - Window: `window_index`, `window_id`, `window_name`, `window_active`, `window_panes`, `window_flags` (`#` activity, `!` bell, `*` active, `Z` zoomed, `-` last, `M` holds the marked pane), `window_zoomed_flag` (`1` when the window is zoomed).
-- Session: `session_name`, `session_windows`, `session_attached` (always `1`), `client_session`.
+- Session: `session_name`, `session_windows`, `session_attached` (the number of clients attached to the session), `client_session`.
 - Host: `host`, `host_short`, `pid`, `version` (`3.4`).
 - Not available, so they expand to empty: `session_id`, `session_created`, `start_time`.
 

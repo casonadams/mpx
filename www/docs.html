@@ -203,6 +203,13 @@ mpx run --pty -- htop            # Run interactive command in PTY
 mpx split -h -d -- htop          # Split side by side without focus (tmux flags)
 mpx logs --plain --tail 50 &lt;name&gt; # Rendered scrollback
 mpx send-keys -t %1 C-c          # tmux key names
+mpx attach -r                   # Read-only: keys and paste stay out of the panes
+mpx attach -d                    # Detach the session's other clients first (-x is the same)
+mpx list-clients                 # Attached clients across sessions (tmux list-clients)
+mpx detach-client -t CLIENT      # Detach one client (-a: the others of its session)
+mpx refresh-client -C 120x40     # Redraw a client, giving it a size (tmux refresh-client)
+mpx switch-client -t SESSION     # Switch a client to another session (-l, -n, -p)
+mpx new-session -t GROUP         # Refused: each session owns its panes in its own daemon
 mpx paste -t %1 --submit "text"  # Bracketed paste + Enter
 mpx wait &lt;name&gt; --match 'done' --timeout 60
 mpx restore                      # Restore workspace from last snapshot

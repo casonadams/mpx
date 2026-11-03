@@ -54,6 +54,7 @@ If you pause after the prefix, a shortcut popup lists common action keys after `
 | `$` | `command-prompt -I "#S"` | Rename current session (prompt prefilled with the current name) |
 | `(` / `)` | `prev-session` / `next-session` | Switch sessions |
 | `d` | `detach-client` | Detach (daemon and panes keep running) |
+| `D` | `choose-client` | Pick another attached client from a list; Enter detaches it |
 | `Ctrl-z` | `suspend-client` | Suspend mpx and return to the shell (`fg` resumes) |
 
 ### Command Palette & Navigation
@@ -112,6 +113,10 @@ Vim-style command line on the status row. Supports tab-completion, history (`Up`
 | `list-buffers` | `lsb` | Paste buffers in a list: `name: N bytes: "sample"` |
 | `choose-buffer` | | Paste buffers, newest first, with a preview: Enter pastes the highlighted one, `d` deletes it, `/` filters |
 | `suspend-client` | `suspendc` | Stop mpx as Ctrl-Z does and return to the shell; `fg` brings it back |
+| `list-clients [-t SESSION] [-F FORMAT]` | `lsc` | Attached clients, one line each (format variables as in [CLI.md](CLI.md)) |
+| `detach-client [-a] [-t CLIENT]` | | Detach CLIENT, or with `-a` the other clients of this session; without `-t` this client (plain `detach` is the same) |
+| `refresh-client [-S] [-C WxH] [-t CLIENT]` | `refresh` | Redraw this client (or CLIENT), giving it a size with `-C` |
+| `switch-client [-t SESSION] [-l] [-n] [-p]` | `switchc`, `session` | Switch to SESSION, or to the last, next or previous session. `-c` is refused here: run it from the command line |
 | `palette [commands\|sessions\|help]` | `command-palette` | Fuzzy command palette |
 
 ---
