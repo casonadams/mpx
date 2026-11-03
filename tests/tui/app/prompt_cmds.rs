@@ -189,6 +189,7 @@ async fn confirm_before_runs_its_command_only_on_y() {
 }
 
 /// Runs `line` at the prompt, draws a frame and returns the text it shows.
+#[cfg(unix)]
 async fn run_and_show(h: &mut Harness, line: &str) -> String {
     h.command(line).await;
     h.frame().await

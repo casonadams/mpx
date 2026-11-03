@@ -19,6 +19,12 @@ async fn appears(path: &Path) -> bool {
     false
 }
 
+/// `path` as the shell hook commands spell it: `sh` reads backslashes as escapes, so Windows
+/// separators become forward slashes.
+fn sh_path(path: &Path) -> String {
+    path.display().to_string().replace('\\', "/")
+}
+
 /// Sends a request that answers `Ok`, or the daemon's error.
 async fn send(client: &mut Client, req: Request) -> Result<(), String> {
     client.call_ok("request", req).await
@@ -142,7 +148,7 @@ async fn after_new_window_runs_its_hook_with_the_hook_variables() {
     let mut client = connect(&daemon.endpoint).await;
     let dir = tempfile::tempdir().unwrap();
     let marker = dir.path().join("marker");
-    let command = format!("run-shell 'printf %s #{{hook}} > {}'", marker.display());
+    let command = format!("run-shell 'printf %s #{{hook}} > {}'", sh_path(&marker));
     send(
         &mut client,
         set_hook("after-new-window", Some(&command), false),
@@ -166,8 +172,8 @@ async fn if_shell_picks_the_branch_in_a_hook_and_in_a_run_command() {
     let no = dir.path().join("no");
     let command = format!(
         "if-shell 'false' 'run-shell touch {}' 'run-shell touch {}'",
-        yes.display(),
-        no.display()
+        sh_path(&yes),
+        sh_path(&no)
     );
     send(
         &mut client,
@@ -183,9 +189,9 @@ async fn if_shell_picks_the_branch_in_a_hook_and_in_a_run_command() {
     let no = dir.path().join("run-no");
     let line = format!(
         "if-shell 'test -d {}' 'run-shell touch {}' 'run-shell touch {}'",
-        dir.path().display(),
-        yes.display(),
-        no.display()
+        sh_path(dir.path()),
+        sh_path(&yes),
+        sh_path(&no)
     );
     send(
         &mut client,
@@ -232,7 +238,7 @@ async fn run_shell_in_the_background_answers_at_once() {
     let dir = tempfile::tempdir().unwrap();
     let marker = dir.path().join("background");
     let answer = client
-        .run_shell(&format!("touch {}", marker.display()), None, true, None)
+        .run_shell(&format!("touch {}", sh_path(&marker)), None, true, None)
         .await
         .unwrap();
     assert!(answer.is_none());
@@ -543,7 +549,7 @@ async fn link_hooks(client: &mut Client, dir: &Path) -> (std::path::PathBuf, std
     let linked = dir.join("linked");
     let unlinked = dir.join("unlinked");
     for (event, file) in [("window-linked", &linked), ("window-unlinked", &unlinked)] {
-        let command = format!("run-shell 'touch {}'", file.display());
+        let command = format!("run-shell 'touch {}'", sh_path(file));
         send(client, set_hook(event, Some(&command), false))
             .await
             .unwrap();
@@ -587,7 +593,7 @@ async fn session_closed_runs_before_the_session_shuts_down() {
         &mut client,
         set_hook(
             "session-closed",
-            Some(&format!("run-shell 'touch {}'", closed.display())),
+            Some(&format!("run-shell 'touch {}'", sh_path(&closed))),
             false,
         ),
     )
@@ -619,7 +625,7 @@ async fn alert_silence_fires_when_a_background_window_goes_quiet() {
         &mut client,
         set_hook(
             "alert-silence",
-            Some(&format!("run-shell 'touch {}'", silent.display())),
+            Some(&format!("run-shell 'touch {}'", sh_path(&silent))),
             false,
         ),
     )
