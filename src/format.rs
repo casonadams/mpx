@@ -277,7 +277,8 @@ fn lookup<'a>(vars: &'a Vars, name: &str) -> &'a str {
     vars.get(name).map_or("", String::as_str)
 }
 
-fn truthy(s: &str) -> bool {
+/// Whether a format's value is true: non-empty and not `0` (the rule of `#{?...}` and `if-shell -F`).
+pub fn truthy(s: &str) -> bool {
     !s.is_empty() && s != "0"
 }
 
@@ -382,6 +383,13 @@ fn shared_vars(vars: &mut Vars, session: &str) {
     vars.insert("host_short", host_short);
     vars.insert("pid", std::process::id().to_string());
     vars.insert("version", TMUX_VERSION.to_string());
+}
+
+/// The variables of a session with no pane to describe: its name and the host's.
+pub fn session_vars(session: &str) -> Vars {
+    let mut vars = Vars::from([("session_name", session.to_string())]);
+    shared_vars(&mut vars, session);
+    vars
 }
 
 pub fn pane_vars(p: &PaneView) -> Vars {

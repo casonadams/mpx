@@ -349,12 +349,25 @@ fn format_view(app: &App, node: &crate::protocol::NodeInfo) -> crate::format::Pa
 
 /// `fmt` expanded the way the status line expands its formats: the active pane's variables.
 pub fn expand_active(app: &App, fmt: &str) -> String {
+    expand_for(app, None, fmt)
+}
+
+/// `fmt` expanded for pane `target` (a name or `%id`; the active pane when `None`), with the
+/// variables of that pane's window. A target that is not on screen expands the session alone.
+pub fn expand_for(app: &App, target: Option<&str>, fmt: &str) -> String {
+    let wanted = target.unwrap_or(app.active_pane.as_str());
     let focused = app
         .nodes
         .iter()
-        .find(|n| n.name == app.active_pane)
+        .find(|n| n.name == wanted || format!("%{}", n.id) == wanted)
         .map(|n| format_view(app, n));
-    let tab = app.layout.tabs.iter().find(|t| t.is_active);
+    let window = focused.as_ref().map(|view| view.window);
+    let tab = app
+        .layout
+        .tabs
+        .iter()
+        .find(|t| Some(t.index) == window)
+        .or_else(|| app.layout.tabs.iter().find(|t| t.is_active));
     let vars = status_vars(
         &app.session,
         focused.as_ref(),
@@ -364,6 +377,7 @@ pub fn expand_active(app: &App, fmt: &str) -> String {
     );
     expand(fmt, &vars)
 }
+
 
 /// Places and shows (or hides) the terminal cursor where the frame wants it.
 pub fn place_cursor<W: Write>(app: &App, out: &mut W) -> io::Result<()> {

@@ -119,16 +119,17 @@ fn unknown_directives_are_ignored_and_unclosed_ones_stay_text() {
 
 #[test]
 fn compose_lays_items_out_with_separators_and_justification() {
-    let cases: [(
+    type Case<'a> = (
         usize,
-        &str,
+        &'a str,
         Vec<Item>,
-        &str,
-        &str,
+        &'a str,
+        &'a str,
         Justify,
-        &str,
+        &'a str,
         Vec<(usize, usize, Target)>,
-    ); 2] = [
+    );
+    let cases: [Case; 2] = [
         (
             20,
             "[dev] ",

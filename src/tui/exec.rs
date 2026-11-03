@@ -1,7 +1,9 @@
 //! Command execution: maps each `Command` onto daemon requests and TUI state.
 use super::app::{App, Flow, Mode};
-use super::command::{Command, CopyModeOpts, PromptSpec};
+use super::command::{Command, CopyModeOpts, PromptSpec, ScriptCommand, parse_in};
 use super::copy::{CopyAction, CopyOutcome, CopyState, Motion, apply_action};
+use super::frame;
+use super::job::{self, Job, Work};
 use super::keymap;
 use super::overlay::{Overlay, OverlayCtx, buffer_summary};
 use super::panes::{find_directional, neighbor_pane};
@@ -11,11 +13,23 @@ use super::session::{pick, split_target};
 use crate::config::Config;
 use crate::ipc;
 use crate::layout::Direction;
-use crate::protocol::{LayoutPreset, NewWindowOpts, Side, SpawnOpts, SplitOpts};
+use crate::protocol::{LayoutPreset, NewWindowOpts, Request, Response, Side, SpawnOpts, SplitOpts};
 use std::collections::VecDeque;
 use std::io::Write;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
+
+/// What one command of a sequence does: nothing more, a branch to run next, a job to start, or
+/// a quit.
+enum Step {
+    Next,
+    Branch(Command),
+    /// A job that the commands after it do not wait for.
+    Background(Work),
+    /// A job that the commands after it wait for.
+    Wait(Work),
+    Quit,
+}
 
 /// Client calls that need only the active window.
 enum Simple {
@@ -218,6 +232,7 @@ impl App {
             Command::ListBuffers => self.list_buffers().await,
             Command::ChooseBuffer => self.open_overlay(Overlay::buffers()).await,
             Command::SuspendClient => self.suspend_client(),
+            Command::Script(script) => self.run_script(script).await,
             other => self.say(format!("unhandled command: {other:?}")),
         }
     }
@@ -395,11 +410,216 @@ impl App {
         }
     }
 
-    /// Commands one after the other, until one quits.
+    /// Commands one after the other, until one quits. A command that waits on the daemon starts a
+    /// job, and the commands after it run when the job finishes; a background one lets them run at
+    /// once. `if-shell -F` decides its branch here, without waiting.
     async fn run_sequence(&mut self, commands: Vec<Command>) -> Flow {
-        for cmd in commands {
-            if self.run(cmd).await == Flow::Quit {
-                return Flow::Quit;
+        let mut queue = VecDeque::from(commands);
+        while let Some(cmd) = queue.pop_front() {
+            match self.step(cmd).await {
+                Step::Next => {}
+                Step::Branch(cmd) => queue.push_front(cmd),
+                Step::Quit => return Flow::Quit,
+                Step::Background(work) => self.spawn_job(work, Vec::new()),
+                Step::Wait(work) => {
+                    self.spawn_job(work, queue.drain(..).collect());
+                    return Flow::Continue;
+                }
+            }
+        }
+        Flow::Continue
+    }
+
+    /// Plans one command of a sequence: the job it starts, the branch it runs, or it runs now.
+    async fn step(&mut self, cmd: Command) -> Step {
+        match cmd {
+            Command::Script(ScriptCommand::IfShell {
+                format: true,
+                target,
+                condition,
+                then,
+                otherwise,
+                ..
+            }) => {
+                let value = frame::expand_for(self, target.as_deref(), &condition);
+                let branch = if crate::format::truthy(&value) {
+                    Some(*then)
+                } else {
+                    otherwise.map(|o| *o)
+                };
+                branch.map_or(Step::Next, Step::Branch)
+            }
+            Command::Script(ScriptCommand::RunShell {
+                background,
+                target,
+                delay_ms,
+                command,
+            }) => {
+                let command = frame::expand_for(self, target.as_deref(), &command);
+                let work = Work::Shell {
+                    command,
+                    target,
+                    background,
+                    delay: delay_ms.map(Duration::from_millis),
+                };
+                if background { Step::Background(work) } else { Step::Wait(work) }
+            }
+            Command::Script(ScriptCommand::IfShell {
+                background,
+                target,
+                condition,
+                then,
+                otherwise,
+                ..
+            }) => {
+                let condition = frame::expand_for(self, target.as_deref(), &condition);
+                let work = Work::If {
+                    condition,
+                    target,
+                    then,
+                    otherwise,
+                };
+                if background { Step::Background(work) } else { Step::Wait(work) }
+            }
+            Command::Script(ScriptCommand::WaitFor { op, channel }) => {
+                Step::Wait(Work::Wait { op, channel })
+            }
+            cmd => {
+                if Box::pin(self.run(cmd)).await == Flow::Quit {
+                    Step::Quit
+                } else {
+                    Step::Next
+                }
+            }
+        }
+    }
+
+    /// The script commands: the ones that wait on the daemon run as a sequence of one, the rest act
+    /// at once.
+    async fn run_script(&mut self, script: ScriptCommand) -> Flow {
+        match script {
+            ScriptCommand::RunShell { .. }
+            | ScriptCommand::IfShell { .. }
+            | ScriptCommand::WaitFor { .. } => self.run_sequence(vec![Command::Script(script)]).await,
+            ScriptCommand::SetHook {
+                name,
+                command,
+                append,
+            } => {
+                let req = Request::SetHook {
+                    name,
+                    command,
+                    append,
+                };
+                let result = self.client.call_ok("SetHook", req).await;
+                self.settle(result)
+            }
+            ScriptCommand::RunHook { name } => {
+                let req = Request::RunHook { name };
+                let result = self.client.call_ok("RunHook", req).await;
+                self.settle(result)
+            }
+            ScriptCommand::ShowHooks => self.show_hooks().await,
+            ScriptCommand::SetAlias { name, command } => self.set_alias(name, command).await,
+            ScriptCommand::SourceFile { paths, quiet } => self.source_file(paths, quiet).await,
+        }
+    }
+
+    /// Starts a job for a command that waits on the daemon; `rest` are the commands that follow it.
+    fn spawn_job(&self, work: Work, rest: Vec<Command>) {
+        let endpoint = self.endpoint.clone();
+        let jobs = self.jobs.clone();
+        tokio::spawn(async move {
+            let finished = job::run(&endpoint, work, rest).await;
+            let _ = jobs.send(finished);
+        });
+    }
+
+    /// Applies a finished job: its output goes to the status row, and the commands that followed
+    /// its command run.
+    pub async fn finish_job(&mut self, finished: Job) -> Flow {
+        match finished.outcome {
+            Ok(lines) => {
+                for line in lines {
+                    self.say(line);
+                }
+            }
+            Err(e) => {
+                self.say(e);
+            }
+        }
+        self.run_sequence(finished.then).await
+    }
+
+    async fn show_hooks(&mut self) -> Flow {
+        let lines = match self.client.call(Request::ShowHooks).await {
+            Ok(Response::Hooks(hooks)) => Ok(hooks
+                .into_iter()
+                .map(|(name, command)| format!("{name} {command}"))
+                .collect()),
+            Ok(Response::Error(e)) | Err(e) => Err(e),
+            Ok(other) => Err(format!("unexpected response to show-hooks: {other:?}")),
+        };
+        self.show_lines("hooks", lines).await
+    }
+
+    /// Opens the overlay `title` with `lines`, or says the error.
+    async fn show_lines(&mut self, title: &str, lines: Result<Vec<String>, String>) -> Flow {
+        match lines {
+            Ok(lines) => self.open_overlay(Overlay::text(title, lines)).await,
+            Err(e) => self.say(e),
+        }
+    }
+
+    /// `set -s command-alias`: the alias is set in the daemon and here, and bindings made from now
+    /// on expand it.
+    async fn set_alias(&mut self, name: String, command: Option<String>) -> Flow {
+        let req = Request::SetAlias {
+            name: name.clone(),
+            command: command.clone(),
+        };
+        let result = self.client.call_ok("SetAlias", req).await;
+        if result.is_ok() {
+            match &command {
+                Some(command) => self.config.alias.insert(name, command.clone()),
+                None => self.config.alias.remove(&name),
+            };
+            self.apply_bindings().await;
+        }
+        self.settle(result)
+    }
+
+    /// `source-file`: runs the commands of each file, in order. A line that does not parse is
+    /// reported and skipped; a missing file is reported unless `-q` silences it.
+    async fn source_file(&mut self, paths: Vec<String>, quiet: bool) -> Flow {
+        let vars = crate::format::session_vars(&self.session);
+        for path in paths {
+            let text = match std::fs::read_to_string(&path) {
+                Ok(text) => text,
+                Err(e) if quiet && e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => {
+                    self.say(format!("{path}: {e}"));
+                    continue;
+                }
+            };
+            let lines = match crate::source::lines(&text, |fmt| crate::format::expand(fmt, &vars)) {
+                Ok(lines) => lines,
+                Err(e) => {
+                    self.say(format!("{path}: {e}"));
+                    continue;
+                }
+            };
+            for (line, text) in lines {
+                match parse_in(&text, &self.config.alias) {
+                    Ok(command) => {
+                        if self.run_sequence(vec![command]).await == Flow::Quit {
+                            return Flow::Quit;
+                        }
+                    }
+                    Err(e) => {
+                        self.say(format!("{path}:{line}: {e}"));
+                    }
+                }
             }
         }
         Flow::Continue
@@ -438,14 +658,12 @@ impl App {
 
     /// `list-buffers`: one line per paste buffer, newest first.
     async fn list_buffers(&mut self) -> Flow {
-        match self.client.list_buffers().await {
-            Ok(buffers) => {
-                let lines = buffers.iter().map(buffer_summary).collect();
-                self.open_overlay(Overlay::text("list-buffers", lines))
-                    .await
-            }
-            Err(e) => self.say(e),
-        }
+        let lines = self
+            .client
+            .list_buffers()
+            .await
+            .map(|buffers| buffers.iter().map(buffer_summary).collect());
+        self.show_lines("list-buffers", lines).await
     }
 
     /// `suspend-client`: the event loop stops the process once the command has run.

@@ -5,6 +5,7 @@ pub mod command;
 pub mod copy;
 pub mod frame;
 pub mod input;
+pub mod job;
 pub mod keymap;
 pub mod labels;
 pub mod overlay;

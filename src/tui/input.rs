@@ -207,7 +207,7 @@ impl App {
             return Flow::Continue;
         }
         self.remember(&line);
-        match command::parse(&line) {
+        match command::parse_in(&line, &self.config.alias) {
             Ok(cmd) => self.dispatch(cmd).await,
             Err(e) => self.say(e),
         }

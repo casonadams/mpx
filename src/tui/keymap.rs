@@ -4,7 +4,7 @@ use std::sync::LazyLock;
 
 use crossterm::event::KeyEvent;
 
-use super::command::{Command, parse};
+use super::command::{Command, parse_in};
 use super::copy::CopyAction;
 use super::overlay::HelpEntry;
 use crate::config::{Config, ModeKeys};
@@ -235,6 +235,8 @@ pub struct Keymap {
     copy_vi: Vec<Binding>,
     /// Copy-mode keys of `mode-keys emacs`.
     copy_emacs: Vec<Binding>,
+    /// Command aliases, applied to the command lines bound later too.
+    aliases: BTreeMap<String, String>,
 }
 
 impl Keymap {
@@ -283,7 +285,7 @@ impl Keymap {
         let new = if line.trim().is_empty() {
             None
         } else {
-            Some(binding(spec, line.to_string())?)
+            Some(binding(spec, line.to_string(), &self.aliases)?)
         };
         if let Some(b) = &new
             && table.is_copy()
@@ -333,10 +335,11 @@ impl Keymap {
 /// Resolves the prefix and bindings: defaults, then `config.bind` replacing or adding keys.
 /// The prefix key itself is bound to `send-prefix`.
 pub fn resolve(config: &Config) -> Result<Keymap, String> {
+    let aliases = &config.alias;
     let prefix = parse_key(&config.prefix)?;
-    let mut bindings = vec![binding(prefix, "send-prefix".to_string())?];
+    let mut bindings = vec![binding(prefix, "send-prefix".to_string(), aliases)?];
     for (key, line) in merged(default_table(), &config.bind)? {
-        bindings.push(binding(key, line)?);
+        bindings.push(binding(key, line, aliases)?);
     }
     let root_defaults = ROOT_BINDINGS
         .iter()
@@ -344,11 +347,11 @@ pub fn resolve(config: &Config) -> Result<Keymap, String> {
         .map(|(key, line)| (key.to_string(), line.to_string()));
     let root = merged(root_defaults, &config.bind_root)?
         .into_iter()
-        .map(|(key, line)| binding(key, line))
+        .map(|(key, line)| binding(key, line, aliases))
         .collect::<Result<_, _>>()?;
     let copy = |rows: &[(&str, &str)]| -> Result<Vec<Binding>, String> {
         rows.iter()
-            .map(|(key, line)| binding(parse_key(key)?, line.to_string()))
+            .map(|(key, line)| binding(parse_key(key)?, line.to_string(), aliases))
             .collect()
     };
     Ok(Keymap {
@@ -357,6 +360,7 @@ pub fn resolve(config: &Config) -> Result<Keymap, String> {
         root,
         copy_vi: copy(COPY_VI_BINDINGS)?,
         copy_emacs: copy(COPY_EMACS_BINDINGS)?,
+        aliases: aliases.clone(),
     })
 }
 
@@ -390,8 +394,12 @@ fn parse_key(spec: &str) -> Result<KeySpec, String> {
     KeySpec::parse(spec).map_err(|e| format!("invalid key '{spec}': {e}"))
 }
 
-fn binding(key: KeySpec, source: String) -> Result<Binding, String> {
-    let command = parse(&source).map_err(|e| format!("bind {}: {e}", key.display()))?;
+fn binding(
+    key: KeySpec,
+    source: String,
+    aliases: &BTreeMap<String, String>,
+) -> Result<Binding, String> {
+    let command = parse_in(&source, aliases).map_err(|e| format!("bind {}: {e}", key.display()))?;
     Ok(Binding {
         key,
         source,

@@ -1,4 +1,5 @@
 mod tui {
+    mod alias;
     mod app;
     mod canvas;
     mod command;

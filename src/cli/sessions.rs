@@ -119,6 +119,11 @@ async fn dispatch(command: Commands, r: Resolved) -> Result<i32, String> {
         }
         Commands::Restore => restore(&r).await,
         Commands::ImportTmux { file } => import_tmux(file.as_deref()),
+        Commands::RunShell { .. }
+        | Commands::IfShell { .. }
+        | Commands::WaitFor { .. }
+        | Commands::SetHook { .. }
+        | Commands::ShowHooks => super::hooks::run(command, &r).await,
         other => panes::run(other, &r).await,
     }
 }

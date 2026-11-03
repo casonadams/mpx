@@ -3,6 +3,7 @@ mod daemon {
     mod config_policy;
     mod env;
     mod exit_drain;
+    mod hooks;
     mod idempotency;
     mod idempotent;
     mod input;

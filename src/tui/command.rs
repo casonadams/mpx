@@ -3,7 +3,8 @@
 use super::copy::CopyAction;
 use super::keymap::Table;
 use super::prompt::PromptKind;
-use crate::protocol::{LayoutPreset, Side};
+use crate::protocol::{ChannelOp, HOOK_EVENTS, LayoutPreset, Side};
+use std::collections::BTreeMap;
 
 /// The options of `copy-mode`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -233,6 +234,63 @@ pub enum Command {
     ChooseBuffer,
     /// `suspend-client`: stop the process as Ctrl-Z does; the TUI resumes on SIGCONT.
     SuspendClient,
+    /// The script commands: `run-shell`, `if-shell`, `wait-for`, hooks, `command-alias` and
+    /// `source-file`.
+    Script(ScriptCommand),
+}
+
+/// Commands that run scripts, hooks, channels and aliases in the daemon, or read them from files.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ScriptCommand {
+    /// `run-shell [-b] [-t pane] [-d seconds] command`: runs `command` through the shell in the
+    /// daemon, with formats expanded for the pane. Its output goes to the status row, a message per
+    /// line; `-b` does not wait for it.
+    RunShell {
+        background: bool,
+        target: Option<String>,
+        delay_ms: Option<u64>,
+        command: String,
+    },
+    /// `if-shell [-bF] [-t pane] shell-command command [command]`: runs `then` when the shell
+    /// command exits 0, else `otherwise`. With `-F` the condition is a format, true when non-empty
+    /// and not `0`.
+    IfShell {
+        background: bool,
+        format: bool,
+        target: Option<String>,
+        condition: String,
+        then: Box<Command>,
+        otherwise: Option<Box<Command>>,
+    },
+    /// `wait-for [-L|-S|-U] channel`: waits for a signal on, or takes or releases the lock of, a
+    /// named channel of the daemon.
+    WaitFor {
+        op: ChannelOp,
+        channel: String,
+    },
+    /// `set-hook [-a] hook command` sets the commands a hook runs, `-a` after the existing ones;
+    /// `set-hook -u hook` removes them (`command` is `None`).
+    SetHook {
+        name: String,
+        command: Option<String>,
+        append: bool,
+    },
+    /// `set-hook -R hook`: runs the commands of a hook now.
+    RunHook {
+        name: String,
+    },
+    /// `show-hooks`: every hook command, one line each, in an overlay.
+    ShowHooks,
+    /// `set -s command-alias name=command` sets an alias; `-u` removes it (`command` is `None`).
+    SetAlias {
+        name: String,
+        command: Option<String>,
+    },
+    /// `source-file [-q] path...`: runs the commands of each file, one command line per line.
+    SourceFile {
+        paths: Vec<String>,
+        quiet: bool,
+    },
 }
 
 /// Command names and aliases accepted by `parse`; used for `:` completion.
@@ -252,6 +310,7 @@ pub const COMMAND_NAMES: &[&str] = &[
     "display-panes",
     "find-window",
     "help",
+    "if-shell",
     "join-pane",
     "kill-pane",
     "kill-server",
@@ -283,14 +342,17 @@ pub const COMMAND_NAMES: &[&str] = &[
     "resize-pane",
     "respawn-pane",
     "rotate-window",
+    "run-shell",
     "select-layout",
     "select-pane",
     "select-window",
     "send-keys",
     "send-prefix",
     "session",
+    "set-hook",
     "set-option",
     "set-window-option",
+    "show-hooks",
     "show-messages",
     "show-options",
     "show-window-options",
@@ -310,17 +372,22 @@ pub const COMMAND_NAMES: &[&str] = &[
     "unbind-key",
     "vs",
     "vsplit",
+    "wait-for",
 ];
 
-/// A family of command names; returns `None` when the name belongs to another family.
-type Group = fn(&str, &[String]) -> Option<Result<Command, String>>;
-
-/// Parses a command line (tmux command names plus vim aliases such as `vsplit`, `q`).
+/// Parses a command line (tmux command names plus vim aliases such as `vsplit`, `q`), without
+/// command aliases.
 pub fn parse(line: &str) -> Result<Command, String> {
+    parse_in(line, &BTreeMap::new())
+}
+
+/// Parses a command line with the command `aliases` of the config (tmux `command-alias`): a
+/// command whose name is an alias runs the alias's command line, with its own arguments after it.
+pub fn parse_in(line: &str, aliases: &BTreeMap<String, String>) -> Result<Command, String> {
     if line.contains(';') {
         let mut commands = Vec::new();
         for words in crate::cmdline::split_commands(line)? {
-            commands.push(parse_words(&words)?);
+            commands.push(parse_words(&expand_alias(words, aliases)?, aliases)?);
         }
         return match commands.len() {
             0 => Err("empty command".to_string()),
@@ -328,17 +395,30 @@ pub fn parse(line: &str) -> Result<Command, String> {
             _ => Ok(Command::Sequence(commands)),
         };
     }
-    parse_words(&split_words(line)?)
+    parse_words(&expand_alias(split_words(line)?, aliases)?, aliases)
 }
 
-fn parse_words(words: &[String]) -> Result<Command, String> {
+/// The words with an aliased command name replaced by the alias's words. An alias is expanded
+/// once, so an alias may name another command but not loop.
+fn expand_alias(
+    mut words: Vec<String>,
+    aliases: &BTreeMap<String, String>,
+) -> Result<Vec<String>, String> {
+    let Some(target) = words.first().and_then(|name| aliases.get(name)) else {
+        return Ok(words);
+    };
+    let mut expanded = split_words(target)?;
+    expanded.extend(words.drain(1..));
+    Ok(expanded)
+}
+
+fn parse_words(words: &[String], aliases: &BTreeMap<String, String>) -> Result<Command, String> {
     let (name, args) = words
         .split_first()
         .ok_or_else(|| "empty command".to_string())?;
-    let groups: [Group; 3] = [window_cmd, pane_cmd, misc_cmd];
-    groups
-        .into_iter()
-        .find_map(|group| group(name, args))
+    window_cmd(name, args)
+        .or_else(|| pane_cmd(name, args))
+        .or_else(|| misc_cmd(name, args, aliases))
         .unwrap_or_else(|| Err(format!("unknown command: {name}")))
 }
 
@@ -488,7 +568,11 @@ fn pane_cmd(name: &str, args: &[String]) -> Option<Result<Command, String>> {
     Some(cmd)
 }
 
-fn misc_cmd(name: &str, args: &[String]) -> Option<Result<Command, String>> {
+fn misc_cmd(
+    name: &str,
+    args: &[String],
+    aliases: &BTreeMap<String, String>,
+) -> Option<Result<Command, String>> {
     let cmd = match name {
         "copy-mode" => copy_mode(name, args),
         "detach-client" | "detach" | "q" | "quit" => bare(name, args, Command::Detach),
@@ -517,6 +601,12 @@ fn misc_cmd(name: &str, args: &[String]) -> Option<Result<Command, String>> {
         "send-prefix" => bare(name, args, Command::SendPrefix),
         "reload-config" => bare(name, args, Command::ReloadConfig),
         "source-file" if args.is_empty() => Ok(Command::ReloadConfig),
+        "source-file" => source_file(name, args).map(Command::Script),
+        "run-shell" => run_shell(name, args).map(Command::Script),
+        "if-shell" => if_shell(name, args, aliases).map(Command::Script),
+        "wait-for" => wait_for(name, args).map(Command::Script),
+        "set-hook" => set_hook(name, args, aliases).map(Command::Script),
+        "show-hooks" => bare(name, args, Command::Script(ScriptCommand::ShowHooks)),
         "bind-key" | "bind" => bind_key(name, args),
         "unbind-key" | "unbind" => unbind_key(name, args),
         "next-session" => bare(name, args, Command::NextSession),
@@ -626,13 +716,19 @@ const FIND_WINDOW: Spec = Spec {
 };
 
 fn find_window(name: &str, args: &[String]) -> Result<Command, String> {
-    let o = parse_opts(name, args, FIND_WINDOW)?;
-    if o.rest.is_empty() {
-        return Err(format!("{name}: need a pattern"));
-    }
+    let o = with_operands(name, args, FIND_WINDOW, "need a pattern")?;
     Ok(Command::FindWindow {
         pattern: o.rest.join(" "),
     })
+}
+
+/// The options of `name`, which must be followed by operands; `missing` says what they are.
+fn with_operands(name: &str, args: &[String], spec: Spec, missing: &str) -> Result<Opts, String> {
+    let o = parse_opts(name, args, spec)?;
+    if o.rest.is_empty() {
+        return Err(format!("{name}: {missing}"));
+    }
+    Ok(o)
 }
 
 fn display_message(name: &str, args: &[String]) -> Result<Command, String> {
@@ -655,6 +751,9 @@ const SHOW_OPTIONS: Spec = Spec {
 fn set_option(name: &str, args: &[String]) -> Result<Command, String> {
     let o = parse_opts(name, args, SET_OPTION)?;
     let unset = o.has("-u");
+    if o.has("-s") && o.rest.first().is_some_and(|option| is_command_alias(option)) {
+        return alias_option(name, &o.rest[1..], unset).map(Command::Script);
+    }
     let (option, value) = match o.rest.as_slice() {
         [option] if unset => (option, None),
         [option, value] if !unset => (option, Some(value.clone())),
@@ -666,6 +765,185 @@ fn set_option(name: &str, args: &[String]) -> Result<Command, String> {
         name: option.clone(),
         value,
         unset,
+        quiet: o.has("-q"),
+    })
+}
+
+/// Whether a server option names the command aliases (`command-alias`, optionally `[N]`).
+fn is_command_alias(option: &str) -> bool {
+    option.split('[').next() == Some("command-alias")
+}
+
+/// `set -s command-alias[N] name=command` (the index is accepted: aliases are looked up by name),
+/// or `set -su command-alias name` to remove one.
+fn alias_option(name: &str, rest: &[String], unset: bool) -> Result<ScriptCommand, String> {
+    match (rest, unset) {
+        ([alias], true) => Ok(ScriptCommand::SetAlias {
+            name: alias.clone(),
+            command: None,
+        }),
+        ([pair], false) => match pair.split_once('=') {
+            Some((alias, command)) if !alias.is_empty() && !command.is_empty() => {
+                Ok(ScriptCommand::SetAlias {
+                    name: alias.to_string(),
+                    command: Some(command.to_string()),
+                })
+            }
+            _ => Err(format!("{name}: command-alias needs name=command")),
+        },
+        _ => Err(format!("{name}: command-alias needs name=command, or -u name")),
+    }
+}
+
+const RUN_SHELL: Spec = Spec {
+    bools: &["-b"],
+    values: &["-t", "-d"],
+    stop_at_arg: true,
+};
+const IF_SHELL: Spec = Spec {
+    bools: &["-b", "-F"],
+    values: &["-t"],
+    stop_at_arg: true,
+};
+const WAIT_FOR: Spec = Spec {
+    bools: &["-L", "-S", "-U"],
+    values: &[],
+    stop_at_arg: false,
+};
+const SET_HOOK: Spec = Spec {
+    bools: &["-a", "-g", "-R", "-u", "-w"],
+    values: &["-t"],
+    stop_at_arg: true,
+};
+const SOURCE_FILE: Spec = Spec {
+    bools: &["-q"],
+    values: &[],
+    stop_at_arg: false,
+};
+
+/// `run-shell [-b] [-t pane] [-d seconds] command`: the words after the flags form the command.
+fn run_shell(name: &str, args: &[String]) -> Result<ScriptCommand, String> {
+    let o = parse_opts(name, args, RUN_SHELL)?;
+    if o.rest.is_empty() {
+        return Err(format!("{name}: need a shell command"));
+    }
+    let delay_ms = o.value("-d").map(|raw| parse_delay(name, raw)).transpose()?;
+    Ok(ScriptCommand::RunShell {
+        background: o.has("-b"),
+        target: o.value("-t").map(str::to_string),
+        delay_ms,
+        command: o.rest.join(" "),
+    })
+}
+
+/// A delay in seconds as milliseconds; fractions are allowed.
+fn parse_delay(name: &str, raw: &str) -> Result<u64, String> {
+    match raw.parse::<f64>() {
+        Ok(secs) if secs.is_finite() && secs >= 0.0 => Ok((secs * 1000.0).round() as u64),
+        _ => Err(format!("{name}: invalid delay '{raw}'")),
+    }
+}
+
+/// `if-shell [-bF] [-t pane] shell-command command [command]`.
+fn if_shell(
+    name: &str,
+    args: &[String],
+    aliases: &BTreeMap<String, String>,
+) -> Result<ScriptCommand, String> {
+    let o = parse_opts(name, args, IF_SHELL)?;
+    let (condition, branches) = match o.rest.as_slice() {
+        [condition, branches @ ..] if matches!(branches.len(), 1 | 2) => (condition, branches),
+        _ => return Err(format!("{name}: need a condition and one or two commands")),
+    };
+    let then = parse_in(&branches[0], aliases)?;
+    let otherwise = branches
+        .get(1)
+        .map(|line| parse_in(line, aliases).map(Box::new))
+        .transpose()?;
+    Ok(ScriptCommand::IfShell {
+        background: o.has("-b"),
+        format: o.has("-F"),
+        target: o.value("-t").map(str::to_string),
+        condition: condition.clone(),
+        then: Box::new(then),
+        otherwise,
+    })
+}
+
+/// `wait-for [-L|-S|-U] channel`: `-S` signals, `-L` locks, `-U` unlocks; with none it waits.
+fn wait_for(name: &str, args: &[String]) -> Result<ScriptCommand, String> {
+    let o = parse_opts(name, args, WAIT_FOR)?;
+    let op = match (o.has("-L"), o.has("-S"), o.has("-U")) {
+        (false, false, false) => ChannelOp::Wait,
+        (true, false, false) => ChannelOp::Lock,
+        (false, true, false) => ChannelOp::Signal,
+        (false, false, true) => ChannelOp::Unlock,
+        _ => return Err(format!("{name}: use one of -L, -S or -U")),
+    };
+    match o.rest.as_slice() {
+        [channel] if !channel.is_empty() => Ok(ScriptCommand::WaitFor {
+            op,
+            channel: channel.clone(),
+        }),
+        [_] | [] => Err(format!("{name}: need a channel name")),
+        _ => Err(format!("{name}: too many arguments")),
+    }
+}
+
+/// `set-hook [-a] hook command`, `set-hook -u hook`, `set-hook -R hook`. Window and pane hooks
+/// (`-w`, `-t`) are refused: a hook applies to the whole session.
+fn set_hook(
+    name: &str,
+    args: &[String],
+    aliases: &BTreeMap<String, String>,
+) -> Result<ScriptCommand, String> {
+    let o = parse_opts(name, args, SET_HOOK)?;
+    if o.has("-w") || o.value("-t").is_some() {
+        return Err(format!(
+            "{name}: window and pane hooks are not supported; a hook applies to the whole session"
+        ));
+    }
+    let (hook, commands) = o
+        .rest
+        .split_first()
+        .ok_or_else(|| format!("{name}: need a hook name"))?;
+    if !HOOK_EVENTS.contains(&hook.as_str()) {
+        return Err(format!("{name}: unknown hook '{hook}'"));
+    }
+    if o.has("-R") || o.has("-u") {
+        if o.has("-R") && o.has("-u") {
+            return Err(format!("{name}: use one of -R or -u"));
+        }
+        if !commands.is_empty() {
+            return Err(format!("{name}: -R and -u take no command"));
+        }
+        return Ok(if o.has("-R") {
+            ScriptCommand::RunHook { name: hook.clone() }
+        } else {
+            ScriptCommand::SetHook {
+                name: hook.clone(),
+                command: None,
+                append: false,
+            }
+        });
+    }
+    if commands.is_empty() {
+        return Err(format!("{name}: need a command for hook {hook}"));
+    }
+    let line = crate::cmdline::command_line(commands);
+    parse_in(&line, aliases)?;
+    Ok(ScriptCommand::SetHook {
+        name: hook.clone(),
+        command: Some(line),
+        append: o.has("-a"),
+    })
+}
+
+/// `source-file [-q] path...`: the commands of each file, run in turn.
+fn source_file(name: &str, args: &[String]) -> Result<ScriptCommand, String> {
+    let o = with_operands(name, args, SOURCE_FILE, "need a file")?;
+    Ok(ScriptCommand::SourceFile {
+        paths: o.rest.clone(),
         quiet: o.has("-q"),
     })
 }

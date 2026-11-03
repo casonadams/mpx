@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
+mod hooks;
 mod panes;
 pub mod render;
 mod resolve;
@@ -498,4 +499,100 @@ pub enum Commands {
 
         name: String,
     },
+
+    /// Run a command through the session's shell (tmux run-shell); formats in it are expanded for
+    /// the target pane, and its output is printed
+    #[command(name = "run-shell")]
+    RunShell {
+        /// Do not wait for the command; print nothing (tmux -b)
+        #[arg(short = 'b')]
+        background: bool,
+
+        /// Pane whose formats are expanded and whose directory the command starts in (tmux -t)
+        #[arg(short = 't', long = "target")]
+        target: Option<String>,
+
+        /// Wait this many seconds before running (tmux -d)
+        #[arg(short = 'd', value_name = "SECONDS")]
+        delay: Option<f64>,
+
+        /// Command to run, with its arguments
+        #[arg(
+            required = true,
+            trailing_var_arg = true,
+            allow_hyphen_values = true,
+            value_name = "COMMAND"
+        )]
+        command: Vec<String>,
+    },
+
+    /// Run one command if a shell command succeeds, else another (tmux if-shell); `-F` tests a
+    /// format instead, true when it is not empty or `0`. The chosen command runs in the session,
+    /// as a hook's commands do.
+    #[command(name = "if-shell")]
+    IfShell {
+        /// The condition is a format, not a shell command (tmux -F)
+        #[arg(short = 'F')]
+        format: bool,
+
+        /// Pane the condition and the commands act on (tmux -t)
+        #[arg(short = 't', long = "target")]
+        target: Option<String>,
+
+        /// Shell command whose exit status decides the branch; with -F, a format
+        condition: String,
+
+        /// Command run when the condition passes
+        then: String,
+
+        /// Command run when the condition fails
+        otherwise: Option<String>,
+    },
+
+    /// Wait for a signal on a named channel, or lock or unlock it (tmux wait-for)
+    #[command(name = "wait-for")]
+    WaitFor {
+        /// Signal the channel, waking its waiters (tmux -S)
+        #[arg(short = 'S', conflicts_with_all = ["lock", "unlock"])]
+        signal: bool,
+
+        /// Take the channel's lock, waiting until it is free (tmux -L)
+        #[arg(short = 'L', conflicts_with = "unlock")]
+        lock: bool,
+
+        /// Release the channel's lock (tmux -U)
+        #[arg(short = 'U')]
+        unlock: bool,
+
+        /// Channel name
+        channel: String,
+    },
+
+    /// Set the command a hook runs on an event (tmux set-hook); `-a` appends, `-u` removes, `-R`
+    /// runs the hook now
+    #[command(name = "set-hook")]
+    SetHook {
+        /// Add the command after the hook's existing commands (tmux -a)
+        #[arg(short = 'a', conflicts_with_all = ["unset", "run"])]
+        append: bool,
+
+        /// Remove the hook's commands (tmux -u)
+        #[arg(short = 'u', conflicts_with = "run")]
+        unset: bool,
+
+        /// Run the hook's commands now (tmux -R)
+        #[arg(short = 'R')]
+        run: bool,
+
+        /// Hook name, such as after-new-window or pane-exited
+        hook: String,
+
+        /// Command line the hook runs
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true, value_name = "COMMAND")]
+        command: Vec<String>,
+    },
+
+    /// List every hook and its command (tmux show-hooks)
+    #[command(name = "show-hooks")]
+    ShowHooks,
 }

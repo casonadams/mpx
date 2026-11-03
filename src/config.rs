@@ -83,6 +83,8 @@ pub struct Config {
     pub bind: BTreeMap<String, String>,
     /// Extra or overriding bindings for keys pressed without the prefix (tmux `bind -n`).
     pub bind_root: BTreeMap<String, String>,
+    /// Command aliases (tmux `command-alias`): a command name -> the command line it stands for.
+    pub alias: BTreeMap<String, String>,
     /// Rules for resuming processes (AI CLI tools, editors, watchers) across restarts.
     pub resume: Vec<ResumeRule>,
     pub style: StyleConfig,
@@ -369,6 +371,7 @@ impl Default for Config {
             set_clipboard: true,
             bind: BTreeMap::new(),
             bind_root: BTreeMap::new(),
+            alias: BTreeMap::new(),
             resume: default_resume_rules(),
             style: StyleConfig::default(),
         }

@@ -198,6 +198,32 @@ pub enum WaitCondition {
     Match { pattern: String },
 }
 
+/// A `wait-for` operation on a named channel: `Wait` blocks until a `Signal`, `Lock` and `Unlock`
+/// take and release its lock (tmux `wait-for`, `-S`, `-L` and `-U`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChannelOp {
+    Wait,
+    Signal,
+    Lock,
+    Unlock,
+}
+
+/// The events a hook can run on (`set-hook`), by their tmux names.
+pub const HOOK_EVENTS: &[&str] = &[
+    "after-new-window",
+    "after-split-window",
+    "after-kill-pane",
+    "after-select-pane",
+    "after-select-window",
+    "pane-exited",
+    "pane-died",
+    "client-attached",
+    "client-detached",
+    "alert-bell",
+    "alert-activity",
+];
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WaitOutcome {
     /// False when the timeout elapsed first.
@@ -208,7 +234,7 @@ pub struct WaitOutcome {
 
 /// Version of the client-daemon protocol. Bump it on any change an older peer cannot parse, so
 /// clients refuse an incompatible daemon instead of misreading it.
-pub const PROTOCOL: u32 = 9;
+pub const PROTOCOL: u32 = 10;
 
 fn first_protocol() -> u32 {
     1
@@ -440,6 +466,60 @@ pub enum Request {
         a: usize,
         b: usize,
     },
+    /// Runs `command` through the shell (tmux `run-shell`). `target` gives the working directory
+    /// (the pane's; the daemon's without one). `delay_ms` waits first. A foreground run answers
+    /// `Shell` with the exit status and output; `background` answers `Ok` at once.
+    RunShell {
+        command: String,
+        #[serde(default)]
+        target: Option<String>,
+        #[serde(default)]
+        background: bool,
+        #[serde(default)]
+        delay_ms: Option<u64>,
+    },
+    /// Runs one command line the way a hook runs its commands, with the session's aliases; the
+    /// line's own `-t` targets, else the active pane. `if-shell` decides its branch and runs it.
+    /// Answers `Ok` once the command has run, or `Error`.
+    RunCommand {
+        line: String,
+    },
+    /// Expands the tmux formats in `fmt` for pane `target` (the active pane when `None`). With
+    /// `hook`, the variables `hook` and `hook_pane` are set as well.
+    Format {
+        fmt: String,
+        #[serde(default)]
+        target: Option<String>,
+        #[serde(default)]
+        hook: Option<String>,
+    },
+    /// Signals, waits on or locks a named channel (tmux `wait-for`). `Wait` and `Lock` answer
+    /// when the channel allows it.
+    WaitFor {
+        channel: String,
+        op: ChannelOp,
+    },
+    /// Sets the commands of hook `name` (`append` adds one after the existing commands); `None`
+    /// removes the hook.
+    SetHook {
+        name: String,
+        #[serde(default)]
+        command: Option<String>,
+        #[serde(default)]
+        append: bool,
+    },
+    /// Runs the commands of hook `name` now, without an event (tmux `set-hook -R`).
+    RunHook {
+        name: String,
+    },
+    /// Every hook with its command line, sorted by name then order.
+    ShowHooks,
+    /// Sets (or with `None` removes) a command alias: `alias` is the name, `command` its command
+    /// line (tmux `set -s command-alias name=command`).
+    SetAlias {
+        name: String,
+        command: Option<String>,
+    },
     /// Restarts a pane's process in place (tmux `respawn-pane`): the pane keeps its name and
     /// layout slot. `kill` stops a running process first. `cwd` and `command` (program, then its
     /// arguments) replace the pane's own for this and later respawns.
@@ -476,6 +556,13 @@ pub enum Response {
     Bindings(Vec<(String, String)>),
     Buffer(Buffer),
     Buffers(Vec<Buffer>),
+    /// A foreground `run-shell`: the exit status (`None` when killed by a signal) and output.
+    Shell {
+        status: Option<i32>,
+        output: String,
+    },
+    Text(String),
+    Hooks(Vec<(String, String)>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
