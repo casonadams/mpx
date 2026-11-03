@@ -8,9 +8,8 @@ fn client(name: &str, session: &str, width: u16, height: u16, activity: u64) -> 
         session: session.into(),
         width,
         height,
-        readonly: false,
-        created_ms: 0,
         activity_ms: activity,
+        ..Default::default()
     }
 }
 

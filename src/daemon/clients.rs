@@ -51,9 +51,36 @@ pub(super) fn detach(subs: &mut Vec<Subscriber>, target: &ClientTarget) -> Resul
 }
 
 /// Detaches every client except the one called `keep`, as `attach -d` does for the new client.
-pub(super) fn detach_others(subs: &mut Vec<Subscriber>, keep: &str) {
+/// Returns the parent processes of the clients detached, for `hang_up`.
+pub(super) fn detach_others(subs: &mut Vec<Subscriber>, keep: &str) -> Vec<u32> {
+    let parents = subs
+        .iter()
+        .filter(|s| !s.sink.is_closed())
+        .filter_map(|s| s.client.as_ref())
+        .filter(|c| c.name != keep)
+        .filter_map(|c| c.parent_pid)
+        .collect();
     retain_detaching(subs, |name| keep != name);
+    parents
 }
+
+/// Sends SIGHUP to each of `pids`, the parents of clients `attach -x` detached. Unix only: elsewhere
+/// the clients are detached but nothing is signalled. Pids 0 and 1 are never signalled.
+#[cfg(unix)]
+pub(super) fn hang_up(pids: &[u32]) {
+    for &pid in pids {
+        let Ok(pid) = libc::pid_t::try_from(pid) else {
+            continue;
+        };
+        if pid > 1 {
+            // SAFETY: kill(2) only sends a signal; a pid that has gone fails with ESRCH.
+            unsafe { libc::kill(pid, libc::SIGHUP) };
+        }
+    }
+}
+
+#[cfg(not(unix))]
+pub(super) fn hang_up(_pids: &[u32]) {}
 
 fn retain_detaching(subs: &mut Vec<Subscriber>, selected: impl Fn(&str) -> bool) -> bool {
     let mut detached = false;

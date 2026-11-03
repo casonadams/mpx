@@ -75,6 +75,7 @@ fn window(
         layout,
         focused: None,
         panes,
+        shares: None,
     }
 }
 

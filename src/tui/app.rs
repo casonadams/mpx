@@ -227,11 +227,13 @@ pub struct AppOptions {
     pub client_name: Option<String>,
 }
 
-/// How a client attaches: `exclusive` detaches the session's other clients (`attach -d`), and
-/// `read_only` keeps every key and paste from reaching the panes (`attach -r`).
+/// How a client attaches: `exclusive` detaches the session's other clients (`attach -d`), `hangup`
+/// (with `exclusive`) also hangs up their parents (`attach -x`), and `read_only` keeps every key and
+/// paste from reaching the panes (`attach -r`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct AttachOpts {
     pub exclusive: bool,
+    pub hangup: bool,
     pub read_only: bool,
 }
 
@@ -262,13 +264,14 @@ impl App {
     ) -> Result<(Self, StreamRx), String> {
         let keymap = keymap::resolve(&opts.config)?;
         let exclusive = opts.attach.exclusive;
+        let hangup = opts.attach.hangup;
         let mut client = Client::connect(endpoint).await?;
         let sub_client = Client::connect(endpoint).await?;
         let started = ensure_running_window(&mut client).await;
         let (tx, rx) = mpsc::channel(STREAM_QUEUE);
         let mut app = Self::new(endpoint, session, client, keymap, tx, opts);
         app.report("new-window", started);
-        app.subscribe_as(sub_client, exclusive);
+        app.subscribe_as(sub_client, exclusive, hangup);
         app.refresh_attached().await;
         app.apply_bindings().await;
         app.refresh_nodes().await;
@@ -313,6 +316,7 @@ impl App {
             readonly: attach.read_only,
             created_ms: now,
             activity_ms: now,
+            parent_pid: crate::clients::parent_pid(),
         };
         App {
             endpoint: endpoint.to_string(),
@@ -378,12 +382,13 @@ impl App {
 
     /// Replaces the event subscription with one bound to `client`'s session, as this client.
     pub fn subscribe(&mut self, client: Client) {
-        self.subscribe_as(client, false);
+        self.subscribe_as(client, false, false);
     }
 
     /// Replaces the event subscription with one bound to `client`'s session, registered as this
-    /// client (with `exclusive`, the session's other clients are detached first).
-    fn subscribe_as(&mut self, client: Client, exclusive: bool) {
+    /// client (with `exclusive`, the session's other clients are detached first, and with `hangup`
+    /// their parents are hung up).
+    fn subscribe_as(&mut self, client: Client, exclusive: bool, hangup: bool) {
         if let Some(task) = self.sub.task.take() {
             task.abort();
         }
@@ -393,7 +398,9 @@ impl App {
         let terminal = self.terminal.clone();
         self.sub.task = Some(tokio::spawn(async move {
             let _ = client
-                .stream_as_client(terminal, exclusive, tx, move |event| (generation, event))
+                .stream_as_client(terminal, exclusive, hangup, tx, move |event| {
+                    (generation, event)
+                })
                 .await;
         }));
     }

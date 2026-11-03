@@ -120,12 +120,14 @@ impl DaemonState {
         sink: Sink,
         client: Option<ClientInfo>,
         exclusive: bool,
+        hangup: bool,
     ) -> Result<(), String> {
         self.ask(|reply| SessionMsg::Subscribe {
             filter,
             sink,
             client,
             exclusive,
+            hangup,
             reply,
         })
         .await
@@ -277,6 +279,7 @@ async fn subscribe_node<S: AsyncStream>(
         layout,
         client,
         exclusive,
+        hangup,
     } = request
     else {
         return;
@@ -293,7 +296,9 @@ async fn subscribe_node<S: AsyncStream>(
         }
         (None, Some(_)) => Err("since requires a node name".to_string()),
         (Some(name), since) => state.subscribe_node(name, since, sink).await,
-        (None, None) => state.subscribe(session_wide, sink, client, exclusive).await,
+        (None, None) => state
+            .subscribe(session_wide, sink, client, exclusive, hangup)
+            .await,
     };
     let attached = terminal && registered.is_ok();
     if attached {

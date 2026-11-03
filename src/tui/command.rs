@@ -7,7 +7,11 @@ use super::placement::{Extent, Offset};
 use super::popup::PopupOpts;
 use super::prompt::PromptKind;
 use crate::keys::KeySpec;
-use crate::protocol::{ChannelOp, EnvChange, HOOK_EVENTS, LayoutPreset, PasteBufferOpts, Side};
+use crate::layout::LinkPlace;
+use crate::protocol::{
+    ChannelOp, EnvChange, HOOK_EVENTS, LayoutPreset, LinkOpts, PasteBufferOpts, ResizeOpts, Side,
+    UnlinkOpts, WindowFit, WindowResize,
+};
 use crate::vt::capture::CaptureSpec;
 use std::collections::BTreeMap;
 
@@ -76,7 +80,9 @@ pub enum Command {
     },
     /// `display-message [-p] [format]`: the expanded format on the status row; with no format it
     /// describes the current pane.
-    DisplayMessage { format: Option<String> },
+    DisplayMessage {
+        format: Option<String>,
+    },
     SendKeys {
         target: Option<String>,
         keys: Vec<String>,
@@ -89,7 +95,10 @@ pub enum Command {
     Zoom,
     /// `set-option [-g] synchronize-panes on|off`: typed input goes to every pane of the active
     /// window (every window with `-g`).
-    SetSynchronize { all: bool, on: bool },
+    SetSynchronize {
+        all: bool,
+        on: bool,
+    },
     /// `copy-mode [-eHMqu] [-t pane]`: enters copy mode, or with `quit` leaves it.
     CopyMode(CopyModeOpts),
     /// `send-keys -X command [args]`: runs one copy-mode command in the copy mode of `target`
@@ -107,12 +116,17 @@ pub enum Command {
     ReloadConfig,
     OpenTree,
     OpenHelp,
-    OpenPalette { tab: Option<PaletteTab> },
+    OpenPalette {
+        tab: Option<PaletteTab>,
+    },
     /// `command-prompt`: one question per `prompts` entry (`-p`), each starting with its `initial`
     /// text (`-I`). With a `template` the answers fill it in (`%%`, `%1`..`%9`); without one the
     /// typed line runs as a command.
     CommandPrompt(PromptSpec),
-    Confirm { prompt: String, then: Box<Command> },
+    Confirm {
+        prompt: String,
+        then: Box<Command>,
+    },
     /// Commands run one after the other (`a ; b`), stopping at the first that fails or quits.
     Sequence(Vec<Command>),
     /// `bind-key`: bind `key` in `table`; an empty `line` is `unbind-key`.
@@ -123,9 +137,13 @@ pub enum Command {
     },
     /// `display-panes [-d ms]`: number each visible pane until a digit picks one, a key is
     /// pressed or the time runs out. `None` takes `display-panes-time`; `Some(0)` waits for a key.
-    DisplayPanes { duration_ms: Option<u64> },
+    DisplayPanes {
+        duration_ms: Option<u64>,
+    },
     /// `clock-mode [-t pane]`: a large clock fills the pane until a key is pressed.
-    ClockMode { target: Option<String> },
+    ClockMode {
+        target: Option<String>,
+    },
     /// `show-messages`: the status-row messages of this session, oldest first.
     ShowMessages,
     /// `choose-buffer`: the paste buffers, newest first; Enter pastes, `d` deletes.
@@ -144,8 +162,7 @@ pub enum Command {
     Script(ScriptCommand),
 }
 
-/// The window commands. They act on the active window, or on the window at the index, name or
-/// offset they carry.
+/// The window commands: the active window, or the one at the index, name or offset they carry.
 #[derive(Debug, Clone, PartialEq)]
 pub enum WindowCommand {
     NewWindow {
@@ -153,14 +170,25 @@ pub enum WindowCommand {
         argv: Vec<String>,
         cwd: Option<String>,
     },
-    KillWindow { index: Option<usize> },
-    RenameWindow { name: String },
-    SelectWindow { index: usize },
+    KillWindow {
+        index: Option<usize>,
+    },
+    RenameWindow {
+        name: String,
+    },
+    SelectWindow {
+        index: usize,
+    },
     /// `select-window -t name`: the window with that name.
-    SelectWindowNamed { name: String },
+    SelectWindowNamed {
+        name: String,
+    },
     /// `rotate-window [-DZ]`: the active window's panes move through its layout slots; `-Z` keeps
     /// the window zoomed.
-    RotateWindow { down: bool, keep_zoom: bool },
+    RotateWindow {
+        down: bool,
+        keep_zoom: bool,
+    },
     /// `respawn-window [-k] [-c dir] [-t index] [command...]`: restarts every pane of the window.
     RespawnWindow {
         target: Option<usize>,
@@ -169,18 +197,42 @@ pub enum WindowCommand {
         command: Vec<String>,
     },
     /// `move-window -t index`: moves the active window to that index (`-r` renumbers instead).
-    MoveWindow { to: usize },
+    MoveWindow {
+        to: usize,
+    },
     /// `move-window -r`: renumbers the windows 0, 1, ... in order.
     RenumberWindows,
     /// `swap-window [-s src] -t dst`: exchanges two windows; `src` defaults to the active one.
-    SwapWindow { src: Option<usize>, dst: usize },
+    SwapWindow {
+        src: Option<usize>,
+        dst: usize,
+    },
+    /// `link-window`: shows a window at another index as well.
+    LinkWindow(LinkOpts),
+    /// `unlink-window`: removes one index of a window.
+    UnlinkWindow(UnlinkOpts),
+    /// `resize-window`: gives a window a size of its own.
+    ResizeWindow(ResizeOpts),
     /// `find-window [-iNT] pattern`: the sessions and windows palette filtered by `pattern`.
-    FindWindow { pattern: String },
-    /// `next-window -a` / `previous-window -a`: the next window with activity or a bell.
-    StepAlert { forward: bool },
-    NextWindow,
-    PrevWindow,
+    FindWindow {
+        pattern: String,
+    },
+    /// `next-window` / `previous-window`; `alert` (`-a`) stops only at activity or bells.
+    StepWindow {
+        forward: bool,
+        alert: bool,
+    },
     LastWindow,
+}
+
+/// `join-pane [-dh] [-s src] [-t dst]`: moves `src` (default: the marked pane) next to `dst`
+/// (default: the active pane), side by side with `-h`, else stacked. `-d` keeps the active pane.
+#[derive(Debug, Clone, PartialEq)]
+pub struct JoinOpts {
+    pub src: Option<String>,
+    pub dst: Option<String>,
+    pub side_by_side: bool,
+    pub detach: bool,
 }
 
 /// The pane commands. They act on the active pane, or on the pane a `target` names.
@@ -194,19 +246,23 @@ pub enum PaneCommand {
         detach: bool,
         keep_zoom: bool,
     },
-    KillPane { target: Option<String> },
-    SelectPane { target: String, keep_zoom: bool },
-    SelectPaneDir { side: Side, keep_zoom: bool },
-    MarkPane { target: Option<String> },
-    ClearMark,
-    /// `join-pane [-dh] [-s src] [-t dst]`: moves `src` (default: the marked pane) next to `dst`
-    /// (default: the active pane), side by side with `-h`, else stacked. `-d` keeps the active pane.
-    JoinPane {
-        src: Option<String>,
-        dst: Option<String>,
-        side_by_side: bool,
-        detach: bool,
+    KillPane {
+        target: Option<String>,
     },
+    SelectPane {
+        target: String,
+        keep_zoom: bool,
+    },
+    SelectPaneDir {
+        side: Side,
+        keep_zoom: bool,
+    },
+    MarkPane {
+        target: Option<String>,
+    },
+    ClearMark,
+    /// `join-pane [-dh] [-s src] [-t dst]`: moves a pane next to another (see `JoinOpts`).
+    JoinPane(JoinOpts),
     /// `respawn-pane [-k] [-c dir] [-t target] [command...]`: restarts the pane's process.
     RespawnPane {
         target: Option<String>,
@@ -215,16 +271,26 @@ pub enum PaneCommand {
         command: Vec<String>,
     },
     NextPane,
-    LastPane { keep_zoom: bool },
-    ResizePane { side: Side, cells: u16 },
-    SwapPane { next: bool, keep_zoom: bool },
+    LastPane {
+        keep_zoom: bool,
+    },
+    ResizePane {
+        side: Side,
+        cells: u16,
+    },
+    SwapPane {
+        next: bool,
+        keep_zoom: bool,
+    },
     SwapPaneMarked {
         source: Option<String>,
         target: Option<String>,
         keep_zoom: bool,
     },
     BreakPane,
-    SelectLayout { preset: Option<LayoutPreset> },
+    SelectLayout {
+        preset: Option<LayoutPreset>,
+    },
     /// `select-layout -E`: spread the panes evenly, keeping their arrangement.
     SpreadLayout,
 }
@@ -232,12 +298,16 @@ pub enum PaneCommand {
 /// The session commands: switching between sessions and renaming the current one.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SessionCommand {
-    SwitchSession { name: String },
+    SwitchSession {
+        name: String,
+    },
     NextSession,
     PrevSession,
     /// `switch-client -l`: the session this client was attached to before the current one.
     LastSession,
-    RenameSession { name: String },
+    RenameSession {
+        name: String,
+    },
 }
 
 /// Commands that run scripts, hooks, channels and aliases in the daemon, or read them from files.
@@ -265,10 +335,7 @@ pub enum ScriptCommand {
     },
     /// `wait-for [-L|-S|-U] channel`: waits for a signal on, or takes or releases the lock of, a
     /// named channel of the daemon.
-    WaitFor {
-        op: ChannelOp,
-        channel: String,
-    },
+    WaitFor { op: ChannelOp, channel: String },
     /// `set-hook [-a] hook command` sets the commands a hook runs, `-a` after the existing ones;
     /// `set-hook -u hook` removes them (`command` is `None`).
     SetHook {
@@ -277,9 +344,7 @@ pub enum ScriptCommand {
         append: bool,
     },
     /// `set-hook -R hook`: runs the commands of a hook now.
-    RunHook {
-        name: String,
-    },
+    RunHook { name: String },
     /// `show-hooks`: every hook command, one line each, in an overlay.
     ShowHooks,
     /// `set -s command-alias name=command` sets an alias; `-u` removes it (`command` is `None`).
@@ -288,10 +353,7 @@ pub enum ScriptCommand {
         command: Option<String>,
     },
     /// `source-file [-q] path...`: runs the commands of each file, one command line per line.
-    SourceFile {
-        paths: Vec<String>,
-        quiet: bool,
-    },
+    SourceFile { paths: Vec<String>, quiet: bool },
 }
 
 /// The paste-buffer and capture commands. They act on the daemon's buffers, which the CLI shares.
@@ -408,6 +470,7 @@ pub const COMMAND_NAMES: &[&str] = &[
     "kill-window",
     "last-pane",
     "last-window",
+    "link-window",
     "list-buffers",
     "list-clients",
     "list-keys",
@@ -436,6 +499,7 @@ pub const COMMAND_NAMES: &[&str] = &[
     "rename-session",
     "rename-window",
     "resize-pane",
+    "resize-window",
     "respawn-pane",
     "respawn-window",
     "rotate-window",
@@ -472,13 +536,14 @@ pub const COMMAND_NAMES: &[&str] = &[
     "tabp",
     "tabprevious",
     "unbind-key",
+    "unlink-window",
     "vs",
     "vsplit",
     "wait-for",
 ];
 
 /// Parses a command line (tmux command names plus vim aliases such as `vsplit`, `q`), without
-/// command aliases.
+/// command aliases, and with no session known: a `session:N` window target is refused.
 pub fn parse(line: &str) -> Result<Command, String> {
     parse_in(line, &BTreeMap::new())
 }
@@ -486,10 +551,44 @@ pub fn parse(line: &str) -> Result<Command, String> {
 /// Parses a command line with the command `aliases` of the config (tmux `command-alias`): a
 /// command whose name is an alias runs the alias's command line, with its own arguments after it.
 pub fn parse_in(line: &str, aliases: &BTreeMap<String, String>) -> Result<Command, String> {
+    parse_scoped_in(
+        line,
+        Scope {
+            aliases,
+            session: None,
+        },
+    )
+}
+
+/// `parse_in` for a line run in the session `session`: its own name is an accepted window target
+/// (`link-window -s session:N`), and other session names are refused.
+pub fn parse_scoped(
+    line: &str,
+    aliases: &BTreeMap<String, String>,
+    session: &str,
+) -> Result<Command, String> {
+    parse_scoped_in(
+        line,
+        Scope {
+            aliases,
+            session: Some(session),
+        },
+    )
+}
+
+/// What a command line is parsed against: the config's command aliases, and the session the line
+/// runs in when it is known.
+#[derive(Clone, Copy)]
+struct Scope<'a> {
+    aliases: &'a BTreeMap<String, String>,
+    session: Option<&'a str>,
+}
+
+fn parse_scoped_in(line: &str, scope: Scope) -> Result<Command, String> {
     if line.contains(';') {
         let mut commands = Vec::new();
         for words in crate::cmdline::split_commands(line)? {
-            commands.push(parse_words(&expand_alias(words, aliases)?, aliases)?);
+            commands.push(parse_words(&expand_alias(words, scope.aliases)?, scope)?);
         }
         return match commands.len() {
             0 => Err("empty command".to_string()),
@@ -497,7 +596,7 @@ pub fn parse_in(line: &str, aliases: &BTreeMap<String, String>) -> Result<Comman
             _ => Ok(Command::Sequence(commands)),
         };
     }
-    parse_words(&expand_alias(split_words(line)?, aliases)?, aliases)
+    parse_words(&expand_alias(split_words(line)?, scope.aliases)?, scope)
 }
 
 /// The words with an aliased command name replaced by the alias's words. An alias is expanded
@@ -514,13 +613,13 @@ fn expand_alias(
     Ok(expanded)
 }
 
-fn parse_words(words: &[String], aliases: &BTreeMap<String, String>) -> Result<Command, String> {
+fn parse_words(words: &[String], scope: Scope) -> Result<Command, String> {
     let (name, args) = words
         .split_first()
         .ok_or_else(|| "empty command".to_string())?;
-    window_cmd(name, args)
+    window_cmd(name, args, scope)
         .or_else(|| pane_cmd(name, args))
-        .or_else(|| misc_cmd(name, args, aliases))
+        .or_else(|| misc_cmd(name, args, scope))
         .unwrap_or_else(|| Err(format!("unknown command: {name}")))
 }
 
@@ -631,30 +730,42 @@ fn flush_word(words: &mut Vec<String>, cur: &mut String, in_word: &mut bool) {
     }
 }
 
-fn window_cmd(name: &str, args: &[String]) -> Option<Result<Command, String>> {
+fn window_cmd(name: &str, args: &[String], scope: Scope) -> Option<Result<Command, String>> {
     let cmd = match name {
         "split-window" | "split" | "sp" => split(name, args, false),
         "vsplit" | "vs" => split(name, args, true),
         "new-window" | "new" | "tabnew" => new_window(name, args),
         "kill-window" => kill_window(name, args),
         "respawn-window" | "respawnw" => respawn_window(name, args),
-        "link-window" | "linkw" => unsupported(name, "a pane belongs to one window, so a window cannot be linked elsewhere"),
-        "unlink-window" | "unlinkw" => unsupported(name, "windows are never linked, so there is nothing to unlink"),
-        "resize-window" | "resizew" => unsupported(name, "a window's size is set by the attached terminal"),
+        "link-window" | "linkw" => link_window(name, args, scope),
+        "unlink-window" | "unlinkw" => unlink_window(name, args, scope),
+        "resize-window" | "resizew" => resize_window(name, args, scope),
         "rename-window" => rename_window(args),
         "select-window" => select_window(name, args),
-        "next-window" if args == ["-a"] => {
-            Ok(Command::Window(WindowCommand::StepAlert { forward: true }))
-        }
-        "previous-window" if args == ["-a"] => {
-            Ok(Command::Window(WindowCommand::StepAlert { forward: false }))
-        }
-        "next-window" | "tabnext" | "tabn" => {
-            bare(name, args, Command::Window(WindowCommand::NextWindow))
-        }
-        "previous-window" | "prev-window" | "tabprevious" | "tabp" => {
-            bare(name, args, Command::Window(WindowCommand::PrevWindow))
-        }
+        "next-window" if args == ["-a"] => Ok(Command::Window(WindowCommand::StepWindow {
+            forward: true,
+            alert: true,
+        })),
+        "previous-window" if args == ["-a"] => Ok(Command::Window(WindowCommand::StepWindow {
+            forward: false,
+            alert: true,
+        })),
+        "next-window" | "tabnext" | "tabn" => bare(
+            name,
+            args,
+            Command::Window(WindowCommand::StepWindow {
+                forward: true,
+                alert: false,
+            }),
+        ),
+        "previous-window" | "prev-window" | "tabprevious" | "tabp" => bare(
+            name,
+            args,
+            Command::Window(WindowCommand::StepWindow {
+                forward: false,
+                alert: false,
+            }),
+        ),
         "last-window" => bare(name, args, Command::Window(WindowCommand::LastWindow)),
         _ => return None,
     };
@@ -687,11 +798,7 @@ fn pane_cmd(name: &str, args: &[String]) -> Option<Result<Command, String>> {
     Some(cmd)
 }
 
-fn misc_cmd(
-    name: &str,
-    args: &[String],
-    aliases: &BTreeMap<String, String>,
-) -> Option<Result<Command, String>> {
+fn misc_cmd(name: &str, args: &[String], scope: Scope) -> Option<Result<Command, String>> {
     let cmd = match name {
         "copy-mode" => copy_mode(name, args),
         "detach" | "q" | "quit" => bare(name, args, Command::Detach),
@@ -741,9 +848,9 @@ fn misc_cmd(
         "source-file" if args.is_empty() => Ok(Command::ReloadConfig),
         "source-file" => source_file(name, args).map(Command::Script),
         "run-shell" => run_shell(name, args).map(Command::Script),
-        "if-shell" => if_shell(name, args, aliases).map(Command::Script),
+        "if-shell" => if_shell(name, args, scope).map(Command::Script),
         "wait-for" => wait_for(name, args).map(Command::Script),
-        "set-hook" => set_hook(name, args, aliases).map(Command::Script),
+        "set-hook" => set_hook(name, args, scope).map(Command::Script),
         "show-hooks" => bare(name, args, Command::Script(ScriptCommand::ShowHooks)),
         "bind-key" | "bind" => bind_key(name, args),
         "unbind-key" | "unbind" => unbind_key(name, args),
@@ -753,7 +860,7 @@ fn misc_cmd(
         "rename-session" | "rename" => rename_session(name, args),
         "palette" | "command-palette" => palette_cmd(name, args),
         "command-prompt" => command_prompt(name, args),
-        "confirm-before" | "confirm" => confirm_before(name, args),
+        "confirm-before" | "confirm" => confirm_before(name, args, scope),
         _ => return None,
     };
     Some(cmd)
@@ -765,11 +872,6 @@ fn bare(name: &str, args: &[String], cmd: Command) -> Result<Command, String> {
     } else {
         Err(format!("{name}: takes no arguments"))
     }
-}
-
-/// A tmux command mpx does not implement: the error says why.
-fn unsupported(name: &str, why: &str) -> Result<Command, String> {
-    Err(format!("{name}: not supported: {why}"))
 }
 
 const ROTATE: Spec = Spec {
@@ -822,14 +924,17 @@ const RESPAWN_PANE: Spec = Spec {
 };
 
 fn join_pane(name: &str, args: &[String]) -> Result<Command, String> {
-    let o = parse_opts(name, args, JOIN_PANE)?;
-    o.no_rest(name)?;
-    Ok(Command::Pane(PaneCommand::JoinPane {
-        src: o.value("-s").map(str::to_string),
-        dst: o.value("-t").map(str::to_string),
-        side_by_side: o.has("-h"),
-        detach: o.has("-d"),
-    }))
+    with_flags(name, args, JOIN_PANE, |o| {
+        let src = o.value("-s").map(str::to_string);
+        let dst = o.value("-t").map(str::to_string);
+        let join = JoinOpts {
+            src,
+            dst,
+            side_by_side: o.has("-h"),
+            detach: o.has("-d"),
+        };
+        Command::Pane(PaneCommand::JoinPane(join))
+    })
 }
 
 fn window_index(name: &str, raw: &str) -> Result<usize, String> {
@@ -847,6 +952,124 @@ fn swap_window(name: &str, args: &[String]) -> Result<Command, String> {
         src,
         dst: window_index(name, dst)?,
     }))
+}
+
+const LINK_WINDOW: Spec = Spec {
+    bools: &["-a", "-b", "-k", "-d"],
+    values: &["-s", "-t"],
+    stop_at_arg: false,
+};
+const UNLINK_WINDOW: Spec = Spec {
+    bools: &["-k"],
+    values: &["-t"],
+    stop_at_arg: false,
+};
+const RESIZE_WINDOW: Spec = Spec {
+    bools: &["-a", "-A", "-L", "-R", "-U", "-D"],
+    values: &["-t", "-x", "-y"],
+    stop_at_arg: false,
+};
+
+/// A window index named by flag `flag`, which may carry a session name in `scope`.
+fn window_flag(o: &Opts, flag: &str, scope: Scope) -> Result<Option<usize>, String> {
+    o.value(flag)
+        .map(|t| window_target(t, scope.session))
+        .transpose()
+}
+
+/// `link-window [-s src] [-t dst] [-a|-b] [-k] [-d]`.
+fn link_window(name: &str, args: &[String], scope: Scope) -> Result<Command, String> {
+    let o = parse_opts(name, args, LINK_WINDOW)?;
+    o.no_rest(name)?;
+    let (after, before) = (o.has("-a"), o.has("-b"));
+    if after && before {
+        return Err(format!("{name}: -a and -b cannot be given together"));
+    }
+    let src = window_flag(&o, "-s", scope)?;
+    let dst = window_flag(&o, "-t", scope)?;
+    let place = LinkPlace {
+        after,
+        before,
+        kill: o.has("-k"),
+        detached: o.has("-d"),
+    };
+    Ok(Command::Window(WindowCommand::LinkWindow(LinkOpts {
+        src,
+        dst,
+        place,
+    })))
+}
+
+/// `unlink-window [-k] [-t index]`.
+fn unlink_window(name: &str, args: &[String], scope: Scope) -> Result<Command, String> {
+    let o = parse_opts(name, args, UNLINK_WINDOW)?;
+    o.no_rest(name)?;
+    let index = window_flag(&o, "-t", scope)?;
+    let kill = o.has("-k");
+    Ok(Command::Window(WindowCommand::UnlinkWindow(UnlinkOpts {
+        index,
+        kill,
+    })))
+}
+
+/// `resize-window [-aA] [-LRUD] [-x W] [-y H] [-t index] [adjustment]`.
+fn resize_window(name: &str, args: &[String], scope: Scope) -> Result<Command, String> {
+    let o = parse_opts(name, args, RESIZE_WINDOW)?;
+    let adjustment = match o.rest.as_slice() {
+        [] => None,
+        [cells] => Some(cells_arg(name, cells)?),
+        _ => return Err(format!("{name}: at most one adjustment")),
+    };
+    let sides = ["-L", "-R", "-U", "-D"].iter().filter(|f| o.has(f)).count();
+    if sides > 1 {
+        return Err(format!("{name}: give one of -L, -R, -U or -D"));
+    }
+    if o.has("-a") && o.has("-A") {
+        return Err(format!("{name}: -a and -A cannot be given together"));
+    }
+    let fit = if o.has("-A") {
+        Some(WindowFit::Largest)
+    } else if o.has("-a") {
+        Some(WindowFit::Smallest)
+    } else {
+        None
+    };
+    let index = window_flag(&o, "-t", scope)?;
+    let resize = WindowResize {
+        width: o.value("-x").map(|v| cells_arg(name, v)).transpose()?,
+        height: o.value("-y").map(|v| cells_arg(name, v)).transpose()?,
+        side: direction_flag(&o),
+        cells: adjustment,
+        fit,
+    };
+    Ok(Command::Window(WindowCommand::ResizeWindow(ResizeOpts {
+        index,
+        resize,
+    })))
+}
+
+/// A size or adjustment in cells, a positive number.
+fn cells_arg(name: &str, raw: &str) -> Result<u16, String> {
+    raw.parse::<u16>()
+        .map_err(|_| format!("{name}: not a number of cells: {raw}"))
+}
+
+/// A window index for a link or resize flag: `N` or `:N` of the session the prompt runs in, or
+/// `session:N` of `session` (`None` when the session is not known here). Any other session is
+/// refused: each session runs in its own daemon, so its windows cannot be shared with this one.
+pub fn window_target(raw: &str, session: Option<&str>) -> Result<usize, String> {
+    let index = match raw.rsplit_once(':') {
+        Some((name, _)) if !name.is_empty() && session != Some(name) => {
+            return Err(format!(
+                "window {raw} is in another session: each session runs in its own daemon, so its windows cannot be shared with this one (see docs/ARCHITECTURE.md)"
+            ));
+        }
+        Some((_, index)) => index,
+        None => raw,
+    };
+    index
+        .parse::<usize>()
+        .map_err(|_| format!("invalid window index '{raw}'"))
 }
 
 fn respawn_pane(name: &str, args: &[String]) -> Result<Command, String> {
@@ -867,7 +1090,10 @@ const RESPAWN_WINDOW: Spec = Spec {
 
 fn respawn_window(name: &str, args: &[String]) -> Result<Command, String> {
     let o = parse_opts(name, args, RESPAWN_WINDOW)?;
-    let target = o.value("-t").map(|raw| window_index(name, raw)).transpose()?;
+    let target = o
+        .value("-t")
+        .map(|raw| window_index(name, raw))
+        .transpose()?;
     Ok(Command::Window(WindowCommand::RespawnWindow {
         target,
         kill: o.has("-k"),
@@ -921,7 +1147,11 @@ fn set_option(name: &str, args: &[String]) -> Result<Command, String> {
         return Err(format!("{name}: mpx has no pane options"));
     }
     let unset = o.has("-u");
-    if o.has("-s") && o.rest.first().is_some_and(|option| is_command_alias(option)) {
+    if o.has("-s")
+        && o.rest
+            .first()
+            .is_some_and(|option| is_command_alias(option))
+    {
         return alias_option(name, &o.rest[1..], unset).map(Command::Script);
     }
     if o.has("-s") {
@@ -977,7 +1207,9 @@ fn alias_option(name: &str, rest: &[String], unset: bool) -> Result<ScriptComman
             }
             _ => Err(format!("{name}: command-alias needs name=command")),
         },
-        _ => Err(format!("{name}: command-alias needs name=command, or -u name")),
+        _ => Err(format!(
+            "{name}: command-alias needs name=command, or -u name"
+        )),
     }
 }
 
@@ -1013,7 +1245,10 @@ fn run_shell(name: &str, args: &[String]) -> Result<ScriptCommand, String> {
     if o.rest.is_empty() {
         return Err(format!("{name}: need a shell command"));
     }
-    let delay_ms = o.value("-d").map(|raw| parse_delay(name, raw)).transpose()?;
+    let delay_ms = o
+        .value("-d")
+        .map(|raw| parse_delay(name, raw))
+        .transpose()?;
     Ok(ScriptCommand::RunShell {
         background: o.has("-b"),
         target: o.value("-t").map(str::to_string),
@@ -1031,20 +1266,16 @@ fn parse_delay(name: &str, raw: &str) -> Result<u64, String> {
 }
 
 /// `if-shell [-bF] [-t pane] shell-command command [command]`.
-fn if_shell(
-    name: &str,
-    args: &[String],
-    aliases: &BTreeMap<String, String>,
-) -> Result<ScriptCommand, String> {
+fn if_shell(name: &str, args: &[String], scope: Scope) -> Result<ScriptCommand, String> {
     let o = parse_opts(name, args, IF_SHELL)?;
     let (condition, branches) = match o.rest.as_slice() {
         [condition, branches @ ..] if matches!(branches.len(), 1 | 2) => (condition, branches),
         _ => return Err(format!("{name}: need a condition and one or two commands")),
     };
-    let then = parse_in(&branches[0], aliases)?;
+    let then = parse_scoped_in(&branches[0], scope)?;
     let otherwise = branches
         .get(1)
-        .map(|line| parse_in(line, aliases).map(Box::new))
+        .map(|line| parse_scoped_in(line, scope).map(Box::new))
         .transpose()?;
     Ok(ScriptCommand::IfShell {
         background: o.has("-b"),
@@ -1078,11 +1309,7 @@ fn wait_for(name: &str, args: &[String]) -> Result<ScriptCommand, String> {
 
 /// `set-hook [-a] hook command`, `set-hook -u hook`, `set-hook -R hook`. Window and pane hooks
 /// (`-w`, `-t`) are refused: a hook applies to the whole session.
-fn set_hook(
-    name: &str,
-    args: &[String],
-    aliases: &BTreeMap<String, String>,
-) -> Result<ScriptCommand, String> {
+fn set_hook(name: &str, args: &[String], scope: Scope) -> Result<ScriptCommand, String> {
     let o = parse_opts(name, args, SET_HOOK)?;
     if o.has("-w") || o.value("-t").is_some() {
         return Err(format!(
@@ -1117,7 +1344,7 @@ fn set_hook(
         return Err(format!("{name}: need a command for hook {hook}"));
     }
     let line = crate::cmdline::command_line(commands);
-    parse_in(&line, aliases)?;
+    parse_scoped_in(&line, scope)?;
     Ok(ScriptCommand::SetHook {
         name: hook.clone(),
         command: Some(line),
@@ -1454,7 +1681,10 @@ fn select_pane(name: &str, args: &[String]) -> Result<Command, String> {
         }));
     }
     if let Some(side) = direction_flag(&o) {
-        return Ok(Command::Pane(PaneCommand::SelectPaneDir { side, keep_zoom }));
+        return Ok(Command::Pane(PaneCommand::SelectPaneDir {
+            side,
+            keep_zoom,
+        }));
     }
     let target = o
         .value("-t")
@@ -1612,12 +1842,16 @@ fn switch_client(name: &str, args: &[String]) -> Result<Command, String> {
         .map(str::to_string)
         .or_else(|| o.rest.first().cloned())
         .ok_or_else(|| format!("{name}: need -t <session>"))?;
-    Ok(Command::Session(SessionCommand::SwitchSession { name: session }))
+    Ok(Command::Session(SessionCommand::SwitchSession {
+        name: session,
+    }))
 }
 
 fn rename_session(name: &str, args: &[String]) -> Result<Command, String> {
     let session = target_or_first(name, args, RENAME, "need new name")?;
-    Ok(Command::Session(SessionCommand::RenameSession { name: session }))
+    Ok(Command::Session(SessionCommand::RenameSession {
+        name: session,
+    }))
 }
 fn command_prompt(name: &str, args: &[String]) -> Result<Command, String> {
     let o = parse_opts(name, args, COMMAND_PROMPT)?;
@@ -1647,13 +1881,13 @@ fn split_list(value: Option<&str>) -> Vec<String> {
 
 /// `confirm-before [-y] [-p prompt] command`: runs `command` once the user answers `y`; `-y`
 /// runs it at once.
-fn confirm_before(name: &str, args: &[String]) -> Result<Command, String> {
+fn confirm_before(name: &str, args: &[String], scope: Scope) -> Result<Command, String> {
     let o = parse_opts(name, args, CONFIRM)?;
     if o.rest.is_empty() {
         return Err(format!("{name}: need a command"));
     }
     let line = crate::cmdline::command_line(&o.rest);
-    let then = parse(&line)?;
+    let then = parse_scoped_in(&line, scope)?;
     if o.has("-y") {
         return Ok(then);
     }
@@ -2102,10 +2336,8 @@ pub fn read_only_allowed(cmd: &Command) -> bool {
                         | ClientCommand::Suspend
                 )
                 | Command::Window(
-                    WindowCommand::NextWindow
-                        | WindowCommand::PrevWindow
+                    WindowCommand::StepWindow { .. }
                         | WindowCommand::LastWindow
-                        | WindowCommand::StepAlert { .. }
                         | WindowCommand::SelectWindow { .. }
                         | WindowCommand::SelectWindowNamed { .. }
                 )

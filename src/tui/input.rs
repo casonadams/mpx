@@ -219,7 +219,7 @@ impl App {
             return Flow::Continue;
         }
         self.remember(&line);
-        match command::parse_in(&line, &self.config.alias) {
+        match command::parse_scoped(&line, &self.config.alias, &self.session) {
             Ok(cmd) => self.dispatch(cmd).await,
             Err(e) => self.say(e),
         }
@@ -352,10 +352,12 @@ impl App {
                 Flow::Continue
             }
             MenuAction::Close => Flow::Continue,
-            MenuAction::Run(line) => match command::parse(&line) {
-                Ok(cmd) => self.dispatch(cmd).await,
-                Err(e) => self.say(e),
-            },
+            MenuAction::Run(line) => {
+                match command::parse_scoped(&line, &self.config.alias, &self.session) {
+                    Ok(cmd) => self.dispatch(cmd).await,
+                    Err(e) => self.say(e),
+                }
+            }
         }
     }
 }

@@ -19,7 +19,7 @@ use super::idempotency::{Claim, IdemCache};
 use super::plan::{self, PaneIdentity};
 use super::snapshot::{PaneRecord, build_snapshot};
 use super::stores::{Stores, no_buffer};
-use crate::clients::effective_size;
+use crate::clients::{Size, WindowSize, effective_size};
 use crate::config::Config;
 use crate::format::{self, Vars};
 use crate::keys::{KeyPolicy, TermModes, encode_key_names, wrap_paste};
@@ -31,13 +31,14 @@ use crate::node::sink::Sink;
 use crate::node::sleep_until_opt;
 use crate::node::{SpawnSpec, now_ms};
 use crate::protocol::{
-    BufferRequest, ChannelOp, ClientInfo, ClientRequest, HOOK_EVENTS, NewWindowOpts, NodeInfo,
-    NodeRequest, PaneId, PaneRequest, Request, Response, ScriptRequest, SessionInfo,
-    SessionRequest, SpawnOpts, SplitOpts, StreamEvent, WindowRequest,
+    BufferRequest, ChannelOp, ClientInfo, ClientRequest, HOOK_EVENTS, LinkOpts, NewWindowOpts,
+    NodeInfo, NodeRequest, PaneId, PaneRequest, Request, ResizeOpts, Response, ScriptRequest,
+    SessionInfo, SessionRequest, Side, SpawnOpts, SplitOpts, StreamEvent, UnlinkOpts, WindowFit,
+    WindowRequest, WindowResize,
 };
 use crate::protocol::{EnvEntry, PasteBufferOpts};
 use crate::store::{SessionSnapshot, SnapshotStore, WindowPlan, plan_restore};
-use crate::tui::command::{Command, parse_in};
+use crate::tui::command::{Command, parse_scoped};
 use crate::vt::capture::CaptureSpec;
 
 pub(super) type Reply<T> = oneshot::Sender<T>;
@@ -60,6 +61,8 @@ pub(super) async fn ask_req(
 const SAVE_DEBOUNCE: Duration = Duration::from_millis(400);
 /// How often the session drops clients whose connection ended, so the others see the new size.
 const CLIENT_CHECK: Duration = Duration::from_secs(1);
+/// The largest size `resize-window` gives a window (tmux `WINDOW_MAXIMUM`).
+const MAX_WINDOW_SIZE: u16 = 10_000;
 
 /// Where a request came from. A hook's own requests fire no hooks, so a hook cannot loop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,6 +103,7 @@ pub(super) enum SessionMsg {
         sink: Sink,
         client: Option<ClientInfo>,
         exclusive: bool,
+        hangup: bool,
         reply: Reply<()>,
     },
     SubscribeNode {
@@ -255,6 +259,8 @@ struct Session {
     hooks: HookTable,
     channels: Channels,
     workspace: Workspace,
+    /// The size of the last layout request: what a window with no sized client takes.
+    requested: (u16, u16),
     /// Live panes and exited panes kept on screen (`remain_on_exit`).
     nodes: HashMap<String, Entry>,
     /// Exited panes removed from the layout; oldest first, capped by `history_limit`.
@@ -302,6 +308,7 @@ pub(super) async fn run(boot: Boot, mut rx: mpsc::UnboundedReceiver<SessionMsg>)
         hooks: HookTable::default(),
         channels: Channels::default(),
         workspace,
+        requested: (Size::default().width, Size::default().height),
         nodes: HashMap::new(),
         history: VecDeque::new(),
         next_pane_id: 0,
@@ -373,7 +380,7 @@ impl Session {
                 ..
             }
         );
-        let before = tracked.then(|| self.window_ids());
+        let before = tracked.then(|| self.link_ids());
         self.dispatch(msg).await;
         if let Some(before) = before {
             self.window_events(&before, !from_hook);
@@ -406,9 +413,10 @@ impl Session {
                 sink,
                 client,
                 exclusive,
+                hangup,
                 reply,
             } => {
-                self.subscribe(filter, sink, client, exclusive);
+                self.subscribe(filter, sink, client, exclusive, hangup);
                 let _ = reply.send(());
             }
             SessionMsg::SubscribeNode {
@@ -452,35 +460,30 @@ impl Session {
             return;
         }
         for number in flagged {
-            let pane = self
-                .workspace
-                .windows
-                .iter()
-                .find(|w| w.number == number)
-                .and_then(|w| w.focused.clone());
+            let pane = self.workspace.focused_at(number);
             self.fire("alert-silence", pane);
         }
         self.fanout(&StreamEvent::Layout);
     }
 
-    /// The ids of the session's windows, to tell which windows a message added or removed.
-    fn window_ids(&self) -> Vec<usize> {
-        self.workspace.windows.iter().map(|w| w.id).collect()
+    /// The ids of the session's indices, to tell which were added or removed by a message.
+    fn link_ids(&self) -> Vec<usize> {
+        self.workspace.links.iter().map(|l| l.id).collect()
     }
 
-    /// Fires `window-linked` for each window added since `before` and `window-unlinked` for each
-    /// one removed, unless `fire` is off.
+    /// Fires `window-linked` for each index added since `before` and `window-unlinked` for each one
+    /// removed, unless `fire` is off.
     fn window_events(&self, before: &[usize], fire: bool) {
         if !fire {
             return;
         }
-        for window in &self.workspace.windows {
-            if !before.contains(&window.id) {
+        for (link, window) in self.workspace.linked() {
+            if !before.contains(&link.id) {
                 self.fire("window-linked", window.focused.clone());
             }
         }
         for id in before {
-            if !self.workspace.windows.iter().any(|w| w.id == *id) {
+            if !self.workspace.links.iter().any(|l| l.id == *id) {
                 self.fire("window-unlinked", None);
             }
         }
@@ -571,7 +574,7 @@ impl Session {
     /// `line` as a command with the session's aliases, and the hook context it runs in: the active
     /// pane is the target the commands act on by default.
     fn parse_script(&self, line: &str) -> Result<(Command, hooks::Context), String> {
-        let command = parse_in(line, &self.config.alias)?;
+        let command = parse_scoped(line, &self.config.alias, &self.session)?;
         let ctx = hooks::Context {
             event: String::new(),
             pane: self.active_pane(),
@@ -590,7 +593,10 @@ impl Session {
     /// Fires the bell and activity alerts an output event raises, then relays the event.
     fn pane_event(&mut self, event: StreamEvent) {
         if let StreamEvent::Output { name, data, .. } = &event {
-            if self.config.window.monitor_bell && data.contains('\x07') && self.workspace.mark_bell(name) {
+            if self.config.window.monitor_bell
+                && data.contains('\x07')
+                && self.workspace.mark_bell(name)
+            {
                 self.fire("alert-bell", Some(name.clone()));
             }
             if self.config.window.monitor_activity && self.workspace.mark_activity(name) {
@@ -626,7 +632,9 @@ impl Session {
     }
 
     fn active_pane(&self) -> Option<String> {
-        self.workspace.active_window().and_then(|w| w.focused.clone())
+        self.workspace
+            .active_window()
+            .and_then(|w| w.focused.clone())
     }
 
     /// Runs the commands of hook `event` for `pane`, when any are set.
@@ -637,13 +645,15 @@ impl Session {
         }
         let commands = lines
             .iter()
-            .filter_map(|line| match parse_in(line, &self.config.alias) {
-                Ok(command) => Some(command),
-                Err(e) => {
-                    warn!("hook {event}: {line}: {e}");
-                    None
-                }
-            })
+            .filter_map(
+                |line| match parse_scoped(line, &self.config.alias, &self.session) {
+                    Ok(command) => Some(command),
+                    Err(e) => {
+                        warn!("hook {event}: {line}: {e}");
+                        None
+                    }
+                },
+            )
             .collect();
         let ctx = hooks::Context {
             event: event.to_string(),
@@ -698,7 +708,11 @@ impl Session {
 
     /// The variables of pane `target` (the active pane when `None`), or of the session alone
     /// when there is no pane. A hook adds its own variables: `hook` and `hook_pane`.
-    async fn format_vars(&self, target: Option<String>, hook: Option<&str>) -> Result<Vars, String> {
+    async fn format_vars(
+        &self,
+        target: Option<String>,
+        hook: Option<&str>,
+    ) -> Result<Vars, String> {
         let name = match target {
             Some(target) => Some(self.target_name(&target)?),
             None => self.active_pane(),
@@ -714,9 +728,9 @@ impl Session {
                 let window = node.window.unwrap_or(0);
                 let slot = self
                     .workspace
-                    .windows
-                    .get(window)
-                    .and_then(|w| w.leaves().iter().position(|leaf| leaf == &name))
+                    .leaves_at(window)
+                    .iter()
+                    .position(|leaf| leaf == &name)
                     .unwrap_or(0);
                 let tabs = self.workspace.window_tabs();
                 let mut view = format::pane_view(&self.session, slot, &node, &[], &tabs);
@@ -742,7 +756,7 @@ impl Session {
             return Response::Error(format!("unknown hook '{name}'"));
         }
         if let Some(line) = &command
-            && let Err(e) = parse_in(line, &self.config.alias)
+            && let Err(e) = parse_scoped(line, &self.config.alias, &self.session)
         {
             return Response::Error(e);
         }
@@ -772,14 +786,16 @@ impl Session {
     }
 
     /// Adds a session-wide subscriber. A terminal (`client`) is registered with this session; with
-    /// `exclusive` (`attach -d`) it first detaches the clients attached before it. Its arrival or
-    /// departure can change the window size the policy picks, so every subscriber lays out again.
+    /// `exclusive` (`attach -d`) it first detaches the clients attached before it, and with `hangup`
+    /// (`attach -x`) it also hangs up their parents. Its arrival or departure can change the window
+    /// size the policy picks, so every subscriber lays out again.
     fn subscribe(
         &mut self,
         filter: Filter,
         sink: Sink,
         client: Option<ClientInfo>,
         exclusive: bool,
+        hangup: bool,
     ) {
         let client = client.map(|info| ClientInfo {
             session: self.session.clone(),
@@ -787,7 +803,10 @@ impl Session {
             ..info
         });
         if let (true, Some(info)) = (exclusive, &client) {
-            clients::detach_others(&mut self.filters, &info.name);
+            let parents = clients::detach_others(&mut self.filters, &info.name);
+            if hangup {
+                clients::hang_up(&parents);
+            }
         }
         let terminal = client.is_some();
         self.filters.push(Subscriber {
@@ -835,9 +854,11 @@ impl Session {
                     Err(e) => Response::Error(e),
                 }
             }
-            ClientRequest::Command { name, line } => {
-                unit(clients::send(&mut self.filters, &name, StreamEvent::Run { line }))
-            }
+            ClientRequest::Command { name, line } => unit(clients::send(
+                &mut self.filters,
+                &name,
+                StreamEvent::Run { line },
+            )),
         }
     }
 
@@ -934,8 +955,10 @@ impl Session {
             SessionRequest::ReloadConfig { path } => {
                 match Config::load_at(path.as_deref().map(std::path::Path::new)) {
                     Ok(config) => {
-                        self.workspace.set_renumber_windows(config.window.renumber_windows);
-                        self.workspace.set_synchronize_new(config.window.synchronize_panes);
+                        self.workspace
+                            .set_renumber_windows(config.window.renumber_windows);
+                        self.workspace
+                            .set_synchronize_new(config.window.synchronize_panes);
                         self.config = config;
                         self.sync_relay();
                         Response::Ok
@@ -1054,11 +1077,13 @@ impl Session {
         cwd: Option<String>,
         command: Option<Vec<String>>,
     ) -> Response {
-        let active = self.workspace.active_idx;
-        let Some(window) = self.workspace.windows.get(index.unwrap_or(active)) else {
+        let Some(number) = index.or_else(|| self.workspace.active_number()) else {
             return Response::Error("No such window".to_string());
         };
-        let panes = window.leaves();
+        let panes = self.workspace.leaves_at(number);
+        if panes.is_empty() {
+            return Response::Error("No such window".to_string());
+        }
         let running = panes
             .iter()
             .filter_map(|name| self.nodes.get(name))
@@ -1292,10 +1317,9 @@ impl Session {
                 self.workspace.compact_numbers();
                 Response::Ok
             }
-            WindowRequest::Rotate { down, keep_zoom } => check(
-                self.workspace.rotate_active(down, keep_zoom),
-                "No window",
-            ),
+            WindowRequest::Rotate { down, keep_zoom } => {
+                check(self.workspace.rotate_active(down, keep_zoom), "No window")
+            }
             WindowRequest::Swap { a, b } => self
                 .workspace
                 .swap_windows(a, b)
@@ -1306,10 +1330,109 @@ impl Session {
                 cwd,
                 command,
             } => self.respawn_window(index, kill, cwd, command),
+            WindowRequest::LinkWindow(req) => self.link_window(req),
+            WindowRequest::UnlinkWindow(req) => self.unlink_window(req),
+            WindowRequest::ResizeWindow(req) => self.resize_window(req),
             WindowRequest::Kill { .. } => {
                 Response::Error("Request is handled by the connection".to_string())
             }
         }
+    }
+
+    /// The index a window request names, or the active one when it names none.
+    fn window_index(&self, index: Option<usize>) -> Result<usize, String> {
+        index
+            .or_else(|| self.workspace.active_number())
+            .ok_or_else(|| "No window".to_string())
+    }
+
+    /// Answers a window request that may have destroyed windows: their panes are killed, and their
+    /// exits are reported as usual.
+    fn killed_panes(&mut self, result: Result<Vec<String>, String>) -> Response {
+        match result {
+            Ok(panes) => {
+                for pane in panes {
+                    let _ = self.kill_entry(&pane);
+                }
+                Response::Ok
+            }
+            Err(e) => Response::Error(e),
+        }
+    }
+
+    /// `link-window`: shows window `src` at index `dst` as well. The panes of a window the link
+    /// destroyed are killed.
+    fn link_window(&mut self, req: LinkOpts) -> Response {
+        let result = self.window_index(req.src).and_then(|src| {
+            self.workspace
+                .link_window(src, req.dst, req.place)
+                .map(|(_, destroyed)| destroyed)
+        });
+        self.killed_panes(result)
+    }
+
+    /// `unlink-window`: removes one index of a window. The window of an index that is its only one
+    /// goes only with `kill`.
+    fn unlink_window(&mut self, req: UnlinkOpts) -> Response {
+        let result = self
+            .window_index(req.index)
+            .and_then(|number| self.workspace.unlink_window(number, req.kill));
+        self.killed_panes(result)
+    }
+
+    /// `resize-window`: pins window `index` (the active one when `None`) to a size of its own,
+    /// starting from its current size. `width` and `height` set it, `side` moves that border by
+    /// `cells` (1 by default), and `fit` takes the largest or smallest attached client.
+    fn resize_window(&mut self, req: ResizeOpts) -> Response {
+        let number = match self.window_index(req.index) {
+            Ok(number) => number,
+            Err(e) => return Response::Error(e),
+        };
+        let WindowResize {
+            width,
+            height,
+            side,
+            cells,
+            fit,
+        } = req.resize;
+        if let Some(bad) = [width, height]
+            .into_iter()
+            .flatten()
+            .find(|v| !(1..=MAX_WINDOW_SIZE).contains(v))
+        {
+            return Response::Error(format!("size {bad} out of range (1 to {MAX_WINDOW_SIZE})"));
+        }
+        let (mut w, mut h) = self.window_size_at(number);
+        w = width.unwrap_or(w);
+        h = height.unwrap_or(h);
+        let cells = cells.unwrap_or(1);
+        match side {
+            Some(Side::Left) => w = shrink(w, cells),
+            Some(Side::Right) => w = w.saturating_add(cells),
+            Some(Side::Up) => h = shrink(h, cells),
+            Some(Side::Down) => h = h.saturating_add(cells),
+            None => {}
+        }
+        if let Some(fit) = fit {
+            let policy = match fit {
+                WindowFit::Largest => WindowSize::Largest,
+                WindowFit::Smallest => WindowSize::Smallest,
+            };
+            let sized = clients::live(&self.filters);
+            (w, h) = effective_size(policy, self.config.window.default_size, &sized, (w, h));
+        }
+        let size = (w.clamp(1, MAX_WINDOW_SIZE), h.clamp(1, MAX_WINDOW_SIZE));
+        match self.workspace.set_manual_size(Some(number), Some(size)) {
+            Ok(()) => Response::Ok,
+            Err(e) => Response::Error(e),
+        }
+    }
+
+    /// The size window `number` is laid out at: its manual size, else the size the clients give.
+    fn window_size_at(&self, number: usize) -> (u16, u16) {
+        self.workspace
+            .manual_size_at(Some(number))
+            .unwrap_or_else(|| self.window_size(self.requested))
     }
 
     fn session_info(&self) -> SessionInfo {
@@ -1318,7 +1441,7 @@ impl Session {
             endpoint: self.endpoint.clone(),
             pid: std::process::id(),
             created_ms: self.created_ms,
-            windows: self.workspace.windows.len(),
+            windows: self.workspace.links.len(),
             panes: self.workspace.pane_count(),
             restored_ms: self.restored_ms,
             protocol: crate::protocol::PROTOCOL,
@@ -1491,7 +1614,11 @@ impl Session {
 
     async fn layout(&mut self, width: u16, height: u16) -> Response {
         self.refresh_window_names().await;
-        let (width, height) = self.window_size((width, height));
+        self.requested = (width, height);
+        let (width, height) = match self.workspace.manual_size_at(None) {
+            Some(size) => size,
+            None => self.window_size((width, height)),
+        };
         let (rects, dividers) = self.workspace.compute_layout_with_dividers(width, height);
         Response::Layout(rects, dividers, self.workspace.window_tabs())
     }
@@ -1502,9 +1629,8 @@ impl Session {
         }
         let windows: Vec<(usize, Option<String>)> = self
             .workspace
-            .windows
-            .iter()
-            .map(|w| (w.number, w.focused.clone()))
+            .linked()
+            .map(|(link, w)| (link.number, w.focused.clone()))
             .collect();
         for (number, focused) in windows {
             let handle = focused
@@ -1822,29 +1948,36 @@ impl Session {
     fn restore_snapshot(&mut self, snapshot: &SessionSnapshot) {
         self.stores.restore_environment(&snapshot.environment);
         let plan = plan_restore(snapshot, &self.config.resume);
-        let numbers: Vec<usize> = plan
-            .windows
-            .into_iter()
-            .filter_map(|window| self.restore_window(window))
-            .collect();
-        if !self.workspace.windows.is_empty() {
-            match numbers.get(plan.active_window) {
-                Some(&number) => {
+        // What each restored index shows, by its position among the restored windows.
+        let mut shown: Vec<Option<(usize, usize)>> = Vec::with_capacity(plan.windows.len());
+        for window in plan.windows {
+            let restored = match window.shares {
+                Some(owner) => self.restore_link(owner, &shown, window.number),
+                None => self.restore_window(window),
+            };
+            shown.push(restored);
+        }
+        if !self.workspace.links.is_empty() {
+            let number_of =
+                |survivor: usize| shown.get(survivor).copied().flatten().map(|(n, _)| n);
+            match number_of(plan.active_window) {
+                Some(number) => {
                     if !self.workspace.select_window(number) {
                         warn!("could not select restored window {number}");
                     }
                 }
                 None => warn!("could not select restored window {}", plan.active_window),
             }
-            self.workspace.last_window = plan.last_window;
+            self.workspace
+                .set_last_window(plan.last_window.and_then(number_of));
         }
         self.restored_ms = Some(now_ms());
         self.schedule_save();
     }
 
     /// Spawns the window's panes, then installs it with the surviving part of its layout. Returns the
-    /// installed window's number, or None when no pane of it survived.
-    fn restore_window(&mut self, window: WindowPlan) -> Option<usize> {
+    /// installed window's index and window id, or None when no pane of it survived.
+    fn restore_window(&mut self, window: WindowPlan) -> Option<(usize, usize)> {
         let mut root = Some(window.layout);
         for opts in &window.panes {
             match self.spawn_restored(opts) {
@@ -1861,10 +1994,23 @@ impl Session {
         }
         let root = root?;
         let label = root.all_leaves().into_iter().next().unwrap_or_default();
-        Some(
+        let number =
             self.workspace
-                .install_window(window.number, label, window.name, root, window.focused),
-        )
+                .install_window(window.number, label, window.name, root, window.focused);
+        let id = self.workspace.window_id_at(number)?;
+        Some((number, id))
+    }
+
+    /// Shows the window that restored index `owner` at index `number` as well. None when the owner
+    /// was not restored.
+    fn restore_link(
+        &mut self,
+        owner: usize,
+        shown: &[Option<(usize, usize)>],
+        number: usize,
+    ) -> Option<(usize, usize)> {
+        let (_, id) = shown.get(owner).copied().flatten()?;
+        Some((self.workspace.link_restored(id, number), id))
     }
 
     /// Types `line` into pane `name`; the terminal queues it until the shell reads it.
@@ -2016,13 +2162,12 @@ fn selects(req: &Request) -> bool {
         req,
         Request::Pane(
             PaneRequest::Focus { .. } | PaneRequest::FocusNext | PaneRequest::FocusLast { .. },
+        ) | Request::Window(
+            WindowRequest::Next
+                | WindowRequest::Prev
+                | WindowRequest::Last
+                | WindowRequest::Select { .. },
         )
-            | Request::Window(
-                WindowRequest::Next
-                    | WindowRequest::Prev
-                    | WindowRequest::Last
-                    | WindowRequest::Select { .. },
-            )
     )
 }
 
@@ -2034,6 +2179,11 @@ fn current_dir() -> Option<String> {
     std::env::current_dir()
         .ok()
         .map(|p| p.to_string_lossy().into_owned())
+}
+
+/// `v` less `by` cells, or `v` itself when it is smaller than that (tmux `resize-window -L`).
+fn shrink(v: u16, by: u16) -> u16 {
+    if v >= by { v - by } else { v }
 }
 
 pub(super) fn unit(result: Result<(), String>) -> Response {

@@ -1,5 +1,5 @@
 use crate::keys::TermModes;
-use crate::layout::{Direction, Divider, Rect, WindowTab};
+use crate::layout::{Direction, Divider, LinkPlace, Rect, WindowTab};
 use crate::vt::capture::CaptureSpec;
 use serde::{Deserialize, Serialize};
 
@@ -291,7 +291,7 @@ pub struct WaitOutcome {
 
 /// Version of the client-daemon protocol. Bump it on any change an older peer cannot parse, so
 /// clients refuse an incompatible daemon instead of misreading it.
-pub const PROTOCOL: u32 = 14;
+pub const PROTOCOL: u32 = 15;
 
 fn first_protocol() -> u32 {
     1
@@ -314,7 +314,7 @@ pub struct SessionInfo {
 }
 
 /// An attached terminal (tmux client), as the daemon of its session sees it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ClientInfo {
     /// Terminal device path (`/dev/ttys004`), or a generated `client-PID-N` without a terminal.
     pub name: String,
@@ -331,6 +331,10 @@ pub struct ClientInfo {
     /// Unix ms of the client's latest input; the `latest` window-size policy follows it.
     #[serde(default)]
     pub activity_ms: u64,
+    /// Process id of the client's parent (the shell that started it), which `attach -x` hangs up
+    /// (tmux `attach -x`). Absent on Windows, where no such signal exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_pid: Option<u32>,
 }
 
 /// Which attached clients of a session a request applies to.
@@ -381,6 +385,10 @@ pub enum Request {
         /// With `client`: detach every other client of the session first (`attach -d`).
         #[serde(default)]
         exclusive: bool,
+        /// With `exclusive`: send SIGHUP to the parents of the clients detached (`attach -x`). Unix
+        /// only; elsewhere the clients are only detached.
+        #[serde(default)]
+        hangup: bool,
     },
     /// Node (pane process) requests.
     Node(NodeRequest),
@@ -602,6 +610,65 @@ pub enum WindowRequest {
         #[serde(default)]
         command: Option<Vec<String>>,
     },
+    /// Shows a window at another index as well (tmux `link-window`).
+    LinkWindow(LinkOpts),
+    /// Removes one index of a window (tmux `unlink-window`).
+    UnlinkWindow(UnlinkOpts),
+    /// Sizes a window by hand (tmux `resize-window`).
+    ResizeWindow(ResizeOpts),
+}
+
+/// `link-window`: shows window `src` (the active window's index when `None`) at index `dst` as well.
+/// Without `dst` it takes the lowest free index; `place` says where it goes and what it displaces.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinkOpts {
+    #[serde(default)]
+    pub src: Option<usize>,
+    #[serde(default)]
+    pub dst: Option<usize>,
+    #[serde(default)]
+    pub place: LinkPlace,
+}
+
+/// `unlink-window`: removes the index `index` (the active one when `None`) of its window. Refused
+/// for a window with no other index unless `kill`, which kills it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnlinkOpts {
+    #[serde(default)]
+    pub index: Option<usize>,
+    #[serde(default)]
+    pub kill: bool,
+}
+
+/// `resize-window`: sizes window `index` (the active one when `None`) by hand. The size starts from
+/// the window's current size, as `WindowResize` describes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResizeOpts {
+    #[serde(default)]
+    pub index: Option<usize>,
+    #[serde(default)]
+    pub resize: WindowResize,
+}
+
+/// Which attached client's size `resize-window -A` or `-a` takes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WindowFit {
+    /// The largest attached client (`-A`).
+    Largest,
+    /// The smallest attached client (`-a`).
+    Smallest,
+}
+
+/// What `resize-window` changes, as the client gives it: the size it sets, the border it moves and
+/// by how many cells, and the fit it takes. The daemon starts from the window's current size.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WindowResize {
+    pub width: Option<u16>,
+    pub height: Option<u16>,
+    pub side: Option<Side>,
+    pub cells: Option<u16>,
+    pub fit: Option<WindowFit>,
 }
 
 /// Requests about paste buffers.
@@ -689,9 +756,7 @@ pub enum ScriptRequest {
     /// Runs one command line the way a hook runs its commands, with the session's aliases; the
     /// line's own `-t` targets, else the active pane. `if-shell` decides its branch and runs it.
     /// Answers `Ok` once the command has run, or `Error`.
-    RunCommand {
-        line: String,
-    },
+    RunCommand { line: String },
     /// Expands the tmux formats in `fmt` for pane `target` (the active pane when `None`). With
     /// `hook`, the variables `hook` and `hook_pane` are set as well.
     Format {
@@ -703,10 +768,7 @@ pub enum ScriptRequest {
     },
     /// Signals, waits on or locks a named channel (tmux `wait-for`). `Wait` and `Lock` answer
     /// when the channel allows it.
-    WaitFor {
-        channel: String,
-        op: ChannelOp,
-    },
+    WaitFor { channel: String, op: ChannelOp },
     /// Sets the commands of hook `name` (`append` adds one after the existing commands); `None`
     /// removes the hook.
     SetHook {
@@ -717,9 +779,7 @@ pub enum ScriptRequest {
         append: bool,
     },
     /// Runs the commands of hook `name` now, without an event (tmux `set-hook -R`).
-    RunHook {
-        name: String,
-    },
+    RunHook { name: String },
     /// Every hook with its command line, sorted by name then order.
     ShowHooks,
     /// Sets (or with `None` removes) a command alias: `alias` is the name, `command` its command

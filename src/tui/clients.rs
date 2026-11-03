@@ -99,7 +99,7 @@ impl App {
     /// Runs a command line another client of the session forwarded here (`switch-client` run from
     /// the command line).
     pub async fn run_forwarded(&mut self, line: &str) -> Flow {
-        match command::parse(line) {
+        match command::parse_scoped(line, &self.config.alias, &self.session) {
             Ok(cmd) => self.run(cmd).await,
             Err(e) => self.say(e),
         }

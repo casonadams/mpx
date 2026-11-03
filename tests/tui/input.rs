@@ -17,7 +17,11 @@ fn overlay_that_closes_runs_nothing() {
 
 #[test]
 fn overlay_run_closes_and_hands_back_its_commands_in_order() {
-    let cmds = vec![Command::Detach, Command::Window(WindowCommand::NextWindow)];
+    let step = WindowCommand::StepWindow {
+        forward: true,
+        alert: false,
+    };
+    let cmds = vec![Command::Detach, Command::Window(step)];
     assert_eq!(
         overlay_next(OverlayAction::Run(cmds.clone())),
         OverlayNext::Close(cmds)

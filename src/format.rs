@@ -51,6 +51,8 @@ pub struct PaneView {
     pub rect: Option<Rect>,
     pub window_active: bool,
     pub window_last: bool,
+    /// The indices the window is linked at, in number order; one entry unless it is linked elsewhere.
+    pub window_links: Vec<usize>,
     pub window_activity: bool,
     pub window_bell: bool,
     /// The window holds the marked pane.
@@ -703,6 +705,8 @@ pub fn pane_vars(p: &PaneView) -> Vars {
     vars.insert("window_bell_flag", flag(p.window_bell));
     vars.insert("window_silence_flag", flag(p.window_silence));
     vars.insert("window_last_flag", flag(p.window_last));
+    vars.insert("window_linked", flag(p.window_links.len() > 1));
+    vars.insert("window_linked_sessions_list", linked_sessions(p));
     vars.insert("window_marked_flag", flag(p.window_marked));
     vars.insert("pane_synchronized", flag(p.synchronized));
     vars.insert("pane_at_left", flag(p.edges[0]));
@@ -805,6 +809,16 @@ impl From<&PaneView> for WindowFlags {
     }
 }
 
+/// `window_linked_sessions_list`: the names of the sessions a window is linked into, each once. This
+/// daemon has one session, so it is that session's name while the window has an index, else empty.
+fn linked_sessions(p: &PaneView) -> String {
+    if p.window_links.is_empty() {
+        String::new()
+    } else {
+        p.session.clone()
+    }
+}
+
 fn window_flags(p: &PaneView) -> String {
     WindowFlags::from(p).render()
 }
@@ -857,6 +871,7 @@ pub fn pane_view(
         rect,
         window_active: tab.is_some_and(|t| t.is_active),
         window_last: tab.is_some_and(|t| t.is_last),
+        window_links: tab.map(|t| t.linked.clone()).unwrap_or_default(),
         window_activity: tab.is_some_and(|t| t.has_activity),
         window_bell: tab.is_some_and(|t| t.has_bell),
         window_marked: tab.is_some_and(|t| t.has_marked),

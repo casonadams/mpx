@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use super::support::{assert_refused, connect, fresh, start, start_with, task};
 use mpx::client::Client;
 use mpx::config::Config;
-use mpx::layout::WindowTab;
+use mpx::layout::{LinkPlace, WindowTab};
 use mpx::protocol::{ChannelOp, NewWindowOpts, Request, Response, ScriptRequest};
 
 /// Waits up to two seconds for `path` to appear, as hook commands run in the background.
@@ -26,7 +26,11 @@ async fn send(client: &mut Client, req: Request) -> Result<(), String> {
 
 /// The commands of every hook, in order.
 async fn show_hooks(client: &mut Client) -> Vec<(String, String)> {
-    match client.call(Request::Script(ScriptRequest::ShowHooks)).await.unwrap() {
+    match client
+        .call(Request::Script(ScriptRequest::ShowHooks))
+        .await
+        .unwrap()
+    {
         Response::Hooks(hooks) => hooks,
         other => panic!("show-hooks answered {other:?}"),
     }
@@ -62,21 +66,36 @@ async fn new_window(client: &mut Client, name: &str) {
 async fn set_hook_lists_its_commands_in_order() {
     let daemon = start().await;
     let mut client = connect(&daemon.endpoint).await;
-    send(&mut client, set_hook("after-new-window", Some("run-shell first"), false))
-        .await
-        .unwrap();
-    send(&mut client, set_hook("after-new-window", Some("run-shell second"), true))
-        .await
-        .unwrap();
-    send(&mut client, set_hook("pane-exited", Some("run-shell third"), false))
-        .await
-        .unwrap();
+    send(
+        &mut client,
+        set_hook("after-new-window", Some("run-shell first"), false),
+    )
+    .await
+    .unwrap();
+    send(
+        &mut client,
+        set_hook("after-new-window", Some("run-shell second"), true),
+    )
+    .await
+    .unwrap();
+    send(
+        &mut client,
+        set_hook("pane-exited", Some("run-shell third"), false),
+    )
+    .await
+    .unwrap();
     let hooks = show_hooks(&mut client).await;
     assert_eq!(
         hooks,
         vec![
-            ("after-new-window".to_string(), "run-shell first".to_string()),
-            ("after-new-window".to_string(), "run-shell second".to_string()),
+            (
+                "after-new-window".to_string(),
+                "run-shell first".to_string()
+            ),
+            (
+                "after-new-window".to_string(),
+                "run-shell second".to_string()
+            ),
             ("pane-exited".to_string(), "run-shell third".to_string()),
         ]
     );
@@ -86,9 +105,12 @@ async fn set_hook_lists_its_commands_in_order() {
 async fn set_hook_without_a_command_removes_the_hook() {
     let daemon = start().await;
     let mut client = connect(&daemon.endpoint).await;
-    send(&mut client, set_hook("pane-exited", Some("run-shell x"), false))
-        .await
-        .unwrap();
+    send(
+        &mut client,
+        set_hook("pane-exited", Some("run-shell x"), false),
+    )
+    .await
+    .unwrap();
     send(&mut client, set_hook("pane-exited", None, false))
         .await
         .unwrap();
@@ -98,13 +120,19 @@ async fn set_hook_without_a_command_removes_the_hook() {
 #[tokio::test]
 async fn unknown_hook_names_and_bad_commands_are_refused() {
     let (_daemon, mut client) = fresh().await;
-    let unknown = send(&mut client, set_hook("no-such-hook", Some("run-shell x"), false))
-        .await
-        .unwrap_err();
+    let unknown = send(
+        &mut client,
+        set_hook("no-such-hook", Some("run-shell x"), false),
+    )
+    .await
+    .unwrap_err();
     assert!(unknown.contains("unknown hook"), "{unknown}");
-    let bad = send(&mut client, set_hook("pane-exited", Some("nosuchcommand"), false))
-        .await
-        .unwrap_err();
+    let bad = send(
+        &mut client,
+        set_hook("pane-exited", Some("nosuchcommand"), false),
+    )
+    .await
+    .unwrap_err();
     assert!(bad.contains("unknown command"), "{bad}");
 }
 
@@ -114,20 +142,23 @@ async fn after_new_window_runs_its_hook_with_the_hook_variables() {
     let mut client = connect(&daemon.endpoint).await;
     let dir = tempfile::tempdir().unwrap();
     let marker = dir.path().join("marker");
-    let command = format!(
-        "run-shell 'printf %s #{{hook}} > {}'",
-        marker.display()
-    );
-    send(&mut client, set_hook("after-new-window", Some(&command), false))
-        .await
-        .unwrap();
+    let command = format!("run-shell 'printf %s #{{hook}} > {}'", marker.display());
+    send(
+        &mut client,
+        set_hook("after-new-window", Some(&command), false),
+    )
+    .await
+    .unwrap();
     new_window(&mut client, "hooked").await;
     assert!(appears(&marker).await, "hook did not run");
-    assert_eq!(std::fs::read_to_string(&marker).unwrap(), "after-new-window");
+    assert_eq!(
+        std::fs::read_to_string(&marker).unwrap(),
+        "after-new-window"
+    );
 }
 
 #[tokio::test]
-async fn if_shell_in_a_hook_picks_the_branch_by_exit_status() {
+async fn if_shell_picks_the_branch_in_a_hook_and_in_a_run_command() {
     let daemon = start().await;
     let mut client = connect(&daemon.endpoint).await;
     let dir = tempfile::tempdir().unwrap();
@@ -138,30 +169,30 @@ async fn if_shell_in_a_hook_picks_the_branch_by_exit_status() {
         yes.display(),
         no.display()
     );
-    send(&mut client, set_hook("after-new-window", Some(&command), false))
-        .await
-        .unwrap();
+    send(
+        &mut client,
+        set_hook("after-new-window", Some(&command), false),
+    )
+    .await
+    .unwrap();
     new_window(&mut client, "branch").await;
     assert!(appears(&no).await, "else branch did not run");
     assert!(!yes.exists());
-}
 
-#[tokio::test]
-async fn run_command_runs_if_shell_and_the_branch_it_picks() {
-    let daemon = start().await;
-    let mut client = connect(&daemon.endpoint).await;
-    let dir = tempfile::tempdir().unwrap();
-    let yes = dir.path().join("yes");
-    let no = dir.path().join("no");
+    let yes = dir.path().join("run-yes");
+    let no = dir.path().join("run-no");
     let line = format!(
         "if-shell 'test -d {}' 'run-shell touch {}' 'run-shell touch {}'",
         dir.path().display(),
         yes.display(),
         no.display()
     );
-    send(&mut client, Request::Script(ScriptRequest::RunCommand { line }))
-        .await
-        .unwrap();
+    send(
+        &mut client,
+        Request::Script(ScriptRequest::RunCommand { line }),
+    )
+    .await
+    .unwrap();
     assert!(appears(&yes).await, "the then branch did not run");
     assert!(!no.exists());
 }
@@ -258,7 +289,10 @@ async fn a_signal_with_no_waiter_is_kept_for_the_next_wait() {
 #[tokio::test]
 async fn unlock_of_an_unlocked_channel_is_an_error() {
     let (_daemon, mut client) = fresh().await;
-    assert_refused(send(&mut client, wait_for("lockname", ChannelOp::Unlock)).await, "not locked");
+    assert_refused(
+        send(&mut client, wait_for("lockname", ChannelOp::Unlock)).await,
+        "not locked",
+    );
 }
 
 #[tokio::test]
@@ -504,37 +538,43 @@ async fn commands_that_need_the_terminal_are_refused_in_a_hook() {
     }
 }
 
+/// Sets `window-linked` and `window-unlinked` to touch two files in `dir`, and returns them.
+async fn link_hooks(client: &mut Client, dir: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    let linked = dir.join("linked");
+    let unlinked = dir.join("unlinked");
+    for (event, file) in [("window-linked", &linked), ("window-unlinked", &unlinked)] {
+        let command = format!("run-shell 'touch {}'", file.display());
+        send(client, set_hook(event, Some(&command), false))
+            .await
+            .unwrap();
+    }
+    (linked, unlinked)
+}
+
 #[tokio::test]
-async fn window_linked_and_unlinked_fire_when_a_window_comes_and_goes() {
-    let daemon = start().await;
-    let mut client = connect(&daemon.endpoint).await;
+async fn window_linked_and_unlinked_fire_for_new_windows_and_for_link_and_unlink() {
+    let (_daemon, mut client) = fresh().await;
     let dir = tempfile::tempdir().unwrap();
-    let linked = dir.path().join("linked");
-    let unlinked = dir.path().join("unlinked");
-    send(
-        &mut client,
-        set_hook(
-            "window-linked",
-            Some(&format!("run-shell 'touch {}'", linked.display())),
-            false,
-        ),
-    )
-    .await
-    .unwrap();
-    send(
-        &mut client,
-        set_hook(
-            "window-unlinked",
-            Some(&format!("run-shell 'touch {}'", unlinked.display())),
-            false,
-        ),
-    )
-    .await
-    .unwrap();
+    let new_dir = dir.path().join("new");
+    let link_dir = dir.path().join("link");
+    std::fs::create_dir(&new_dir).unwrap();
+    std::fs::create_dir(&link_dir).unwrap();
+
+    let (linked, unlinked) = link_hooks(&mut client, &new_dir).await;
     new_window(&mut client, "linked").await;
     assert!(appears(&linked).await, "window-linked did not run");
     client.kill_window(None).await.unwrap();
     assert!(appears(&unlinked).await, "window-unlinked did not run");
+
+    new_window(&mut client, "shared").await;
+    let (linked, unlinked) = link_hooks(&mut client, &link_dir).await;
+    client
+        .link_window(None, None, LinkPlace::default())
+        .await
+        .unwrap();
+    assert!(appears(&linked).await, "window-linked did not run for the link");
+    client.unlink_window(Some(1), false).await.unwrap();
+    assert!(appears(&unlinked).await, "window-unlinked did not run for the unlink");
 }
 
 #[tokio::test]

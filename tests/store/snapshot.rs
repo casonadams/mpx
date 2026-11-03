@@ -48,6 +48,7 @@ fn sample() -> SessionSnapshot {
                     session_id: Some("abc".into()),
                 },
             ],
+            shares: None,
         }],
         environment: vec![EnvEntry {
             name: "TZ".into(),

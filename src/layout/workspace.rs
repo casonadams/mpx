@@ -34,14 +34,17 @@ pub struct WindowTab {
     /// The window's active pane (tmux `pane_active`), whether or not the window is shown.
     #[serde(default)]
     pub focused: Option<String>,
+    /// Every index the window is linked at, this one included, in number order (tmux
+    /// `window_linked`).
+    #[serde(default)]
+    pub linked: Vec<usize>,
 }
 
+/// A window: its panes, split tree, focus and name. Every index it is linked at shows this one
+/// window, so a pane killed here is gone from all of them (tmux `struct window`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Window {
     pub id: usize,
-    /// The number `select-window` and friends address. Numbers are unique and ascending; with
-    /// renumber-windows on they are the positions.
-    pub number: usize,
     pub name: String,
     /// Name given at creation; automatic naming falls back to it.
     #[serde(default)]
@@ -56,29 +59,22 @@ pub struct Window {
     /// Preset most recently applied by `select-layout`, used to cycle.
     #[serde(default)]
     pub preset: Option<LayoutPreset>,
-    #[serde(default)]
-    pub has_activity: bool,
-    #[serde(default)]
-    pub has_bell: bool,
-    /// The window has been quiet for `monitor-silence` seconds while in the background (tmux `~`).
-    #[serde(default)]
-    pub has_silence: bool,
     /// The window's panes all receive typed input (tmux `synchronize-panes`).
     #[serde(default)]
     pub synchronized: bool,
-    /// When the window last printed output; `None` until it does. Not persisted.
-    #[serde(skip)]
-    pub last_output: Option<Instant>,
     /// Zoomed: only the focused pane is shown. Any change to the layout unzooms the window.
     #[serde(default)]
     pub zoomed: bool,
+    /// The size `resize-window` set, which replaces the size the clients give (tmux `window-size
+    /// manual`). Not persisted: a restored window follows its clients again.
+    #[serde(skip)]
+    pub manual_size: Option<(u16, u16)>,
 }
 
 impl Window {
-    pub fn new(id: usize, number: usize, name: String, root_node: String) -> Self {
+    pub fn new(id: usize, name: String, root_node: String) -> Self {
         Self {
             id,
-            number,
             label: name.clone(),
             name,
             renamed: false,
@@ -86,12 +82,9 @@ impl Window {
             focused: Some(root_node),
             last_focused: None,
             preset: None,
-            has_activity: false,
-            has_bell: false,
-            has_silence: false,
             synchronized: false,
-            last_output: None,
             zoomed: false,
+            manual_size: None,
         }
     }
 
@@ -263,12 +256,70 @@ fn next_preset(current: Option<LayoutPreset>) -> LayoutPreset {
     }
 }
 
+/// One index of the session (tmux winlink): the window shown there, and the alerts raised there.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Link {
+    /// Identifies the index across renumbering, so a change can tell which links were added or
+    /// removed.
+    pub id: usize,
+    /// The number `select-window` and friends address. Numbers are unique and ascending; with
+    /// renumber-windows on they are the positions.
+    pub number: usize,
+    /// Id of the window shown at this index.
+    pub window: usize,
+    #[serde(default)]
+    pub has_activity: bool,
+    #[serde(default)]
+    pub has_bell: bool,
+    /// The window has been quiet for `monitor-silence` seconds while in the background (tmux `~`).
+    #[serde(default)]
+    pub has_silence: bool,
+    /// When the window last printed output; `None` until it does. Not persisted.
+    #[serde(skip)]
+    pub last_output: Option<Instant>,
+}
+
+impl Link {
+    fn new(id: usize, number: usize, window: usize) -> Self {
+        Self {
+            id,
+            number,
+            window,
+            has_activity: false,
+            has_bell: false,
+            has_silence: false,
+            last_output: None,
+        }
+    }
+}
+
+/// Where `link-window` puts a new index and how it treats the one it is given (tmux `link-window`
+/// flags `-a`, `-b`, `-k` and `-d`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LinkPlace {
+    /// Insert after the given index (`-a`).
+    pub after: bool,
+    /// Insert before the given index (`-b`).
+    pub before: bool,
+    /// Replace the window at an occupied index, unlinking it (`-k`).
+    pub kill: bool,
+    /// Keep the active index as it is (`-d`).
+    pub detached: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Workspace {
     pub name: String,
+    /// Every window, once each, however many indices show it.
     pub windows: Vec<Window>,
+    /// The session's indices, in number order.
+    pub links: Vec<Link>,
+    /// Position in `links` of the active index.
     pub active_idx: usize,
     pub next_window_id: usize,
+    pub next_link_id: usize,
+    /// Position in `links` of the index that was active before the current one.
     #[serde(default)]
     pub last_window: Option<usize>,
     #[serde(default)]
@@ -286,8 +337,10 @@ impl Workspace {
         Self {
             name,
             windows: Vec::new(),
+            links: Vec::new(),
             active_idx: 0,
             next_window_id: 0,
+            next_link_id: 0,
             last_window: None,
             marked_pane: None,
             renumber_windows: true,
@@ -309,18 +362,16 @@ impl Workspace {
         self.new_window_with_focus(window_name, root_node, true)
     }
 
-    /// Adds a window at its number's place in the order, numbered with the lowest free number, and
-    /// returns that number.
+    /// Adds a window at the lowest free number and returns that number.
     pub fn new_window_with_focus(
         &mut self,
         window_name: String,
         root_node: String,
         focus: bool,
     ) -> usize {
-        let id = self.next_window_id;
-        self.next_window_id += 1;
         let number = self.lowest_free_number();
-        let pos = self.insert_window(Window::new(id, number, window_name, root_node));
+        let id = self.push_window(|id| Window::new(id, window_name, root_node));
+        let pos = self.insert_link(id, number);
         if focus {
             self.set_active(pos);
         }
@@ -339,63 +390,72 @@ impl Workspace {
         root: LayoutNode,
         focused: Option<String>,
     ) -> usize {
-        let id = self.next_window_id;
-        self.next_window_id += 1;
         let focused = focused
             .filter(|f| root.has_leaf(f))
             .or_else(|| root.all_leaves().into_iter().next());
-        let number = if self.renumber_windows || self.position_of(number).is_some() {
-            self.lowest_free_number()
-        } else {
-            number
-        };
-        let pos = self.insert_window(Window {
+        let number = self.number_for(number);
+        let id = self.push_window(|id| Window {
             id,
-            number,
             name: sticky.clone().unwrap_or_else(|| label.clone()),
-            label,
             renamed: sticky.is_some(),
+            label,
             root: Some(root),
             focused,
             last_focused: None,
             preset: None,
-            has_activity: false,
-            has_bell: false,
-            has_silence: false,
             synchronized: false,
-            last_output: None,
             zoomed: false,
+            manual_size: None,
         });
-        self.windows[pos].number
+        let pos = self.insert_link(id, number);
+        self.links[pos].number
     }
 
-    fn set_active(&mut self, idx: usize) {
-        if idx < self.windows.len() {
-            if idx != self.active_idx {
-                if let Some(left) = self.windows.get_mut(self.active_idx) {
-                    left.zoomed = false;
-                }
-                self.last_window = Some(self.active_idx);
-                self.active_idx = idx;
-            }
-            if let Some(w) = self.windows.get_mut(idx) {
-                w.has_activity = false;
-                w.has_bell = false;
-                w.has_silence = false;
-            }
+    /// The id of the window shown at index `number`.
+    pub fn window_id_at(&self, number: usize) -> Option<usize> {
+        self.position_of(number).map(|pos| self.links[pos].window)
+    }
+
+    /// Shows the window `window` (an id from `window_id_at`) at index `number`, numbered as
+    /// `install_window` numbers windows. Returns the index it took.
+    pub fn link_restored(&mut self, window: usize, number: usize) -> usize {
+        let number = self.number_for(number);
+        let pos = self.insert_link(window, number);
+        self.links[pos].number
+    }
+
+    /// Makes the link at position `pos` the active one. Leaving a window unzooms it; the alerts of
+    /// the index are cleared.
+    fn set_active(&mut self, pos: usize) {
+        if pos >= self.links.len() {
+            return;
         }
+        if pos != self.active_idx {
+            let leaving = self.window_at(self.active_idx).map(|w| w.id);
+            if leaving != self.window_at(pos).map(|w| w.id)
+                && let Some(left) = self.window_at_mut(self.active_idx)
+            {
+                left.zoomed = false;
+            }
+            self.last_window = Some(self.active_idx);
+            self.active_idx = pos;
+        }
+        let link = &mut self.links[pos];
+        link.has_activity = false;
+        link.has_bell = false;
+        link.has_silence = false;
     }
 
     pub fn next_window(&mut self) {
-        if !self.windows.is_empty() {
-            self.set_active((self.active_idx + 1) % self.windows.len());
+        if !self.links.is_empty() {
+            self.set_active((self.active_idx + 1) % self.links.len());
         }
     }
 
     pub fn prev_window(&mut self) {
-        if !self.windows.is_empty() {
+        if !self.links.is_empty() {
             let prev = if self.active_idx == 0 {
-                self.windows.len() - 1
+                self.links.len() - 1
             } else {
                 self.active_idx - 1
             };
@@ -413,10 +473,10 @@ impl Workspace {
         }
     }
 
-    /// Switches to the window that was active before the current one.
+    /// Switches to the index that was active before the current one.
     pub fn last_window_switch(&mut self) -> bool {
         match self.last_window {
-            Some(idx) if idx < self.windows.len() => {
+            Some(idx) if idx < self.links.len() => {
                 self.set_active(idx);
                 true
             }
@@ -424,162 +484,186 @@ impl Workspace {
         }
     }
 
+    /// Makes the index `number` the one active before the current one (`None` for none).
+    pub fn set_last_window(&mut self, number: Option<usize>) {
+        self.last_window = number.and_then(|n| self.position_of(n));
+    }
+
+    /// Every index with the window it shows, in number order.
+    pub fn linked(&self) -> impl Iterator<Item = (&Link, &Window)> + '_ {
+        self.links
+            .iter()
+            .filter_map(|link| Some((link, self.window_by_id(link.window)?)))
+    }
+
     pub fn window_tabs(&self) -> Vec<WindowTab> {
-        self.windows
+        self.links
             .iter()
             .enumerate()
-            .map(|(i, w)| {
+            .filter_map(|(i, link)| {
+                let w = self.window_by_id(link.window)?;
                 let marked_pane = self.marked_pane.as_ref().filter(|m| w.contains(m)).cloned();
-                let has_marked = marked_pane.is_some();
-                WindowTab {
-                    index: w.number,
+                Some(WindowTab {
+                    index: link.number,
                     name: w.name.clone(),
                     is_active: i == self.active_idx,
                     is_last: Some(i) == self.last_window,
-                    has_activity: w.has_activity,
-                    has_bell: w.has_bell,
-                    has_silence: w.has_silence,
+                    has_activity: link.has_activity,
+                    has_bell: link.has_bell,
+                    has_silence: link.has_silence,
                     synchronized: w.synchronized,
                     zoomed: w.zoomed,
                     focused: w.focused.clone(),
-                    has_marked,
+                    has_marked: marked_pane.is_some(),
                     marked_pane,
                     agent_badge: None,
-                }
+                    linked: self.numbers_of(link.window),
+                })
             })
             .collect()
     }
 
-    fn mark_window_flag(
-        &mut self,
-        pane_name: &str,
-        flag: impl FnOnce(&mut Window) -> &mut bool,
-    ) -> bool {
-        let Some(w_idx) = self.window_of(pane_name) else {
-            return false;
-        };
-        if w_idx == self.active_idx {
-            return false;
+    /// Sets an alert flag on every index showing the window of `pane` but the active one. True when
+    /// a flag was newly set.
+    fn mark_alert(&mut self, pane: &str, flag: impl Fn(&mut Link) -> &mut bool) -> bool {
+        let active = self.active_idx;
+        let mut marked = false;
+        for pos in self.links_showing(pane) {
+            if pos == active {
+                continue;
+            }
+            let target = flag(&mut self.links[pos]);
+            if !*target {
+                *target = true;
+                marked = true;
+            }
         }
-        let Some(w) = self.windows.get_mut(w_idx) else {
-            return false;
-        };
-        let target = flag(w);
-        if !*target {
-            *target = true;
-            return true;
-        }
-        false
+        marked
     }
 
     pub fn mark_activity(&mut self, pane_name: &str) -> bool {
-        self.mark_window_flag(pane_name, |w| &mut w.has_activity)
+        self.mark_alert(pane_name, |l| &mut l.has_activity)
     }
 
     pub fn mark_bell(&mut self, pane_name: &str) -> bool {
-        self.mark_window_flag(pane_name, |w| &mut w.has_bell)
+        self.mark_alert(pane_name, |l| &mut l.has_bell)
     }
 
-    /// Records output from a pane: its window's silence timer restarts and its silence flag clears.
+    /// Records output from a pane: the silence timer of every index showing its window restarts and
+    /// their silence flags clear.
     pub fn note_output(&mut self, pane_name: &str, now: Instant) {
-        if let Some(w) = self
-            .window_of(pane_name)
-            .and_then(|i| self.windows.get_mut(i))
-        {
-            w.last_output = Some(now);
-            w.has_silence = false;
+        for pos in self.links_showing(pane_name) {
+            let link = &mut self.links[pos];
+            link.last_output = Some(now);
+            link.has_silence = false;
         }
     }
 
-    /// Flags background windows that have been quiet for `secs` seconds (`monitor-silence`).
-    /// Returns the numbers of the windows flagged now.
+    /// Flags background indices whose windows have been quiet for `secs` seconds
+    /// (`monitor-silence`). Returns the numbers of the indices flagged now.
     pub fn expire_silence(&mut self, secs: u64, now: Instant) -> Vec<usize> {
         let active = self.active_idx;
         let quiet = Duration::from_secs(secs);
         let mut flagged = Vec::new();
-        for (i, w) in self.windows.iter_mut().enumerate() {
-            if i != active
-                && !w.has_silence
-                && w.last_output
+        for (pos, link) in self.links.iter_mut().enumerate() {
+            if pos != active
+                && !link.has_silence
+                && link
+                    .last_output
                     .is_some_and(|t| now.duration_since(t) >= quiet)
             {
-                w.has_silence = true;
-                flagged.push(w.number);
+                link.has_silence = true;
+                flagged.push(link.number);
             }
         }
         flagged
     }
 
-    /// When the next background window goes quiet for `secs` seconds, if any is still counting.
+    /// When the next background index goes quiet for `secs` seconds, if any is still counting.
     pub fn next_silence(&self, secs: u64) -> Option<Instant> {
         let quiet = Duration::from_secs(secs);
-        self.windows
+        self.links
             .iter()
             .enumerate()
-            .filter(|(i, w)| *i != self.active_idx && !w.has_silence)
-            .filter_map(|(_, w)| w.last_output)
+            .filter(|(i, l)| *i != self.active_idx && !l.has_silence)
+            .filter_map(|(_, l)| l.last_output)
             .map(|t| t + quiet)
             .min()
     }
 
-    /// Turns `synchronize-panes` on or off for the window numbered `number` (the active window when
+    /// Turns `synchronize-panes` on or off for the window at index `number` (the active window when
     /// `None`); `on` None toggles it.
     pub fn synchronize(&mut self, number: Option<usize>, on: Option<bool>) -> Result<(), String> {
-        let idx = match number {
-            Some(n) => self.position_of(n).ok_or_else(|| window_not_found(n))?,
-            None => self.active_idx,
-        };
-        let win = self
-            .windows
-            .get_mut(idx)
-            .ok_or_else(|| "No active window".to_string())?;
+        let win = self.window_mut_at(number)?;
         win.synchronized = on.unwrap_or(!win.synchronized);
         Ok(())
     }
 
     pub fn active_window(&self) -> Option<&Window> {
-        self.windows.get(self.active_idx)
+        self.window_at(self.active_idx)
     }
 
     pub fn active_window_mut(&mut self) -> Option<&mut Window> {
-        self.windows.get_mut(self.active_idx)
+        let pos = self.active_idx;
+        self.window_at_mut(pos)
     }
 
+    /// The position in `links` of the index showing pane `name`: the active index when it shows it,
+    /// else the first index that does.
     pub fn window_of(&self, name: &str) -> Option<usize> {
-        self.windows.iter().position(|w| w.contains(name))
+        let shows = |pos: usize| self.window_at(pos).is_some_and(|w| w.contains(name));
+        if shows(self.active_idx) {
+            return Some(self.active_idx);
+        }
+        (0..self.links.len()).find(|&pos| shows(pos))
     }
 
-    /// The number of the window holding pane `name`.
+    /// The number of the index showing pane `name`.
     pub fn number_of(&self, name: &str) -> Option<usize> {
-        self.window_of(name).map(|idx| self.windows[idx].number)
+        self.window_of(name).map(|pos| self.links[pos].number)
     }
 
-    /// The number of the active window, if there is one.
+    /// The number of the active index, if there is one.
     pub fn active_number(&self) -> Option<usize> {
-        self.active_window().map(|w| w.number)
+        self.links.get(self.active_idx).map(|l| l.number)
+    }
+
+    /// The panes of the window at index `number`, empty when there is no such index.
+    pub fn leaves_at(&self, number: usize) -> Vec<String> {
+        self.position_of(number)
+            .and_then(|pos| self.window_at(pos))
+            .map(Window::leaves)
+            .unwrap_or_default()
+    }
+
+    /// The focused pane of the window at index `number`.
+    pub fn focused_at(&self, number: usize) -> Option<String> {
+        self.position_of(number)
+            .and_then(|pos| self.window_at(pos))
+            .and_then(|w| w.focused.clone())
     }
 
     /// Number of panes across all windows.
     pub fn pane_count(&self) -> usize {
         self.windows.iter().map(|w| w.leaves().len()).sum()
     }
+
     pub fn add_or_split(&mut self, node_name: String, dir: Direction) {
         self.add_or_split_with_focus(node_name, dir, true);
     }
 
     pub fn add_or_split_with_focus(&mut self, node_name: String, dir: Direction, focus: bool) {
-        if self.windows.is_empty() {
+        if self.links.is_empty() {
             let win_name = node_name.clone();
             self.new_window_with_focus(win_name, node_name, focus);
             return;
         }
-
-        if let Some(win) = self.windows.get_mut(self.active_idx) {
+        if let Some(win) = self.active_window_mut() {
             win.split_at(None, node_name, dir, None, focus);
         }
     }
 
-    /// Splits `target` (default: the focused pane of the active window). The new pane's window
+    /// Splits `target` (default: the focused pane of the active window). The new pane's index
     /// becomes active when `focus` is set.
     pub fn split_pane(
         &mut self,
@@ -589,21 +673,24 @@ impl Workspace {
         percent: Option<u8>,
         focus: bool,
     ) -> Result<(), String> {
-        let idx = match target {
+        let pos = match target {
             Some(t) => self
                 .window_of(t)
                 .ok_or_else(|| format!("Node '{}' not found", t))?,
-            None if self.windows.is_empty() => {
+            None if self.links.is_empty() => {
                 self.new_window_with_focus(node_name.clone(), node_name, focus);
                 return Ok(());
             }
             None => self.active_idx,
         };
-        if !self.windows[idx].split_at(target, node_name, dir, percent, focus) {
+        let split = self
+            .window_at_mut(pos)
+            .is_some_and(|w| w.split_at(target, node_name, dir, percent, focus));
+        if !split {
             return Err("Split target not found".to_string());
         }
         if focus {
-            self.set_active(idx);
+            self.set_active(pos);
         }
         Ok(())
     }
@@ -618,24 +705,29 @@ impl Workspace {
         self.drop_empty_windows();
     }
 
+    /// Drops the windows left without panes, with every index that showed them.
     fn drop_empty_windows(&mut self) {
-        let active = self.windows.get(self.active_idx).map(|w| w.id);
+        let active = self.links.get(self.active_idx).map(|l| l.id);
         let last = self
             .last_window
-            .and_then(|i| self.windows.get(i))
-            .map(|w| w.id);
+            .and_then(|i| self.links.get(i))
+            .map(|l| l.id);
+        let emptied: Vec<usize> = self
+            .windows
+            .iter()
+            .filter(|w| w.root.is_none())
+            .map(|w| w.id)
+            .collect();
         self.windows.retain(|w| w.root.is_some());
-        self.active_idx = active
-            .and_then(|id| self.windows.iter().position(|w| w.id == id))
-            .unwrap_or_else(|| self.windows.len().saturating_sub(1));
-        self.last_window = last.and_then(|id| self.windows.iter().position(|w| w.id == id));
-        if self.renumber_windows {
-            self.compact_numbers();
+        self.links.retain(|l| !emptied.contains(&l.window));
+        self.restore_positions(active, last);
+        if !emptied.is_empty() {
+            self.renumber_if_enabled();
         }
     }
 
     pub fn focus_next(&mut self) {
-        if let Some(win) = self.windows.get_mut(self.active_idx) {
+        if let Some(win) = self.active_window_mut() {
             win.focus_next();
             win.zoomed = false;
         }
@@ -647,7 +739,7 @@ impl Workspace {
 
     /// Focuses the last pane of the active window. Unless `keep_zoom`, a move unzooms the window.
     pub fn focus_last_with(&mut self, keep_zoom: bool) -> bool {
-        let Some(win) = self.windows.get_mut(self.active_idx) else {
+        let Some(win) = self.active_window_mut() else {
             return false;
         };
         let moved = win.focus_last();
@@ -664,23 +756,25 @@ impl Workspace {
 
     /// Focuses a pane, switching to its window. Unless `keep_zoom`, focusing unzooms that window.
     pub fn focus_with(&mut self, name: &str, keep_zoom: bool) -> bool {
-        match self.window_of(name) {
-            Some(idx) => {
-                self.windows[idx].set_focus(name);
-                if !keep_zoom {
-                    self.windows[idx].zoomed = false;
-                }
-                self.set_active(idx);
-                true
+        let Some(pos) = self.window_of(name) else {
+            return false;
+        };
+        if let Some(win) = self.window_at_mut(pos) {
+            win.set_focus(name);
+            if !keep_zoom {
+                win.zoomed = false;
             }
-            None => false,
         }
+        self.set_active(pos);
+        true
     }
 
     pub fn rename_window(&mut self, number: usize, name: String) -> bool {
-        match self.position_of(number) {
-            Some(idx) => {
-                let win = &mut self.windows[idx];
+        let Some(pos) = self.position_of(number) else {
+            return false;
+        };
+        match self.window_at_mut(pos) {
+            Some(win) => {
                 win.name = name;
                 win.renamed = true;
                 true
@@ -689,34 +783,140 @@ impl Workspace {
         }
     }
 
-    /// Sets the automatic name of the window numbered `number` unless it was renamed explicitly.
+    /// Sets the automatic name of the window at index `number` unless it was renamed explicitly.
     pub fn set_auto_name(&mut self, number: usize, name: Option<String>) {
-        if let Some(idx) = self.position_of(number) {
-            let win = &mut self.windows[idx];
-            if !win.renamed {
-                win.name = name.unwrap_or_else(|| win.label.clone());
-            }
+        if let Some(pos) = self.position_of(number)
+            && let Some(win) = self.window_at_mut(pos)
+            && !win.renamed
+        {
+            win.name = name.unwrap_or_else(|| win.label.clone());
         }
     }
 
-    /// Removes the window numbered `number` and returns its panes. With renumber-windows on, the
-    /// windows after it are renumbered.
+    /// Kills the window at index `number` with every index it is linked at, and returns its panes.
+    /// With renumber-windows on, the indices after it are renumbered.
     pub fn kill_window(&mut self, number: usize) -> Option<Vec<String>> {
-        let idx = self.position_of(number)?;
-        let panes = self.windows[idx].leaves();
-        if let Some(marked) = &self.marked_pane
-            && panes.iter().any(|p| p == marked)
-        {
+        let pos = self.position_of(number)?;
+        let id = self.links[pos].window;
+        let panes = self.kill_body(id);
+        self.renumber_if_enabled();
+        Some(panes)
+    }
+
+    /// Removes the window `id` and every link to it. Returns its panes.
+    fn kill_body(&mut self, id: usize) -> Vec<String> {
+        let panes = self
+            .window_by_id(id)
+            .map(Window::leaves)
+            .unwrap_or_default();
+        if self.marked_pane.as_ref().is_some_and(|m| panes.contains(m)) {
             self.marked_pane = None;
         }
-        self.windows.remove(idx);
-        let shift = |i: usize| if i > idx { i - 1 } else { i };
-        self.active_idx = shift(self.active_idx).min(self.windows.len().saturating_sub(1));
-        self.last_window = self.last_window.filter(|&l| l != idx).map(shift);
-        if self.renumber_windows {
-            self.compact_numbers();
+        let gone: Vec<usize> = self
+            .links
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.window == id)
+            .map(|(pos, _)| pos)
+            .collect();
+        self.windows.retain(|w| w.id != id);
+        self.unlink_positions(&gone);
+        panes
+    }
+
+    /// Removes the links at the positions `gone` (ascending). The active and last indices move with
+    /// their links; when the active one is removed, the index that takes its place becomes active.
+    fn unlink_positions(&mut self, gone: &[usize]) {
+        let shift = |p: usize| p - gone.iter().filter(|&&g| g < p).count();
+        let active = shift(self.active_idx);
+        let last = self.last_window.filter(|l| !gone.contains(l)).map(shift);
+        let mut pos = 0;
+        self.links.retain(|_| {
+            let keep = !gone.contains(&pos);
+            pos += 1;
+            keep
+        });
+        self.active_idx = active.min(self.links.len().saturating_sub(1));
+        self.last_window = last;
+    }
+
+    /// Removes one index (`pos` in `links`). The window it showed is killed when that was its only
+    /// index, which needs `kill`; returns the panes of a killed window.
+    fn unlink_at(&mut self, pos: usize, kill: bool) -> Result<Vec<String>, String> {
+        let (id, number) = (self.links[pos].window, self.links[pos].number);
+        if self.links.iter().filter(|l| l.window == id).count() > 1 {
+            self.unlink_positions(&[pos]);
+            return Ok(Vec::new());
         }
-        Some(panes)
+        if !kill {
+            return Err(format!(
+                "window {number} is linked to no other index: use -k to kill it"
+            ));
+        }
+        Ok(self.kill_body(id))
+    }
+
+    /// Removes the index `number` (tmux `unlink-window`). Its window stays at its other indices;
+    /// a window with no other index is killed only with `kill`. Returns the panes of a killed
+    /// window.
+    pub fn unlink_window(&mut self, number: usize, kill: bool) -> Result<Vec<String>, String> {
+        let pos = self
+            .position_of(number)
+            .ok_or_else(|| window_not_found(number))?;
+        let panes = self.unlink_at(pos, kill)?;
+        self.renumber_if_enabled();
+        Ok(panes)
+    }
+
+    /// Shows the window at index `src` at index `dst` as well (tmux `link-window`). Without `dst` the
+    /// lowest free index is taken. With `after` or `before`, the window goes next to `dst` and the
+    /// indices in the way move up. An occupied index is refused unless `kill`, which unlinks what is
+    /// there first. Returns the new index and the panes of a window that `kill` destroyed.
+    pub fn link_window(
+        &mut self,
+        src: usize,
+        dst: Option<usize>,
+        place: LinkPlace,
+    ) -> Result<(usize, Vec<String>), String> {
+        let src_pos = self.position_of(src).ok_or_else(|| window_not_found(src))?;
+        let window = self.links[src_pos].window;
+        let shuffles = place.after || place.before;
+        if !shuffles && dst == Some(src) {
+            return Err(format!("same index: {src}"));
+        }
+        let number = if shuffles {
+            let base = dst.or_else(|| self.active_number()).unwrap_or(0);
+            self.open_index(base + usize::from(place.after))
+        } else {
+            dst.unwrap_or_else(|| self.lowest_free_number())
+        };
+        let mut destroyed = Vec::new();
+        if let Some(pos) = self.position_of(number) {
+            if !place.kill {
+                return Err(format!("index in use: {number}"));
+            }
+            destroyed = self.unlink_at(pos, true)?;
+        }
+        let pos = self.insert_link(window, number);
+        if !place.detached {
+            self.set_active(pos);
+        }
+        Ok((number, destroyed))
+    }
+
+    /// Frees index `start` for a new link: the run of occupied indices from `start` moves up one
+    /// (tmux `winlink_shuffle_up`). Returns `start`.
+    fn open_index(&mut self, start: usize) -> usize {
+        let mut end = start;
+        while self.position_of(end).is_some() {
+            end += 1;
+        }
+        for link in self.links.iter_mut() {
+            if (start..end).contains(&link.number) {
+                link.number += 1;
+            }
+        }
+        start
     }
 
     /// Toggles the marked flag on `pane`: if already marked, clears the mark;
@@ -770,17 +970,20 @@ impl Workspace {
 
     /// Moves a pane out of its window into a new window of its own.
     pub fn break_pane(&mut self, name: &str) -> bool {
-        let Some(idx) = self.window_of(name) else {
+        let Some(pos) = self.window_of(name) else {
             return false;
         };
-        if self.windows[idx].leaves().len() <= 1 {
+        let id = self.links[pos].window;
+        let Some(win) = self.window_by_id_mut(id) else {
+            return false;
+        };
+        if win.leaves().len() <= 1 {
             return false;
         }
-        self.windows[idx].remove(name);
-        let id = self.next_window_id;
-        self.next_window_id += 1;
+        win.remove(name);
+        let new_id = self.push_window(|id| Window::new(id, name.to_string(), name.to_string()));
         let number = self.lowest_free_number();
-        let pos = self.insert_window(Window::new(id, number, name.to_string(), name.to_string()));
+        let pos = self.insert_link(new_id, number);
         self.set_active(pos);
         true
     }
@@ -804,9 +1007,16 @@ impl Workspace {
             return Err(format!("Node '{target}' not found"));
         }
         let previous = self.active_window().and_then(|w| w.focused.clone());
-        self.windows[from].remove(src);
+        let from_id = self.links[from].window;
+        if let Some(win) = self.window_by_id_mut(from_id) {
+            win.remove(src);
+        }
         let to = self.window_of(target).unwrap_or(from);
-        if !self.windows[to].split_at(Some(target), src.to_string(), dir, None, !detach) {
+        let to_id = self.links[to].window;
+        let joined = self
+            .window_by_id_mut(to_id)
+            .is_some_and(|w| w.split_at(Some(target), src.to_string(), dir, None, !detach));
+        if !joined {
             return Err("Split target not found".to_string());
         }
         self.drop_empty_windows();
@@ -820,91 +1030,169 @@ impl Workspace {
         Ok(())
     }
 
-    /// Exchanges the numbers of two windows (tmux `swap-window`); the active and last window stay the
-    /// same windows.
+    /// Exchanges the numbers of two windows (tmux `swap-window`); the active and last index stay on
+    /// the same windows.
     pub fn swap_windows(&mut self, a: usize, b: usize) -> Result<(), String> {
         let pa = self.position_of(a).ok_or_else(|| window_not_found(a))?;
         let pb = self.position_of(b).ok_or_else(|| window_not_found(b))?;
         if pa != pb {
-            self.reorder(|windows| {
-                let number = windows[pa].number;
-                windows[pa].number = windows[pb].number;
-                windows[pb].number = number;
-                windows.sort_by_key(|w| w.number);
+            self.reorder(|links| {
+                let number = links[pa].number;
+                links[pa].number = links[pb].number;
+                links[pb].number = number;
+                links.sort_by_key(|l| l.number);
             });
         }
         Ok(())
     }
 
-    /// Moves window `from` to number `to` (tmux `move-window`). With renumber-windows on, `to` is a
-    /// position and the windows are renumbered afterwards; otherwise `to` must be free.
+    /// Moves index `from` to number `to` (tmux `move-window`). With renumber-windows on, `to` is a
+    /// position and the indices are renumbered afterwards; otherwise `to` must be free.
     pub fn move_window(&mut self, from: usize, to: usize) -> Result<(), String> {
         let from_pos = self
             .position_of(from)
             .ok_or_else(|| window_not_found(from))?;
         if self.renumber_windows {
-            if to >= self.windows.len() {
+            if to >= self.links.len() {
                 return Err(window_not_found(to));
             }
-            self.reorder(|windows| {
-                let window = windows.remove(from_pos);
-                windows.insert(to, window);
+            self.reorder(|links| {
+                let link = links.remove(from_pos);
+                links.insert(to, link);
             });
             self.compact_numbers();
         } else if from != to {
             if self.position_of(to).is_some() {
                 return Err(format!("Window {to} already exists"));
             }
-            self.reorder(|windows| {
-                windows[from_pos].number = to;
-                windows.sort_by_key(|w| w.number);
+            self.reorder(|links| {
+                links[from_pos].number = to;
+                links.sort_by_key(|l| l.number);
             });
         }
         Ok(())
     }
 
-    fn reorder(&mut self, change: impl FnOnce(&mut Vec<Window>)) {
-        let active = self.windows.get(self.active_idx).map(|w| w.id);
+    /// Changes the order of the links, keeping the active and last index on their links.
+    fn reorder(&mut self, change: impl FnOnce(&mut Vec<Link>)) {
+        let active = self.links.get(self.active_idx).map(|l| l.id);
         let last = self
             .last_window
-            .and_then(|i| self.windows.get(i))
-            .map(|w| w.id);
-        change(&mut self.windows);
-        let position =
-            |id: Option<usize>| id.and_then(|id| self.windows.iter().position(|w| w.id == id));
-        self.active_idx = position(active).unwrap_or(0);
-        self.last_window = position(last);
+            .and_then(|i| self.links.get(i))
+            .map(|l| l.id);
+        change(&mut self.links);
+        self.restore_positions(active, last);
     }
 
+    /// Points the active and last indices at the links with ids `active` and `last`. When the active
+    /// link is gone, the last link becomes active.
+    fn restore_positions(&mut self, active: Option<usize>, last: Option<usize>) {
+        let position = |id: Option<usize>, links: &[Link]| {
+            id.and_then(|id| links.iter().position(|l| l.id == id))
+        };
+        let fallback = self.links.len().saturating_sub(1);
+        self.active_idx = position(active, &self.links).unwrap_or(fallback);
+        self.last_window = position(last, &self.links);
+    }
+
+    /// The position in `links` of the index `number`.
     fn position_of(&self, number: usize) -> Option<usize> {
-        self.windows
-            .binary_search_by_key(&number, |w| w.number)
-            .ok()
+        self.links.binary_search_by_key(&number, |l| l.number).ok()
     }
 
-    /// The lowest number no window has: the first gap in the ascending numbers.
+    /// The lowest number no index has: the first gap in the ascending numbers.
     fn lowest_free_number(&self) -> usize {
-        self.windows
+        self.links
             .iter()
             .enumerate()
-            .find(|(i, w)| w.number != *i)
-            .map_or(self.windows.len(), |(i, _)| i)
+            .find(|(i, l)| l.number != *i)
+            .map_or(self.links.len(), |(i, _)| i)
     }
 
-    /// Inserts a window in number order and returns its position. The active and last windows stay
-    /// the same windows.
-    fn insert_window(&mut self, mut window: Window) -> usize {
+    /// The number a window restored or added at `wanted` takes: `wanted` when it is free and
+    /// renumber-windows is off, else the lowest free one.
+    fn number_for(&self, wanted: usize) -> usize {
+        if self.renumber_windows || self.position_of(wanted).is_some() {
+            self.lowest_free_number()
+        } else {
+            wanted
+        }
+    }
+
+    /// Adds a window, built from its id, and returns the id.
+    fn push_window(&mut self, make: impl FnOnce(usize) -> Window) -> usize {
+        let id = self.next_window_id;
+        self.next_window_id += 1;
+        let mut window = make(id);
         window.synchronized = self.synchronize_new;
-        let pos = self.windows.partition_point(|w| w.number < window.number);
-        self.reorder(|windows| windows.insert(pos, window));
+        self.windows.push(window);
+        id
+    }
+
+    /// Adds an index showing window `window` at number `number`, in number order. Returns its
+    /// position.
+    fn insert_link(&mut self, window: usize, number: usize) -> usize {
+        let id = self.next_link_id;
+        self.next_link_id += 1;
+        let pos = self.links.partition_point(|l| l.number < number);
+        let link = Link::new(id, number, window);
+        self.reorder(|links| links.insert(pos, link));
         pos
     }
 
-    /// Numbers the windows 0, 1, ... in order (tmux `move-window -r`).
-    pub fn compact_numbers(&mut self) {
-        for (i, win) in self.windows.iter_mut().enumerate() {
-            win.number = i;
+    fn renumber_if_enabled(&mut self) {
+        if self.renumber_windows {
+            self.compact_numbers();
         }
+    }
+
+    /// Numbers the indices 0, 1, ... in order (tmux `move-window -r`).
+    pub fn compact_numbers(&mut self) {
+        for (i, link) in self.links.iter_mut().enumerate() {
+            link.number = i;
+        }
+    }
+
+    /// The numbers of every index showing window `id`, in number order.
+    fn numbers_of(&self, id: usize) -> Vec<usize> {
+        self.links
+            .iter()
+            .filter(|l| l.window == id)
+            .map(|l| l.number)
+            .collect()
+    }
+
+    /// The positions in `links` of the indices showing the window that holds pane `name`.
+    fn links_showing(&self, name: &str) -> Vec<usize> {
+        self.links
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| {
+                self.window_by_id(l.window)
+                    .is_some_and(|w| w.contains(name))
+            })
+            .map(|(pos, _)| pos)
+            .collect()
+    }
+
+    fn window_by_id(&self, id: usize) -> Option<&Window> {
+        self.windows.iter().find(|w| w.id == id)
+    }
+
+    fn window_by_id_mut(&mut self, id: usize) -> Option<&mut Window> {
+        self.windows.iter_mut().find(|w| w.id == id)
+    }
+
+    /// The window shown at position `pos` of `links`.
+    fn window_at(&self, pos: usize) -> Option<&Window> {
+        self.links
+            .get(pos)
+            .and_then(|link| self.window_by_id(link.window))
+    }
+
+    fn window_at_mut(&mut self, pos: usize) -> Option<&mut Window> {
+        let id = self.links.get(pos)?.window;
+        self.window_by_id_mut(id)
     }
 
     /// Applies a preset to the active window; `None` cycles.
@@ -929,14 +1217,18 @@ impl Workspace {
 
     /// Whether the window holding `target` (the active window when `None`) is zoomed.
     pub fn zoomed_at(&self, target: Option<&str>) -> bool {
-        let idx = target.and_then(|t| self.window_of(t)).unwrap_or(self.active_idx);
-        self.windows.get(idx).is_some_and(|w| w.zoomed)
+        let pos = target
+            .and_then(|t| self.window_of(t))
+            .unwrap_or(self.active_idx);
+        self.window_at(pos).is_some_and(|w| w.zoomed)
     }
 
     /// Zooms the window holding pane `pane`.
     pub fn zoom_window_of(&mut self, pane: &str) {
-        if let Some(idx) = self.window_of(pane) {
-            self.windows[idx].zoomed = true;
+        if let Some(pos) = self.window_of(pane)
+            && let Some(win) = self.window_at_mut(pos)
+        {
+            win.zoomed = true;
         }
     }
 
@@ -961,6 +1253,37 @@ impl Workspace {
         }
     }
 
+    /// The size `resize-window` pinned the window at index `number` to (the active window when
+    /// `None`), if it has one.
+    pub fn manual_size_at(&self, number: Option<usize>) -> Option<(u16, u16)> {
+        let pos = match number {
+            Some(n) => self.position_of(n)?,
+            None => self.active_idx,
+        };
+        self.window_at(pos)?.manual_size
+    }
+
+    /// Pins the size of the window at index `number` (the active one when `None`); `None` clears the
+    /// pin.
+    pub fn set_manual_size(
+        &mut self,
+        number: Option<usize>,
+        size: Option<(u16, u16)>,
+    ) -> Result<(), String> {
+        self.window_mut_at(number)?.manual_size = size;
+        Ok(())
+    }
+
+    /// The window at index `number` (the active one when `None`), for a change to it.
+    fn window_mut_at(&mut self, number: Option<usize>) -> Result<&mut Window, String> {
+        let pos = match number {
+            Some(n) => self.position_of(n).ok_or_else(|| window_not_found(n))?,
+            None => self.active_idx,
+        };
+        self.window_at_mut(pos)
+            .ok_or_else(|| "No window".to_string())
+    }
+
     pub fn resize_split(
         &mut self,
         name: &str,
@@ -969,10 +1292,13 @@ impl Workspace {
         width: u16,
         height: u16,
     ) -> bool {
-        let Some(idx) = self.window_of(name) else {
+        let Some(pos) = self.window_of(name) else {
             return false;
         };
-        self.windows[idx].resize_split(name, side, cells, Rect::new(0, 0, width, height))
+        match self.window_at_mut(pos) {
+            Some(win) => win.resize_split(name, side, cells, Rect::new(0, 0, width, height)),
+            None => false,
+        }
     }
 
     pub fn compute_layout(&self, width: u16, height: u16) -> Vec<(String, Rect, bool)> {

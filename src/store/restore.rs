@@ -5,17 +5,40 @@ use crate::store::{PaneSnapshot, RestorePlan, SessionSnapshot, WindowPlan, Windo
 /// Restores PTY panes with their original command or configured resume command in their last cwd;
 /// non-PTY task panes are not restored. Windows left without panes are dropped.
 pub fn plan_restore(snapshot: &SessionSnapshot, rules: &[ResumeRule]) -> RestorePlan {
-    let planned: Vec<Option<WindowPlan>> = snapshot
-        .windows
-        .iter()
-        .enumerate()
-        .map(|(position, window)| plan_window(window, position, rules))
-        .collect();
+    let mut planned: Vec<Option<WindowPlan>> = Vec::with_capacity(snapshot.windows.len());
+    for (position, window) in snapshot.windows.iter().enumerate() {
+        let plan = match window.shares {
+            Some(primary) => shared_plan(window, position, primary, &planned),
+            None => plan_window(window, position, rules),
+        };
+        planned.push(plan);
+    }
     RestorePlan {
         active_window: remap_active(snapshot.active_window, &planned),
         last_window: remap_last(snapshot.last_window, &planned),
         windows: planned.into_iter().flatten().collect(),
     }
+}
+
+/// The plan of an index that shows the window of entry `primary`: it spawns nothing, and it is
+/// dropped with that window. Its `shares` names the window's survivor index.
+fn shared_plan(
+    window: &WindowSnapshot,
+    position: usize,
+    primary: usize,
+    planned: &[Option<WindowPlan>],
+) -> Option<WindowPlan> {
+    let owner = planned.get(primary)?.as_ref()?;
+    let survivor = planned[..primary].iter().filter(|p| p.is_some()).count();
+    Some(WindowPlan {
+        number: window.number.unwrap_or(position),
+        name: None,
+        layout: owner.layout.clone(),
+        focused: owner.focused.clone(),
+        panes: Vec::new(),
+        startup_input: std::collections::BTreeMap::new(),
+        shares: Some(survivor),
+    })
 }
 
 /// Index among surviving windows of the last active window, or None when dropped.
@@ -78,6 +101,7 @@ fn plan_window(
         focused,
         panes,
         startup_input,
+        shares: None,
     })
 }
 

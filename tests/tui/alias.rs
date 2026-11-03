@@ -32,8 +32,14 @@ fn an_alias_is_expanded_once_and_applies_inside_sequences() {
     assert_eq!(
         cmd,
         Command::Sequence(vec![
-            Command::Window(WindowCommand::NextWindow),
-            Command::Window(WindowCommand::NextWindow),
+            Command::Window(WindowCommand::StepWindow {
+                forward: true,
+                alert: false,
+            }),
+            Command::Window(WindowCommand::StepWindow {
+                forward: true,
+                alert: false,
+            }),
         ])
     );
 }
@@ -84,8 +90,14 @@ fn if_shell_parses_both_branches_with_aliases() {
             format: true,
             target: Some("%1".into()),
             condition: "#{pane_active}".into(),
-            then: Box::new(Command::Window(WindowCommand::NextWindow)),
-            otherwise: Some(Box::new(Command::Window(WindowCommand::PrevWindow))),
+            then: Box::new(Command::Window(WindowCommand::StepWindow {
+                forward: true,
+                alert: false,
+            })),
+            otherwise: Some(Box::new(Command::Window(WindowCommand::StepWindow {
+                forward: false,
+                alert: false,
+            }))),
         })
     );
 }

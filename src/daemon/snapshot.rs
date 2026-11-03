@@ -1,5 +1,7 @@
 //! Builds the persisted session snapshot from the workspace and the live panes. Pure: the caller
 //! gathers the pane facts (live cwd, process) and the clock.
+use std::collections::HashMap;
+
 use crate::layout::Workspace;
 use crate::protocol::SpawnOpts;
 use crate::store::{PaneSnapshot, SNAPSHOT_VERSION, SessionSnapshot, WindowSnapshot};
@@ -17,8 +19,10 @@ pub struct PaneRecord {
     pub session_id: Option<String>,
 }
 
-/// Snapshot of the running panes. Exited panes leave the layout, windows without running panes are
-/// dropped, and the active window follows its window when it survives.
+/// Snapshot of the running panes, one entry per index. Exited panes leave the layout, windows
+/// without running panes are dropped, and the active index follows its window when it survives. A
+/// window linked at several indices saves its panes once, at its first index; the others point
+/// at that entry.
 pub fn build_snapshot(
     session: &str,
     saved_ms: u64,
@@ -27,10 +31,11 @@ pub fn build_snapshot(
     panes: &[PaneRecord],
 ) -> SessionSnapshot {
     let live = |name: &str| panes.iter().find(|p| p.name == name && p.running);
-    let mut windows = Vec::new();
+    let mut windows: Vec<WindowSnapshot> = Vec::new();
+    let mut first_entry: HashMap<usize, usize> = HashMap::new();
     let mut active_window = None;
     let mut last_window = None;
-    for (idx, win) in ws.windows.iter().enumerate() {
+    for (idx, (link, win)) in ws.linked().enumerate() {
         let mut root = win.root.clone();
         for leaf in win.leaves() {
             if live(&leaf).is_none() {
@@ -40,24 +45,31 @@ pub fn build_snapshot(
         let Some(layout) = root else { continue };
         let names = layout.all_leaves();
         let focused = win.focused.clone().filter(|f| names.contains(f));
-        let window_panes = names
-            .iter()
-            .filter_map(|n| live(n))
-            .map(pane_snapshot)
-            .collect();
+        let shares = first_entry.get(&link.window).copied();
+        let window_panes = match shares {
+            Some(_) => Vec::new(),
+            None => names
+                .iter()
+                .filter_map(|n| live(n))
+                .map(pane_snapshot)
+                .collect(),
+        };
+        let entry = windows.len();
+        first_entry.entry(link.window).or_insert(entry);
         if idx == ws.active_idx {
-            active_window = Some(windows.len());
+            active_window = Some(entry);
         }
         if Some(idx) == ws.last_window {
-            last_window = Some(windows.len());
+            last_window = Some(entry);
         }
         windows.push(WindowSnapshot {
-            number: Some(win.number),
+            number: Some(link.number),
             name: win.name.clone(),
             renamed: win.renamed,
             layout,
             focused,
             panes: window_panes,
+            shares,
         });
     }
     SessionSnapshot {

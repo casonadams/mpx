@@ -296,13 +296,26 @@ fn zoom_flags_keep_the_window_zoomed_where_tmux_keeps_it() {
 }
 
 #[test]
-fn link_unlink_and_resize_window_fail_with_exit_1() {
+fn link_window_shows_a_window_at_a_second_index_until_unlinked() {
     let f = Fixture::start();
-    for args in [
-        &["link-window", "-s", "a", "-t", "2"][..],
-        &["unlink-window"][..],
-        &["resize-window", "-x", "10"][..],
-    ] {
-        assert_eq!(run_command(&f, args), 1, "{args:?}");
-    }
+    assert_eq!(run_command(&f, &["new-window", "-n", "a", "sleep", "30"]), 0);
+    assert_eq!(run_command(&f, &["link-window", "--source", "0", "-t", "3"]), 0);
+    assert_eq!(f.info().windows, 2);
+    assert_eq!(run_command(&f, &["unlink-window", "-t", "3"]), 0);
+    assert_eq!(f.info().windows, 1);
+    assert_eq!(run_command(&f, &["unlink-window"]), 1, "its only index needs -k");
+    assert_eq!(f.info().windows, 1);
+    assert_eq!(run_command(&f, &["unlink-window", "-k"]), 0);
+    assert_eq!(f.info().windows, 0);
+}
+
+#[test]
+fn resize_window_sets_a_size_the_layout_follows_and_adjusts_it() {
+    let f = Fixture::start();
+    assert_eq!(run_command(&f, &["new-window", "-n", "a", "sleep", "30"]), 0);
+    assert_eq!(run_command(&f, &["resize-window", "-x", "10", "-y", "5"]), 0);
+    let pane = place(&f, "a");
+    assert_eq!((pane.w, pane.h), (10, 5));
+    assert_eq!(run_command(&f, &["resize-window", "-R", "5"]), 0);
+    assert_eq!(place(&f, "a").w, 15);
 }

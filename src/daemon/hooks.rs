@@ -21,8 +21,8 @@ use super::shell;
 use crate::layout::WindowTab;
 use crate::node::pane::ask_actor;
 use crate::protocol::{
-    BufferRequest, NewWindowOpts, NodeRequest, PaneRequest, Request, Response, ScriptRequest,
-    SessionRequest, SpawnOpts, SplitOpts, WindowRequest,
+    BufferRequest, LinkOpts, NewWindowOpts, NodeRequest, PaneRequest, Request, ResizeOpts,
+    Response, ScriptRequest, SessionRequest, SpawnOpts, SplitOpts, UnlinkOpts, WindowRequest,
 };
 use crate::tui::command::{
     BufferCommand, Command, EnvCommand, PaneCommand, ScriptCommand, SessionCommand, WindowCommand,
@@ -262,8 +262,132 @@ async fn run_script(tx: &Tx, ctx: &Context, script: ScriptCommand) -> Result<(),
     }
 }
 
-/// Window commands. Listing and alert navigation read the session's windows first.
+/// Window commands, by group: each group sends one window request or answers from the session.
 async fn window_command(tx: &Tx, ctx: &Context, command: WindowCommand) -> Result<(), String> {
+    match command {
+        WindowCommand::LinkWindow(_)
+        | WindowCommand::UnlinkWindow(_)
+        | WindowCommand::ResizeWindow(_) => window_link(tx, ctx, command).await,
+        WindowCommand::RotateWindow { .. }
+        | WindowCommand::RespawnWindow { .. }
+        | WindowCommand::MoveWindow { .. }
+        | WindowCommand::RenumberWindows
+        | WindowCommand::SwapWindow { .. } => window_layout(tx, ctx, command).await,
+        WindowCommand::SelectWindow { .. }
+        | WindowCommand::SelectWindowNamed { .. }
+        | WindowCommand::StepWindow { .. }
+        | WindowCommand::LastWindow => window_navigate(tx, ctx, command).await,
+        WindowCommand::NewWindow { .. }
+        | WindowCommand::KillWindow { .. }
+        | WindowCommand::RenameWindow { .. }
+        | WindowCommand::FindWindow { .. } => window_lifecycle(tx, ctx, command).await,
+    }
+}
+
+/// `link-window`, `unlink-window` and `resize-window`: the window request, with indices resolved.
+async fn window_link(tx: &Tx, ctx: &Context, command: WindowCommand) -> Result<(), String> {
+    let req = match command {
+        WindowCommand::LinkWindow(req) => WindowRequest::LinkWindow(LinkOpts {
+            src: optional_window(ctx, req.src)?,
+            dst: optional_window(ctx, req.dst)?,
+            place: req.place,
+        }),
+        WindowCommand::UnlinkWindow(req) => WindowRequest::UnlinkWindow(UnlinkOpts {
+            index: optional_window(ctx, req.index)?,
+            kill: req.kill,
+        }),
+        WindowCommand::ResizeWindow(req) => WindowRequest::ResizeWindow(ResizeOpts {
+            index: optional_window(ctx, req.index)?,
+            resize: req.resize,
+        }),
+        _ => unreachable!("window_link received a command of another group: {command:?}"),
+    };
+    request(tx, Request::Window(req)).await.map(drop)
+}
+
+/// Rotation, respawn, moves, renumbering and swaps: the active window unless the command names one.
+async fn window_layout(tx: &Tx, ctx: &Context, command: WindowCommand) -> Result<(), String> {
+    let req = match command {
+        WindowCommand::RotateWindow { down, keep_zoom } => {
+            WindowRequest::Rotate { down, keep_zoom }
+        }
+        WindowCommand::RespawnWindow {
+            target,
+            kill,
+            cwd,
+            command,
+        } => WindowRequest::Respawn {
+            index: optional_window(ctx, target)?,
+            kill,
+            cwd,
+            command: (!command.is_empty()).then_some(command),
+        },
+        WindowCommand::MoveWindow { to } => {
+            let to = window(ctx, to)?;
+            let from = active_window(tx).await?;
+            WindowRequest::Move { from, to }
+        }
+        WindowCommand::RenumberWindows => WindowRequest::Renumber,
+        WindowCommand::SwapWindow { src, dst } => {
+            let a = match src {
+                Some(index) => window(ctx, index)?,
+                None => active_window(tx).await?,
+            };
+            let b = window(ctx, dst)?;
+            WindowRequest::Swap { a, b }
+        }
+        _ => unreachable!("window_layout received a command of another group: {command:?}"),
+    };
+    request(tx, Request::Window(req)).await.map(drop)
+}
+
+/// Selecting, stepping and returning to windows. Listing and alert stepping read the windows first.
+async fn window_navigate(tx: &Tx, ctx: &Context, command: WindowCommand) -> Result<(), String> {
+    match command {
+        WindowCommand::SelectWindow { index } => select_window(tx, window(ctx, index)?).await,
+        WindowCommand::SelectWindowNamed { name } => {
+            let index = state(tx)
+                .await?
+                .windows
+                .iter()
+                .find(|t| t.name == name)
+                .map(|t| t.index)
+                .ok_or_else(|| format!("can't find window: {name}"))?;
+            select_window(tx, index).await
+        }
+        WindowCommand::StepWindow {
+            forward,
+            alert: true,
+        } => {
+            let windows = state(tx).await?.windows;
+            match alert_window(&windows, forward) {
+                Some(index) => select_window(tx, index).await,
+                None => Err(format!(
+                    "no {} window with an alert",
+                    if forward { "next" } else { "previous" }
+                )),
+            }
+        }
+        WindowCommand::StepWindow {
+            forward,
+            alert: false,
+        } => {
+            let req = if forward {
+                WindowRequest::Next
+            } else {
+                WindowRequest::Prev
+            };
+            request(tx, Request::Window(req)).await.map(drop)
+        }
+        WindowCommand::LastWindow => request(tx, Request::Window(WindowRequest::Last))
+            .await
+            .map(drop),
+        _ => unreachable!("window_navigate received a command of another group: {command:?}"),
+    }
+}
+
+/// Creating, killing, renaming and finding windows.
+async fn window_lifecycle(tx: &Tx, ctx: &Context, command: WindowCommand) -> Result<(), String> {
     match command {
         WindowCommand::NewWindow { name, argv, cwd } => {
             let opts = NewWindowOpts {
@@ -276,7 +400,7 @@ async fn window_command(tx: &Tx, ctx: &Context, command: WindowCommand) -> Resul
                 .map(drop)
         }
         WindowCommand::KillWindow { index } => {
-            let index = index.map(|i| window(ctx, i)).transpose()?;
+            let index = optional_window(ctx, index)?;
             ask_actor(tx, SESSION_GONE, |reply| SessionMsg::KillWindow {
                 index,
                 reply,
@@ -290,79 +414,8 @@ async fn window_command(tx: &Tx, ctx: &Context, command: WindowCommand) -> Resul
         )
         .await
         .map(drop),
-        WindowCommand::SelectWindow { index } => select_window(tx, window(ctx, index)?).await,
-        WindowCommand::SelectWindowNamed { name } => {
-            let index = state(tx)
-                .await?
-                .windows
-                .iter()
-                .find(|t| t.name == name)
-                .map(|t| t.index)
-                .ok_or_else(|| format!("can't find window: {name}"))?;
-            select_window(tx, index).await
-        }
-        WindowCommand::StepAlert { forward } => {
-            let windows = state(tx).await?.windows;
-            match alert_window(&windows, forward) {
-                Some(index) => select_window(tx, index).await,
-                None => Err(format!(
-                    "no {} window with an alert",
-                    if forward { "next" } else { "previous" }
-                )),
-            }
-        }
-        WindowCommand::NextWindow => request(tx, Request::Window(WindowRequest::Next))
-            .await
-            .map(drop),
-        WindowCommand::PrevWindow => request(tx, Request::Window(WindowRequest::Prev))
-            .await
-            .map(drop),
-        WindowCommand::LastWindow => request(tx, Request::Window(WindowRequest::Last))
-            .await
-            .map(drop),
-        WindowCommand::RotateWindow { down, keep_zoom } => request(
-            tx,
-            Request::Window(WindowRequest::Rotate { down, keep_zoom }),
-        )
-        .await
-        .map(drop),
-        WindowCommand::RespawnWindow {
-            target,
-            kill,
-            cwd,
-            command,
-        } => {
-            let index = target.map(|i| window(ctx, i)).transpose()?;
-            let command = (!command.is_empty()).then_some(command);
-            let req = WindowRequest::Respawn {
-                index,
-                kill,
-                cwd,
-                command,
-            };
-            request(tx, Request::Window(req)).await.map(drop)
-        }
-        WindowCommand::MoveWindow { to } => {
-            let to = window(ctx, to)?;
-            let from = active_window(tx).await?;
-            request(tx, Request::Window(WindowRequest::Move { from, to }))
-                .await
-                .map(drop)
-        }
-        WindowCommand::RenumberWindows => request(tx, Request::Window(WindowRequest::Renumber))
-            .await
-            .map(drop),
-        WindowCommand::SwapWindow { src, dst } => {
-            let a = match src {
-                Some(index) => window(ctx, index)?,
-                None => active_window(tx).await?,
-            };
-            let b = window(ctx, dst)?;
-            request(tx, Request::Window(WindowRequest::Swap { a, b }))
-                .await
-                .map(drop)
-        }
         WindowCommand::FindWindow { .. } => Err(unavailable()),
+        _ => unreachable!("window_lifecycle received a command of another group: {command:?}"),
     }
 }
 
@@ -425,25 +478,20 @@ async fn pane_command(tx: &Tx, ctx: &Context, command: PaneCommand) -> Result<()
         )
         .await
         .map(drop),
-        PaneCommand::JoinPane {
-            src,
-            dst,
-            side_by_side,
-            detach,
-        } => {
-            let src = match src {
+        PaneCommand::JoinPane(join) => {
+            let src = match join.src {
                 Some(src) => src,
                 None => state(tx)
                     .await?
                     .marked
                     .ok_or_else(|| "no marked pane".to_string())?,
             };
-            let dst = target_pane(ctx, dst)?;
+            let dst = target_pane(ctx, join.dst)?;
             let req = PaneRequest::Join {
                 src,
                 dst,
-                side_by_side,
-                detach,
+                side_by_side: join.side_by_side,
+                detach: join.detach,
             };
             request(tx, Request::Pane(req)).await.map(drop)
         }
@@ -768,6 +816,11 @@ fn pane(ctx: &Context) -> Result<String, String> {
     ctx.pane
         .clone()
         .ok_or_else(|| "no pane for this hook".to_string())
+}
+
+/// `window` for a number the hook may leave out: `None` stays `None` (the active window).
+fn optional_window(ctx: &Context, index: Option<usize>) -> Result<Option<usize>, String> {
+    index.map(|i| window(ctx, i)).transpose()
 }
 
 /// A window number as the user gives it (from `base-index`) as the daemon's index.

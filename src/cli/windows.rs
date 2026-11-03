@@ -8,8 +8,9 @@ use super::panes::{
 use super::resolve::Resolved;
 use super::sessions::ensure_client;
 use crate::client::Client;
-use crate::layout::WindowTab;
-use crate::protocol::{LayoutPreset, NewWindowOpts, Side};
+use crate::layout::{LinkPlace, WindowTab};
+use crate::protocol::{LayoutPreset, NewWindowOpts, Side, WindowFit, WindowResize};
+use crate::tui::command::window_target;
 
 /// Window and pane-layout commands, flattened into `mpx` next to the pane commands.
 #[derive(Subcommand, Debug)]
@@ -312,28 +313,92 @@ pub enum WindowOrderCommands {
     },
 }
 
-/// Window commands mpx refuses: tmux features it has no equivalent for.
+/// Window linking and sizing: a window shown at several indices, and a size of its own (tmux
+/// link-window, unlink-window, resize-window).
 #[derive(Subcommand, Debug)]
-pub enum UnsupportedWindowCommands {
-    /// Not supported: a window cannot be linked into another place (tmux link-window)
+pub enum WindowLinkCommands {
+    /// Show a window at another index as well (tmux link-window)
     #[command(name = "link-window", alias = "linkw")]
     LinkWindow {
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<String>,
+        /// Window to link (defaults to the active window): N, or session:N of this session
+        #[arg(long = "source")]
+        source: Option<String>,
+
+        /// Index to link it at (defaults to the lowest free one): N, or session:N of this session
+        #[arg(short = 't', long = "target")]
+        target: Option<String>,
+
+        /// Link after the target index, moving the indices in the way up (tmux -a)
+        #[arg(short = 'a', long = "after", conflicts_with = "before")]
+        after: bool,
+
+        /// Link before the target index, moving it and the indices after it up (tmux -b)
+        #[arg(short = 'b', long = "before")]
+        before: bool,
+
+        /// Unlink the window at the target index first when it is taken (tmux -k)
+        #[arg(short = 'k', long = "kill")]
+        kill: bool,
+
+        /// Keep the active window as it is (tmux -d)
+        #[arg(short = 'd', long = "detached")]
+        detached: bool,
     },
 
-    /// Not supported: windows are never linked, so there is nothing to unlink (tmux unlink-window)
+    /// Remove one index of a window; the window stays at its other indices (tmux unlink-window)
     #[command(name = "unlink-window", alias = "unlinkw")]
     UnlinkWindow {
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<String>,
+        /// Index to remove (defaults to the active window)
+        #[arg(short = 't', long = "target")]
+        target: Option<String>,
+
+        /// Kill the window when this is its only index (tmux -k)
+        #[arg(short = 'k', long = "kill")]
+        kill: bool,
     },
 
-    /// Not supported: a window has no size of its own (tmux resize-window)
+    /// Give a window a size of its own, overriding the attached clients (tmux resize-window)
     #[command(name = "resize-window", alias = "resizew")]
     ResizeWindow {
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<String>,
+        /// Window to resize (defaults to the active window)
+        #[arg(short = 't', long = "target")]
+        target: Option<String>,
+
+        /// Width in cells (tmux -x)
+        #[arg(short = 'x', long = "width")]
+        width: Option<u16>,
+
+        /// Height in cells (tmux -y)
+        #[arg(short = 'y', long = "height")]
+        height: Option<u16>,
+
+        /// Size to the largest attached client (tmux -A)
+        #[arg(short = 'A', conflicts_with = "smallest")]
+        largest: bool,
+
+        /// Size to the smallest attached client (tmux -a)
+        #[arg(short = 'a')]
+        smallest: bool,
+
+        /// Move the left border by ADJUSTMENT cells (tmux -L)
+        #[arg(short = 'L', conflicts_with_all = ["right", "up", "down"])]
+        left: bool,
+
+        /// Move the right border by ADJUSTMENT cells (tmux -R)
+        #[arg(short = 'R', conflicts_with_all = ["up", "down"])]
+        right: bool,
+
+        /// Move the top border by ADJUSTMENT cells (tmux -U)
+        #[arg(short = 'U', conflicts_with = "down")]
+        up: bool,
+
+        /// Move the bottom border by ADJUSTMENT cells (tmux -D)
+        #[arg(short = 'D')]
+        down: bool,
+
+        /// Cells to adjust by (default 1)
+        #[arg(value_name = "ADJUSTMENT")]
+        adjustment: Option<u16>,
     },
 }
 
@@ -368,7 +433,7 @@ pub async fn run(cmd: Commands, r: &Resolved) -> Result<i32, String> {
         Commands::Resize(cmd) => run_resize(cmd, r).await,
         Commands::Respawn(cmd) => run_respawn(cmd, r).await,
         Commands::WindowOrder(cmd) => run_window_order(cmd, r).await,
-        Commands::Unsupported(cmd) => run_unsupported(cmd),
+        Commands::WindowLink(cmd) => run_window_link(cmd, r).await,
         _ => Err("command is not routed".to_string()),
     }
 }
@@ -492,20 +557,82 @@ async fn run_window_order(cmd: WindowOrderCommands, r: &Resolved) -> Result<i32,
     }
 }
 
-/// The refusal for a window command mpx does not support, as an error.
-fn run_unsupported(cmd: UnsupportedWindowCommands) -> Result<i32, String> {
-    let why = match cmd {
-        UnsupportedWindowCommands::LinkWindow { .. } => {
-            "link-window: not supported: a pane belongs to one window, so a window cannot be linked elsewhere"
+/// Runs a window link, unlink or resize command against the session's daemon.
+async fn run_window_link(cmd: WindowLinkCommands, r: &Resolved) -> Result<i32, String> {
+    match cmd {
+        WindowLinkCommands::LinkWindow {
+            source,
+            target,
+            after,
+            before,
+            kill,
+            detached,
+        } => {
+            let src = source.map(|s| window_ref(&s, &r.session)).transpose()?;
+            let dst = target.map(|t| window_ref(&t, &r.session)).transpose()?;
+            let place = LinkPlace {
+                after,
+                before,
+                kill,
+                detached,
+            };
+            let mut client = ensure_client(r).await?;
+            daemon_result(client.link_window(src, dst, place).await, "link-window")?;
+            Ok(0)
         }
-        UnsupportedWindowCommands::UnlinkWindow { .. } => {
-            "unlink-window: not supported: windows are never linked, so there is nothing to unlink"
+        WindowLinkCommands::UnlinkWindow { target, kill } => {
+            let index = target.map(|t| window_ref(&t, &r.session)).transpose()?;
+            let mut client = ensure_client(r).await?;
+            daemon_result(client.unlink_window(index, kill).await, "unlink-window")?;
+            Ok(0)
         }
-        UnsupportedWindowCommands::ResizeWindow { .. } => {
-            "resize-window: not supported: a window's size is set by the attached terminal"
+        WindowLinkCommands::ResizeWindow {
+            target,
+            width,
+            height,
+            largest,
+            smallest,
+            left,
+            right,
+            up,
+            down,
+            adjustment,
+        } => {
+            let index = target.map(|t| window_ref(&t, &r.session)).transpose()?;
+            let resize = WindowResize {
+                width,
+                height,
+                side: side_flag(left, right, up, down)?,
+                cells: adjustment,
+                fit: match (largest, smallest) {
+                    (true, _) => Some(WindowFit::Largest),
+                    (_, true) => Some(WindowFit::Smallest),
+                    _ => None,
+                },
+            };
+            let mut client = ensure_client(r).await?;
+            daemon_result(client.resize_window(index, resize).await, "resize-window")?;
+            Ok(0)
         }
-    };
-    Err(why.to_string())
+    }
+}
+
+/// The border a resize moves: the one of the single direction flag given.
+fn side_flag(left: bool, right: bool, up: bool, down: bool) -> Result<Option<Side>, String> {
+    Ok(match (left, right, up, down) {
+        (false, false, false, false) => None,
+        (true, false, false, false) => Some(Side::Left),
+        (false, true, false, false) => Some(Side::Right),
+        (false, false, true, false) => Some(Side::Up),
+        (false, false, false, true) => Some(Side::Down),
+        _ => return Err("resize-window: give one of -L, -R, -U or -D".to_string()),
+    })
+}
+
+/// A window index for a link or resize flag: `N`, or `session:N` naming this session. A window of
+/// another session is refused: each session runs in its own daemon, so its windows cannot be shared.
+fn window_ref(raw: &str, session: &str) -> Result<usize, String> {
+    window_target(raw, Some(session))
 }
 
 async fn kill_window(r: &Resolved, index: Option<usize>) -> Result<i32, String> {
