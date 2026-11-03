@@ -57,7 +57,7 @@ impl App {
             return self.dispatch(cmd).await;
         }
         self.forward_key(&key).await;
-        self.forwarded = true;
+        self.pacing.forwarded = true;
         Flow::Continue
     }
 
@@ -189,8 +189,8 @@ impl App {
             (KeyCode::Right, _) => prompt.right(),
             (KeyCode::Home, _) => prompt.home(),
             (KeyCode::End, _) => prompt.end(),
-            (KeyCode::Up, _) => prompt.history_prev(&self.history),
-            (KeyCode::Down, _) => prompt.history_next(&self.history),
+            (KeyCode::Up, _) => prompt.history_prev(&self.interaction.history),
+            (KeyCode::Down, _) => prompt.history_next(&self.interaction.history),
             (KeyCode::Tab, _) => self.complete_prompt(prompt, true),
             (KeyCode::BackTab, _) => self.complete_prompt(prompt, false),
             _ => {}
@@ -265,7 +265,7 @@ impl App {
 
     /// Sends `bytes` to each named pane. A read-only client sends nothing; an empty name is no pane.
     async fn send_to(&mut self, panes: &[String], bytes: &[u8]) -> Result<(), String> {
-        if self.terminal.readonly {
+        if self.attachment.terminal.readonly {
             return Ok(());
         }
         let text = String::from_utf8_lossy(bytes).into_owned();
@@ -292,7 +292,7 @@ impl App {
     }
 
     pub async fn on_paste(&mut self, text: &str) -> Flow {
-        if self.terminal.readonly {
+        if self.attachment.terminal.readonly {
             return Flow::Continue;
         }
         if let Mode::Prompt(prompt) = &mut self.mode {

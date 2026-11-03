@@ -13,7 +13,8 @@ use super::render::{
 use super::status::{exit_badge, node_named};
 use super::status::{local_utc_offset, pane_items};
 use super::statusline::{
-    Item, Line, Seg, Target, compose, parse_styled, status_lists, status_vars, strftime, truncate,
+    Item, Line, Seg, SessionInfo, Target, compose, parse_styled, status_lists, status_vars, strftime,
+    truncate,
 };
 use crate::config::Justify;
 use crate::format::{Lists, expand_with};
@@ -224,7 +225,7 @@ fn draw_panes<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
     let mut panes = drawable(&app.panes);
     panes.sort_by_key(|(_, rect, _)| (rect.x, rect.y));
     let crowd = (app.panes.len(), app.zoomed(), app.config.style.dim_inactive);
-    let colors = PaneColors::new(&app.config.style, app.host_colors);
+    let colors = PaneColors::new(&app.config.style, app.host.colors);
     for pane in &panes {
         if app.sync_held(&pane.0) {
             continue;
@@ -322,7 +323,7 @@ fn divider_style(app: &App) -> DividerStyle {
             .config
             .style
             .dim_inactive
-            .then(|| PaneColors::new(&app.config.style, app.host_colors).inactive_default_bg())
+            .then(|| PaneColors::new(&app.config.style, app.host.colors).inactive_default_bg())
             .flatten(),
         active_bg: active.bg,
         inactive_bg: inactive.bg,
@@ -358,7 +359,8 @@ fn status_row(app: &mut App, out: &mut Vec<u8>) -> io::Result<()> {
         seg.style = row.over(&seg.style);
     }
     draw_status_segments(out, &line.segs, y, bg, fg)?;
-    app.status_targets = line.targets;
+    app.status_hits.targets = line.targets;
+    app.status_hits.zones = (line.left_end, line.right_start);
     Ok(())
 }
 
@@ -440,8 +442,13 @@ fn active_vars(app: &App) -> crate::format::Vars {
 fn loop_lists(app: &App) -> Lists {
     let panes: Vec<crate::format::PaneView> =
         app.nodes.iter().map(|n| format_view(app, n)).collect();
+    let session = SessionInfo {
+        name: &app.session,
+        times: app.attachment.times,
+        attached: app.attachment.attached,
+    };
     status_lists(
-        &app.session,
+        session,
         &app.layout.tabs,
         &panes,
         app.zoomed(),
@@ -523,8 +530,8 @@ fn format_view(app: &App, node: &crate::protocol::NodeInfo) -> crate::format::Pa
         .position(|n| n.id == node.id)
         .unwrap_or(0);
     let mut view = crate::format::pane_view(&app.session, slot, node, &app.panes, &app.layout.tabs);
-    view.times = app.times;
-    view.session_attached = app.attached;
+    view.times = app.attachment.times;
+    view.session_attached = app.attachment.attached;
     view.in_mode = app.parked_copy.contains_key(&node.name)
         || (matches!(app.mode, Mode::Copy(_)) && node.name == app.active_pane);
     view.window_base = app.config.base_index;
@@ -672,7 +679,7 @@ fn draw_clock<W: Write>(app: &App, pane: &str, out: &mut W) -> io::Result<()> {
     let Some((_, area, _)) = app.panes.iter().find(|(name, ..)| name.as_str() == pane) else {
         return Ok(());
     };
-    let (hour, minute) = app.clock.hour_minute();
+    let (hour, minute) = app.chrome.clock.hour_minute();
     let rows = clock_lines(hour, minute, area.width as usize, area.height as usize);
     queue!(out, SetForegroundColor(Color::Cyan))?;
     for (y, row) in rows.iter().enumerate() {

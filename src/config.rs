@@ -12,6 +12,9 @@ pub const DEFAULT_STATUS_RIGHT: &str =
 /// tmux's `window-status-format` and `window-status-current-format` default.
 pub const DEFAULT_WINDOW_FORMAT: &str = "#I:#W#{window_flags}";
 
+/// A table of command lines keyed by name or key.
+pub type CommandTable = BTreeMap<String, String>;
+
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
@@ -81,11 +84,11 @@ pub struct Config {
     /// Whether copy-mode searches wrap around the ends of the history (tmux `wrap-search`).
     pub wrap_search: bool,
     /// Extra or overriding key bindings: key (tmux notation) -> command line.
-    pub bind: BTreeMap<String, String>,
+    pub bind: CommandTable,
     /// Extra or overriding bindings for keys pressed without the prefix (tmux `bind -n`).
-    pub bind_root: BTreeMap<String, String>,
+    pub bind_root: CommandTable,
     /// Command aliases (tmux `command-alias`): a command name -> the command line it stands for.
-    pub alias: BTreeMap<String, String>,
+    pub alias: CommandTable,
     /// Rules for resuming processes (AI CLI tools, editors, watchers) across restarts.
     pub resume: Vec<ResumeRule>,
     pub style: StyleConfig,

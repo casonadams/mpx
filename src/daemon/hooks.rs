@@ -21,13 +21,14 @@ use super::shell;
 use crate::layout::WindowTab;
 use crate::node::pane::ask_actor;
 use crate::protocol::{
-    BufferRequest, NewWindowOpts, NodeRequest, PaneRequest, Request, Response, ScriptRequest,
-    SessionRequest, SpawnOpts, SplitOpts, WindowRequest,
+    BufferRequest, NewWindowOpts, NodeRequest, PaneRequest, PasteBufferOpts, Request, Response,
+    ScriptRequest, SessionRequest, SpawnOpts, SplitOpts, WindowRequest,
 };
 use crate::tui::command::{
     BufferCommand, Command, EnvCommand, PaneCommand, ScriptCommand, SessionCommand, WindowCommand,
 };
 use crate::tui::panes::neighbor;
+use crate::vt::capture::CaptureSpec;
 
 pub(super) type Tx = mpsc::UnboundedSender<SessionMsg>;
 
@@ -171,15 +172,8 @@ async fn run_script(tx: &Tx, ctx: &Context, script: ScriptCommand) -> Result<(),
             delay_ms,
             command,
         } => {
-            let target = target.or_else(|| ctx.pane.clone());
-            let command = expand(tx, ctx, &command, target.as_deref()).await?;
-            let job = shell::Job {
-                command,
-                target,
-                background,
-                delay: delay_ms.map(std::time::Duration::from_millis),
-            };
-            shell::run(tx, job).await.map(drop)
+            let delay = delay_ms.map(std::time::Duration::from_millis);
+            run_shell(tx, ctx, shell::Job { command, target, background, delay }).await
         }
         ScriptCommand::IfShell {
             background,
@@ -189,43 +183,20 @@ async fn run_script(tx: &Tx, ctx: &Context, script: ScriptCommand) -> Result<(),
             then,
             otherwise,
         } => {
-            let (tx, ctx) = (tx.clone(), ctx.clone());
-            let run = async move {
-                let target = target.or_else(|| ctx.pane.clone());
-                let passed = if format {
-                    truthy(&expand(&tx, &ctx, &condition, target.as_deref()).await?)
-                } else {
-                    let command = expand(&tx, &ctx, &condition, target.as_deref()).await?;
-                    let job = shell::Job {
-                        command,
-                        target,
-                        background: false,
-                        delay: None,
-                    };
-                    matches!(
-                        shell::run(&tx, job).await?,
-                        Response::Shell {
-                            status: Some(0),
-                            ..
-                        }
-                    )
-                };
-                match (passed, otherwise) {
-                    (true, _) => run_command(&tx, &ctx, *then).await,
-                    (false, Some(otherwise)) => run_command(&tx, &ctx, *otherwise).await,
-                    (false, None) => Ok(()),
-                }
+            let check = shell::Job {
+                command: condition,
+                target,
+                background: false,
+                delay: None,
             };
-            if background {
-                tokio::spawn(async move {
-                    if let Err(e) = run.await {
-                        warn!("hook if-shell: {e}");
-                    }
-                });
-                Ok(())
-            } else {
-                run.await
-            }
+            let branch = Branch {
+                background,
+                format,
+                check,
+                then,
+                otherwise,
+            };
+            if_shell(tx, ctx, branch).await
         }
         ScriptCommand::WaitFor { op, channel } => {
             ask_actor(tx, SESSION_GONE, |reply| {
@@ -233,99 +204,111 @@ async fn run_script(tx: &Tx, ctx: &Context, script: ScriptCommand) -> Result<(),
             })
             .await?
         }
+        _ => hook_script(tx, script).await,
+    }
+}
+
+/// Runs `run-shell`: the command is expanded for the job's target, else the hook's pane.
+async fn run_shell(tx: &Tx, ctx: &Context, job: shell::Job) -> Result<(), String> {
+    let target = job.target.or_else(|| ctx.pane.clone());
+    let command = expand(tx, ctx, &job.command, target.as_deref()).await?;
+    shell::run(tx, shell::Job { command, target, ..job })
+        .await
+        .map(drop)
+}
+
+/// The two parts of an `if-shell`: its condition, and the command run for each outcome.
+struct Branch {
+    background: bool,
+    format: bool,
+    check: shell::Job,
+    then: Box<Command>,
+    otherwise: Option<Box<Command>>,
+}
+
+/// `if-shell`: runs `then` when the condition passes, else `otherwise`. A background branch runs
+/// in a task of its own.
+async fn if_shell(tx: &Tx, ctx: &Context, branch: Branch) -> Result<(), String> {
+    let Branch {
+        background,
+        format,
+        check,
+        then,
+        otherwise,
+    } = branch;
+    let (tx, ctx) = (tx.clone(), ctx.clone());
+    let run = async move {
+        let passed = condition_passes(&tx, &ctx, format, check).await?;
+        match (passed, otherwise) {
+            (true, _) => run_command(&tx, &ctx, *then).await,
+            (false, Some(otherwise)) => run_command(&tx, &ctx, *otherwise).await,
+            (false, None) => Ok(()),
+        }
+    };
+    if background {
+        tokio::spawn(async move {
+            if let Err(e) = run.await {
+                warn!("hook if-shell: {e}");
+            }
+        });
+        Ok(())
+    } else {
+        run.await
+    }
+}
+
+/// Whether an `if-shell` condition passes: its expanded text is truthy with `-F`, else the shell
+/// command it expands to exits with status 0.
+async fn condition_passes(
+    tx: &Tx,
+    ctx: &Context,
+    format: bool,
+    check: shell::Job,
+) -> Result<bool, String> {
+    let target = check.target.or_else(|| ctx.pane.clone());
+    let command = expand(tx, ctx, &check.command, target.as_deref()).await?;
+    if format {
+        return Ok(truthy(&command));
+    }
+    let job = shell::Job {
+        command,
+        target,
+        background: false,
+        delay: None,
+    };
+    Ok(matches!(
+        shell::run(tx, job).await?,
+        Response::Shell {
+            status: Some(0),
+            ..
+        }
+    ))
+}
+
+/// The hook and alias settings, which a hook sets through the session.
+async fn hook_script(tx: &Tx, script: ScriptCommand) -> Result<(), String> {
+    match script {
         ScriptCommand::SetHook {
             name,
             command,
             append,
-        } => request(
-            tx,
-            Request::Script(ScriptRequest::SetHook {
-                name,
-                command,
-                append,
-            }),
-        )
-        .await
-        .map(drop),
-        ScriptCommand::RunHook { name } => {
-            request(tx, Request::Script(ScriptRequest::RunHook { name }))
-                .await
-                .map(drop)
+        } => script_req(tx, ScriptRequest::SetHook { name, command, append }).await,
+        ScriptCommand::RunHook { name } => script_req(tx, ScriptRequest::RunHook { name }).await,
+        ScriptCommand::SetAlias { name, command } => {
+            script_req(tx, ScriptRequest::SetAlias { name, command }).await
         }
-        ScriptCommand::SetAlias { name, command } => request(
-            tx,
-            Request::Script(ScriptRequest::SetAlias { name, command }),
-        )
-        .await
-        .map(drop),
-        ScriptCommand::ShowHooks | ScriptCommand::SourceFile { .. } => Err(unavailable()),
+        _ => Err(unavailable()),
     }
 }
 
 /// Window commands. Listing and alert navigation read the session's windows first.
 async fn window_command(tx: &Tx, ctx: &Context, command: WindowCommand) -> Result<(), String> {
     match command {
-        WindowCommand::NewWindow { name, argv, cwd } => {
-            let opts = NewWindowOpts {
-                spawn: spawn_opts(name.clone(), argv, cwd),
-                name,
-                focus: true,
-            };
-            request(tx, Request::Window(WindowRequest::New(opts)))
-                .await
-                .map(drop)
+        WindowCommand::NewWindow { name, argv, cwd } => new_window(tx, name, argv, cwd).await,
+        WindowCommand::KillWindow { index } => kill_window(tx, ctx, index).await,
+        WindowCommand::RenameWindow { name } => {
+            window_req(tx, WindowRequest::Rename { index: None, name }).await
         }
-        WindowCommand::KillWindow { index } => {
-            let index = index.map(|i| window(ctx, i)).transpose()?;
-            ask_actor(tx, SESSION_GONE, |reply| SessionMsg::KillWindow {
-                index,
-                reply,
-            })
-            .await?
-            .map(drop)
-        }
-        WindowCommand::RenameWindow { name } => request(
-            tx,
-            Request::Window(WindowRequest::Rename { index: None, name }),
-        )
-        .await
-        .map(drop),
-        WindowCommand::SelectWindow { index } => select_window(tx, window(ctx, index)?).await,
-        WindowCommand::SelectWindowNamed { name } => {
-            let index = state(tx)
-                .await?
-                .windows
-                .iter()
-                .find(|t| t.name == name)
-                .map(|t| t.index)
-                .ok_or_else(|| format!("can't find window: {name}"))?;
-            select_window(tx, index).await
-        }
-        WindowCommand::StepAlert { forward } => {
-            let windows = state(tx).await?.windows;
-            match alert_window(&windows, forward) {
-                Some(index) => select_window(tx, index).await,
-                None => Err(format!(
-                    "no {} window with an alert",
-                    if forward { "next" } else { "previous" }
-                )),
-            }
-        }
-        WindowCommand::NextWindow => request(tx, Request::Window(WindowRequest::Next))
-            .await
-            .map(drop),
-        WindowCommand::PrevWindow => request(tx, Request::Window(WindowRequest::Prev))
-            .await
-            .map(drop),
-        WindowCommand::LastWindow => request(tx, Request::Window(WindowRequest::Last))
-            .await
-            .map(drop),
-        WindowCommand::RotateWindow { down, keep_zoom } => request(
-            tx,
-            Request::Window(WindowRequest::Rotate { down, keep_zoom }),
-        )
-        .await
-        .map(drop),
         WindowCommand::RespawnWindow {
             target,
             kill,
@@ -333,37 +316,136 @@ async fn window_command(tx: &Tx, ctx: &Context, command: WindowCommand) -> Resul
             command,
         } => {
             let index = target.map(|i| window(ctx, i)).transpose()?;
-            let command = (!command.is_empty()).then_some(command);
-            let req = WindowRequest::Respawn {
-                index,
-                kill,
-                cwd,
-                command,
-            };
-            request(tx, Request::Window(req)).await.map(drop)
-        }
-        WindowCommand::MoveWindow { to } => {
-            let to = window(ctx, to)?;
-            let from = active_window(tx).await?;
-            request(tx, Request::Window(WindowRequest::Move { from, to }))
-                .await
-                .map(drop)
-        }
-        WindowCommand::RenumberWindows => request(tx, Request::Window(WindowRequest::Renumber))
+            respawn(tx, command, |command| {
+                Request::Window(WindowRequest::Respawn {
+                    index,
+                    kill,
+                    cwd,
+                    command,
+                })
+            })
             .await
-            .map(drop),
-        WindowCommand::SwapWindow { src, dst } => {
-            let a = match src {
-                Some(index) => window(ctx, index)?,
-                None => active_window(tx).await?,
-            };
-            let b = window(ctx, dst)?;
-            request(tx, Request::Window(WindowRequest::Swap { a, b }))
-                .await
-                .map(drop)
         }
-        WindowCommand::FindWindow { .. } => Err(unavailable()),
+        _ => window_select_command(tx, ctx, command).await,
     }
+}
+
+/// Window commands that select a window by number, name, or alert, or step to the next one.
+async fn window_select_command(
+    tx: &Tx,
+    ctx: &Context,
+    command: WindowCommand,
+) -> Result<(), String> {
+    match command {
+        WindowCommand::SelectWindow { index } => select_window(tx, window(ctx, index)?).await,
+        WindowCommand::SelectWindowNamed { name } => select_window_named(tx, name).await,
+        WindowCommand::StepAlert { forward } => step_alert(tx, forward).await,
+        WindowCommand::NextWindow => window_req(tx, WindowRequest::Next).await,
+        _ => window_order_command(tx, ctx, command).await,
+    }
+}
+
+/// Window commands that step back, rotate, or move a window.
+async fn window_order_command(
+    tx: &Tx,
+    ctx: &Context,
+    command: WindowCommand,
+) -> Result<(), String> {
+    match command {
+        WindowCommand::PrevWindow => window_req(tx, WindowRequest::Prev).await,
+        WindowCommand::LastWindow => window_req(tx, WindowRequest::Last).await,
+        WindowCommand::RotateWindow { down, keep_zoom } => {
+            window_req(tx, WindowRequest::Rotate { down, keep_zoom }).await
+        }
+        WindowCommand::MoveWindow { to } => move_window(tx, window(ctx, to)?).await,
+        _ => window_swap_command(tx, ctx, command).await,
+    }
+}
+
+/// Window commands that renumber or swap windows. Finding a window needs the terminal.
+async fn window_swap_command(
+    tx: &Tx,
+    ctx: &Context,
+    command: WindowCommand,
+) -> Result<(), String> {
+    match command {
+        WindowCommand::RenumberWindows => window_req(tx, WindowRequest::Renumber).await,
+        WindowCommand::SwapWindow { src, dst } => swap_window(tx, ctx, src, dst).await,
+        _ => Err(unavailable()),
+    }
+}
+
+/// `new-window`: a new window is spawned and focused.
+async fn new_window(
+    tx: &Tx,
+    name: Option<String>,
+    argv: Vec<String>,
+    cwd: Option<String>,
+) -> Result<(), String> {
+    let opts = NewWindowOpts {
+        spawn: spawn_opts(name.clone(), argv, cwd),
+        name,
+        focus: true,
+    };
+    window_req(tx, WindowRequest::New(opts)).await
+}
+
+/// `kill-window`: the window is killed as a hook's kill, which fires its own hooks.
+async fn kill_window(tx: &Tx, ctx: &Context, index: Option<usize>) -> Result<(), String> {
+    let index = index.map(|i| window(ctx, i)).transpose()?;
+    ask_actor(tx, SESSION_GONE, |reply| SessionMsg::KillWindow { index, reply })
+        .await?
+        .map(drop)
+}
+
+/// `respawn-window` and `respawn-pane`: sends the request `build` makes, with `command` when one is
+/// given.
+async fn respawn(
+    tx: &Tx,
+    command: Vec<String>,
+    build: impl FnOnce(Option<Vec<String>>) -> Request,
+) -> Result<(), String> {
+    let command = (!command.is_empty()).then_some(command);
+    request(tx, build(command)).await.map(drop)
+}
+
+/// `select-window -t` by name: the first window with that name.
+async fn select_window_named(tx: &Tx, name: String) -> Result<(), String> {
+    let index = lookup(
+        tx,
+        |s| s.windows.iter().find(|t| t.name == name).map(|t| t.index),
+        &format!("can't find window: {name}"),
+    )
+    .await?;
+    select_window(tx, index).await
+}
+
+/// `next-window -a` / `previous-window -a`: selects the next window with an alert.
+async fn step_alert(tx: &Tx, forward: bool) -> Result<(), String> {
+    let windows = state(tx).await?.windows;
+    match alert_window(&windows, forward) {
+        Some(index) => select_window(tx, index).await,
+        None => Err(format!(
+            "no {} window with an alert",
+            if forward { "next" } else { "previous" }
+        )),
+    }
+}
+
+/// `move-window -t`: moves the active window to `to`.
+async fn move_window(tx: &Tx, to: usize) -> Result<(), String> {
+    let from = lookup(tx, active_index, "no active window").await?;
+    window_req(tx, WindowRequest::Move { from, to }).await
+}
+
+/// `swap-window`: swaps `src` (the active window when `None`) with `dst`.
+async fn swap_window(tx: &Tx, ctx: &Context, src: Option<usize>, dst: usize) -> Result<(), String> {
+    let a = match src {
+        Some(index) => window(ctx, index)?,
+        None => lookup(tx, active_index, "no active window").await?,
+    };
+    let b = window(ctx, dst)?;
+    window_req(tx, WindowRequest::Swap { a, b }).await
 }
 
 /// Pane commands. Those that move focus or swap panes by the terminal's geometry are not here.
@@ -384,69 +466,62 @@ async fn pane_command(tx: &Tx, ctx: &Context, command: PaneCommand) -> Result<()
                 focus: !detach,
                 keep_zoom,
             };
-            request(tx, Request::Pane(PaneRequest::Split(opts)))
-                .await
-                .map(drop)
+            pane_req(tx, PaneRequest::Split(opts)).await
         }
-        PaneCommand::KillPane { target } => {
-            let target = target_pane(ctx, target)?;
-            ask_actor(tx, SESSION_GONE, |reply| SessionMsg::Kill {
-                target,
-                origin: Origin::Hook,
-                reply,
-            })
-            .await?
-            .map(drop)
+        PaneCommand::KillPane { target } => kill_pane(tx, target_pane(ctx, target)?).await,
+        PaneCommand::SelectPane { target, keep_zoom } => {
+            pane_req(
+                tx,
+                PaneRequest::Focus {
+                    name: target,
+                    keep_zoom,
+                },
+            )
+            .await
         }
-        PaneCommand::SelectPane { target, keep_zoom } => request(
-            tx,
-            Request::Pane(PaneRequest::Focus {
-                name: target,
-                keep_zoom,
-            }),
-        )
-        .await
-        .map(drop),
-        PaneCommand::MarkPane { target } => request(
-            tx,
-            Request::Pane(PaneRequest::MarkPane {
-                name: target,
-                clear: false,
-            }),
-        )
-        .await
-        .map(drop),
-        PaneCommand::ClearMark => request(
-            tx,
-            Request::Pane(PaneRequest::MarkPane {
-                name: None,
-                clear: true,
-            }),
-        )
-        .await
-        .map(drop),
+        _ => pane_mark_command(tx, ctx, command).await,
+    }
+}
+
+/// Pane commands that mark panes, move them into another window, or toggle their input.
+async fn pane_mark_command(tx: &Tx, ctx: &Context, command: PaneCommand) -> Result<(), String> {
+    match command {
+        PaneCommand::MarkPane { target } => {
+            pane_req(
+                tx,
+                PaneRequest::MarkPane {
+                    name: target,
+                    clear: false,
+                },
+            )
+            .await
+        }
+        PaneCommand::ClearMark => {
+            pane_req(
+                tx,
+                PaneRequest::MarkPane {
+                    name: None,
+                    clear: true,
+                },
+            )
+            .await
+        }
+        PaneCommand::InputOff { target, off } => {
+            pane_req(tx, PaneRequest::InputOff { name: target, off }).await
+        }
         PaneCommand::JoinPane {
             src,
             dst,
             side_by_side,
             detach,
-        } => {
-            let src = match src {
-                Some(src) => src,
-                None => state(tx)
-                    .await?
-                    .marked
-                    .ok_or_else(|| "no marked pane".to_string())?,
-            };
-            let dst = target_pane(ctx, dst)?;
-            let req = PaneRequest::Join {
-                src,
-                dst,
-                side_by_side,
-                detach,
-            };
-            request(tx, Request::Pane(req)).await.map(drop)
-        }
+        } => join_pane(tx, src, target_pane(ctx, dst), side_by_side, detach).await,
+        _ => pane_move_command(tx, ctx, command).await,
+    }
+}
+
+/// Pane commands that restart panes, move focus, or swap panes by the session's order.
+async fn pane_move_command(tx: &Tx, ctx: &Context, command: PaneCommand) -> Result<(), String> {
+    match command {
         PaneCommand::RespawnPane {
             target,
             kill,
@@ -454,70 +529,110 @@ async fn pane_command(tx: &Tx, ctx: &Context, command: PaneCommand) -> Result<()
             command,
         } => {
             let name = target_pane(ctx, target)?;
-            let command = (!command.is_empty()).then_some(command);
-            let req = NodeRequest::Respawn {
-                name,
-                kill,
-                cwd,
-                command,
-            };
-            request(tx, Request::Node(req)).await.map(drop)
-        }
-        PaneCommand::NextPane => request(tx, Request::Pane(PaneRequest::FocusNext))
+            respawn(tx, command, |command| {
+                Request::Node(NodeRequest::Respawn {
+                    name,
+                    kill,
+                    cwd,
+                    command,
+                })
+            })
             .await
-            .map(drop),
+        }
+        PaneCommand::NextPane => pane_req(tx, PaneRequest::FocusNext).await,
         PaneCommand::LastPane { keep_zoom } => {
-            request(tx, Request::Pane(PaneRequest::FocusLast { keep_zoom }))
-                .await
-                .map(drop)
+            pane_req(tx, PaneRequest::FocusLast { keep_zoom }).await
         }
-        PaneCommand::SwapPane { next, keep_zoom } => {
-            let active = pane(ctx)?;
-            let panes = state(tx).await?.panes;
-            let other = panes
-                .iter()
-                .position(|p| *p == active)
-                .and_then(|i| neighbor(&panes, i, next))
-                .cloned();
-            match other {
-                Some(other) => {
-                    let req = PaneRequest::SwapPane {
-                        a: Some(active),
-                        b: Some(other),
-                        keep_zoom,
-                    };
-                    request(tx, Request::Pane(req)).await.map(drop)
-                }
-                None => Ok(()),
-            }
-        }
+        PaneCommand::SwapPane { next, keep_zoom } => swap_pane(tx, ctx, next, keep_zoom).await,
+        _ => pane_layout_command(tx, ctx, command).await,
+    }
+}
+
+/// Pane commands that swap marked panes, break a pane out, or change the layout.
+async fn pane_layout_command(tx: &Tx, ctx: &Context, command: PaneCommand) -> Result<(), String> {
+    match command {
         PaneCommand::SwapPaneMarked {
             source,
             target,
             keep_zoom,
         } => {
-            let req = PaneRequest::SwapPane {
-                a: source,
-                b: target,
-                keep_zoom,
-            };
-            request(tx, Request::Pane(req)).await.map(drop)
-        }
-        PaneCommand::BreakPane => request(
-            tx,
-            Request::Pane(PaneRequest::BreakPane { name: pane(ctx)? }),
-        )
-        .await
-        .map(drop),
-        PaneCommand::SelectLayout { preset } => {
-            request(tx, Request::Pane(PaneRequest::SelectLayout { preset }))
-                .await
-                .map(drop)
-        }
-        PaneCommand::SpreadLayout => request(tx, Request::Pane(PaneRequest::SpreadLayout))
+            pane_req(
+                tx,
+                PaneRequest::SwapPane {
+                    a: source,
+                    b: target,
+                    keep_zoom,
+                },
+            )
             .await
-            .map(drop),
-        PaneCommand::SelectPaneDir { .. } | PaneCommand::ResizePane { .. } => Err(unavailable()),
+        }
+        PaneCommand::BreakPane => pane_req(tx, PaneRequest::BreakPane { name: pane(ctx)? }).await,
+        PaneCommand::SelectLayout { preset } => {
+            pane_req(tx, PaneRequest::SelectLayout { preset }).await
+        }
+        PaneCommand::SpreadLayout => pane_req(tx, PaneRequest::SpreadLayout).await,
+        _ => Err(unavailable()),
+    }
+}
+
+/// `join-pane`: `src` defaults to the marked pane, and `dst` is checked after it.
+async fn join_pane(
+    tx: &Tx,
+    src: Option<String>,
+    dst: Result<String, String>,
+    side_by_side: bool,
+    detach: bool,
+) -> Result<(), String> {
+    let src = match src {
+        Some(src) => src,
+        None => lookup(tx, |s| s.marked.clone(), "no marked pane").await?,
+    };
+    let dst = dst?;
+    pane_req(
+        tx,
+        PaneRequest::Join {
+            src,
+            dst,
+            side_by_side,
+            detach,
+        },
+    )
+    .await
+}
+
+/// `kill-pane`: the pane is killed as a hook's kill, which fires its own hooks.
+async fn kill_pane(tx: &Tx, target: String) -> Result<(), String> {
+    ask_actor(tx, SESSION_GONE, |reply| SessionMsg::Kill {
+        target,
+        origin: Origin::Hook,
+        reply,
+    })
+    .await?
+    .map(drop)
+}
+
+/// `swap-pane -D`/`-U`: swaps the hook's pane with the next or previous pane, if there is one.
+async fn swap_pane(tx: &Tx, ctx: &Context, next: bool, keep_zoom: bool) -> Result<(), String> {
+    let active = pane(ctx)?;
+    let panes = state(tx).await?.panes;
+    let other = panes
+        .iter()
+        .position(|p| *p == active)
+        .and_then(|i| neighbor(&panes, i, next))
+        .cloned();
+    match other {
+        Some(other) => {
+            pane_req(
+                tx,
+                PaneRequest::SwapPane {
+                    a: Some(active),
+                    b: Some(other),
+                    keep_zoom,
+                },
+            )
+            .await
+        }
+        None => Ok(()),
     }
 }
 
@@ -525,89 +640,105 @@ async fn pane_command(tx: &Tx, ctx: &Context, command: PaneCommand) -> Result<()
 /// `list-buffers`, `capture-pane -p`) is read, so a bad name still fails, and then not shown.
 async fn buffer_command(tx: &Tx, ctx: &Context, command: BufferCommand) -> Result<(), String> {
     match command {
-        BufferCommand::ListBuffers { .. } => request(tx, Request::Buffer(BufferRequest::List))
-            .await
-            .map(drop),
+        BufferCommand::ListBuffers { .. } => buffer_req(tx, BufferRequest::List).await,
         BufferCommand::SetBuffer {
             name,
             append,
             rename,
             data,
-        } => match (rename, data) {
-            (Some(to), None) => request(tx, Request::Buffer(BufferRequest::Rename { name, to }))
-                .await
-                .map(drop),
-            (Some(_), Some(_)) => Err("set-buffer: -n takes no data".to_string()),
-            (None, Some(data)) => request(
-                tx,
-                Request::Buffer(BufferRequest::Set { name, data, append }),
-            )
-            .await
-            .map(drop),
-            (None, None) => Err("set-buffer: no data given".to_string()),
-        },
-        BufferCommand::ShowBuffer { name } => {
-            request(tx, Request::Buffer(BufferRequest::Get { name }))
-                .await
-                .map(drop)
-        }
+        } => set_buffer(tx, name, append, rename, data).await,
+        BufferCommand::ShowBuffer { name } => buffer_req(tx, BufferRequest::Get { name }).await,
         BufferCommand::DeleteBuffer { name } => {
-            request(tx, Request::Buffer(BufferRequest::Delete { name }))
-                .await
-                .map(drop)
+            buffer_req(tx, BufferRequest::Delete { name }).await
         }
-        BufferCommand::LoadBuffer { name, path } => {
-            let data =
-                std::fs::read_to_string(&path).map_err(|e| format!("load-buffer: {path}: {e}"))?;
-            request(
-                tx,
-                Request::Buffer(BufferRequest::Set {
-                    name,
-                    data,
-                    append: false,
-                }),
-            )
-            .await
-            .map(drop)
-        }
+        _ => buffer_file_command(tx, ctx, command).await,
+    }
+}
+
+/// Paste-buffer and capture commands that read or write a file or a pane.
+async fn buffer_file_command(
+    tx: &Tx,
+    ctx: &Context,
+    command: BufferCommand,
+) -> Result<(), String> {
+    match command {
+        BufferCommand::LoadBuffer { name, path } => load_buffer(tx, name, &path).await,
         BufferCommand::SaveBuffer { name, append, path } => {
             save_buffer(tx, name, append, &path).await
         }
-        BufferCommand::PasteBuffer { mut opts } => {
-            if opts.pane.is_empty() {
-                opts.pane = pane(ctx)?;
-            }
-            request(tx, Request::Buffer(BufferRequest::Paste(opts)))
-                .await
-                .map(drop)
-        }
+        BufferCommand::PasteBuffer { opts } => paste_buffer(tx, ctx, opts).await,
         BufferCommand::CapturePane {
             target,
             print,
             buffer,
             spec,
-        } => {
-            let name = target_pane(ctx, target)?;
-            let text = match request(tx, Request::Node(NodeRequest::Capture { name, spec })).await?
-            {
-                Response::Capture(text) => text,
-                other => return Err(format!("unexpected response to capture-pane: {other:?}")),
-            };
-            if print {
-                return Ok(());
-            }
-            request(
-                tx,
-                Request::Buffer(BufferRequest::Set {
-                    name: buffer,
-                    data: text,
-                    append: false,
-                }),
-            )
-            .await
-            .map(drop)
-        }
+        } => capture_pane(tx, target_pane(ctx, target)?, print, buffer, spec).await,
+        _ => Err(unavailable()),
     }
+}
+
+/// `set-buffer`: stores `data` in a buffer (appended with `append`), or renames it with `rename`.
+async fn set_buffer(
+    tx: &Tx,
+    name: Option<String>,
+    append: bool,
+    rename: Option<String>,
+    data: Option<String>,
+) -> Result<(), String> {
+    match (rename, data) {
+        (Some(to), None) => buffer_req(tx, BufferRequest::Rename { name, to }).await,
+        (Some(_), Some(_)) => Err("set-buffer: -n takes no data".to_string()),
+        (None, Some(data)) => buffer_req(tx, BufferRequest::Set { name, data, append }).await,
+        (None, None) => Err("set-buffer: no data given".to_string()),
+    }
+}
+
+/// `load-buffer`: a file becomes a paste buffer.
+async fn load_buffer(tx: &Tx, name: Option<String>, path: &str) -> Result<(), String> {
+    let data = std::fs::read_to_string(path).map_err(|e| format!("load-buffer: {path}: {e}"))?;
+    buffer_req(
+        tx,
+        BufferRequest::Set {
+            name,
+            data,
+            append: false,
+        },
+    )
+    .await
+}
+
+/// `paste-buffer`: the pane defaults to the hook's pane.
+async fn paste_buffer(tx: &Tx, ctx: &Context, mut opts: PasteBufferOpts) -> Result<(), String> {
+    if opts.pane.is_empty() {
+        opts.pane = pane(ctx)?;
+    }
+    buffer_req(tx, BufferRequest::Paste(opts)).await
+}
+
+/// `capture-pane`: the text is shown (`print`, not kept here) or stored in buffer `buffer`.
+async fn capture_pane(
+    tx: &Tx,
+    name: String,
+    print: bool,
+    buffer: Option<String>,
+    spec: CaptureSpec,
+) -> Result<(), String> {
+    let text = match request(tx, Request::Node(NodeRequest::Capture { name, spec })).await? {
+        Response::Capture(text) => text,
+        other => return Err(format!("unexpected response to capture-pane: {other:?}")),
+    };
+    if print {
+        return Ok(());
+    }
+    buffer_req(
+        tx,
+        BufferRequest::Set {
+            name: buffer,
+            data: text,
+            append: false,
+        },
+    )
+    .await
 }
 
 /// `save-buffer`: a paste buffer is written to a file, appended with `append`.
@@ -706,20 +837,26 @@ async fn set_synchronize(tx: &Tx, all: bool, on: bool) -> Result<(), String> {
 
 /// Selects window `index` (a daemon index).
 async fn select_window(tx: &Tx, index: usize) -> Result<(), String> {
-    request(tx, Request::Window(WindowRequest::Select { index }))
-        .await
-        .map(drop)
+    window_req(tx, WindowRequest::Select { index }).await
+}
+
+/// Reads the session state and picks one value from it, or fails with `missing` when there is none.
+async fn lookup<T>(
+    tx: &Tx,
+    select: impl FnOnce(&State) -> Option<T>,
+    missing: &str,
+) -> Result<T, String> {
+    let session = state(tx).await?;
+    select(&session).ok_or_else(|| missing.to_string())
 }
 
 /// The daemon index of the active window.
-async fn active_window(tx: &Tx) -> Result<usize, String> {
-    state(tx)
-        .await?
+fn active_index(session: &State) -> Option<usize> {
+    session
         .windows
         .iter()
         .find(|t| t.is_active)
         .map(|t| t.index)
-        .ok_or_else(|| "no active window".to_string())
 }
 
 /// The next (or previous) window with activity, a bell or silence, wrapping around.
@@ -799,6 +936,26 @@ async fn request(tx: &Tx, req: Request) -> Result<Response, String> {
         Response::Error(e) => Err(e),
         resp => Ok(resp),
     }
+}
+
+/// Sends a window request as a hook's, and discards the response.
+async fn window_req(tx: &Tx, req: WindowRequest) -> Result<(), String> {
+    request(tx, Request::Window(req)).await.map(drop)
+}
+
+/// Sends a pane request as a hook's, and discards the response.
+async fn pane_req(tx: &Tx, req: PaneRequest) -> Result<(), String> {
+    request(tx, Request::Pane(req)).await.map(drop)
+}
+
+/// Sends a buffer request as a hook's, and discards the response.
+async fn buffer_req(tx: &Tx, req: BufferRequest) -> Result<(), String> {
+    request(tx, Request::Buffer(req)).await.map(drop)
+}
+
+/// Sends a script request as a hook's, and discards the response.
+async fn script_req(tx: &Tx, req: ScriptRequest) -> Result<(), String> {
+    request(tx, Request::Script(req)).await.map(drop)
 }
 
 /// `fmt` with the formats expanded for `target`, and the hook's own variables.

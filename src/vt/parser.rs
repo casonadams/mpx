@@ -252,6 +252,95 @@ impl VtHandler {
             _ => {}
         }
     }
+
+    fn csi_cursor_move(&mut self, action: char, params: &Params) {
+        match action {
+            'H' | 'f' => {
+                let row = first_param(params, 1);
+                let col = params.iter().nth(1).map_or(1, |p| p[0] as usize);
+                self.grid.move_cursor(col.saturating_sub(1), row.saturating_sub(1));
+            }
+            'A' => self.cursor_up(count_param(params)),
+            'B' => self.cursor_down(count_param(params)),
+            'C' => {
+                let count = count_param(params);
+                let cols = self.grid.cols.saturating_sub(1);
+                self.grid.cursor.x = (self.grid.cursor.x + count).min(cols);
+            }
+            _ => {
+                let count = count_param(params);
+                self.grid.cursor.x = self.grid.cursor.x.saturating_sub(count);
+            }
+        }
+    }
+
+    fn csi_erase(&mut self, action: char, params: &Params) {
+        let mode = first_param(params, 0);
+        if action == 'J' {
+            self.grid.clear_screen(mode);
+        } else {
+            self.grid.clear_line(mode);
+        }
+    }
+
+    fn csi_scroll(&mut self, action: char, params: &Params) {
+        let count = count_param(params);
+        match action {
+            'S' => self.grid.scroll_up(count),
+            'T' => self.grid.scroll_down(count),
+            'M' => self.grid.delete_lines(count),
+            _ => self.grid.insert_lines(count),
+        }
+    }
+
+    /// `CSI s`: DECSLRM left/right margins while DECLRMM is set, otherwise save the cursor.
+    fn csi_save_cursor(&mut self, params: &Params) {
+        if self.grid.lr_margins {
+            let value = |i: usize| {
+                params.iter().nth(i).map(|p| p[0] as usize).filter(|&v| v > 0)
+            };
+            self.grid.set_lr_margins(value(0), value(1));
+        } else {
+            self.grid.saved_cursor = Some(self.grid.cursor);
+        }
+    }
+
+    fn csi_restore_cursor(&mut self) {
+        if let Some(c) = self.grid.saved_cursor {
+            self.grid.cursor = c;
+        }
+    }
+
+    /// `CSI 5 n` reports terminal status; `CSI 6 n` reports the cursor position (DSR).
+    fn csi_device_status(&mut self, params: &Params) {
+        match first_param(params, 0) {
+            // Cursor Position Report (DSR): ESC [ row ; col R
+            6 => {
+                let r = self.grid.cursor.y + 1;
+                let c = self.grid.cursor.x + 1;
+                self.responses.push(format!("\x1b[{};{}R", r, c).into_bytes());
+            }
+            // Terminal status OK
+            5 => self.responses.push(b"\x1b[0n".to_vec()),
+            _ => {}
+        }
+    }
+
+    fn csi_device_attributes(&mut self, intermediates: &[u8]) {
+        // Secondary Device Attributes for `CSI > c`, otherwise Primary (VT220 compatible).
+        let reply: &[u8] = if intermediates == b">" {
+            b"\x1b[>0;10;0c"
+        } else {
+            b"\x1b[?62;c"
+        };
+        self.responses.push(reply.to_vec());
+    }
+
+    fn csi_set_mode(&mut self, action: char, intermediates: &[u8], params: &Params) {
+        if intermediates == b"?" {
+            self.handle_mode(params, action == 'h');
+        }
+    }
 }
 
 /// The colour a 58 underline selector sets, in colon or semicolon form.
@@ -429,13 +518,19 @@ fn join_osc(parts: &[&[u8]]) -> String {
         .join(";")
 }
 
+/// The first parameter as a count, `default` when it is absent.
+fn first_param(params: &Params, default: usize) -> usize {
+    params.iter().next().map_or(default, |p| p[0] as usize)
+}
+
 fn count_param(params: &Params) -> usize {
-    params
-        .iter()
-        .next()
-        .map(|p| p[0] as usize)
-        .unwrap_or(1)
-        .max(1)
+    first_param(params, 1).max(1)
+}
+
+/// CSI forms with a private intermediate (`CSI > 4;2 m`, `CSI ? 6 n`) share finals with SGR,
+/// cursor restore and DSR but mean something else, so only `c`, `h` and `l` may carry one.
+fn is_private_form(intermediates: &[u8], action: char) -> bool {
+    !intermediates.is_empty() && !matches!(action, 'c' | 'h' | 'l')
 }
 
 fn back_tab(x: usize) -> usize {
@@ -463,140 +558,22 @@ impl Perform for VtHandler {
     }
 
     fn csi_dispatch(&mut self, params: &Params, intermediates: &[u8], _ignore: bool, action: char) {
-        if self.keyboard_csi(params, intermediates, action) {
-            return;
-        }
-        // `CSI > 4;2 m` (modifyOtherKeys), `CSI > 1 u` (kitty keyboard), `CSI ? 6 n` and similar
-        // private forms share finals with SGR, cursor restore and DSR but mean something else.
-        if !intermediates.is_empty() && !matches!(action, 'c' | 'h' | 'l') {
+        if self.keyboard_csi(params, intermediates, action)
+            || is_private_form(intermediates, action)
+        {
             return;
         }
         match action {
-            'H' | 'f' => {
-                let row = params.iter().next().map(|p| p[0] as usize).unwrap_or(1);
-                let col = params.iter().nth(1).map(|p| p[0] as usize).unwrap_or(1);
-                let y = row.saturating_sub(1);
-                let x = col.saturating_sub(1);
-                self.grid.move_cursor(x, y);
-            }
-            'A' => self.cursor_up(count_param(params)),
-            'B' => self.cursor_down(count_param(params)),
-            'C' => {
-                let count = params
-                    .iter()
-                    .next()
-                    .map(|p| p[0] as usize)
-                    .unwrap_or(1)
-                    .max(1);
-                self.grid.cursor.x =
-                    (self.grid.cursor.x + count).min(self.grid.cols.saturating_sub(1));
-            }
-            'D' => {
-                let count = params
-                    .iter()
-                    .next()
-                    .map(|p| p[0] as usize)
-                    .unwrap_or(1)
-                    .max(1);
-                self.grid.cursor.x = self.grid.cursor.x.saturating_sub(count);
-            }
-            'J' => {
-                let mode = params.iter().next().map(|p| p[0] as usize).unwrap_or(0);
-                self.grid.clear_screen(mode);
-            }
-            'K' => {
-                let mode = params.iter().next().map(|p| p[0] as usize).unwrap_or(0);
-                self.grid.clear_line(mode);
-            }
             'm' => self.handle_sgr(params),
-            // With DECLRMM set, `CSI s` is DECSLRM (left/right margins), not save-cursor.
-            's' if self.grid.lr_margins => {
-                let value = |i: usize| {
-                    params
-                        .iter()
-                        .nth(i)
-                        .map(|p| p[0] as usize)
-                        .filter(|&v| v > 0)
-                };
-                self.grid.set_lr_margins(value(0), value(1));
-            }
-            's' => {
-                self.grid.saved_cursor = Some(self.grid.cursor);
-            }
-            'u' => {
-                if let Some(c) = self.grid.saved_cursor {
-                    self.grid.cursor = c;
-                }
-            }
-            'n' => {
-                let code = params.iter().next().map(|p| p[0]).unwrap_or(0);
-                if code == 6 {
-                    // Cursor Position Report (DSR): ESC [ row ; col R
-                    let r = self.grid.cursor.y + 1;
-                    let c = self.grid.cursor.x + 1;
-                    self.responses
-                        .push(format!("\x1b[{};{}R", r, c).into_bytes());
-                } else if code == 5 {
-                    // Terminal status OK
-                    self.responses.push(b"\x1b[0n".to_vec());
-                }
-            }
-            'c' => {
-                if intermediates == b">" {
-                    // Secondary Device Attributes
-                    self.responses.push(b"\x1b[>0;10;0c".to_vec());
-                } else {
-                    // Primary Device Attributes (VT220 compatible)
-                    self.responses.push(b"\x1b[?62;c".to_vec());
-                }
-            }
-            'h' => {
-                if intermediates == b"?" {
-                    self.handle_mode(params, true);
-                }
-            }
-            'l' => {
-                if intermediates == b"?" {
-                    self.handle_mode(params, false);
-                }
-            }
+            'H' | 'f' | 'A' | 'B' | 'C' | 'D' => self.csi_cursor_move(action, params),
+            'J' | 'K' => self.csi_erase(action, params),
+            'S' | 'T' | 'M' | 'L' => self.csi_scroll(action, params),
+            's' => self.csi_save_cursor(params),
+            'u' => self.csi_restore_cursor(),
+            'n' => self.csi_device_status(params),
+            'c' => self.csi_device_attributes(intermediates),
+            'h' | 'l' => self.csi_set_mode(action, intermediates, params),
             'r' => handle_set_margins(&mut self.grid, params),
-            'S' => {
-                let count = params
-                    .iter()
-                    .next()
-                    .map(|p| p[0] as usize)
-                    .unwrap_or(1)
-                    .max(1);
-                self.grid.scroll_up(count);
-            }
-            'T' => {
-                let count = params
-                    .iter()
-                    .next()
-                    .map(|p| p[0] as usize)
-                    .unwrap_or(1)
-                    .max(1);
-                self.grid.scroll_down(count);
-            }
-            'M' => {
-                let count = params
-                    .iter()
-                    .next()
-                    .map(|p| p[0] as usize)
-                    .unwrap_or(1)
-                    .max(1);
-                self.grid.delete_lines(count);
-            }
-            'L' => {
-                let count = params
-                    .iter()
-                    .next()
-                    .map(|p| p[0] as usize)
-                    .unwrap_or(1)
-                    .max(1);
-                self.grid.insert_lines(count);
-            }
             _ => self.handle_csi_cursor_edit(action, params),
         }
     }

@@ -103,6 +103,17 @@ async fn new_session(mut r: Resolved, detach: bool, force: bool) -> Result<i32, 
 
 async fn dispatch(command: Commands, r: Resolved) -> Result<i32, String> {
     match command {
+        Commands::Clients(cmd) => super::clients::run(cmd, &r).await,
+        Commands::Buffers(cmd) => buffers::run(cmd, &r).await,
+        Commands::Environment(cmd) => environment::run(cmd, &r).await,
+        Commands::Hooks(cmd) => super::hooks::run(cmd, &r).await,
+        other => session_command(other, r).await,
+    }
+}
+
+/// Runs the session-level commands, handing the pane and window commands to `panes::run`.
+async fn session_command(command: Commands, r: Resolved) -> Result<i32, String> {
+    match command {
         Commands::Daemon => {
             run_daemon(&r.endpoint, &r.session, &r.state_dir, r.config)
                 .await
@@ -131,7 +142,6 @@ async fn dispatch(command: Commands, r: Resolved) -> Result<i32, String> {
              in its own daemon, so windows cannot share windows with another session"
         )),
         Commands::NewSession { detach, force, .. } => new_session(r, detach, force).await,
-        Commands::Clients(cmd) => super::clients::run(cmd, &r).await,
         Commands::ListSessions { json } => list_sessions(&r, json).await,
         Commands::ListPanes { json } => list_panes(&r, json).await,
         Commands::HasSession { target } => has_session(&r, target.as_deref()).await,
@@ -140,9 +150,6 @@ async fn dispatch(command: Commands, r: Resolved) -> Result<i32, String> {
         }
         Commands::Restore => restore(&r).await,
         Commands::ImportTmux { file } => import_tmux(file.as_deref()),
-        Commands::Buffers(cmd) => buffers::run(cmd, &r).await,
-        Commands::Environment(cmd) => environment::run(cmd, &r).await,
-        Commands::Hooks(cmd) => super::hooks::run(cmd, &r).await,
         other => panes::run(other, &r).await,
     }
 }

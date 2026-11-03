@@ -115,7 +115,7 @@ impl App {
 
     /// Runs a command without the interactive confirmation step (used once confirmed).
     pub async fn run(&mut self, cmd: Command) -> Flow {
-        if self.terminal.readonly && !super::command::read_only_allowed(&cmd) {
+        if self.attachment.terminal.readonly && !super::command::read_only_allowed(&cmd) {
             return self.say("read-only client: this command would change the session");
         }
         let cmd = match self.run_windows(cmd).await {
@@ -226,6 +226,7 @@ impl App {
                 self.mark_pane(target.as_deref()).await
             }
             Command::Pane(PaneCommand::ClearMark) => self.clear_mark().await,
+            Command::Pane(PaneCommand::InputOff { target, off }) => self.input_off(target, off).await,
             Command::Pane(PaneCommand::SelectPane { target, keep_zoom }) => {
                 self.select_pane(target, keep_zoom).await
             }
@@ -318,7 +319,7 @@ impl App {
 
     /// Switches to the session that was current before this one, if there was one.
     async fn last_session(&mut self) -> Flow {
-        match self.previous_session.clone() {
+        match self.attachment.previous_session.clone() {
             Some(name) => self.go_session(&name).await,
             None => self.say("no last session"),
         }
@@ -339,7 +340,7 @@ impl App {
                 self.open_menu(title, x, y, items)
             }
             Command::ShowMessages => {
-                let lines = self.message_log.clone();
+                let lines = self.chrome.message_log.clone();
                 self.open_overlay(Overlay::text("messages", lines)).await
             }
             Command::ChooseBuffer => self.open_overlay(Overlay::buffers()).await,
@@ -429,7 +430,7 @@ impl App {
     /// leaves everything unchanged. The daemon reloads the settings it owns (resume rules,
     /// restore, history limit and spawn defaults) from the same file.
     async fn reload_config(&mut self) -> Flow {
-        let path = self.config_path.clone().or_else(Config::path);
+        let path = self.launch.config_path.clone().or_else(Config::path);
         let config = match Config::load_at(path.as_deref()) {
             Ok(config) => config,
             Err(e) => return self.say(format!("reload-config: {e}")),
@@ -699,15 +700,7 @@ impl App {
                 then,
                 otherwise,
                 ..
-            }) => {
-                let value = frame::expand_for(self, target.as_deref(), &condition);
-                let branch = if crate::format::truthy(&value) {
-                    Some(*then)
-                } else {
-                    otherwise.map(|o| *o)
-                };
-                branch.map_or(Step::Next, Step::Branch)
-            }
+            }) => self.format_branch(target.as_deref(), &condition, *then, otherwise.map(|o| *o)),
             Command::Script(ScriptCommand::RunShell {
                 background,
                 target,
@@ -721,11 +714,7 @@ impl App {
                     background,
                     delay: delay_ms.map(Duration::from_millis),
                 };
-                if background {
-                    Step::Background(work)
-                } else {
-                    Step::Wait(work)
-                }
+                Self::scheduled(background, work)
             }
             Command::Script(ScriptCommand::IfShell {
                 background,
@@ -742,22 +731,47 @@ impl App {
                     then,
                     otherwise,
                 };
-                if background {
-                    Step::Background(work)
-                } else {
-                    Step::Wait(work)
-                }
+                Self::scheduled(background, work)
             }
             Command::Script(ScriptCommand::WaitFor { op, channel }) => {
                 Step::Wait(Work::Wait { op, channel })
             }
-            cmd => {
-                if Box::pin(self.run(cmd)).await == Flow::Quit {
-                    Step::Quit
-                } else {
-                    Step::Next
-                }
-            }
+            cmd => self.run_now(cmd).await,
+        }
+    }
+
+    /// `if-shell -F`: the truth of the format picks the branch to run next.
+    fn format_branch(
+        &self,
+        target: Option<&str>,
+        condition: &str,
+        then: Command,
+        otherwise: Option<Command>,
+    ) -> Step {
+        let value = frame::expand_for(self, target, condition);
+        let branch = if crate::format::truthy(&value) {
+            Some(then)
+        } else {
+            otherwise
+        };
+        branch.map_or(Step::Next, Step::Branch)
+    }
+
+    /// Runs `cmd` now: a quit ends the sequence, anything else lets it go on.
+    async fn run_now(&mut self, cmd: Command) -> Step {
+        if Box::pin(self.run(cmd)).await == Flow::Quit {
+            Step::Quit
+        } else {
+            Step::Next
+        }
+    }
+
+    /// `work` as a background job, or one the commands after it wait for.
+    fn scheduled(background: bool, work: Work) -> Step {
+        if background {
+            Step::Background(work)
+        } else {
+            Step::Wait(work)
         }
     }
 
@@ -865,7 +879,11 @@ impl App {
     /// `source-file`: runs the commands of each file, in order. A line that does not parse is
     /// reported and skipped; a missing file is reported unless `-q` silences it.
     async fn source_file(&mut self, paths: Vec<String>, quiet: bool) -> Flow {
-        let vars = crate::format::session_vars(&self.session, self.times, self.attached);
+        let vars = crate::format::session_vars(
+            &self.session,
+            self.attachment.times,
+            self.attachment.attached,
+        );
         for path in paths {
             let text = match std::fs::read_to_string(&path) {
                 Ok(text) => text,
@@ -947,13 +965,12 @@ impl App {
 
     /// `show-buffer`: the text of a paste buffer, in an overlay.
     async fn show_buffer(&mut self, name: Option<String>) -> Flow {
-        match self.client.get_buffer(name.as_deref()).await {
-            Ok(buffer) => {
-                let lines = buffer.data.lines().map(str::to_string).collect();
-                self.open_overlay(Overlay::text("show-buffer", lines)).await
-            }
-            Err(e) => self.say(e),
-        }
+        let lines: Result<Vec<String>, String> = self
+            .client
+            .get_buffer(name.as_deref())
+            .await
+            .map(|buffer| buffer.data.lines().map(str::to_string).collect());
+        self.show_lines("show-buffer", lines).await
     }
 
     /// `set-buffer`: stores `data`, appending with `append`, or renames the buffer to `rename`.
@@ -1056,20 +1073,20 @@ impl App {
 
     /// `show-environment`: the session environment, or one variable, in an overlay.
     async fn show_environment(&mut self, name: Option<String>) -> Flow {
-        match self.client.show_environment(name.as_deref()).await {
-            Ok(entries) => {
-                let lines = entries
+        let lines: Result<Vec<String>, String> = self
+            .client
+            .show_environment(name.as_deref())
+            .await
+            .map(|entries| {
+                entries
                     .into_iter()
                     .map(|entry| match entry.value {
                         Some(value) => format!("{}={value}", entry.name),
                         None => format!("-{}", entry.name),
                     })
-                    .collect();
-                self.open_overlay(Overlay::text("show-environment", lines))
-                    .await
-            }
-            Err(e) => self.say(e),
-        }
+                    .collect()
+            });
+        self.show_lines("show-environment", lines).await
     }
 
     /// `display-popup`: the command starts on a pty in a box over the panes. Its directory is `-d`,
@@ -1123,7 +1140,7 @@ impl App {
     /// `suspend-client`: the event loop stops the process once the command has run.
     fn suspend_client(&mut self) -> Flow {
         if cfg!(unix) {
-            self.suspend_requested = true;
+            self.chrome.suspend_requested = true;
             Flow::Continue
         } else {
             self.say("suspend-client is not supported on this platform")
@@ -1202,7 +1219,7 @@ impl App {
     }
 
     async fn step_session(&mut self, next: bool) -> Flow {
-        let infos = ipc::session_infos(&self.socket_dir).await;
+        let infos = ipc::session_infos(&self.launch.socket_dir).await;
         let live: Vec<_> = infos
             .iter()
             .filter(|i| i.panes > 0 || i.endpoint == self.endpoint)
@@ -1310,9 +1327,9 @@ impl App {
             Err(e) => return self.say(e),
         };
         let text = if text.is_empty() {
-            match &self.last_copy {
+            match &self.yank.last_copy {
                 Some(s) => s.clone(),
-                None => match &self.clipboard {
+                None => match &self.yank.clipboard {
                     super::app::Clipboard::Captured(items) => {
                         items.last().cloned().unwrap_or_default()
                     }
@@ -1377,6 +1394,12 @@ impl App {
 
     async fn clear_mark(&mut self) -> Flow {
         let result = self.client.mark_pane(None, true).await;
+        self.settle(result)
+    }
+
+    /// `select-pane -d` / `-e`: the pane's input is off or back on.
+    async fn input_off(&mut self, target: Option<String>, off: bool) -> Flow {
+        let result = self.client.input_off(target.as_deref(), off).await;
         self.settle(result)
     }
 
@@ -1538,10 +1561,10 @@ impl App {
         };
         if let Some(text) = &text {
             if self.config.set_clipboard {
-                self.clipboard.copy(text);
+                self.yank.clipboard.copy(text);
             }
-            self.yanks.push(text.clone());
-            self.last_copy = Some(text.clone());
+            self.yank.yanks.push(text.clone());
+            self.yank.last_copy = Some(text.clone());
         }
         if let (Some(command), Some(text)) = (pipe, &text) {
             pipe_text(&command, text);
@@ -1587,7 +1610,7 @@ impl App {
             session: &self.session,
             config: &self.config,
             cwd: cwd.as_deref(),
-            socket_dir: &self.socket_dir,
+            socket_dir: &self.launch.socket_dir,
         };
         overlay.refresh(&mut ctx).await;
         self.mode = Mode::Overlay(overlay);

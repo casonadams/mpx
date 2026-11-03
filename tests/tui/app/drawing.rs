@@ -148,7 +148,7 @@ async fn a_burst_split_across_several_frames_is_not_held_back() {
     let mut h = start().await;
     h.frame().await;
     for _ in 0..FRAMES_PER_BUDGET - 1 {
-        h.app.frame_due = Some(Instant::now());
+        h.app.pacing.frame_due = Some(Instant::now());
         h.app.drew(Instant::now());
     }
     let before = h.app.expected.get(MAIN).copied().unwrap_or(0);
@@ -157,7 +157,7 @@ async fn a_burst_split_across_several_frames_is_not_held_back() {
         app.expected.get(MAIN).copied().unwrap_or(0) > before
     })
     .await;
-    let due = h.app.frame_due.expect("a frame is scheduled");
+    let due = h.app.pacing.frame_due.expect("a frame is scheduled");
     assert!(
         due <= Instant::now(),
         "the last piece of a burst is not held back"
@@ -182,7 +182,7 @@ async fn a_redraw_without_new_output_does_not_delay_the_next_output_frame() {
         app.expected.get(MAIN).copied().unwrap_or(0) > before
     })
     .await;
-    let due = h.app.frame_due.expect("a frame is scheduled");
+    let due = h.app.pacing.frame_due.expect("a frame is scheduled");
     assert!(
         due <= Instant::now(),
         "output after a keypress redraw is drawn at once, not a budget later"
@@ -194,7 +194,7 @@ async fn pane_output_schedules_a_frame_without_holding_up_input() {
     let mut h = start().await;
     h.frame().await;
     for _ in 0..FRAMES_PER_BUDGET {
-        h.app.frame_due = Some(Instant::now());
+        h.app.pacing.frame_due = Some(Instant::now());
         h.app.drew(Instant::now());
     }
     let before = h.app.expected.get(MAIN).copied().unwrap_or(0);
@@ -208,10 +208,10 @@ async fn pane_output_schedules_a_frame_without_holding_up_input() {
         took.elapsed() < FRAME_BUDGET,
         "applying output must not wait for the frame budget"
     );
-    let due = h.app.frame_due.expect("a frame is scheduled");
+    let due = h.app.pacing.frame_due.expect("a frame is scheduled");
     assert!(due > Instant::now(), "a spent budget holds the next output frame back");
     h.app.drew(Instant::now());
-    assert_eq!(h.app.frame_due, None);
+    assert_eq!(h.app.pacing.frame_due, None);
 }
 
 /// Fills a pane with 40 lines, then scrolls it by one more: that one-line scroll must send far
@@ -261,16 +261,16 @@ async fn a_key_typed_into_a_pane_is_marked_as_forwarded_and_others_are_not() {
     let mut h = start().await;
     h.frame().await;
     h.key(KeyCode::Char('x')).await;
-    assert!(std::mem::take(&mut h.app.forwarded));
+    assert!(std::mem::take(&mut h.app.pacing.forwarded));
     h.prefixed_char('?').await;
-    assert!(!h.app.forwarded, "opening help changes the screen");
+    assert!(!h.app.pacing.forwarded, "opening help changes the screen");
 }
 
 /// Draws enough output frames that the budget is spent for the next one.
 fn spend_budget(h: &mut Harness) {
     let recent = Instant::now() + Duration::from_secs(1);
     for _ in 0..FRAMES_PER_BUDGET {
-        h.app.frame_due = Some(recent);
+        h.app.pacing.frame_due = Some(recent);
         h.app.drew(recent);
     }
 }
@@ -283,7 +283,7 @@ async fn output_from(h: &mut Harness, pane: &str, text: &str) -> Instant {
         app.expected.get(&name).copied().unwrap_or(0) > before
     })
     .await;
-    h.app.frame_due.expect("a frame is scheduled")
+    h.app.pacing.frame_due.expect("a frame is scheduled")
 }
 
 #[tokio::test]
@@ -314,7 +314,7 @@ async fn a_keypress_lets_only_a_few_frames_skip_the_budget() {
     let mut h = start().await;
     h.frame().await;
     h.key(KeyCode::Char('x')).await;
-    h.app.key_frames = 0;
+    h.app.pacing.key_frames = 0;
     spend_budget(&mut h);
     let due = output_from(&mut h, MAIN, "more").await;
     assert!(due > Instant::now(), "the keypress's allowance is used up");

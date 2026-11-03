@@ -12,6 +12,7 @@ mod overlay_io;
 mod options;
 mod overlay_keys;
 mod passthrough;
+mod mouse_menus;
 #[cfg(unix)]
 mod popups;
 mod prompt_cmds;

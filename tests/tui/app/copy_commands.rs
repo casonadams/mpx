@@ -148,10 +148,10 @@ async fn a_bad_copy_command_is_refused_and_leaves_copy_mode_as_it_was() {
     assert!(matches!(h.app.mode, Mode::Copy(_)));
     assert!(
         h.app
-            .message
+            .interaction.message
             .as_ref()
             .is_some_and(|(m, _)| m.contains("copy-mode command not supported")),
         "{:?}",
-        h.app.message
+        h.app.interaction.message
     );
 }

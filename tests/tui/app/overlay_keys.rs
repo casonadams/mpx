@@ -51,7 +51,7 @@ async fn the_shortcut_popup_goes_away_when_a_key_opens_the_palette() {
     // Taller than the palette's 26 rows, so the popup sits below the palette's box but inside the
     // overlay area.
     let mut h = Harness::idle().await;
-    h.app.fixed_size = Some((100, 80));
+    h.app.launch.fixed_size = Some((100, 80));
     h.terminal = VtScreen::new(100, 80);
     h.app.config.which_key_delay_ms = 0;
     h.ctrl('b').await;

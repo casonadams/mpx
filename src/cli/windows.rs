@@ -100,6 +100,14 @@ pub enum PaneCommands {
         #[arg(short = 'M')]
         clear_mark: bool,
 
+        /// Disable input to the target pane: keys typed or sent to it are dropped (tmux -d)
+        #[arg(short = 'd')]
+        disable_input: bool,
+
+        /// Enable input to the target pane again (tmux -e)
+        #[arg(short = 'e')]
+        enable_input: bool,
+
         /// Keep the window zoomed if it was zoomed (tmux -Z)
         #[arg(short = 'Z')]
         keep_zoom: bool,
@@ -411,8 +419,19 @@ async fn run_pane(cmd: PaneCommands, r: &Resolved) -> Result<i32, String> {
             target,
             mark,
             clear_mark,
+            disable_input,
+            enable_input,
             keep_zoom,
-        } => select_pane(r, target.as_deref(), mark, clear_mark, keep_zoom).await,
+        } => {
+            let input = (disable_input || enable_input).then_some(disable_input);
+            let flags = SelectPaneFlags {
+                mark,
+                clear_mark,
+                input,
+                keep_zoom,
+            };
+            select_pane(r, target.as_deref(), flags).await
+        }
         PaneCommands::BreakPane { name } => break_pane(r, &name).await,
         PaneCommands::SelectLayout { preset, spread } => {
             select_layout(r, preset.as_deref(), spread).await
@@ -579,13 +598,25 @@ async fn new_window(r: &Resolved, req: NewWindowRequest) -> Result<i32, String> 
     Ok(0)
 }
 
+/// The flags of `select-pane`, bundled so the handler stays under the parameter budget.
+struct SelectPaneFlags {
+    mark: bool,
+    clear_mark: bool,
+    input: Option<bool>,
+    keep_zoom: bool,
+}
+
 async fn select_pane(
     r: &Resolved,
     target: Option<&str>,
-    mark: bool,
-    clear_mark: bool,
-    keep_zoom: bool,
+    flags: SelectPaneFlags,
 ) -> Result<i32, String> {
+    let SelectPaneFlags {
+        mark,
+        clear_mark,
+        input,
+        keep_zoom,
+    } = flags;
     let mut client = ensure_client(r).await?;
     if clear_mark {
         daemon_result(client.mark_pane(None, true).await, "select-pane")?;
@@ -593,6 +624,12 @@ async fn select_pane(
         let name = resolve_optional(&mut client, target).await?;
         daemon_result(
             client.mark_pane(name.as_deref(), false).await,
+            "select-pane",
+        )?;
+    } else if let Some(off) = input {
+        let name = resolve_optional(&mut client, target).await?;
+        daemon_result(
+            client.input_off(name.as_deref(), off).await,
             "select-pane",
         )?;
     } else if let Some(target) = target {

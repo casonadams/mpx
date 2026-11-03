@@ -8,6 +8,16 @@ use crate::protocol::{ChannelOp, Request, Response, ScriptRequest};
 /// The daemon-side commands of the CLI, flattened into `Commands`.
 #[derive(Subcommand, Debug)]
 pub enum HookCommands {
+    #[command(flatten)]
+    Script(ScriptHookCommands),
+
+    #[command(flatten)]
+    Hooks(HookSetCommands),
+}
+
+/// The commands that run a shell in the session: `run-shell` and `if-shell`.
+#[derive(Subcommand, Debug)]
+pub enum ScriptHookCommands {
     /// Run a command through the session's shell (tmux run-shell); formats in it are expanded for
     /// the target pane, and its output is printed
     #[command(name = "run-shell")]
@@ -56,7 +66,11 @@ pub enum HookCommands {
         /// Command run when the condition fails
         otherwise: Option<String>,
     },
+}
 
+/// The channel and hook commands: `wait-for`, `set-hook` and `show-hooks`.
+#[derive(Subcommand, Debug)]
+pub enum HookSetCommands {
     /// Wait for a signal on a named channel, or lock or unlock it (tmux wait-for)
     #[command(name = "wait-for")]
     WaitFor {
@@ -109,13 +123,36 @@ pub enum HookCommands {
 /// `show-hooks`.
 pub async fn run(cmd: HookCommands, r: &Resolved) -> Result<i32, String> {
     match cmd {
-        HookCommands::RunShell {
+        HookCommands::Script(cmd) => run_script(cmd, r).await,
+        HookCommands::Hooks(cmd) => match cmd {
+            HookSetCommands::WaitFor {
+                signal,
+                lock,
+                unlock,
+                channel,
+            } => wait_for(r, (signal, lock, unlock), &channel).await,
+            HookSetCommands::SetHook {
+                append,
+                unset,
+                run,
+                hook,
+                command,
+            } => set_hook(r, (append, unset, run), &hook, &command).await,
+            HookSetCommands::ShowHooks => show_hooks(r).await,
+        },
+    }
+}
+
+/// Runs `run-shell` or `if-shell`.
+async fn run_script(cmd: ScriptHookCommands, r: &Resolved) -> Result<i32, String> {
+    match cmd {
+        ScriptHookCommands::RunShell {
             background,
             target,
             delay,
             command,
         } => run_shell(r, background, target.as_deref(), delay, &command.join(" ")).await,
-        HookCommands::IfShell {
+        ScriptHookCommands::IfShell {
             format,
             target,
             condition,
@@ -129,20 +166,6 @@ pub async fn run(cmd: HookCommands, r: &Resolved) -> Result<i32, String> {
             };
             if_shell(r, format, target.as_deref(), branches).await
         }
-        HookCommands::WaitFor {
-            signal,
-            lock,
-            unlock,
-            channel,
-        } => wait_for(r, (signal, lock, unlock), &channel).await,
-        HookCommands::SetHook {
-            append,
-            unset,
-            run,
-            hook,
-            command,
-        } => set_hook(r, (append, unset, run), &hook, &command).await,
-        HookCommands::ShowHooks => show_hooks(r).await,
     }
 }
 

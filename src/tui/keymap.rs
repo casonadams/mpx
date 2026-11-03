@@ -11,7 +11,7 @@ use crate::config::{Config, ModeKeys};
 use crate::keys::KeySpec;
 
 /// Bindings typed after the prefix: key (tmux notation) -> command line.
-const DEFAULT_BINDINGS: &[(&str, &str)] = &[
+const WINDOW_PANE_BINDINGS: &[(&str, &str)] = &[
     ("c", "new-window"),
     ("n", "next-window"),
     ("p", "previous-window"),
@@ -44,6 +44,10 @@ const DEFAULT_BINDINGS: &[(&str, &str)] = &[
     ("M", "select-pane -M"),
     ("{", "swap-pane -U"),
     ("}", "swap-pane -D"),
+];
+
+/// Layout, buffer, copy-mode and resize bindings typed after the prefix.
+const LAYOUT_BINDINGS: &[(&str, &str)] = &[
     ("Space", "next-layout"),
     ("E", "select-layout -E"),
     ("=", "choose-buffer"),
@@ -72,6 +76,10 @@ const DEFAULT_BINDINGS: &[(&str, &str)] = &[
     ("M-Down", "resize-pane -D 5"),
     ("M-Left", "resize-pane -L 5"),
     ("M-Right", "resize-pane -R 5"),
+];
+
+/// Session, prompt, palette and menu bindings typed after the prefix.
+const SESSION_BINDINGS: &[(&str, &str)] = &[
     ("[", "copy-mode"),
     ("]", "paste"),
     ("d", "detach-client"),
@@ -184,10 +192,12 @@ const MAC_OPTION_BINDINGS: &[(&str, &str)] = &[];
 #[cfg(not(target_os = "macos"))]
 const MAC_OPTION_BINDINGS: &[(&str, &str)] = &[];
 
-/// The default table: `DEFAULT_BINDINGS` plus `0`-`9` for `select-window`.
+/// The default table: the default bindings plus `0`-`9` for `select-window`.
 pub fn default_table() -> Vec<(String, String)> {
-    let mut table: Vec<(String, String)> = DEFAULT_BINDINGS
-        .iter()
+    let defaults = [WINDOW_PANE_BINDINGS, LAYOUT_BINDINGS, SESSION_BINDINGS];
+    let mut table: Vec<(String, String)> = defaults
+        .into_iter()
+        .flatten()
         .map(|(key, line)| (key.to_string(), line.to_string()))
         .collect();
     table.extend((0..=9).map(|d| (d.to_string(), format!("select-window -t {d}"))));

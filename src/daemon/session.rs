@@ -23,7 +23,7 @@ use crate::clients::effective_size;
 use crate::config::Config;
 use crate::format::{self, Vars};
 use crate::keys::{KeyPolicy, TermModes, encode_key_names, wrap_paste};
-use crate::layout::{Direction, Workspace, window_not_found};
+use crate::layout::{Direction, RestoredLayout, Workspace, window_not_found};
 use crate::node::pacing::Pacing;
 use crate::node::pane::{self, InputBuild, Notifier, PaneCtx, PaneHandle, PaneNotice, TermView};
 use crate::node::process::basename;
@@ -1161,6 +1161,7 @@ impl Session {
             },
             PaneRequest::SwapPane { a, b, keep_zoom } => self.swap_pane_req(a, b, keep_zoom),
             PaneRequest::MarkPane { name, clear } => self.mark_pane_req(name, clear),
+            PaneRequest::InputOff { name, off } => self.input_off_req(name, off),
             PaneRequest::BreakPane { name } => match self.target_name(&name) {
                 Ok(n) => check(self.workspace.break_pane(&n), "Pane is alone in its window"),
                 Err(e) => Response::Error(e),
@@ -1235,24 +1236,37 @@ impl Session {
         }
     }
 
+    /// The named pane, or the active window's focused pane when `name` is None.
+    fn pane_or_active(&self, name: Option<String>) -> Result<String, String> {
+        match name {
+            Some(n) => self.target_name(&n),
+            None => self
+                .workspace
+                .active_window()
+                .and_then(|w| w.focused.clone())
+                .ok_or_else(|| "No active pane".to_string()),
+        }
+    }
+
+    /// `select-pane -d` / `-e`: stops or resumes input to the named pane, or the active pane.
+    fn input_off_req(&mut self, name: Option<String>, off: bool) -> Response {
+        match self.pane_or_active(name) {
+            Ok(target) => {
+                self.workspace.set_input_off(&target, off);
+                Response::Ok
+            }
+            Err(e) => Response::Error(e),
+        }
+    }
+
     fn mark_pane_req(&mut self, name: Option<String>, clear: bool) -> Response {
         if clear {
             self.workspace.clear_mark_pane();
             return Response::Ok;
         }
-        let target = match name {
-            Some(n) => match self.target_name(&n) {
-                Ok(t) => t,
-                Err(e) => return Response::Error(e),
-            },
-            None => match self
-                .workspace
-                .active_window()
-                .and_then(|w| w.focused.clone())
-            {
-                Some(f) => f,
-                None => return Response::Error("No active pane to mark".to_string()),
-            },
+        let target = match self.pane_or_active(name) {
+            Ok(t) => t,
+            Err(e) => return Response::Error(e),
         };
         self.workspace.mark_pane(&target);
         Response::Ok
@@ -1275,15 +1289,7 @@ impl Session {
                 self.workspace.select_window(index),
                 &window_not_found(index),
             ),
-            WindowRequest::Rename { index, name } => {
-                match index.or_else(|| self.workspace.active_number()) {
-                    Some(number) => check(
-                        self.workspace.rename_window(number, name),
-                        &window_not_found(number),
-                    ),
-                    None => Response::Error("No window".to_string()),
-                }
-            }
+            WindowRequest::Rename { index, name } => self.rename_window(index, name),
             WindowRequest::Move { from, to } => self
                 .workspace
                 .move_window(from, to)
@@ -1309,6 +1315,17 @@ impl Session {
             WindowRequest::Kill { .. } => {
                 Response::Error("Request is handled by the connection".to_string())
             }
+        }
+    }
+
+    /// Renames window `index`, or the active window when there is none.
+    fn rename_window(&mut self, index: Option<usize>, name: String) -> Response {
+        match index.or_else(|| self.workspace.active_number()) {
+            Some(number) => check(
+                self.workspace.rename_window(number, name),
+                &window_not_found(number),
+            ),
+            None => Response::Error("No window".to_string()),
         }
     }
 
@@ -1361,6 +1378,7 @@ impl Session {
         let mut info = handle.info(full).await?;
         info.window = self.workspace.number_of(name);
         info.marked = Some(self.workspace.marked_pane.as_deref() == Some(name));
+        info.input_off = Some(self.workspace.input_off(name));
         Ok(info)
     }
 
@@ -1376,6 +1394,7 @@ impl Session {
                 info.window = self.workspace.number_of(entry.handle.name());
                 info.marked =
                     Some(self.workspace.marked_pane.as_deref() == Some(entry.handle.name()));
+                info.input_off = Some(self.workspace.input_off(entry.handle.name()));
                 infos.push(info);
             }
         }
@@ -1439,6 +1458,9 @@ impl Session {
     }
 
     async fn send(&self, name: &str, build: InputBuild) -> Result<(), String> {
+        if self.workspace.input_off(name) {
+            return Ok(());
+        }
         self.handle_of(name)?.input(build).await
     }
 
@@ -1828,18 +1850,22 @@ impl Session {
             .filter_map(|window| self.restore_window(window))
             .collect();
         if !self.workspace.windows.is_empty() {
-            match numbers.get(plan.active_window) {
-                Some(&number) => {
-                    if !self.workspace.select_window(number) {
-                        warn!("could not select restored window {number}");
-                    }
-                }
-                None => warn!("could not select restored window {}", plan.active_window),
-            }
+            self.select_restored(&numbers, plan.active_window);
             self.workspace.last_window = plan.last_window;
         }
         self.restored_ms = Some(now_ms());
         self.schedule_save();
+    }
+
+    /// Selects the restored window at position `active` of `numbers`, warning when it cannot be.
+    fn select_restored(&mut self, numbers: &[usize], active: usize) {
+        let Some(&number) = numbers.get(active) else {
+            warn!("could not select restored window {active}");
+            return;
+        };
+        if !self.workspace.select_window(number) {
+            warn!("could not select restored window {number}");
+        }
     }
 
     /// Spawns the window's panes, then installs it with the surviving part of its layout. Returns the
@@ -1861,10 +1887,15 @@ impl Session {
         }
         let root = root?;
         let label = root.all_leaves().into_iter().next().unwrap_or_default();
-        Some(
-            self.workspace
-                .install_window(window.number, label, window.name, root, window.focused),
-        )
+        Some(self.workspace.install_window(
+            window.number,
+            label,
+            window.name,
+            RestoredLayout {
+                root,
+                focused: window.focused,
+            },
+        ))
     }
 
     /// Types `line` into pane `name`; the terminal queues it until the shell reads it.

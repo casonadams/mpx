@@ -96,29 +96,21 @@ fn encode_key_table() {
 }
 
 #[test]
-fn decckm_switches_unmodified_cursor_keys_to_ss3() {
-    let cases: &[(KeyCode, &str)] = &[
-        (KeyCode::Up, "\x1bOA"),
-        (KeyCode::Down, "\x1bOB"),
-        (KeyCode::Right, "\x1bOC"),
-        (KeyCode::Left, "\x1bOD"),
-        (KeyCode::Home, "\x1bOH"),
-        (KeyCode::End, "\x1bOF"),
+fn decckm_switches_unmodified_cursor_keys_and_leaves_the_rest_alone() {
+    let cases: &[(KeyCode, KeyModifiers, &str)] = &[
+        (KeyCode::Up, NONE, "\x1bOA"),
+        (KeyCode::Down, NONE, "\x1bOB"),
+        (KeyCode::Right, NONE, "\x1bOC"),
+        (KeyCode::Left, NONE, "\x1bOD"),
+        (KeyCode::Home, NONE, "\x1bOH"),
+        (KeyCode::End, NONE, "\x1bOF"),
+        (KeyCode::Left, CTRL, "\x1b[1;5D"),
+        (KeyCode::F(1), NONE, "\x1bOP"),
+        (KeyCode::PageUp, NONE, "\x1b[5~"),
     ];
-    for (code, expected) in cases {
-        assert_eq!(
-            enc(*code, NONE, &app_cursor()),
-            expected.as_bytes(),
-            "{code:?}"
-        );
+    for (code, mods, expected) in cases {
+        assert_eq!(enc(*code, *mods, &app_cursor()), expected.as_bytes(), "{code:?}");
     }
-}
-
-#[test]
-fn decckm_leaves_modified_and_function_keys_alone() {
-    assert_eq!(enc(KeyCode::Left, CTRL, &app_cursor()), b"\x1b[1;5D");
-    assert_eq!(enc(KeyCode::F(1), NONE, &app_cursor()), b"\x1bOP");
-    assert_eq!(enc(KeyCode::PageUp, NONE, &app_cursor()), b"\x1b[5~");
 }
 
 #[test]
@@ -232,61 +224,67 @@ fn modified(extended: ExtendedKeys, xterm_keys: bool) -> KeyPolicy {
     }
 }
 
-#[test]
-fn modify_other_keys_sends_ctrl_keys_and_modified_editing_keys_as_csi_27() {
-    let modes = TermModes {
-        modify_other_keys: 2,
+/// Asserts each `(code, mods, modes, policy, expected)` encodes to its bytes.
+fn assert_encodes(cases: &[(KeyCode, KeyModifiers, TermModes, KeyPolicy, &[u8])]) {
+    for (code, mods, modes, policy, want) in cases {
+        assert_eq!(enc_with(*code, *mods, modes, *policy), *want, "{code:?} {mods:?}");
+    }
+}
+
+fn modify_modes(level: u8) -> TermModes {
+    TermModes {
+        modify_other_keys: level,
         ..TermModes::default()
-    };
-    let on = modified(ExtendedKeys::On, true);
-    assert_eq!(enc_with(KeyCode::Char('a'), CTRL, &modes, on), b"\x1b[27;5;97~");
-    assert_eq!(enc_with(KeyCode::Char('A'), CTRL | SHIFT, &modes, on), b"\x1b[27;6;65~");
-    assert_eq!(enc_with(KeyCode::Enter, SHIFT, &modes, on), b"\x1b[27;2;13~");
-    assert_eq!(enc_with(KeyCode::Esc, ALT, &modes, on), b"\x1b[27;3;27~");
+    }
+}
+
+fn kitty_modes(flags: u8) -> TermModes {
+    TermModes {
+        kitty_keys: flags,
+        ..TermModes::default()
+    }
 }
 
 #[test]
-fn modify_other_keys_separates_ctrl_i_from_tab_and_leaves_plain_keys_alone() {
-    let modes = TermModes {
-        modify_other_keys: 2,
-        ..TermModes::default()
-    };
+fn modify_other_keys_sends_ctrl_and_modified_keys_as_csi_27_and_leaves_plain_keys_alone() {
     let on = modified(ExtendedKeys::On, true);
-    assert_eq!(enc_with(KeyCode::Char('i'), CTRL, &modes, on), b"\x1b[27;5;105~");
-    assert_eq!(enc_with(KeyCode::Tab, NONE, &modes, on), b"\t");
-    assert_eq!(enc_with(KeyCode::Char('x'), NONE, &modes, on), b"x");
-    assert_eq!(enc_with(KeyCode::Char('A'), SHIFT, &modes, on), b"A");
-    assert_eq!(enc_with(KeyCode::Char('x'), ALT, &modes, on), b"\x1bx");
-    assert_eq!(enc_with(KeyCode::Enter, NONE, &modes, on), b"\r");
+    assert_encodes(&[
+        (KeyCode::Char('a'), CTRL, modify_modes(2), on, b"\x1b[27;5;97~"),
+        (KeyCode::Char('A'), CTRL | SHIFT, modify_modes(2), on, b"\x1b[27;6;65~"),
+        (KeyCode::Enter, SHIFT, modify_modes(2), on, b"\x1b[27;2;13~"),
+        (KeyCode::Esc, ALT, modify_modes(2), on, b"\x1b[27;3;27~"),
+        (KeyCode::Char('i'), CTRL, modify_modes(2), on, b"\x1b[27;5;105~"),
+        (KeyCode::Tab, NONE, modify_modes(2), on, b"\t"),
+        (KeyCode::Char('x'), NONE, modify_modes(2), on, b"x"),
+        (KeyCode::Char('A'), SHIFT, modify_modes(2), on, b"A"),
+        (KeyCode::Char('x'), ALT, modify_modes(2), on, b"\x1bx"),
+        (KeyCode::Enter, NONE, modify_modes(2), on, b"\r"),
+    ]);
 }
 
 #[test]
-fn kitty_disambiguate_sends_ambiguous_keys_as_csi_u() {
-    let modes = TermModes {
-        kitty_keys: 1,
-        ..TermModes::default()
-    };
+fn kitty_disambiguation_and_extended_keys_policy_pick_the_encoding() {
     let on = modified(ExtendedKeys::On, true);
-    assert_eq!(enc_with(KeyCode::Esc, NONE, &modes, on), b"\x1b[27u");
-    assert_eq!(enc_with(KeyCode::Enter, SHIFT, &modes, on), b"\x1b[13;2u");
-    assert_eq!(enc_with(KeyCode::Char('i'), CTRL, &modes, on), b"\x1b[105;5u");
-    assert_eq!(enc_with(KeyCode::Char('A'), CTRL | SHIFT, &modes, on), b"\x1b[97;6u");
-    assert_eq!(enc_with(KeyCode::Tab, NONE, &modes, on), b"\t");
-    assert_eq!(enc_with(KeyCode::Enter, NONE, &modes, on), b"\r");
-    assert_eq!(enc_with(KeyCode::Char('A'), SHIFT, &modes, on), b"A");
-}
-
-#[test]
-fn extended_keys_policy_decides_whether_a_pane_request_counts() {
-    let asked = TermModes {
-        modify_other_keys: 2,
-        ..TermModes::default()
-    };
-    let plain_pane = TermModes::default();
-    assert_eq!(enc_with(KeyCode::Char('a'), CTRL, &plain_pane, modified(ExtendedKeys::On, true)), b"\x01");
-    assert_eq!(enc_with(KeyCode::Char('a'), CTRL, &asked, modified(ExtendedKeys::Off, true)), b"\x01");
-    assert_eq!(enc_with(KeyCode::Char('a'), CTRL, &asked, modified(ExtendedKeys::On, true)), b"\x1b[27;5;97~");
-    assert_eq!(enc_with(KeyCode::Char('a'), CTRL, &plain_pane, modified(ExtendedKeys::Always, true)), b"\x1b[27;5;97~");
+    assert_encodes(&[
+        (KeyCode::Esc, NONE, kitty_modes(1), on, b"\x1b[27u"),
+        (KeyCode::Enter, SHIFT, kitty_modes(1), on, b"\x1b[13;2u"),
+        (KeyCode::Char('i'), CTRL, kitty_modes(1), on, b"\x1b[105;5u"),
+        (KeyCode::Char('A'), CTRL | SHIFT, kitty_modes(1), on, b"\x1b[97;6u"),
+        (KeyCode::Tab, NONE, kitty_modes(1), on, b"\t"),
+        (KeyCode::Enter, NONE, kitty_modes(1), on, b"\r"),
+        (KeyCode::Char('A'), SHIFT, kitty_modes(1), on, b"A"),
+        // extended-keys decides whether a pane's modifyOtherKeys request counts
+        (KeyCode::Char('a'), CTRL, TermModes::default(), on, b"\x01"),
+        (KeyCode::Char('a'), CTRL, modify_modes(2), modified(ExtendedKeys::Off, true), b"\x01"),
+        (KeyCode::Char('a'), CTRL, modify_modes(2), on, b"\x1b[27;5;97~"),
+        (
+            KeyCode::Char('a'),
+            CTRL,
+            TermModes::default(),
+            modified(ExtendedKeys::Always, true),
+            b"\x1b[27;5;97~",
+        ),
+    ]);
 }
 
 #[test]

@@ -45,9 +45,22 @@ pub enum BufferCommands {
         buffer: Option<String>,
     },
 
+    #[command(flatten)]
+    Store(BufferStoreCommands),
+
+    #[command(flatten)]
+    Files(BufferFileCommands),
+
+    #[command(flatten)]
+    Paste(BufferPasteCommands),
+}
+
+/// The commands that set, show and delete paste buffers.
+#[derive(Subcommand, Debug)]
+pub enum BufferStoreCommands {
     /// Store text in a paste buffer; `-n` renames the buffer (tmux set-buffer)
     #[command(name = "set-buffer", alias = "setb")]
-    SetBuffer {
+    Set {
         /// Buffer to set (default: a new buffer, or the newest one with -a)
         #[arg(short = 'b')]
         buffer: Option<String>,
@@ -67,18 +80,22 @@ pub enum BufferCommands {
 
     /// Print a paste buffer (tmux show-buffer)
     #[command(name = "show-buffer", alias = "showb")]
-    ShowBuffer {
+    Show {
         #[arg(short = 'b')]
         buffer: Option<String>,
     },
 
     /// Delete a paste buffer (tmux delete-buffer)
     #[command(name = "delete-buffer", alias = "deleteb")]
-    DeleteBuffer {
+    Delete {
         #[arg(short = 'b')]
         buffer: Option<String>,
     },
+}
 
+/// The commands that load and save paste buffers through files.
+#[derive(Subcommand, Debug)]
+pub enum BufferFileCommands {
     /// Load a file, or stdin with `-`, into a paste buffer (tmux load-buffer)
     #[command(name = "load-buffer", alias = "loadb")]
     LoadBuffer {
@@ -102,7 +119,11 @@ pub enum BufferCommands {
         /// File to write, or `-` for stdout
         path: String,
     },
+}
 
+/// The commands that paste buffers into a pane and list them.
+#[derive(Subcommand, Debug)]
+pub enum BufferPasteCommands {
     /// Paste a paste buffer into a pane (tmux paste-buffer)
     #[command(name = "paste-buffer", alias = "pasteb")]
     PasteBuffer {
@@ -180,23 +201,39 @@ pub async fn run(cmd: BufferCommands, r: &Resolved) -> Result<i32, String> {
             let spec = capture_spec(start.as_deref(), end.as_deref(), escapes, join)?;
             capture_pane(r, target.as_deref(), print, spec, buffer.as_deref()).await
         }
-        BufferCommands::SetBuffer {
+        BufferCommands::Store(cmd) => run_store(cmd, r).await,
+        BufferCommands::Files(cmd) => match cmd {
+            BufferFileCommands::LoadBuffer { buffer, path } => {
+                load_buffer(r, buffer.as_deref(), &path).await
+            }
+            BufferFileCommands::SaveBuffer {
+                buffer,
+                append,
+                path,
+            } => save_buffer(r, buffer.as_deref(), append, &path).await,
+        },
+        BufferCommands::Paste(cmd) => run_paste(cmd, r).await,
+    }
+}
+
+/// Runs `set-buffer`, `show-buffer` or `delete-buffer`.
+async fn run_store(cmd: BufferStoreCommands, r: &Resolved) -> Result<i32, String> {
+    match cmd {
+        BufferStoreCommands::Set {
             buffer,
             append,
             rename,
             data,
         } => set_buffer(r, buffer.as_deref(), append, rename.as_deref(), data).await,
-        BufferCommands::ShowBuffer { buffer } => show_buffer(r, buffer.as_deref()).await,
-        BufferCommands::DeleteBuffer { buffer } => delete_buffer(r, buffer.as_deref()).await,
-        BufferCommands::LoadBuffer { buffer, path } => {
-            load_buffer(r, buffer.as_deref(), &path).await
-        }
-        BufferCommands::SaveBuffer {
-            buffer,
-            append,
-            path,
-        } => save_buffer(r, buffer.as_deref(), append, &path).await,
-        BufferCommands::PasteBuffer {
+        BufferStoreCommands::Show { buffer } => show_buffer(r, buffer.as_deref()).await,
+        BufferStoreCommands::Delete { buffer } => delete_buffer(r, buffer.as_deref()).await,
+    }
+}
+
+/// Runs `paste-buffer` or `list-buffers`.
+async fn run_paste(cmd: BufferPasteCommands, r: &Resolved) -> Result<i32, String> {
+    match cmd {
+        BufferPasteCommands::PasteBuffer {
             buffer,
             target,
             delete,
@@ -219,7 +256,9 @@ pub async fn run(cmd: BufferCommands, r: &Resolved) -> Result<i32, String> {
             .await?;
             Ok(0)
         }
-        BufferCommands::ListBuffers { format } => list_buffers(r, format.as_deref()).await,
+        BufferPasteCommands::ListBuffers { format } => {
+            list_buffers(r, format.as_deref()).await
+        }
     }
 }
 

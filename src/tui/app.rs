@@ -73,6 +73,16 @@ pub struct Subscription {
     pub task: Option<JoinHandle<()>>,
 }
 
+impl Subscription {
+    fn new(tx: mpsc::Sender<(u64, StreamEvent)>) -> Self {
+        Self {
+            generation: 0,
+            tx,
+            task: None,
+        }
+    }
+}
+
 pub type StreamRx = mpsc::Receiver<(u64, StreamEvent)>;
 
 /// Stream events the app holds before its subscription stops reading the daemon. Small, so a pane
@@ -104,19 +114,8 @@ pub struct App {
     pub session: String,
     pub client: Client,
     pub config: Config,
-    /// Config file given with `-f`; `reload-config` re-reads it instead of the default location.
-    pub config_path: Option<PathBuf>,
     pub keymap: Keymap,
     pub mode: Mode,
-    pub history: Vec<String>,
-    pub message: Option<(String, Instant)>,
-    pub repeat_until: Option<Instant>,
-    /// When the prefix key was pressed; the shortcut popup waits `which_key_delay_ms` after it.
-    pub prefix_at: Option<Instant>,
-    /// Pane and cell of a left-button press; a drag from it starts a copy-mode selection.
-    pub press: Option<(String, usize, usize)>,
-    /// A split border held with the mouse: dragging moves it.
-    pub border_drag: Option<BorderGrab>,
     /// Copy-mode state of panes that are not in the foreground: a pane keeps its scroll position,
     /// cursor and selection while the prefix is pending or focus moves elsewhere.
     pub parked_copy: HashMap<String, CopyState>,
@@ -130,10 +129,6 @@ pub struct App {
     pub viewport: (u16, u16),
     /// Rows on screen: the pane area, the status line and the message row.
     pub rows: Rows,
-    /// Clickable items of the status line as last drawn: `[start, end)` columns and their target.
-    pub status_targets: Vec<(usize, usize, Target)>,
-    /// When the last frame was drawn; paces `status-interval`.
-    pub drawn_at: Option<Instant>,
     /// Panes drawn this frame (the zoomed pane alone when zoomed).
     pub panes: Vec<PaneRect>,
     pub active_pane: String,
@@ -144,6 +139,36 @@ pub struct App {
     /// Nodes of the attached session, refreshed every tick.
     pub nodes: Vec<NodeInfo>,
     pub sub: Subscription,
+    /// What the terminal currently shows, so frames send only changed cells.
+    pub canvas: Canvas,
+    /// Commands that wait on the daemon report back here (see `job`).
+    pub jobs: mpsc::UnboundedSender<Job>,
+    pub job_rx: UnboundedReceiver<Job>,
+    /// What this client shows on the outer terminal beyond the panes: title, bells, activity.
+    pub outer: OuterTerminal,
+    /// Frame pacing: when pane output is drawn and when a keypress lets its echo skip the budget.
+    pub pacing: FramePacing,
+    /// Input in progress: prompt history, the status-row message, key repeat, prefix and mouse presses.
+    pub interaction: Interaction,
+    /// Where this client was launched: its config file, socket directory and any fixed size.
+    pub launch: Launch,
+    /// The status line as last drawn: its clickable items and the columns its zones end at.
+    pub status_hits: StatusHits,
+    /// Yanked text and where yanks go.
+    pub yank: YankState,
+    /// The host terminal's colors, as reported at attach and as panes' color sequences changed them.
+    pub host: HostTerm,
+    /// What the app shows beyond the panes: the message log, clock mode's time source and suspension.
+    pub chrome: Chrome,
+    /// This TUI as its session's client, and the session it is attached to.
+    pub attachment: Attachment,
+}
+
+/// Frame pacing state (see `drew` and `prepare_frame`).
+#[derive(Default)]
+pub struct FramePacing {
+    /// When the last frame was drawn; paces `status-interval`.
+    pub drawn_at: Option<Instant>,
     /// When the latest frames that showed new pane output were drawn, oldest first, at most
     /// `FRAMES_PER_BUDGET` of them.
     pub output_frames: VecDeque<Instant>,
@@ -151,33 +176,113 @@ pub struct App {
     pub frame_due: Option<Instant>,
     /// The last key only went to the active pane: nothing on screen changed until it answers.
     pub forwarded: bool,
-    /// When the last key was pressed, and how many of its frames may still skip the budget.
+    /// When the last key was pressed.
     pub last_key: Option<Instant>,
+    /// How many of the last key's frames may still skip the budget.
     pub key_frames: u8,
+}
+
+/// Input in progress: the command history, the status-row message, key repeat, the prefix and the
+/// mouse presses.
+#[derive(Default)]
+pub struct Interaction {
+    /// Command-prompt lines remembered, oldest first (capped at `HISTORY_CAP`).
+    pub history: Vec<String>,
+    /// The status-row message and when it was set.
+    pub message: Option<(String, Instant)>,
+    /// When the window in which a repeated key still counts as repeated ends.
+    pub repeat_until: Option<Instant>,
+    /// When the prefix key was pressed; the shortcut popup waits `which_key_delay_ms` after it.
+    pub prefix_at: Option<Instant>,
+    /// Pane and cell of a left-button press; a drag from it starts a copy-mode selection.
+    pub press: Option<(String, usize, usize)>,
+    /// A split border held with the mouse: dragging moves it.
+    pub border_drag: Option<BorderGrab>,
+}
+
+/// Where this client was launched from.
+pub struct Launch {
+    /// Config file given with `-f`; `reload-config` re-reads it instead of the default location.
+    pub config_path: Option<PathBuf>,
     /// Directory holding the session sockets, used to discover and switch sessions.
     pub socket_dir: PathBuf,
     /// Fixed screen size (columns, rows) instead of the real terminal's.
     pub fixed_size: Option<(u16, u16)>,
+}
+
+impl Launch {
+    fn new(
+        config_path: Option<PathBuf>,
+        socket_dir: PathBuf,
+        fixed_size: Option<(u16, u16)>,
+    ) -> Self {
+        Self {
+            config_path,
+            socket_dir,
+            fixed_size,
+        }
+    }
+}
+
+/// The status line as last drawn.
+pub struct StatusHits {
+    /// Clickable items as `[start, end)` columns and their target.
+    pub targets: Vec<(usize, usize, Target)>,
+    /// Columns the status line's `status-left` ends before and `status-right` starts at.
+    pub zones: (usize, usize),
+}
+
+impl Default for StatusHits {
+    fn default() -> Self {
+        Self {
+            targets: Vec::new(),
+            zones: (0, usize::MAX),
+        }
+    }
+}
+
+/// Yanked text and where it goes.
+pub struct YankState {
     /// Where yanks go; `Captured` keeps them in memory instead of the system clipboard.
     pub clipboard: Clipboard,
-    /// What the terminal currently shows, so frames send only changed cells.
-    pub canvas: Canvas,
+    /// The text of the last yank.
     pub last_copy: Option<String>,
     /// Text yanked while handling the current event, pushed to the session's paste buffers after it.
     pub yanks: Vec<String>,
+}
+
+impl YankState {
+    fn new(clipboard: Clipboard) -> Self {
+        Self {
+            clipboard,
+            last_copy: None,
+            yanks: Vec::new(),
+        }
+    }
+}
+
+/// The host terminal's colors.
+#[derive(Default)]
+pub struct HostTerm {
     /// Default foreground and background of the host terminal, read at attach.
-    pub host_colors: super::render::HostColors,
+    pub colors: super::render::HostColors,
     /// What the terminal reported at attach, which a color reset goes back to.
-    pub host_original: super::render::HostColors,
+    pub original: super::render::HostColors,
+}
+
+/// What the app shows beyond the panes.
+#[derive(Default)]
+pub struct Chrome {
     /// The last `MESSAGE_LOG_CAP` status-row messages, oldest first (`show-messages`).
     pub message_log: Vec<String>,
     /// Set by `suspend-client`; the event loop stops the process once the command has run.
     pub suspend_requested: bool,
     /// Where clock mode reads the time.
     pub clock: ClockSource,
-    /// Commands that wait on the daemon report back here (see `job`).
-    pub jobs: mpsc::UnboundedSender<Job>,
-    pub job_rx: UnboundedReceiver<Job>,
+}
+
+/// This client as its session's client.
+pub struct Attachment {
     /// This TUI as its session's client: its name, the size it reports and its read-only flag.
     pub terminal: ClientInfo,
     /// Clients attached to this session, counted every tick (`session_attached`).
@@ -186,8 +291,17 @@ pub struct App {
     pub times: crate::format::SessionTimes,
     /// The session this client was attached to before the current one (`switch-client -l`).
     pub previous_session: Option<String>,
-    /// What this client shows on the outer terminal beyond the panes: title, bells, activity.
-    pub outer: OuterTerminal,
+}
+
+impl Attachment {
+    fn new(terminal: ClientInfo) -> Self {
+        Self {
+            terminal,
+            attached: 0,
+            times: crate::format::SessionTimes::default(),
+            previous_session: None,
+        }
+    }
 }
 
 /// Where clock mode reads the time: the system clock, or a fixed time (for tests).
@@ -274,7 +388,7 @@ impl App {
         app.refresh_nodes().await;
         if let Ok(info) = app.client.info().await {
             // The daemon's name wins over the socket's: `rename-session` changes one, not the other.
-            app.times = crate::format::SessionTimes {
+            app.attachment.times = crate::format::SessionTimes {
                 started_ms: info.created_ms,
                 restored_ms: info.restored_ms,
             };
@@ -304,30 +418,14 @@ impl App {
             client_name,
         } = opts;
         let (jobs, job_rx) = unbounded_channel();
-        let now = crate::node::now_ms();
-        let terminal = ClientInfo {
-            name: client_name.unwrap_or_else(crate::clients::terminal_name),
-            session: session.to_string(),
-            width: 0,
-            height: 0,
-            readonly: attach.read_only,
-            created_ms: now,
-            activity_ms: now,
-        };
+        let terminal = terminal_info(session, client_name, attach.read_only);
         App {
             endpoint: endpoint.to_string(),
             session: session.to_string(),
             client,
             config,
-            config_path,
             keymap,
             mode: Mode::Normal,
-            history: Vec::new(),
-            message: None,
-            repeat_until: None,
-            prefix_at: None,
-            press: None,
-            border_drag: None,
             parked_copy: HashMap::new(),
             vt: HashMap::new(),
             passthroughs: Vec::new(),
@@ -336,8 +434,6 @@ impl App {
             layout: LayoutCache::new(),
             viewport: (80, 23),
             rows: statusline::rows(24, 1, false),
-            status_targets: Vec::new(),
-            drawn_at: None,
             panes: Vec::new(),
             active_pane: String::new(),
             active_rect: None,
@@ -345,34 +441,19 @@ impl App {
             focus_pane: None,
             split_counter: 1,
             nodes: Vec::new(),
-            sub: Subscription {
-                generation: 0,
-                tx,
-                task: None,
-            },
-            output_frames: VecDeque::new(),
-            frame_due: None,
-            forwarded: false,
-            last_key: None,
-            key_frames: 0,
-            socket_dir,
-            fixed_size: size,
-            clipboard: Clipboard::System,
+            sub: Subscription::new(tx),
             canvas: Canvas::default(),
-            last_copy: None,
-            yanks: Vec::new(),
-            host_colors: super::render::HostColors::default(),
-            host_original: super::render::HostColors::default(),
-            message_log: Vec::new(),
-            suspend_requested: false,
-            clock: ClockSource::default(),
             jobs,
             job_rx,
-            terminal,
-            attached: 0,
-            times: crate::format::SessionTimes::default(),
-            previous_session: None,
             outer: OuterTerminal::default(),
+            pacing: FramePacing::default(),
+            interaction: Interaction::default(),
+            launch: Launch::new(config_path, socket_dir, size),
+            status_hits: StatusHits::default(),
+            yank: YankState::new(Clipboard::System),
+            host: HostTerm::default(),
+            chrome: Chrome::default(),
+            attachment: Attachment::new(terminal),
         }
     }
 
@@ -390,7 +471,7 @@ impl App {
         self.sub.generation += 1;
         let generation = self.sub.generation;
         let tx = self.sub.tx.clone();
-        let terminal = self.terminal.clone();
+        let terminal = self.attachment.terminal.clone();
         self.sub.task = Some(tokio::spawn(async move {
             let _ = client
                 .stream_as_client(terminal, exclusive, tx, move |event| (generation, event))
@@ -401,7 +482,7 @@ impl App {
     /// Fetches the layout and pane sizes for the next frame. Returns false when nothing is left to show.
     pub async fn prepare_frame(&mut self) -> bool {
         let (w, h) = self
-            .fixed_size
+            .launch.fixed_size
             .unwrap_or_else(|| crossterm::terminal::size().unwrap_or((80, 24)));
         let status_lines = if self.config.status {
             self.config.status_lines
@@ -467,7 +548,7 @@ impl App {
         }
         // While a border is dragged, panes are drawn at their new places as they are: resizing
         // their terminals and rebuilding their screens waits for the release.
-        if self.border_drag.is_none() {
+        if self.interaction.border_drag.is_none() {
             self.sync_pane_sizes().await;
         }
         self.route_focus().await;
@@ -517,7 +598,7 @@ impl App {
         if name.is_empty()
             || !self.config.terminal.focus_events
             || !self.modes_of(name).focus_events
-            || self.terminal.readonly
+            || self.attachment.terminal.readonly
         {
             return;
         }
@@ -621,20 +702,20 @@ impl App {
         // The focused pane's output right after a keypress is likely its response: it goes out at
         // once, whatever other panes are flooding, for a few frames per keypress.
         let typing = echo
-            && self.key_frames > 0
-            && self
+            && self.pacing.key_frames > 0
+            && self.pacing
                 .last_key
                 .is_some_and(|at| now.saturating_duration_since(at) < TYPING_WINDOW);
         if typing {
-            self.key_frames -= 1;
+            self.pacing.key_frames -= 1;
         }
-        let window_start = (self.output_frames.len() == FRAMES_PER_BUDGET)
-            .then(|| self.output_frames.front().copied())
+        let window_start = (self.pacing.output_frames.len() == FRAMES_PER_BUDGET)
+            .then(|| self.pacing.output_frames.front().copied())
             .flatten();
-        self.frame_due = Some(if typing {
+        self.pacing.frame_due = Some(if typing {
             now
         } else {
-            next_frame(window_start, now, self.frame_due)
+            next_frame(window_start, now, self.pacing.frame_due)
         });
         Flow::Continue
     }
@@ -643,11 +724,11 @@ impl App {
     /// output counts against the frame budget; a redraw for a keypress must not delay the output
     /// that keypress provokes.
     pub fn drew(&mut self, at: Instant) {
-        self.drawn_at = Some(at);
-        if self.frame_due.take().is_some() {
-            self.output_frames.push_back(at);
-            if self.output_frames.len() > FRAMES_PER_BUDGET {
-                self.output_frames.pop_front();
+        self.pacing.drawn_at = Some(at);
+        if self.pacing.frame_due.take().is_some() {
+            self.pacing.output_frames.push_back(at);
+            if self.pacing.output_frames.len() > FRAMES_PER_BUDGET {
+                self.pacing.output_frames.pop_front();
             }
         }
     }
@@ -687,7 +768,7 @@ impl App {
     /// Work that follows every input or stream batch: copies made reach the paste buffers.
     async fn after_input(&mut self) {
         self.ring_bells();
-        for text in std::mem::take(&mut self.yanks) {
+        for text in std::mem::take(&mut self.yank.yanks) {
             if let Err(e) = self.client.set_buffer(None, &text, false).await {
                 self.say(format!("set-buffer: {e}"));
             }
@@ -697,8 +778,8 @@ impl App {
     async fn handle_event(&mut self, ev: Event) -> Flow {
         match ev {
             Event::Key(key) if key.kind != KeyEventKind::Release => {
-                self.last_key = Some(Instant::now());
-                self.key_frames = TYPING_FRAMES;
+                self.pacing.last_key = Some(Instant::now());
+                self.pacing.key_frames = TYPING_FRAMES;
                 self.on_key(key).await
             }
             Event::Mouse(mouse) => self.on_mouse(mouse).await,
@@ -717,11 +798,11 @@ impl App {
     /// Records a message for the status row; it expires after a few seconds.
     pub fn say(&mut self, text: impl Into<String>) -> Flow {
         let text = text.into();
-        self.message_log.push(text.clone());
-        if self.message_log.len() > MESSAGE_LOG_CAP {
-            self.message_log.remove(0);
+        self.chrome.message_log.push(text.clone());
+        if self.chrome.message_log.len() > MESSAGE_LOG_CAP {
+            self.chrome.message_log.remove(0);
         }
-        self.message = Some((text, Instant::now()));
+        self.interaction.message = Some((text, Instant::now()));
         Flow::Continue
     }
 
@@ -734,41 +815,41 @@ impl App {
 
     /// The live message, if one was set within the last few seconds.
     pub fn live_message(&self) -> Option<&str> {
-        self.message
+        self.interaction.message
             .as_ref()
             .filter(|(_, at)| at.elapsed() < Duration::from_millis(self.config.display_time_ms))
             .map(|(text, _)| text.as_str())
     }
 
     pub fn remember(&mut self, line: &str) {
-        if self.history.last().map(String::as_str) != Some(line) {
-            self.history.push(line.to_string());
-            if self.history.len() > HISTORY_CAP {
-                self.history.remove(0);
+        if self.interaction.history.last().map(String::as_str) != Some(line) {
+            self.interaction.history.push(line.to_string());
+            if self.interaction.history.len() > HISTORY_CAP {
+                self.interaction.history.remove(0);
             }
         }
     }
 
     pub fn repeating(&self) -> bool {
-        self.repeat_until
+        self.interaction.repeat_until
             .is_some_and(|until| Instant::now() < until)
     }
 
     pub fn arm_repeat(&mut self) {
-        self.repeat_until = Some(Instant::now() + REPEAT_WINDOW);
+        self.interaction.repeat_until = Some(Instant::now() + REPEAT_WINDOW);
     }
 
     /// Enters prefix mode; the shortcut popup follows after the configured delay.
     pub fn enter_prefix(&mut self) {
         self.mode = Mode::Prefix;
-        self.prefix_at = Some(Instant::now());
+        self.interaction.prefix_at = Some(Instant::now());
     }
 
     /// When the pending shortcut popup is due, while prefix mode waits for its next key.
     pub fn hud_deadline(&self) -> Option<Instant> {
         let delay = Duration::from_millis(self.config.which_key_delay_ms);
         match self.mode {
-            Mode::Prefix => self.prefix_at.map(|at| at + delay),
+            Mode::Prefix => self.interaction.prefix_at.map(|at| at + delay),
             _ => None,
         }
     }
@@ -840,6 +921,20 @@ async fn ensure_running_window(client: &mut Client) -> Result<(), String> {
         })
         .await
         .map(|_| ())
+}
+
+/// This TUI as its session's client: the name it reports, sized when it attaches.
+fn terminal_info(session: &str, client_name: Option<String>, read_only: bool) -> ClientInfo {
+    let now = crate::node::now_ms();
+    ClientInfo {
+        name: client_name.unwrap_or_else(crate::clients::terminal_name),
+        session: session.to_string(),
+        width: 0,
+        height: 0,
+        readonly: read_only,
+        created_ms: now,
+        activity_ms: now,
+    }
 }
 
 /// When to draw output that arrived at `now`: a frame already scheduled stands; otherwise at once,
@@ -1018,8 +1113,8 @@ impl Tui {
         let report = super::terminal::query_terminal(opts.config.style.dim_inactive);
         let (mut app, stream) = App::open(endpoint, session, start, opts).await?;
         app.canvas.set_lr_margins(report.margins);
-        app.host_colors = super::render::HostColors::from_report(&report);
-        app.host_original = app.host_colors;
+        app.host.colors = super::render::HostColors::from_report(&report);
+        app.host.original = app.host.colors;
         let mut tui = Self {
             out: BufWriter::with_capacity(64 * 1024, stdout()),
             body: Vec::with_capacity(64 * 1024),
@@ -1057,16 +1152,16 @@ impl Tui {
             self.app.config.mouse,
             &mut self.mouse_captured,
         );
-        let forwarded = std::mem::take(&mut self.app.forwarded);
-        self.redraw = needs_redraw(output, forwarded, self.app.frame_due, Instant::now())
+        let forwarded = std::mem::take(&mut self.app.pacing.forwarded);
+        self.redraw = needs_redraw(output, forwarded, self.app.pacing.frame_due, Instant::now())
             || suspended
             || self.app.outer.bell_pending;
         if ticked
             && self.app.live_message().is_none()
-            && self.app.frame_due.is_none()
+            && self.app.pacing.frame_due.is_none()
             && !statusline::status_due(
                 self.app.config.status_interval,
-                self.app.drawn_at,
+                self.app.pacing.drawn_at,
                 Instant::now(),
             )
         {
@@ -1098,7 +1193,7 @@ impl Tui {
     /// Waits for input, stream output, the tick or a delayed element coming due.
     async fn wait(&mut self) -> Wake {
         let popup = self.app.hud_deadline().filter(|_| !self.app.hud_visible());
-        let due = earliest([popup, self.app.frame_due, self.app.display_deadline()]);
+        let due = earliest([popup, self.app.pacing.frame_due, self.app.display_deadline()]);
         tokio::select! {
             Some(event) = super::popup::next_event(&mut self.app.mode) => Wake::Popup(event),
             Some(event) = self.keys.recv() => Wake::Input(event),
@@ -1132,7 +1227,7 @@ impl Tui {
 
     /// Gives the terminal to the shell when `suspend-client` asked for it; returns whether it did.
     fn suspend_if_requested(&mut self) -> bool {
-        let suspended = std::mem::take(&mut self.app.suspend_requested);
+        let suspended = std::mem::take(&mut self.app.chrome.suspend_requested);
         if suspended {
             let _ = self.out.flush();
             if let Err(e) = self.guard.suspend() {

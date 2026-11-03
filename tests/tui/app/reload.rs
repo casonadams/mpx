@@ -10,7 +10,7 @@ fn ctrl_a() -> KeyEvent {
 }
 
 fn said(h: &Harness) -> String {
-    h.app.message.as_ref().map(|(m, _)| m.clone()).unwrap_or_default()
+    h.app.interaction.message.as_ref().map(|(m, _)| m.clone()).unwrap_or_default()
 }
 
 #[tokio::test]
@@ -19,7 +19,7 @@ async fn reload_applies_the_file_and_keeps_the_old_config_when_it_is_invalid() {
     h.frame().await;
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("config.toml");
-    h.app.config_path = Some(file.clone());
+    h.app.launch.config_path = Some(file.clone());
     assert!(!h.app.keymap.is_prefix(&ctrl_a()));
 
     std::fs::write(&file, "prefix = \"C-a\"\n").unwrap();

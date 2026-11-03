@@ -54,6 +54,13 @@ pub enum ClientCommands {
         status: bool,
     },
 
+    #[command(flatten)]
+    Switch(SwitchClientCommands),
+}
+
+/// The `switch-client` command, flattened into `ClientCommands`.
+#[derive(Subcommand, Debug)]
+pub enum SwitchClientCommands {
     /// Switch a client to another session (tmux switch-client)
     #[command(name = "switch-client", alias = "switchc")]
     SwitchClient {
@@ -91,20 +98,24 @@ pub async fn run(cmd: ClientCommands, r: &Resolved) -> Result<i32, String> {
         ClientCommands::RefreshClient { target, size, .. } => {
             refresh(r, target.as_deref(), size.as_deref()).await
         }
-        ClientCommands::SwitchClient {
-            client,
-            target,
-            last,
-            next,
-            prev,
-        } => {
-            let step = [(last, "-l"), (next, "-n"), (prev, "-p")]
-                .into_iter()
-                .find(|(set, _)| *set)
-                .map(|(_, flag)| flag);
-            switch(r, client.as_deref(), target.as_deref(), step).await
-        }
+        ClientCommands::Switch(cmd) => switch_client(r, cmd).await,
     }
+}
+
+/// `switch-client [-c client] (-t session | -l | -n | -p)`: the step is the flag given, if any.
+async fn switch_client(r: &Resolved, cmd: SwitchClientCommands) -> Result<i32, String> {
+    let SwitchClientCommands::SwitchClient {
+        client,
+        target,
+        last,
+        next,
+        prev,
+    } = cmd;
+    let step = [(last, "-l"), (next, "-n"), (prev, "-p")]
+        .into_iter()
+        .find(|(set, _)| *set)
+        .map(|(_, flag)| flag);
+    switch(r, client.as_deref(), target.as_deref(), step).await
 }
 
 /// Client rows that match `target` (a client name), or every client when `None`.

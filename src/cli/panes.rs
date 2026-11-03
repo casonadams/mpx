@@ -73,6 +73,16 @@ pub enum NodeCommands {
         data: String,
     },
 
+    #[command(flatten)]
+    Input(NodeInputCommands),
+
+    #[command(flatten)]
+    Control(NodeControlCommands),
+}
+
+/// The commands that send keys or text to a pane.
+#[derive(Subcommand, Debug)]
+pub enum NodeInputCommands {
     /// Send keys to a pane (tmux send-keys); key names such as Enter, C-c, or literal text with -l
     #[command(name = "send-keys")]
     SendKeys {
@@ -101,7 +111,11 @@ pub enum NodeCommands {
         #[arg(allow_hyphen_values = true)]
         text: String,
     },
+}
 
+/// The commands that end, wait on or snapshot a node.
+#[derive(Subcommand, Debug)]
+pub enum NodeControlCommands {
     /// Terminate a running node
     Kill {
         /// Name of the node
@@ -305,18 +319,32 @@ async fn node_command(cmd: NodeCommands, r: &Resolved) -> Result<i32, String> {
             .await
         }
         NodeCommands::Send { name, data } => send(r, &name, &data).await,
-        NodeCommands::SendKeys {
+        NodeCommands::Input(cmd) => node_input(cmd, r).await,
+        NodeCommands::Control(cmd) => node_control(cmd, r).await,
+    }
+}
+
+/// Runs `send-keys` or `paste`.
+async fn node_input(cmd: NodeInputCommands, r: &Resolved) -> Result<i32, String> {
+    match cmd {
+        NodeInputCommands::SendKeys {
             target,
             literal,
             keys,
         } => send_keys(r, target.as_deref(), literal, keys).await,
-        NodeCommands::Paste {
+        NodeInputCommands::Paste {
             target,
             submit,
             text,
         } => paste(r, target.as_deref(), submit, &text).await,
-        NodeCommands::Kill { name } => kill_node(r, &name).await,
-        NodeCommands::Wait {
+    }
+}
+
+/// Runs `kill`, `wait` or `screen`.
+async fn node_control(cmd: NodeControlCommands, r: &Resolved) -> Result<i32, String> {
+    match cmd {
+        NodeControlCommands::Kill { name } => kill_node(r, &name).await,
+        NodeControlCommands::Wait {
             name,
             timeout,
             idle,
@@ -331,7 +359,7 @@ async fn node_command(cmd: NodeCommands, r: &Resolved) -> Result<i32, String> {
             )
             .await
         }
-        NodeCommands::Screen { name } => screen_node(r, &name).await,
+        NodeControlCommands::Screen { name } => screen_node(r, &name).await,
     }
 }
 

@@ -13,21 +13,21 @@ use super::overlay::Overlay;
 impl App {
     /// Tells the daemon this client gave input: the `latest` window-size policy follows it.
     pub async fn touch_client(&mut self) {
-        let name = self.terminal.name.clone();
+        let name = self.attachment.terminal.name.clone();
         let result = self.client.client_activity(&name).await;
         self.report("client activity", result);
     }
 
     /// Tells the daemon the size of the area this client shows the window in, when it changed.
     pub async fn report_size(&mut self, width: u16, height: u16) {
-        if (self.terminal.width, self.terminal.height) == (width, height) {
+        if (self.attachment.terminal.width, self.attachment.terminal.height) == (width, height) {
             return;
         }
-        let name = self.terminal.name.clone();
+        let name = self.attachment.terminal.name.clone();
         let result = self.client.client_resized(&name, width, height).await;
         if result.is_ok() {
-            self.terminal.width = width;
-            self.terminal.height = height;
+            self.attachment.terminal.width = width;
+            self.attachment.terminal.height = height;
         }
         self.report("resize", result);
     }
@@ -35,14 +35,14 @@ impl App {
     /// Counts the clients attached to this session, for `session_attached`.
     pub async fn refresh_attached(&mut self) {
         if let Ok(clients) = self.client.list_clients().await {
-            self.attached = clients.len();
+            self.attachment.attached = clients.len();
         }
     }
 
     /// `list-clients [-t session] [-F format]`: the clients of `target` (of every session without
     /// one), a line each, in an overlay.
     pub async fn list_clients(&mut self, target: Option<String>, format: Option<String>) -> Flow {
-        let mut rows = clients::attached_clients(&self.socket_dir).await;
+        let mut rows = clients::attached_clients(&self.launch.socket_dir).await;
         if let Some(session) = target {
             rows.retain(|r| r.info.session == session);
         }
@@ -58,7 +58,7 @@ impl App {
     /// `detach-client [-a] [-t client]`: detaches `target`, or with `all_others` the other clients
     /// of its session. Detaching this client ends the TUI.
     pub async fn detach_clients(&mut self, target: Option<String>, all_others: bool) -> Flow {
-        let own = self.terminal.name.clone();
+        let own = self.attachment.terminal.name.clone();
         let keep = target.clone().unwrap_or_else(|| own.clone());
         if !all_others && (target.is_none() || keep == own) {
             return Flow::Quit;
@@ -85,7 +85,7 @@ impl App {
         target: Option<String>,
         size: Option<(u16, u16)>,
     ) -> Flow {
-        let name = target.unwrap_or_else(|| self.terminal.name.clone());
+        let name = target.unwrap_or_else(|| self.attachment.terminal.name.clone());
         let result = match self.endpoint_of(&name).await {
             Ok(endpoint) => match Client::connect(&endpoint).await {
                 Ok(mut client) => client.refresh_client(&name, size).await,
@@ -107,10 +107,10 @@ impl App {
 
     /// The daemon of the session the client called `name` is attached to.
     async fn endpoint_of(&self, name: &str) -> Result<String, String> {
-        if name == self.terminal.name {
+        if name == self.attachment.terminal.name {
             return Ok(self.endpoint.clone());
         }
-        let rows = clients::attached_clients(&self.socket_dir).await;
+        let rows = clients::attached_clients(&self.launch.socket_dir).await;
         clients::find_row(&rows, name)
             .map(|row| row.endpoint.clone())
             .ok_or_else(|| format!("can't find client: {name}"))
@@ -123,7 +123,7 @@ impl App {
         if self.config.session.detach_on_destroy {
             return false;
         }
-        let infos = ipc::session_infos(&self.socket_dir).await;
+        let infos = ipc::session_infos(&self.launch.socket_dir).await;
         let Some(next) = infos
             .into_iter()
             .find(|info| info.name != self.session && info.panes > 0)

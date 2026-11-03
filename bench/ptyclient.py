@@ -67,7 +67,6 @@ class PtyClient:
 
     def __init__(self, argv: list[str], env: dict[str, str], marker: bytes | None = None):
         self.marker = marker
-        self.drained = 0
         self.marker_at: float | None = None
         self._tail = b""
         self._seen = threading.Event()
@@ -94,7 +93,6 @@ class PtyClient:
                 return
             if not chunk:
                 return
-            self.drained += len(chunk)
             if self.marker and not self._seen.is_set():
                 window = self._tail + chunk
                 if self.marker in window:
@@ -135,24 +133,25 @@ class PtyClient:
                 raise TimeoutError(f"client still running after {timeout}s")
             time.sleep(0.001)
 
+    def _reap(self, timeout: float, interval: float) -> bool:
+        """Poll until the client is reaped, for up to ``timeout`` seconds; True once it is."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                if os.waitpid(self.pid, os.WNOHANG)[0] == self.pid:
+                    return True
+            except ChildProcessError:  # already reaped
+                return True
+            time.sleep(interval)
+        return False
+
     def close(self) -> None:
         """Terminate the client, reap it, and release the PTY."""
         try:
             os.kill(self.pid, signal.SIGTERM)
         except ProcessLookupError:
             pass
-        reaped = False
-        deadline = time.monotonic() + 3.0
-        while time.monotonic() < deadline:
-            try:
-                if os.waitpid(self.pid, os.WNOHANG)[0] == self.pid:
-                    reaped = True
-                    break
-            except ChildProcessError:
-                reaped = True
-                break
-            time.sleep(0.02)
-        if not reaped:
+        if not self._reap(3.0, 0.02):
             try:
                 os.kill(self.pid, signal.SIGKILL)
                 os.waitpid(self.pid, 0)

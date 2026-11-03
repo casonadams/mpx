@@ -77,18 +77,7 @@ pub(super) async fn execute(state: &Arc<DaemonState>, req: Request) -> Response 
             target,
             background,
             delay_ms,
-        }) => {
-            let job = shell::Job {
-                command,
-                target,
-                background,
-                delay: delay_ms.map(Duration::from_millis),
-            };
-            match shell::run(state.session_tx(), job).await {
-                Ok(resp) => resp,
-                Err(e) => Response::Error(e),
-            }
-        }
+        }) => run_shell(state, command, target, background, delay_ms).await,
         Request::Script(ScriptRequest::RunCommand { line }) => run_line(state, &line).await,
         Request::Script(ScriptRequest::WaitFor { channel, op }) => {
             match state
@@ -117,6 +106,26 @@ pub(super) async fn execute(state: &Arc<DaemonState>, req: Request) -> Response 
             Response::Error("Idempotent requests cannot nest or stream".to_string())
         }
         req => state.session_req(req).await,
+    }
+}
+
+/// `run-shell`: runs the job on the shell path and answers with its result.
+async fn run_shell(
+    state: &Arc<DaemonState>,
+    command: String,
+    target: Option<String>,
+    background: bool,
+    delay_ms: Option<u64>,
+) -> Response {
+    let job = shell::Job {
+        command,
+        target,
+        background,
+        delay: delay_ms.map(Duration::from_millis),
+    };
+    match shell::run(state.session_tx(), job).await {
+        Ok(resp) => resp,
+        Err(e) => Response::Error(e),
     }
 }
 

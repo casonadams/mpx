@@ -186,7 +186,7 @@ impl App {
         let pass = vt.take_passthroughs();
         if self.config.allow_passthrough.allows(name == self.active_pane) {
             for sequence in &pass {
-                self.host_colors.follow(&self.host_original, sequence);
+                self.host.colors.follow(&self.host.original, sequence);
             }
             self.passthroughs.extend(pass);
         }

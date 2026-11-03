@@ -83,7 +83,7 @@ async fn overlays_open_show_their_text_and_close_on_their_key() {
     ];
     for (opener, shows, text, close) in cases {
         let mut h = Harness::start(Config::default(), ECHO).await;
-        h.app.clock = ClockSource::Fixed(9, 41);
+        h.app.chrome.clock = ClockSource::Fixed(9, 41);
         h.frame().await;
         let shown = match opener {
             Opener::Command(line) => h.command_frame(line).await,
@@ -137,13 +137,13 @@ async fn the_message_log_keeps_the_last_hundred_messages() {
     for i in 0..105 {
         h.app.say(format!("note {i}"));
     }
-    assert_eq!(h.app.message_log.len(), 100);
+    assert_eq!(h.app.chrome.message_log.len(), 100);
     assert_eq!(
-        h.app.message_log.first().map(String::as_str),
+        h.app.chrome.message_log.first().map(String::as_str),
         Some("note 5")
     );
     assert_eq!(
-        h.app.message_log.last().map(String::as_str),
+        h.app.chrome.message_log.last().map(String::as_str),
         Some("note 104")
     );
 }
@@ -216,7 +216,7 @@ async fn suspend_client_asks_the_event_loop_to_stop_the_process() {
 
     h.command("suspend-client").await;
     assert!(h.mode_is_normal());
-    assert!(h.app.suspend_requested);
+    assert!(h.app.chrome.suspend_requested);
 }
 
 #[test]

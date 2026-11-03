@@ -9,26 +9,71 @@ use crate::format::truthy;
 /// `eval` expands the tmux formats of a condition or a `%hidden` value.
 pub fn lines(text: &str, eval: impl Fn(&str) -> String) -> Result<Vec<(usize, String)>, String> {
     let mut out = Vec::new();
-    let mut frames: Vec<Frame> = Vec::new();
-    let mut hidden: BTreeMap<String, String> = BTreeMap::new();
+    let mut conditions = Conditions::default();
     for (line_no, line) in logical_lines(text) {
         let line = line.trim_start();
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        let active = frames.last().is_none_or(|f| f.active);
         let Some(directive) = line.strip_prefix('%') else {
-            if active {
-                out.push((line_no, substitute(line, &hidden)));
+            if conditions.active() {
+                out.push((line_no, substitute(line, &conditions.hidden)));
             }
             continue;
         };
         let (word, rest) = directive
             .split_once(char::is_whitespace)
             .map_or((directive, ""), |(word, rest)| (word, rest.trim()));
+        conditions.directive(word, rest, line_no, &eval)?;
+    }
+    match conditions.frames.last() {
+        Some(frame) => Err(format!("line {}: %if without %endif", frame.line)),
+        None => Ok(out),
+    }
+}
+
+/// The `%if` stack and the `%hidden` variables read so far.
+#[derive(Default)]
+struct Conditions {
+    frames: Vec<Frame>,
+    hidden: BTreeMap<String, String>,
+}
+
+impl Conditions {
+    /// Whether the lines read now are in an active branch.
+    fn active(&self) -> bool {
+        self.frames.last().is_none_or(|f| f.active)
+    }
+
+    /// Applies the directive `word` with its argument `rest`, read on `line_no`.
+    fn directive(
+        &mut self,
+        word: &str,
+        rest: &str,
+        line_no: usize,
+        eval: &impl Fn(&str) -> String,
+    ) -> Result<(), String> {
+        match word {
+            "if" | "elif" | "else" | "endif" => self.branch(word, rest, line_no, eval),
+            "hidden" if self.active() => self.set_hidden(rest, line_no, eval),
+            "hidden" => Ok(()),
+            other => Err(format!("line {line_no}: unknown directive %{other}")),
+        }
+    }
+
+    /// `%if` opens a block, `%elif` and `%else` continue it and `%endif` closes it.
+    fn branch(
+        &mut self,
+        word: &str,
+        rest: &str,
+        line_no: usize,
+        eval: &impl Fn(&str) -> String,
+    ) -> Result<(), String> {
+        let Conditions { frames, hidden } = self;
+        let active = frames.last().is_none_or(|f| f.active);
         match word {
             "if" => {
-                let cond = active && truthy(&eval(&substitute(rest, &hidden)));
+                let cond = active && truthy(&eval(&substitute(rest, hidden)));
                 frames.push(Frame {
                     parent: active,
                     seen: cond,
@@ -40,8 +85,7 @@ pub fn lines(text: &str, eval: impl Fn(&str) -> String) -> Result<Vec<(usize, St
                 let frame = frames
                     .last_mut()
                     .ok_or_else(|| format!("line {line_no}: %elif without %if"))?;
-                let cond =
-                    frame.parent && !frame.seen && truthy(&eval(&substitute(rest, &hidden)));
+                let cond = frame.parent && !frame.seen && truthy(&eval(&substitute(rest, hidden)));
                 frame.active = cond;
                 frame.seen |= cond;
             }
@@ -52,24 +96,27 @@ pub fn lines(text: &str, eval: impl Fn(&str) -> String) -> Result<Vec<(usize, St
                 frame.active = frame.parent && !frame.seen;
                 frame.seen = true;
             }
-            "endif" => {
+            _ => {
                 frames
                     .pop()
                     .ok_or_else(|| format!("line {line_no}: %endif without %if"))?;
             }
-            "hidden" if active => {
-                let (name, value) = hidden_assignment(rest)
-                    .ok_or_else(|| format!("line {line_no}: %hidden needs NAME=value"))?;
-                let value = eval(&substitute(value, &hidden));
-                hidden.insert(name.to_string(), value);
-            }
-            "hidden" => {}
-            other => return Err(format!("line {line_no}: unknown directive %{other}")),
         }
+        Ok(())
     }
-    match frames.last() {
-        Some(frame) => Err(format!("line {}: %if without %endif", frame.line)),
-        None => Ok(out),
+
+    /// `%hidden NAME=value`: defines a variable whose value is expanded first.
+    fn set_hidden(
+        &mut self,
+        rest: &str,
+        line_no: usize,
+        eval: &impl Fn(&str) -> String,
+    ) -> Result<(), String> {
+        let (name, value) = hidden_assignment(rest)
+            .ok_or_else(|| format!("line {line_no}: %hidden needs NAME=value"))?;
+        let value = eval(&substitute(value, &self.hidden));
+        self.hidden.insert(name.to_string(), value);
+        Ok(())
     }
 }
 

@@ -251,7 +251,7 @@ async fn a_hidden_windows_output_never_reaches_the_tui_and_shows_once_selected()
     while let Ok(item) = h.rx.try_recv() {
         h.app.on_stream(Some(item), &mut h.rx).await;
     }
-    h.app.frame_due = None;
+    h.app.pacing.frame_due = None;
 
     h.probe.send_input("work", "BEHIND-THE-SCENES").await.expect("send");
     wait_for(&mut h.probe, "work", "BEHIND-THE-SCENES").await;
@@ -265,7 +265,7 @@ async fn a_hidden_windows_output_never_reaches_the_tui_and_shows_once_selected()
         .get("work")
         .is_some_and(|vt| vt.snapshot().contains("BEHIND-THE-SCENES"));
     assert!(!parsed, "the daemon does not send a hidden window's output");
-    assert_eq!(h.app.frame_due, None, "nothing on screen changed");
+    assert_eq!(h.app.pacing.frame_due, None, "nothing on screen changed");
 
     h.prefixed_char('1').await;
     let shown = h.frame().await;
@@ -413,7 +413,7 @@ async fn select_window_finds_a_window_by_name() {
     assert_eq!(active_window(&h), first);
 
     h.command("select-window -t ':nosuch'").await;
-    assert!(h.app.message.as_ref().is_some_and(|(m, _)| m.contains("can't find window: nosuch")));
+    assert!(h.app.interaction.message.as_ref().is_some_and(|(m, _)| m.contains("can't find window: nosuch")));
     assert_eq!(active_window(&h), first);
 }
 
@@ -452,7 +452,7 @@ async fn next_window_with_a_steps_to_the_window_that_has_activity() {
 
     h.command("next-window -a").await;
     assert!(
-        h.app.message.as_ref().is_some_and(|(m, _)| m.contains("no next window with an alert")),
+        h.app.interaction.message.as_ref().is_some_and(|(m, _)| m.contains("no next window with an alert")),
         "no window has an alert yet"
     );
     assert_eq!(active_window(&h), first);
@@ -473,7 +473,7 @@ async fn next_window_with_a_steps_to_the_window_that_has_activity() {
 
     h.command("previous-window -a").await;
     assert!(
-        h.app.message.as_ref().is_some_and(|(m, _)| m.contains("no previous window with an alert")),
+        h.app.interaction.message.as_ref().is_some_and(|(m, _)| m.contains("no previous window with an alert")),
         "visiting the window cleared its alert"
     );
 }

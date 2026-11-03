@@ -182,6 +182,14 @@ fn select_pane_by_target_or_direction() {
         })
     );
     assert_eq!(ok("select-pane -M"), Command::Pane(PaneCommand::ClearMark));
+    assert_eq!(
+        ok("select-pane -d"),
+        Command::Pane(PaneCommand::InputOff { target: None, off: true })
+    );
+    assert_eq!(
+        ok("select-pane -e -t x"),
+        Command::Pane(PaneCommand::InputOff { target: Some("x".into()), off: false })
+    );
     assert_eq!(ok("mark-pane"), Command::Pane(PaneCommand::MarkPane { target: None }));
     assert!(err("select-pane").contains("need -t"));
 }

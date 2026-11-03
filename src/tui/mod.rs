@@ -13,6 +13,7 @@ pub mod overlay;
 pub mod panes;
 pub mod prompt;
 pub mod render;
+pub mod mouse_menu;
 pub mod menu;
 pub mod placement;
 pub mod popup;

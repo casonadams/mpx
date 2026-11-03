@@ -99,6 +99,9 @@ pub struct NodeInfo {
     /// Whether this pane is the marked pane in the session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub marked: Option<bool>,
+    /// Whether input to this pane is off (tmux `select-pane -d`): typed and sent keys are dropped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_off: Option<bool>,
 }
 
 impl NodeInfo {
@@ -124,6 +127,7 @@ impl NodeInfo {
             cursor: None,
             history_size: None,
             size: None,
+            input_off: None,
             marked: None,
         }
     }
@@ -522,6 +526,13 @@ pub enum PaneRequest {
         name: Option<String>,
         #[serde(default)]
         clear: bool,
+    },
+    /// Turns input to a pane off (`off`, tmux `select-pane -d`) or back on (`-e`). If `name` is None,
+    /// targets the currently active pane. While off, keys sent to the pane are dropped.
+    InputOff {
+        #[serde(default)]
+        name: Option<String>,
+        off: bool,
     },
     BreakPane {
         name: String,

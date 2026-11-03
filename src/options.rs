@@ -207,10 +207,32 @@ static TERMINAL_OPTIONS: &[Opt] = &[
     ),
 ];
 
-/// The status line and the messages shown on it.
-static STATUS_OPTIONS: &[Opt] = &[
+/// Messages shown on the status line: their styles.
+static MESSAGE_OPTIONS: &[Opt] = &[
     style_option!("message-command-style", message_command_style),
     style_option!("message-style", message_style),
+];
+
+/// The text on either side of the window list, and the widths they are cut to.
+static STATUS_SIDE_OPTIONS: &[Opt] = &[
+    text_option!("status-left", status_left),
+    option!(
+        "status-left-length",
+        status_left_length,
+        |v: &usize| v.to_string(),
+        number::<usize>
+    ),
+    text_option!("status-right", status_right),
+    option!(
+        "status-right-length",
+        status_right_length,
+        |v: &usize| v.to_string(),
+        number::<usize>
+    ),
+];
+
+/// The status line: its rows, position and justification.
+static STATUS_OPTIONS: &[Opt] = &[
     Opt {
         name: "status",
         get: |c| {
@@ -249,25 +271,11 @@ static STATUS_OPTIONS: &[Opt] = &[
         |v: &crate::config::Justify| v.as_str().to_string(),
         |v: &str| v.parse()
     ),
-    text_option!("status-left", status_left),
-    option!(
-        "status-left-length",
-        status_left_length,
-        |v: &usize| v.to_string(),
-        number::<usize>
-    ),
     option!(
         "status-position",
         status_position,
         |v: &crate::config::StatusPosition| v.as_str().to_string(),
         |v: &str| v.parse()
-    ),
-    text_option!("status-right", status_right),
-    option!(
-        "status-right-length",
-        status_right_length,
-        |v: &usize| v.to_string(),
-        number::<usize>
     ),
     style_option!("status-style", status_style),
 ];
@@ -290,7 +298,9 @@ fn tables() -> impl Iterator<Item = &'static Opt> {
         GENERAL_OPTIONS,
         PANE_OPTIONS,
         TERMINAL_OPTIONS,
+        MESSAGE_OPTIONS,
         STATUS_OPTIONS,
+        STATUS_SIDE_OPTIONS,
         WINDOW_OPTIONS,
     ]
     .into_iter()

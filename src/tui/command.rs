@@ -199,6 +199,8 @@ pub enum PaneCommand {
     SelectPaneDir { side: Side, keep_zoom: bool },
     MarkPane { target: Option<String> },
     ClearMark,
+    /// `select-pane -d` (`off`) or `-e`: stops or resumes input to a pane.
+    InputOff { target: Option<String>, off: bool },
     /// `join-pane [-dh] [-s src] [-t dst]`: moves `src` (default: the marked pane) next to `dst`
     /// (default: the active pane), side by side with `-h`, else stacked. `-d` keeps the active pane.
     JoinPane {
@@ -1191,7 +1193,7 @@ const MOVE_WINDOW: Spec = Spec {
     stop_at_arg: false,
 };
 const SELECT_PANE: Spec = Spec {
-    bools: &["-L", "-R", "-U", "-D", "-m", "-M", "-Z"],
+    bools: &["-L", "-R", "-U", "-D", "-m", "-M", "-Z", "-d", "-e"],
     values: &["-t"],
     stop_at_arg: false,
 };
@@ -1447,6 +1449,12 @@ fn select_pane(name: &str, args: &[String]) -> Result<Command, String> {
     let keep_zoom = o.has("-Z");
     if o.has("-M") {
         return Ok(Command::Pane(PaneCommand::ClearMark));
+    }
+    if o.has("-d") || o.has("-e") {
+        return Ok(Command::Pane(PaneCommand::InputOff {
+            target: o.value("-t").map(str::to_string),
+            off: o.has("-d"),
+        }));
     }
     if o.has("-m") {
         return Ok(Command::Pane(PaneCommand::MarkPane {

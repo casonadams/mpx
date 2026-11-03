@@ -45,7 +45,7 @@ async fn set_option_reports_unknown_and_daemon_options_and_quiet_hides_unknown()
     assert_eq!(said, "set-option: unknown option: nonsense");
     let said = h.command_message("set -g remain-on-exit on").await.unwrap_or_default();
     assert!(said.contains("reload-config"), "{said}");
-    h.app.message = None;
+    h.app.interaction.message = None;
     let said = h.command_message("set -gq nonsense 1").await;
     assert_eq!(said, None);
 }

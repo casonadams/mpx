@@ -105,7 +105,7 @@ pub async fn open_app(
     let (mut app, rx) = App::open(&sandbox.endpoint(session), session, StartView::Panes, opts)
         .await
         .expect("attach app");
-    app.clipboard = Clipboard::Captured(Vec::new());
+    app.yank.clipboard = Clipboard::Captured(Vec::new());
     (app, rx)
 }
 
@@ -210,6 +210,12 @@ pub fn active_window(h: &Harness) -> String {
         .find(|t| t.is_active)
         .map(|t| t.name.clone())
         .unwrap_or_default()
+}
+
+/// Runs `line` at the `:` prompt and returns the message it leaves, or an empty string when it
+/// leaves none. A refused command says why in that message.
+pub async fn run_line(h: &mut Harness, line: &str) -> String {
+    h.command_message(line).await.unwrap_or_default()
 }
 
 /// The text of a popup's screen, one line per row.
@@ -508,7 +514,7 @@ impl Harness {
     }
 
     pub fn clipboard(&self) -> Vec<String> {
-        match &self.app.clipboard {
+        match &self.app.yank.clipboard {
             Clipboard::Captured(texts) => texts.clone(),
             Clipboard::System => panic!("clipboard must be captured in tests"),
         }

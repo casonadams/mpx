@@ -65,7 +65,7 @@ impl App {
         if name == self.session {
             return Ok(());
         }
-        let infos = ipc::session_infos(&self.socket_dir).await;
+        let infos = ipc::session_infos(&self.launch.socket_dir).await;
         let target = pick_session(&infos, name)?;
         self.attach_endpoint(&target.endpoint, &target.name).await
     }
@@ -79,11 +79,11 @@ impl App {
         }
         let sub = Client::connect(endpoint).await.map_err(|_| not_running())?;
         if self.session != name {
-            self.previous_session = Some(self.session.clone());
+            self.attachment.previous_session = Some(self.session.clone());
         }
         self.endpoint = endpoint.to_string();
         self.session = name.to_string();
-        self.terminal.session = name.to_string();
+        self.attachment.terminal.session = name.to_string();
         self.client = client;
         self.reset_view();
         self.subscribe(sub);
@@ -130,7 +130,7 @@ impl App {
         match session.filter(|s| *s != self.session.as_str()) {
             None => Ok((None, pane.to_string())),
             Some(other) => {
-                let endpoint = ipc::endpoint_in(&self.socket_dir, other);
+                let endpoint = ipc::endpoint_in(&self.launch.socket_dir, other);
                 let client = Client::connect(&endpoint)
                     .await
                     .map_err(|_| format!("session '{other}' is not running"))?;

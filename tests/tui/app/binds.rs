@@ -54,7 +54,7 @@ async fn typing_bind_key_at_the_prompt_binds_it_here_and_records_it_in_the_sessi
     assert_eq!(recorded, [("prefix:w".to_string(), "split-window -h".to_string())]);
 
     h.command("bind-key q nosuchcommand").await;
-    assert!(h.app.message.as_ref().is_some_and(|(m, _)| m.contains("unknown command")));
+    assert!(h.app.interaction.message.as_ref().is_some_and(|(m, _)| m.contains("unknown command")));
 }
 
 #[tokio::test]

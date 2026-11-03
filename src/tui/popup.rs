@@ -8,7 +8,9 @@ use std::time::Duration;
 use crossterm::cursor::MoveTo;
 use crossterm::event::KeyEvent;
 use crossterm::queue;
-use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
+use portable_pty::{
+    Child, ChildKiller, CommandBuilder, MasterPty, PtySize, SlavePty, native_pty_system,
+};
 use tokio::sync::mpsc;
 
 use super::app::Mode;
@@ -105,19 +107,9 @@ impl PopupState {
         }
         .map_err(|e| format!("display-popup: failed to open a pty: {e}"))?;
 
-        let mut cmd = CommandBuilder::new(shell);
-        if let Some(command) = &opts.command {
-            cmd.arg("-c");
-            cmd.arg(command);
-        }
-        if let Some(dir) = &opts.cwd {
-            cmd.cwd(dir);
-        }
-        cmd.env("TERM", term);
-        cmd.env("COLORTERM", "truecolor");
-        let mut child = pair
+        let child = pair
             .slave
-            .spawn_command(cmd)
+            .spawn_command(popup_command(&opts, shell, term))
             .map_err(|e| format!("display-popup: failed to start {shell}: {e}"))?;
         let killer = child.clone_killer();
         let reader = pair
@@ -128,22 +120,7 @@ impl PopupState {
             .master
             .take_writer()
             .map_err(|e| format!("display-popup: {e}"))?;
-
-        let (tx, rx) = mpsc::unbounded_channel();
-        let (eof_tx, eof_rx) = std::sync::mpsc::channel::<()>();
-        let output = tx.clone();
-        std::thread::spawn(move || {
-            pump(reader, &output);
-            let _ = eof_tx.send(());
-        });
-        let slave = pair.slave;
-        std::thread::spawn(move || {
-            let code = child.wait().ok().map(|status| status.exit_code() as i32);
-            drop(slave);
-            // The output is read to its end before the exit is reported, so none of it is lost.
-            let _ = eof_rx.recv_timeout(Duration::from_millis(500));
-            let _ = tx.send(PopupEvent::Exited(code));
-        });
+        let rx = watch(child, reader, pair.slave);
 
         Ok(Self {
             opts,
@@ -246,6 +223,44 @@ fn pty_size(cols: u16, rows: u16) -> PtySize {
         pixel_width: 0,
         pixel_height: 0,
     }
+}
+
+/// The command a popup runs: `shell -c command`, or the shell alone, in the popup's directory.
+fn popup_command(opts: &PopupOpts, shell: &str, term: &str) -> CommandBuilder {
+    let mut cmd = CommandBuilder::new(shell);
+    if let Some(line) = &opts.command {
+        cmd.arg("-c");
+        cmd.arg(line);
+    }
+    if let Some(dir) = &opts.cwd {
+        cmd.cwd(dir);
+    }
+    cmd.env("TERM", term);
+    cmd.env("COLORTERM", "truecolor");
+    cmd
+}
+
+/// Reads the command's output on one thread and reports its exit on another, after the output's
+/// end, so none of it is lost.
+fn watch(
+    mut child: Box<dyn Child + Send + Sync>,
+    reader: Box<dyn io::Read + Send>,
+    slave: Box<dyn SlavePty + Send>,
+) -> mpsc::UnboundedReceiver<PopupEvent> {
+    let (tx, rx) = mpsc::unbounded_channel();
+    let (eof_tx, eof_rx) = std::sync::mpsc::channel::<()>();
+    let output = tx.clone();
+    std::thread::spawn(move || {
+        pump(reader, &output);
+        let _ = eof_tx.send(());
+    });
+    std::thread::spawn(move || {
+        let code = child.wait().ok().map(|status| status.exit_code() as i32);
+        drop(slave);
+        let _ = eof_rx.recv_timeout(Duration::from_millis(500));
+        let _ = tx.send(PopupEvent::Exited(code));
+    });
+    rx
 }
 
 /// Copies the command's output to the TUI until its end of file, or until the TUI has gone.

@@ -38,6 +38,8 @@ pub struct PaneView {
     pub active: bool,
     pub dead: bool,
     pub marked: bool,
+    /// Input to the pane is off (`select-pane -d`).
+    pub input_off: bool,
     pub marked_set: bool,
     /// The pane is in a mode (copy mode), (`pane_in_mode`).
     pub in_mode: bool,
@@ -623,16 +625,24 @@ pub struct SessionTimes {
     pub restored_ms: Option<u64>,
 }
 
+/// The session-level inputs of the variables every session-describing set shares.
+struct SessionScope<'a> {
+    session: &'a str,
+    times: SessionTimes,
+    attached: usize,
+}
+
 /// Variables that do not depend on the pane or session being described.
-fn shared_vars(vars: &mut Vars, session: &str, times: SessionTimes, attached: usize) {
+fn shared_vars(vars: &mut Vars, scope: &SessionScope<'_>) {
     let host = host_name();
     let host_short = host.split('.').next().unwrap_or_default().to_string();
-    vars.insert("client_session", session.to_string());
+    let times = scope.times;
+    vars.insert("client_session", scope.session.to_string());
     vars.insert("session_id", format!("${}", times.started_ms));
     let created = times.restored_ms.unwrap_or(times.started_ms);
     vars.insert("session_created", (created / 1000).to_string());
     vars.insert("start_time", (times.started_ms / 1000).to_string());
-    vars.insert("session_attached", attached.to_string());
+    vars.insert("session_attached", scope.attached.to_string());
     vars.insert("host", host);
     vars.insert("host_short", host_short);
     vars.insert("pid", std::process::id().to_string());
@@ -653,31 +663,12 @@ fn terminal_vars(p: &PaneView, vars: &mut Vars) {
 /// The variables of a session with no pane to describe: its name, times and the host's.
 pub fn session_vars(session: &str, times: SessionTimes, attached: usize) -> Vars {
     let mut vars = Vars::from([("session_name", session.to_string())]);
-    shared_vars(&mut vars, session, times, attached);
+    shared_vars(&mut vars, &SessionScope { session, times, attached });
     vars
 }
 
-pub fn pane_vars(p: &PaneView) -> Vars {
-    let mut vars = Vars::new();
-    vars.insert("pane_id", format!("%{}", p.id));
-    vars.insert("pane_index", (p.index + p.pane_base).to_string());
-    vars.insert("pane_pid", p.pid.map(|x| x.to_string()).unwrap_or_default());
-    vars.insert("pane_title", p.title.clone());
-    vars.insert("pane_current_command", p.command.clone());
-    vars.insert("pane_current_path", p.path.clone());
-    vars.insert("pane_width", p.width.to_string());
-    vars.insert("pane_height", p.height.to_string());
-    vars.insert("pane_active", flag(p.active));
-    vars.insert("pane_dead", flag(p.dead));
-    vars.insert("pane_marked", flag(p.marked));
-    vars.insert("pane_marked_set", flag(p.marked_set));
-    vars.insert("pane_in_mode", flag(p.in_mode));
-    vars.insert(
-        "pane_mode",
-        if p.in_mode { "copy-mode" } else { "" }.to_string(),
-    );
-    vars.insert("pane_tty", p.tty.clone());
-    vars.insert("pane_start_command", p.start_command.clone());
+/// A pane's rectangle in its window and which window edges it touches.
+fn pane_layout_vars(p: &PaneView, vars: &mut Vars) {
     if let Some(r) = p.rect {
         vars.insert("pane_left", r.x.to_string());
         vars.insert("pane_top", r.y.to_string());
@@ -690,6 +681,14 @@ pub fn pane_vars(p: &PaneView) -> Vars {
             r.y.saturating_add(r.height).saturating_sub(1).to_string(),
         );
     }
+    vars.insert("pane_at_left", flag(p.edges[0]));
+    vars.insert("pane_at_top", flag(p.edges[1]));
+    vars.insert("pane_at_right", flag(p.edges[2]));
+    vars.insert("pane_at_bottom", flag(p.edges[3]));
+}
+
+/// The session and window variables of a pane: its window's index, name, panes and flags.
+fn pane_window_vars(p: &PaneView, vars: &mut Vars) {
     vars.insert("session_name", p.session.clone());
     vars.insert("session_windows", p.session_windows.to_string());
     vars.insert("window_index", (p.window + p.window_base).to_string());
@@ -705,12 +704,39 @@ pub fn pane_vars(p: &PaneView) -> Vars {
     vars.insert("window_last_flag", flag(p.window_last));
     vars.insert("window_marked_flag", flag(p.window_marked));
     vars.insert("pane_synchronized", flag(p.synchronized));
-    vars.insert("pane_at_left", flag(p.edges[0]));
-    vars.insert("pane_at_top", flag(p.edges[1]));
-    vars.insert("pane_at_right", flag(p.edges[2]));
-    vars.insert("pane_at_bottom", flag(p.edges[3]));
+}
+
+pub fn pane_vars(p: &PaneView) -> Vars {
+    let mut vars = Vars::new();
+    vars.insert("pane_id", format!("%{}", p.id));
+    vars.insert("pane_index", (p.index + p.pane_base).to_string());
+    vars.insert("pane_pid", p.pid.map(|x| x.to_string()).unwrap_or_default());
+    vars.insert("pane_title", p.title.clone());
+    vars.insert("pane_current_command", p.command.clone());
+    vars.insert("pane_current_path", p.path.clone());
+    vars.insert("pane_width", p.width.to_string());
+    vars.insert("pane_height", p.height.to_string());
+    vars.insert("pane_active", flag(p.active));
+    vars.insert("pane_dead", flag(p.dead));
+    vars.insert("pane_input_off", flag(p.input_off));
+    vars.insert("pane_marked", flag(p.marked));
+    vars.insert("pane_marked_set", flag(p.marked_set));
+    vars.insert("pane_in_mode", flag(p.in_mode));
+    vars.insert(
+        "pane_mode",
+        if p.in_mode { "copy-mode" } else { "" }.to_string(),
+    );
+    vars.insert("pane_tty", p.tty.clone());
+    vars.insert("pane_start_command", p.start_command.clone());
+    pane_layout_vars(p, &mut vars);
+    pane_window_vars(p, &mut vars);
     terminal_vars(p, &mut vars);
-    shared_vars(&mut vars, &p.session, p.times, p.session_attached);
+    let scope = SessionScope {
+        session: &p.session,
+        times: p.times,
+        attached: p.session_attached,
+    };
+    shared_vars(&mut vars, &scope);
     vars
 }
 
@@ -809,6 +835,26 @@ fn window_flags(p: &PaneView) -> String {
     WindowFlags::from(p).render()
 }
 
+/// The layout rectangle of the pane named `name`, and whether the layout marks it active.
+fn layout_of(name: &str, rects: &[(String, Rect, bool)]) -> (Option<Rect>, bool) {
+    rects
+        .iter()
+        .find(|(n, _, _)| n == name)
+        .map_or((None, false), |(_, r, f)| (Some(*r), *f))
+}
+
+/// Sets the window-tab fields of `view` from its window's tab; all false when it has none.
+fn apply_tab(view: &mut PaneView, tab: Option<&WindowTab>) {
+    view.window_active = tab.is_some_and(|t| t.is_active);
+    view.window_last = tab.is_some_and(|t| t.is_last);
+    view.window_activity = tab.is_some_and(|t| t.has_activity);
+    view.window_bell = tab.is_some_and(|t| t.has_bell);
+    view.window_marked = tab.is_some_and(|t| t.has_marked);
+    view.window_zoomed = tab.is_some_and(|t| t.zoomed);
+    view.window_silence = tab.is_some_and(|t| t.has_silence);
+    view.synchronized = tab.is_some_and(|t| t.synchronized);
+}
+
 /// View of one pane from its node position, the current layout rectangles and the window tabs.
 pub fn pane_view(
     session: &str,
@@ -818,16 +864,11 @@ pub fn pane_view(
     tabs: &[WindowTab],
 ) -> PaneView {
     let window = node.window.unwrap_or(0);
-    let (width, height, active, rect) = rects
-        .iter()
-        .find(|(n, _, _)| n == &node.name)
-        .map(|(_, r, f)| (r.width, r.height, *f, Some(*r)))
-        .unwrap_or((0, 0, false, None));
+    let (rect, layout_active) = layout_of(&node.name, rects);
+    let (width, height) = rect.map_or((0, 0), |r| (r.width, r.height));
     let marked = node.marked.unwrap_or(false);
-    let marked_set = tabs.iter().any(|t| t.has_marked) || marked;
     let tab = tabs.iter().find(|t| t.index == window);
-    let edges = at_edges(rect, rects);
-    PaneView {
+    let mut view = PaneView {
         session: session.to_string(),
         times: SessionTimes::default(),
         id: node.id,
@@ -841,10 +882,11 @@ pub fn pane_view(
         path: node.cwd.clone().unwrap_or_default(),
         width,
         height,
-        active: tab.map_or(active, |t| t.focused.as_deref() == Some(node.name.as_str())),
+        active: tab.map_or(layout_active, |t| t.focused.as_deref() == Some(node.name.as_str())),
         dead: !node.is_running(),
         marked,
-        marked_set,
+        marked_set: tabs.iter().any(|t| t.has_marked) || marked,
+        input_off: node.input_off.unwrap_or(false),
         in_mode: false,
         window,
         window_name: tab.map(|t| t.name.clone()).unwrap_or_default(),
@@ -855,20 +897,14 @@ pub fn pane_view(
             .map(|t| format!("/dev/{t}"))
             .unwrap_or_default(),
         rect,
-        window_active: tab.is_some_and(|t| t.is_active),
-        window_last: tab.is_some_and(|t| t.is_last),
-        window_activity: tab.is_some_and(|t| t.has_activity),
-        window_bell: tab.is_some_and(|t| t.has_bell),
-        window_marked: tab.is_some_and(|t| t.has_marked),
-        window_zoomed: tab.is_some_and(|t| t.zoomed),
-        window_silence: tab.is_some_and(|t| t.has_silence),
-        synchronized: tab.is_some_and(|t| t.synchronized),
-        edges,
+        edges: at_edges(rect, rects),
         cursor: node.cursor,
         history_size: node.history_size,
         session_windows: tabs.len(),
         ..Default::default()
-    }
+    };
+    apply_tab(&mut view, tab);
+    view
 }
 
 /// The `list-buffers -F` default: `name: N bytes: "sample"`.

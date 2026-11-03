@@ -10,7 +10,7 @@ use mpx::config::Config;
 use mpx::protocol::{ClientInfo, StreamEvent};
 use mpx::tui::app::AttachOpts;
 
-use super::support::{ECHO, Harness, MAIN, SESSION, open_app, wait_for};
+use super::support::{ECHO, Harness, MAIN, SESSION, open_app, run_line, wait_for};
 
 const WAIT: Duration = Duration::from_secs(2);
 
@@ -52,7 +52,7 @@ async fn a_read_only_client_is_refused_commands_that_change_the_session() {
     let mut h = Harness::start_with(Config::default(), ECHO, attach, None).await;
     h.frame().await;
 
-    let said = h.command_message("new-window").await.unwrap_or_default();
+    let said = run_line(&mut h, "new-window").await;
     assert!(said.contains("read-only client"), "{said}");
     assert_eq!(h.windows().await.len(), 1);
 }

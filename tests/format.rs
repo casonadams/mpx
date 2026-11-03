@@ -407,10 +407,9 @@ fn buffer_samples_keep_fifty_characters_and_escape_control_bytes() {
 }
 
 #[test]
-fn match_operator_globs_or_matches_a_regex() {
-    let v = vars(&[("name", "build-42")]);
+fn match_and_arithmetic_operators_compute_their_values() {
     assert_expands(
-        &v,
+        &vars(&[("name", "build-42")]),
         &[
             ("#{m:build*,#{name}}", "1"),
             ("#{m:b?ild-4[0-9],#{name}}", "1"),
@@ -422,13 +421,8 @@ fn match_operator_globs_or_matches_a_regex() {
             ("#{m/r:(,#{name}}", "0"),
         ],
     );
-}
-
-#[test]
-fn arithmetic_operator_computes_integers_and_floats() {
-    let v = base_vars();
     assert_expands(
-        &v,
+        &base_vars(),
         &[
             ("#{e|+:2,3}", "5"),
             ("#{e|-:2,5}", "-3"),
@@ -490,33 +484,37 @@ fn window_flags_and_pane_edges_are_exposed_as_variables() {
 }
 
 #[test]
-fn window_loop_expands_body_once_per_window() {
-    let lists = Lists {
+fn window_pane_and_nested_loops_expand_body_once_per_item() {
+    let windows = Lists {
         windows: vec![
             vars(&[("window_index", "1"), ("window_name", "shell")]),
             vars(&[("window_index", "2"), ("window_name", "logs")]),
         ],
         ..Lists::default()
     };
-    assert_eq!(
-        expand_with("#{W:#{window_index}=#{window_name} }", &Vars::new(), &lists),
-        "1=shell 2=logs "
-    );
-}
-
-#[test]
-fn pane_loop_expands_body_once_per_pane() {
-    let lists = Lists {
+    let panes = Lists {
         panes: vec![
             vars(&[("pane_index", "0"), ("pane_active", "1")]),
             vars(&[("pane_index", "1"), ("pane_active", "0")]),
         ],
         ..Lists::default()
     };
-    assert_eq!(
-        expand_with("#{P:#{pane_index}#{?pane_active,*,}}", &Vars::new(), &lists),
-        "0*1"
-    );
+    let nested = Lists {
+        windows: vec![
+            vars(&[("window_active", "1"), ("window_name", "shell")]),
+            vars(&[("window_active", "0"), ("window_name", "logs")]),
+        ],
+        ..Lists::default()
+    };
+    let cases: &[(&Lists, &str, &str)] = &[
+        (&windows, "#{W:#{window_index}=#{window_name} }", "1=shell 2=logs "),
+        (&panes, "#{P:#{pane_index}#{?pane_active,*,}}", "0*1"),
+        (&nested, "#{W:#{?window_active,[#{window_name}],#{window_name}}}", "[shell]logs"),
+        (&nested, "#{W:a#,b#}c}", "a,b}ca,b}c"),
+    ];
+    for (lists, format, want) in cases {
+        assert_eq!(expand_with(format, &Vars::new(), lists), *want, "format {format:?}");
+    }
 }
 
 #[test]
@@ -539,29 +537,6 @@ fn loops_over_empty_lists_expand_to_nothing() {
             &Vars::new()
         ),
         "xyz"
-    );
-}
-
-#[test]
-fn loop_body_may_nest_conditionals_and_escapes() {
-    let lists = Lists {
-        windows: vec![
-            vars(&[("window_active", "1"), ("window_name", "shell")]),
-            vars(&[("window_active", "0"), ("window_name", "logs")]),
-        ],
-        ..Lists::default()
-    };
-    assert_eq!(
-        expand_with(
-            "#{W:#{?window_active,[#{window_name}],#{window_name}}}",
-            &Vars::new(),
-            &lists
-        ),
-        "[shell]logs"
-    );
-    assert_eq!(
-        expand_with("#{W:a#,b#}c}", &Vars::new(), &lists),
-        "a,b}ca,b}c"
     );
 }
 
@@ -593,4 +568,38 @@ fn pretty_time_shows_the_clock_for_recent_times_and_the_day_for_older_ones() {
         "{older:?}"
     );
     assert_eq!(expand("#{t/p:bad}", &v), "");
+}
+
+#[test]
+fn pane_input_off_is_a_flag_variable() {
+    let off = node("p", 1);
+    let on = NodeInfo {
+        input_off: Some(true),
+        ..node("p", 1)
+    };
+    assert_expands(&pane_vars(&pane_view("dev", 0, &on, &[], &[])), &[("#{pane_input_off}", "1")]);
+    assert_expands(&pane_vars(&pane_view("dev", 0, &off, &[], &[])), &[("#{pane_input_off}", "0")]);
+}
+
+#[test]
+fn session_loop_entry_carries_the_session_variables() {
+    let times = SessionTimes {
+        started_ms: 1_709_647_629_000,
+        restored_ms: Some(1_709_647_700_000),
+    };
+    let tabs = [tab(0), tab(1)];
+    let session = mpx::tui::statusline::SessionInfo {
+        name: "work",
+        times,
+        attached: 2,
+    };
+    let lists = mpx::tui::statusline::status_lists(session, &tabs, &[], false, 0);
+    assert_eq!(
+        expand_with(
+            "#{S:#{session_name} #{session_id} #{session_created} #{start_time} #{session_attached} #{session_windows}}",
+            &Vars::new(),
+            &lists,
+        ),
+        "work $1709647629000 1709647700 1709647629 2 2",
+    );
 }

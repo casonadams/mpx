@@ -497,6 +497,17 @@ impl Client {
         self.call_ok("MarkPane", req).await
     }
 
+    /// Sends pane request `req` as operation `op`.
+    async fn pane_op(&mut self, op: &str, req: PaneRequest) -> Result<(), String> {
+        self.call_ok(op, Request::Pane(req)).await
+    }
+
+    /// Turns input to pane `name` (the active pane when `None`) off (`select-pane -d`) or on (`-e`).
+    pub async fn input_off(&mut self, name: Option<&str>, off: bool) -> Result<(), String> {
+        let name = name.map(str::to_string);
+        self.pane_op("InputOff", PaneRequest::InputOff { name, off }).await
+    }
+
     pub async fn break_pane(&mut self, name: &str) -> Result<(), String> {
         self.call_ok(
             "BreakPane",

@@ -61,6 +61,13 @@ async fn check(h: &mut Harness, step: &str) {
     check_masked(h, step, &[]).await;
 }
 
+/// Closes the overlay the caller just opened with Esc, then asserts every pane matches again.
+async fn esc_overlay(h: &mut Harness, step: &str) {
+    h.frame().await;
+    h.key(KeyCode::Esc).await;
+    check(h, step).await;
+}
+
 /// The cells the display-panes numbers cover in the last frame.
 fn number_areas(h: &Harness) -> Vec<Rect> {
     let mut areas = Vec::new();
@@ -144,28 +151,20 @@ async fn frames_keep_the_terminal_identical_to_the_panes() {
     check(&mut h, "unzoomed").await;
 
     h.prefixed_char('?').await;
-    h.frame().await;
-    h.key(KeyCode::Esc).await;
-    check(&mut h, "help overlay closed").await;
+    esc_overlay(&mut h, "help overlay closed").await;
 
     h.ctrl('b').await;
-    h.frame().await;
-    h.key(KeyCode::Esc).await;
-    check(&mut h, "prefix HUD dismissed").await;
+    esc_overlay(&mut h, "prefix HUD dismissed").await;
 
     h.key(KeyCode::Char(':')).await;
-    h.frame().await;
-    h.key(KeyCode::Esc).await;
-    check(&mut h, "command prompt cancelled").await;
+    esc_overlay(&mut h, "command prompt cancelled").await;
 
     h.emit(MAIN, "\x1b[H\x1b[2Jfinal\r\nFINAL-DONE", "FINAL-DONE")
         .await;
     check(&mut h, "redraw after overlays").await;
 
     h.prefixed_char('?').await;
-    h.frame().await;
-    h.key(KeyCode::Esc).await;
-    check(&mut h, "overlay closed").await;
+    esc_overlay(&mut h, "overlay closed").await;
     h.prefixed_char('z').await;
     check(&mut h, "zoomed pane").await;
     h.prefixed_char('z').await;
@@ -228,7 +227,7 @@ async fn pane_overlays_cover_only_their_own_cells() {
     check(&mut h, "pane numbers dismissed").await;
 
     h.command("clock-mode").await;
-    h.app.clock = ClockSource::Fixed(9, 41);
+    h.app.chrome.clock = ClockSource::Fixed(9, 41);
     h.frame().await;
     let clock = h.rect_of(MAIN);
     check_masked(&mut h, "clock fills the active pane", &[clock]).await;
