@@ -1,4 +1,5 @@
 pub mod grid;
+pub mod capture;
 pub mod parser;
 
 pub use grid::{Cell, CellStyle, Color, Cursor, Grid, HistoryRow, ScrollHint};

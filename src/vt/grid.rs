@@ -71,6 +71,8 @@ pub struct HistoryRow {
     text: RowText,
     /// First column and style of each run, in column order; the first run starts at column 0.
     runs: Box<[(u16, CellStyle)]>,
+    /// The row wrapped at the right margin: its text continues on the next row.
+    wrapped: bool,
 }
 
 impl HistoryRow {
@@ -91,6 +93,7 @@ impl HistoryRow {
         Self {
             text,
             runs: runs.into_boxed_slice(),
+            wrapped: false,
         }
     }
 
@@ -168,6 +171,8 @@ pub struct Grid {
     pub rows: usize,
     /// One vector of `cols` cells per screen row, so scrolling moves rows instead of cells.
     lines: Vec<Vec<Cell>>,
+    /// Per screen row: the row wrapped at the right margin, so its text continues on the next row.
+    wrapped: Vec<bool>,
     pub cursor: Cursor,
     pub saved_cursor: Option<Cursor>,
     pub scroll_top: usize,
@@ -193,6 +198,7 @@ impl Grid {
             cols,
             rows,
             lines: vec![vec![Cell::default(); cols]; rows],
+            wrapped: vec![false; rows],
             cursor: Cursor::default(),
             saved_cursor: None,
             scroll_top: 0,
@@ -218,6 +224,7 @@ impl Grid {
         for line in &mut self.lines {
             line.resize(new_cols, Cell::default());
         }
+        self.wrapped.resize(new_rows, false);
         self.cols = new_cols;
         self.rows = new_rows;
         self.scroll_top = 0;
@@ -239,6 +246,15 @@ impl Grid {
 
     pub fn get_cell_mut(&mut self, x: usize, y: usize) -> Option<&mut Cell> {
         self.lines.get_mut(y).and_then(|line| line.get_mut(x))
+    }
+
+    /// Whether line `abs_line` (history or live screen) wrapped at the right margin.
+    pub fn line_wrapped(&self, abs_line: usize) -> bool {
+        let total_hist = self.history.len();
+        match abs_line.checked_sub(total_hist) {
+            Some(y) => self.wrapped.get(y).copied().unwrap_or(false),
+            None => self.history.get(abs_line).is_some_and(|row| row.wrapped),
+        }
     }
     pub fn history_len(&self) -> usize {
         self.history.len()
@@ -300,6 +316,7 @@ impl Grid {
     pub fn put_char(&mut self, c: char) {
         if self.cursor.x >= self.cols {
             self.cursor.x = 0;
+            self.wrapped[self.cursor.y] = true;
             self.newline();
         }
 
@@ -378,6 +395,7 @@ impl Grid {
         let (top, bottom) = (self.scroll_top, self.scroll_bottom);
         let n = lines.unsigned_abs().min(bottom - top + 1);
         self.scroll_mixed = true;
+        self.wrapped[top..=bottom].fill(false);
         let blank = self.blank();
         let rows: Vec<usize> = if lines > 0 {
             (top..=bottom).collect()
@@ -401,23 +419,44 @@ impl Grid {
     }
 
     pub fn scroll_up(&mut self, count: usize) {
+        self.scroll_region(count, true);
+    }
+
+    /// Scrolls the lines of the scroll region by `count` rows, up or down. Scrolling up sends the
+    /// rows leaving the top of a full screen to history and blanks rows entering at the bottom;
+    /// scrolling down blanks rows entering at the top.
+    fn scroll_region(&mut self, count: usize, up: bool) {
         if count == 0 || self.scroll_top >= self.scroll_bottom {
             return;
         }
         if let Some(columns) = self.narrow_margins() {
-            self.scroll_columns(columns, count as isize);
+            let lines = count as isize;
+            self.scroll_columns(columns, if up { lines } else { -lines });
             return;
         }
         let (top, bottom) = (self.scroll_top, self.scroll_bottom);
         let n = count.min(bottom - top + 1);
-        self.note_scroll(top, bottom, n as isize);
-        self.lines[top..=bottom].rotate_left(n);
+        if up {
+            self.note_scroll(top, bottom, n as isize);
+            self.lines[top..=bottom].rotate_left(n);
+            self.wrapped[top..=bottom].rotate_left(n);
+        } else {
+            self.note_scroll(top, bottom, -(n as isize));
+            self.lines[top..=bottom].rotate_right(n);
+            self.wrapped[top..=bottom].rotate_right(n);
+        }
         let blank = self.blank();
-        for y in bottom + 1 - n..=bottom {
-            if top == 0 {
+        let entering = if up {
+            bottom + 1 - n..=bottom
+        } else {
+            top..=top + n - 1
+        };
+        for y in entering {
+            if up && top == 0 {
                 self.keep_in_history(y);
             }
             self.lines[y].fill(blank);
+            self.wrapped[y] = false;
         }
     }
 
@@ -460,25 +499,13 @@ impl Grid {
         if self.history.len() >= self.history_limit {
             self.history.pop_front();
         }
-        self.history.push_back(HistoryRow::from_cells(&self.lines[y]));
+        let mut row = HistoryRow::from_cells(&self.lines[y]);
+        row.wrapped = self.wrapped[y];
+        self.history.push_back(row);
     }
 
     pub fn scroll_down(&mut self, count: usize) {
-        if count == 0 || self.scroll_top >= self.scroll_bottom {
-            return;
-        }
-        if let Some(columns) = self.narrow_margins() {
-            self.scroll_columns(columns, -(count as isize));
-            return;
-        }
-        let (top, bottom) = (self.scroll_top, self.scroll_bottom);
-        let n = count.min(bottom - top + 1);
-        self.note_scroll(top, bottom, -(n as isize));
-        let blank = self.blank();
-        self.lines[top..=bottom].rotate_right(n);
-        for line in &mut self.lines[top..top + n] {
-            line.fill(blank);
-        }
+        self.scroll_region(count, false);
     }
 
     pub fn delete_lines(&mut self, count: usize) {
@@ -547,6 +574,9 @@ impl Grid {
         let cols = self.cols;
         let x = self.cursor.x;
         let blank = self.blank();
+        if mode == 2 {
+            self.wrapped[self.cursor.y] = false;
+        }
         let row = self.cursor_row_mut();
         match mode {
             0 => row[x.min(cols)..].fill(blank),
@@ -558,6 +588,12 @@ impl Grid {
 
     pub fn clear_screen(&mut self, mode: usize) {
         let blank = self.blank();
+        match mode {
+            0 => self.wrapped[self.cursor.y + 1..].fill(false),
+            1 => self.wrapped[..self.cursor.y].fill(false),
+            2 | 3 => self.wrapped.fill(false),
+            _ => {}
+        }
         match mode {
             0 => {
                 self.clear_line(0);
