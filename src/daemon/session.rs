@@ -1137,15 +1137,34 @@ impl Session {
     fn restore_window(&mut self, window: WindowPlan) {
         let mut root = Some(window.layout);
         for opts in &window.panes {
-            if let Err(e) = self.spawn_restored(opts) {
-                warn!("could not restore pane '{}': {}", opts.name, e);
-                root = root.and_then(|r| r.remove_leaf(&opts.name));
+            match self.spawn_restored(opts) {
+                Ok(()) => {
+                    if let Some(line) = window.startup_input.get(&opts.name) {
+                        self.type_into(&opts.name, line);
+                    }
+                }
+                Err(e) => {
+                    warn!("could not restore pane '{}': {}", opts.name, e);
+                    root = root.and_then(|r| r.remove_leaf(&opts.name));
+                }
             }
         }
         let Some(root) = root else { return };
         let label = root.all_leaves().into_iter().next().unwrap_or_default();
         self.workspace
             .install_window(label, window.name, root, window.focused);
+    }
+
+    /// Types `line` into pane `name`; the terminal queues it until the shell reads it.
+    fn type_into(&self, name: &str, line: &str) {
+        let Some(entry) = self.nodes.get(name) else {
+            return;
+        };
+        let handle = entry.handle.clone();
+        let bytes = line.as_bytes().to_vec();
+        tokio::spawn(async move {
+            let _ = handle.input(Box::new(move |_: &TermView| bytes)).await;
+        });
     }
 
     fn spawn_restored(&mut self, opts: &SpawnOpts) -> Result<(), String> {

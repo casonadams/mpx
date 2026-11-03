@@ -91,5 +91,8 @@ pub struct WindowPlan {
     pub focused: Option<String>,
     /// One spawn per restored pane, `SpawnOpts.name` equal to its layout leaf.
     pub panes: Vec<SpawnOpts>,
+    /// Pane name -> the command line to type into its shell once it starts. A tool that ran inside
+    /// a shell resumes this way, so quitting it leaves the shell, as it did before.
+    pub startup_input: std::collections::BTreeMap<String, String>,
 }
 

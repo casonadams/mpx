@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use super::support::{connect, exit_code, pty, start, start_on, start_with, task};
+use super::support::{connect, exit_code, pty, start, start_on, start_with, task, logs_until};
 use mpx::config::Config;
 use mpx::protocol::{NodeState, SpawnOpts};
 
@@ -187,4 +187,40 @@ async fn killing_a_running_task_records_it_as_exited() {
     client.kill("victim").await.unwrap();
     let info = client.status("victim").await.unwrap();
     assert_eq!(info.state, NodeState::Exited);
+}
+
+#[tokio::test]
+async fn a_tool_that_ran_in_a_shell_resumes_in_a_shell_that_outlives_it() {
+    let state = tempfile::tempdir().unwrap();
+    let config = || Config {
+        resume: vec![mpx::config::ResumeRule {
+            name: "sleeper".into(),
+            detect: vec!["sleep".into()],
+            fallback: vec!["printf".into(), "%s-%s\\n".into(), "back".into(), "again".into()],
+            ..Default::default()
+        }],
+        ..Config::default()
+    };
+    let first = start_on(state.path(), config()).await;
+    let mut client = connect(&first.endpoint).await;
+    client.spawn(pty("work", "sh", &[])).await.unwrap();
+    client.send_input("work", "sleep 30\r").await.unwrap();
+    for _ in 0..100 {
+        let info = client.status("work").await.unwrap();
+        if info.foreground.as_deref() == Some("sleep") {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    client.shutdown().await.unwrap();
+
+    let second = start_on(state.path(), config()).await;
+    let mut client = connect(&second.endpoint).await;
+    logs_until(&mut client, "work", "back-again").await;
+    assert_eq!(
+        client.status("work").await.unwrap().state,
+        mpx::protocol::NodeState::Running,
+        "the shell is still there once the resumed command finished"
+    );
+    client.kill("work").await.unwrap();
 }

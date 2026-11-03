@@ -46,15 +46,20 @@ fn plan_window(
     window: &WindowSnapshot,
     rules: &[ResumeRule],
 ) -> Option<WindowPlan> {
-    let panes: Vec<SpawnOpts> = window
+    let planned: Vec<(SpawnOpts, Option<String>)> = window
         .panes
         .iter()
         .filter(|pane| pane.pty)
         .map(|pane| plan_pane(pane, rules))
         .collect();
-    if panes.is_empty() {
+    if planned.is_empty() {
         return None;
     }
+    let startup_input = planned
+        .iter()
+        .filter_map(|(opts, input)| Some((opts.name.clone(), input.clone()?)))
+        .collect();
+    let panes: Vec<SpawnOpts> = planned.into_iter().map(|(opts, _)| opts).collect();
     let mut layout = window.layout.clone();
     for leaf in window.layout.all_leaves() {
         if !panes.iter().any(|pane| pane.name == leaf) {
@@ -72,6 +77,7 @@ fn plan_window(
         layout,
         focused,
         panes,
+        startup_input,
     })
 }
 
@@ -86,7 +92,23 @@ fn fill(template: &[String], id: &str) -> Vec<String> {
     template.iter().map(|s| s.replace("{id}", id)).collect()
 }
 
-fn plan_pane(pane: &PaneSnapshot, rules: &[ResumeRule]) -> SpawnOpts {
+/// A word as a POSIX shell reads it back unchanged.
+fn shell_word(word: &str) -> String {
+    let plain = !word.is_empty()
+        && word
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "_@%+=:,./-".contains(c));
+    if plain {
+        word.to_string()
+    } else {
+        format!("'{}'", word.replace('\'', "'\\''"))
+    }
+}
+
+/// What to spawn for a pane, and a command line to type into it once its shell is up. A pane whose
+/// own process is a resumable tool is respawned as the resumed tool; a tool that ran inside a shell
+/// resumes in a fresh shell, so quitting it leaves the shell.
+fn plan_pane(pane: &PaneSnapshot, rules: &[ResumeRule]) -> (SpawnOpts, Option<String>) {
     let original = SpawnOpts {
         name: pane.name.clone(),
         command: pane.command.clone(),
@@ -97,6 +119,7 @@ fn plan_pane(pane: &PaneSnapshot, rules: &[ResumeRule]) -> SpawnOpts {
         remain_on_exit: pane.remain_on_exit,
     };
 
+    let hosted = find_rule(rules, &pane.command).is_none();
     let rule = pane
         .resume_rule
         .as_deref()
@@ -104,7 +127,7 @@ fn plan_pane(pane: &PaneSnapshot, rules: &[ResumeRule]) -> SpawnOpts {
         .or_else(|| find_rule(rules, &pane.command));
 
     let Some(rule) = rule else {
-        return original;
+        return (original, None);
     };
 
     let argv = if let Some(id) = pane.session_id.as_deref().filter(|_| !rule.resume.is_empty()) {
@@ -112,15 +135,22 @@ fn plan_pane(pane: &PaneSnapshot, rules: &[ResumeRule]) -> SpawnOpts {
     } else if !rule.fallback.is_empty() {
         rule.fallback.clone()
     } else {
-        return original;
+        return (original, None);
     };
 
+    if hosted {
+        let line: Vec<String> = argv.iter().map(|word| shell_word(word)).collect();
+        return (original, Some(format!("{}\r", line.join(" "))));
+    }
     match argv.split_first() {
-        Some((cmd, args)) => SpawnOpts {
-            command: cmd.clone(),
-            args: args.to_vec(),
-            ..original
-        },
-        None => original,
+        Some((cmd, args)) => (
+            SpawnOpts {
+                command: cmd.clone(),
+                args: args.to_vec(),
+                ..original
+            },
+            None,
+        ),
+        None => (original, None),
     }
 }

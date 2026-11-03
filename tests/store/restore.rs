@@ -254,3 +254,34 @@ fn empty_session_yields_empty_plan() {
     let plan = restore(0, vec![], &[]);
     assert_eq!(plan.windows, Vec::<WindowPlan>::new());
 }
+
+#[test]
+fn a_tool_hosted_by_a_shell_resumes_by_typing_its_command_into_a_fresh_shell() {
+    let pane = PaneSnapshot {
+        resume_rule: Some("claude".into()),
+        session_id: Some("abc".into()),
+        ..shell("sh")
+    };
+    let win = restore_window(single("main", pane), &[claude()]);
+    assert_spawn(&win.panes[0], "bash", &["-l"]);
+    assert_eq!(win.startup_input["sh"], "claude --resume abc\r");
+}
+
+#[test]
+fn typed_resume_commands_quote_what_a_shell_would_split() {
+    let mut rule = claude();
+    rule.resume = strings(&["claude", "--name", "it's a test", "{id}"]);
+    let pane = PaneSnapshot {
+        resume_rule: Some("claude".into()),
+        session_id: Some("a b".into()),
+        ..shell("sh")
+    };
+    let win = restore_window(single("main", pane), &[rule]);
+    assert_eq!(win.startup_input["sh"], "claude --name 'it'\\''s a test' 'a b'\r");
+}
+
+#[test]
+fn a_pane_whose_own_process_is_the_tool_is_respawned_as_the_resumed_tool() {
+    let win = restore_window(single("main", tool_pane("claude", "claude", Some("abc"))), &[claude()]);
+    assert!(win.startup_input.is_empty());
+}

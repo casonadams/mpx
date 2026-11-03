@@ -182,6 +182,8 @@ Rules that dictate how tools (AI CLIs, editors, background tasks) are resumed wh
 | `env_id` | string (optional) | Name of an environment variable, read from the daemon's environment, that carries the session ID. Used when `id_source` finds nothing. |
 | `id_source` | `"claude"` or `"omp"` (optional) | Finds the session ID of the tool running in the pane from its own state files: `claude` reads `~/.claude/sessions/<pid>.json` for the pane's foreground process, `omp` reads `~/.omp/agent/terminal-sessions/<tty>`. Each pane resumes its own session, even with several in one directory. |
 
+A tool that was running inside a shell is resumed by typing its command into a fresh shell in the same directory, so quitting the tool leaves that shell, as it did before the restore. A pane whose own process is the tool (for example `mpx new-window claude`) is respawned as the tool, and quitting it closes the pane.
+
 `mpx` ships with built-in defaults for `claude`, `omp`, `codex`, `rho`, `antigravity`, `opencode`, and `nvim`. `claude` and `omp` use `id_source`. A `[[resume]]` list in `config.toml` replaces the defaults, so repeat every rule you want to keep.
 
 ## Options at run time
