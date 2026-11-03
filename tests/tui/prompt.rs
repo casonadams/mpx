@@ -218,10 +218,19 @@ fn without_a_template_the_typed_line_is_the_answer() {
 }
 
 #[test]
-fn a_template_prompt_without_a_text_asks_for_a_command() {
+fn a_template_prompt_without_a_text_names_the_command_it_will_run() {
     let run = PromptRun::new(VecDeque::new(), Some("kill-pane".into()), true);
-    assert_eq!(run.line.label(), "(command) ");
+    assert_eq!(run.line.label(), "(kill-pane) ");
     assert!(run.single_key);
+}
+
+#[test]
+fn the_default_label_is_the_templates_command_as_tmux_shows_it() {
+    use mpx::tui::prompt::default_label;
+    assert_eq!(default_label(Some("rename-window -- '%%'")), "(rename-window) ");
+    assert_eq!(default_label(Some("  move-window -t '%%'")), "(move-window) ");
+    assert_eq!(default_label(Some("")), "(command) ");
+    assert_eq!(default_label(None), ":");
 }
 
 #[test]

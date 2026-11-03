@@ -237,10 +237,12 @@ impl App {
         app.subscribe(sub_client);
         app.apply_bindings().await;
         app.refresh_nodes().await;
-        if let Ok(info) = app.client.info().await
-            && let Some(restored_ms) = info.restored_ms
-        {
-            app.say(restored_notice(restored_ms, local_utc_offset(restored_ms)));
+        if let Ok(info) = app.client.info().await {
+            // The daemon's name wins over the socket's: `rename-session` changes one, not the other.
+            app.session = info.name;
+            if let Some(restored_ms) = info.restored_ms {
+                app.say(restored_notice(restored_ms, local_utc_offset(restored_ms)));
+            }
         }
         Ok((app, rx))
     }

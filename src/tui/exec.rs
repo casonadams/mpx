@@ -485,16 +485,12 @@ impl App {
                 text.to_string()
             }
         };
-        let default_label = if spec.template.is_some() {
-            "(command) "
-        } else {
-            ":"
-        };
+        let default_label = super::prompt::default_label(spec.template.as_deref());
         (0..spec.prompts.len().max(1))
             .map(|i| {
                 let label = spec.prompts.get(i).or(spec.prompts.last());
                 Question {
-                    label: fmt(label.map_or(default_label, String::as_str)),
+                    label: fmt(label.map_or(default_label.as_str(), String::as_str)),
                     initial: fmt(spec.initial.get(i).map_or("", String::as_str)),
                     kind: spec.kind,
                     numeric: spec.numeric,
@@ -537,12 +533,19 @@ impl App {
     }
 
     async fn step_session(&mut self, next: bool) -> Flow {
-        let names: Vec<String> = ipc::list_sessions(&self.socket_dir)
-            .into_iter()
-            .map(|s| s.name)
+        let infos = ipc::session_infos(&self.socket_dir).await;
+        let live: Vec<_> = infos
+            .iter()
+            .filter(|i| i.panes > 0 || i.endpoint == self.endpoint)
             .collect();
-        match neighbor_session(&names, &self.session, next) {
-            Some(name) => self.go_session(&name).await,
+        let endpoints: Vec<String> = live.iter().map(|i| i.endpoint.clone()).collect();
+        let target = neighbor_session(&endpoints, &self.endpoint, next)
+            .and_then(|endpoint| live.into_iter().find(|i| i.endpoint == endpoint));
+        match target {
+            Some(info) => {
+                let result = self.attach_endpoint(&info.endpoint, &info.name).await;
+                self.settle(result)
+            }
             None => self.say("no other session"),
         }
     }

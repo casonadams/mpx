@@ -27,21 +27,58 @@ pub fn pick<'a>(temp: &'a mut Option<Client>, main: &'a mut Client) -> &'a mut C
     }
 }
 
+/// Whether the session behind `client` has a pane to show; one without has nothing to attach to,
+/// and the TUI would end on its first frame.
+async fn shows_panes(client: &mut Client) -> bool {
+    client.layout(80, 24).await.is_ok_and(|(panes, ..)| !panes.is_empty())
+}
+
+/// The running session `name` refers to. A session's name is the one its daemon reports, which
+/// `rename-session` changes without moving the socket, so a socket called `name` may belong to
+/// some other session. Of the daemons that report `name`, one with panes wins, then the one whose
+/// socket is called `name`.
+pub fn pick_session<'a>(
+    infos: &'a [crate::protocol::SessionInfo],
+    name: &str,
+) -> Result<&'a crate::protocol::SessionInfo, String> {
+    let named: Vec<_> = infos.iter().filter(|i| i.name == name).collect();
+    if named.is_empty() {
+        return Err(format!("session '{name}' is not running"));
+    }
+    let socket_is_name = |i: &&crate::protocol::SessionInfo| {
+        std::path::Path::new(&i.endpoint)
+            .file_stem()
+            .is_some_and(|stem| stem == name)
+    };
+    named
+        .iter()
+        .copied()
+        .filter(|i| i.panes > 0)
+        .max_by_key(|i| socket_is_name(i))
+        .ok_or_else(|| format!("session '{name}' has no panes"))
+}
+
 impl App {
-    /// Attaches to another session. Fails, leaving the current session in place, when it is not running.
+    /// Attaches to another session by name. Fails, leaving the current session in place, when it
+    /// is not running or has no panes.
     pub async fn switch_session(&mut self, name: &str) -> Result<(), String> {
         if name == self.session {
             return Ok(());
         }
-        let endpoint = ipc::endpoint_in(&self.socket_dir, name);
+        let infos = ipc::session_infos(&self.socket_dir).await;
+        let target = pick_session(&infos, name)?;
+        self.attach_endpoint(&target.endpoint, &target.name).await
+    }
+
+    /// Attaches to the session whose daemon listens on `endpoint`, known as `name`.
+    pub async fn attach_endpoint(&mut self, endpoint: &str, name: &str) -> Result<(), String> {
         let not_running = || format!("session '{name}' is not running");
-        let client = Client::connect(&endpoint)
-            .await
-            .map_err(|_| not_running())?;
-        let sub = Client::connect(&endpoint)
-            .await
-            .map_err(|_| not_running())?;
-        self.endpoint = endpoint;
+        let mut client = Client::connect(endpoint).await.map_err(|_| not_running())?;
+        if !shows_panes(&mut client).await {
+            return Err(format!("session '{name}' has no panes"));
+        }
+        let sub = Client::connect(endpoint).await.map_err(|_| not_running())?;
+        self.endpoint = endpoint.to_string();
         self.session = name.to_string();
         self.client = client;
         self.reset_view();

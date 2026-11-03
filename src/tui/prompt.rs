@@ -300,6 +300,16 @@ pub struct PromptRun {
     pub single_key: bool,
 }
 
+/// What a `command-prompt` without `-p` shows before the text: `(rename-window) ` for a template
+/// that runs `rename-window`, as tmux does, and `:` when the typed line is the command.
+pub fn default_label(template: Option<&str>) -> String {
+    match template.and_then(|t| t.split_whitespace().next()) {
+        Some(command) => format!("({command}) "),
+        None if template.is_some() => "(command) ".to_string(),
+        None => ":".to_string(),
+    }
+}
+
 impl PromptRun {
     /// A run asking `questions` in order (the `:` prompt when there are none).
     pub fn new(
@@ -307,9 +317,8 @@ impl PromptRun {
         template: Option<String>,
         single_key: bool,
     ) -> Self {
-        let default_label = if template.is_some() { "(command) " } else { ":" };
         let first = questions.pop_front().unwrap_or(Question {
-            label: default_label.to_string(),
+            label: default_label(template.as_deref()),
             initial: String::new(),
             kind: PromptKind::Command,
             numeric: false,

@@ -106,7 +106,7 @@ Vim-style command line on the status row. Supports tab-completion, history (`Up`
 | `choose-tree` | | Interactive session/window tree |
 | `display-panes [-d ms]` | `displayp` | Number each pane large; a digit selects that pane, any other key dismisses. Stays `display-panes-time` ms (`-d 0`: until a key) |
 | `clock-mode [-t PANE]` | | Big clock filling the pane until a key is pressed |
-| `command-prompt [-1bFkN] [-I initial,...] [-p prompt,...] [-T type] [template]` | | Asks each prompt (`-p`, default `(command) ` with a template). With a template the answers replace `%%` (`%1`..`%9` for the nth prompt; `%%%` quotes the answer for the command parser) and the result runs; without one the typed line runs. `-1`/`-k`: one key, no Enter. `-N`: digits only. `-F`: formats in the prompt and initial text |
+| `command-prompt [-1bFkN] [-I initial,...] [-p prompt,...] [-T type] [template]` | | Asks each prompt (`-p`; with a template the default is the template's command in parentheses, such as `(rename-window) `, and without one `:`). With a template the answers replace `%%` (`%1`..`%9` for the nth prompt; `%%%` quotes the answer for the command parser) and the result runs; without one the typed line runs. `-1`/`-k`: one key, no Enter. `-N`: digits only. `-F`: formats in the prompt and initial text |
 | `confirm-before [-y] [-p prompt] command` | | Asks `y`/`n` (default `Confirm 'command'? (y/n)`), then runs the command on `y`. `-y` runs it at once |
 | `show-messages` | `showmsgs` | Status-row messages of this session, oldest first (last 100) |
 | `list-buffers` | `lsb` | Paste buffers in a list: `name: N bytes: "sample"` |

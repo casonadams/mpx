@@ -52,6 +52,7 @@ async fn rename_window_through_the_command_prompt() {
     let mut h = start().await;
     h.frame().await;
     h.prefixed_char(',').await;
+    assert!(h.frame().await.contains("(rename-window) "), "the prompt says what it will do");
     // `,` starts with the current name, which the user replaces.
     h.ctrl('u').await;
     h.type_str("logs").await;
