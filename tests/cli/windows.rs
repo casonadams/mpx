@@ -116,7 +116,7 @@ fn swap_pane_exchanges_the_two_positions() {
 }
 
 #[test]
-fn select_pane_mark_and_swap_with_marked() {
+fn select_pane_mark_input_and_swap_with_marked() {
     let f = Fixture::start();
     base_and_side(&f);
     let (base, side) = (place(&f, "base"), place(&f, "side"));
@@ -131,6 +131,11 @@ fn select_pane_mark_and_swap_with_marked() {
     assert_eq!(run_command(&f, &["swap-pane"]), 0);
     assert_eq!(place(&f, "base"), side);
     assert_eq!(place(&f, "side"), base);
+
+    // Disable input to base and enable it again; a missing pane is an error
+    assert_eq!(run_command(&f, &["select-pane", "-t", "base", "-d"]), 0);
+    assert_eq!(run_command(&f, &["select-pane", "-t", "base", "-e"]), 0);
+    assert_eq!(run_command(&f, &["select-pane", "-t", "missing", "-d"]), 1);
 
     // Clear mark
     assert_eq!(run_command(&f, &["select-pane", "-M"]), 0);

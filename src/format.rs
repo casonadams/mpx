@@ -38,6 +38,8 @@ pub struct PaneView {
     pub active: bool,
     pub dead: bool,
     pub marked: bool,
+    /// Input to the pane is off (`select-pane -d`).
+    pub input_off: bool,
     pub marked_set: bool,
     /// The pane is in a mode (copy mode), (`pane_in_mode`).
     pub in_mode: bool,
@@ -669,6 +671,7 @@ pub fn pane_vars(p: &PaneView) -> Vars {
     vars.insert("pane_height", p.height.to_string());
     vars.insert("pane_active", flag(p.active));
     vars.insert("pane_dead", flag(p.dead));
+    vars.insert("pane_input_off", flag(p.input_off));
     vars.insert("pane_marked", flag(p.marked));
     vars.insert("pane_marked_set", flag(p.marked_set));
     vars.insert("pane_in_mode", flag(p.in_mode));
@@ -845,6 +848,7 @@ pub fn pane_view(
         dead: !node.is_running(),
         marked,
         marked_set,
+        input_off: node.input_off.unwrap_or(false),
         in_mode: false,
         window,
         window_name: tab.map(|t| t.name.clone()).unwrap_or_default(),

@@ -1161,6 +1161,7 @@ impl Session {
             },
             PaneRequest::SwapPane { a, b, keep_zoom } => self.swap_pane_req(a, b, keep_zoom),
             PaneRequest::MarkPane { name, clear } => self.mark_pane_req(name, clear),
+            PaneRequest::InputOff { name, off } => self.input_off_req(name, off),
             PaneRequest::BreakPane { name } => match self.target_name(&name) {
                 Ok(n) => check(self.workspace.break_pane(&n), "Pane is alone in its window"),
                 Err(e) => Response::Error(e),
@@ -1235,24 +1236,37 @@ impl Session {
         }
     }
 
+    /// The named pane, or the active window's focused pane when `name` is None.
+    fn pane_or_active(&self, name: Option<String>) -> Result<String, String> {
+        match name {
+            Some(n) => self.target_name(&n),
+            None => self
+                .workspace
+                .active_window()
+                .and_then(|w| w.focused.clone())
+                .ok_or_else(|| "No active pane".to_string()),
+        }
+    }
+
+    /// `select-pane -d` / `-e`: stops or resumes input to the named pane, or the active pane.
+    fn input_off_req(&mut self, name: Option<String>, off: bool) -> Response {
+        match self.pane_or_active(name) {
+            Ok(target) => {
+                self.workspace.set_input_off(&target, off);
+                Response::Ok
+            }
+            Err(e) => Response::Error(e),
+        }
+    }
+
     fn mark_pane_req(&mut self, name: Option<String>, clear: bool) -> Response {
         if clear {
             self.workspace.clear_mark_pane();
             return Response::Ok;
         }
-        let target = match name {
-            Some(n) => match self.target_name(&n) {
-                Ok(t) => t,
-                Err(e) => return Response::Error(e),
-            },
-            None => match self
-                .workspace
-                .active_window()
-                .and_then(|w| w.focused.clone())
-            {
-                Some(f) => f,
-                None => return Response::Error("No active pane to mark".to_string()),
-            },
+        let target = match self.pane_or_active(name) {
+            Ok(t) => t,
+            Err(e) => return Response::Error(e),
         };
         self.workspace.mark_pane(&target);
         Response::Ok
@@ -1361,6 +1375,7 @@ impl Session {
         let mut info = handle.info(full).await?;
         info.window = self.workspace.number_of(name);
         info.marked = Some(self.workspace.marked_pane.as_deref() == Some(name));
+        info.input_off = Some(self.workspace.input_off(name));
         Ok(info)
     }
 
@@ -1376,6 +1391,7 @@ impl Session {
                 info.window = self.workspace.number_of(entry.handle.name());
                 info.marked =
                     Some(self.workspace.marked_pane.as_deref() == Some(entry.handle.name()));
+                info.input_off = Some(self.workspace.input_off(entry.handle.name()));
                 infos.push(info);
             }
         }
@@ -1439,6 +1455,9 @@ impl Session {
     }
 
     async fn send(&self, name: &str, build: InputBuild) -> Result<(), String> {
+        if self.workspace.input_off(name) {
+            return Ok(());
+        }
         self.handle_of(name)?.input(build).await
     }
 

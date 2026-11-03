@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -273,6 +274,9 @@ pub struct Workspace {
     pub last_window: Option<usize>,
     #[serde(default)]
     pub marked_pane: Option<String>,
+    /// Panes whose input is off (tmux `select-pane -d`); they drop keys sent to them.
+    #[serde(default)]
+    pub input_off: BTreeSet<String>,
     /// Whether windows created from now on start with `synchronize-panes` on (config `synchronize_panes`).
     #[serde(skip)]
     synchronize_new: bool,
@@ -290,6 +294,7 @@ impl Workspace {
             next_window_id: 0,
             last_window: None,
             marked_pane: None,
+            input_off: BTreeSet::new(),
             renumber_windows: true,
             synchronize_new: false,
         }
@@ -612,6 +617,7 @@ impl Workspace {
         if self.marked_pane.as_deref() == Some(node_name) {
             self.marked_pane = None;
         }
+        self.input_off.remove(node_name);
         for win in &mut self.windows {
             win.remove(node_name);
         }
@@ -709,6 +715,7 @@ impl Workspace {
         {
             self.marked_pane = None;
         }
+        self.input_off.retain(|p| !panes.iter().any(|q| q == p));
         self.windows.remove(idx);
         let shift = |i: usize| if i > idx { i - 1 } else { i };
         self.active_idx = shift(self.active_idx).min(self.windows.len().saturating_sub(1));
@@ -741,6 +748,20 @@ impl Workspace {
     /// The currently marked pane, if any.
     pub fn marked_pane(&self) -> Option<&str> {
         self.marked_pane.as_deref()
+    }
+
+    /// Turns input to `pane` off or on (tmux `select-pane -d`/`-e`).
+    pub fn set_input_off(&mut self, pane: &str, off: bool) {
+        if off {
+            self.input_off.insert(pane.to_string());
+        } else {
+            self.input_off.remove(pane);
+        }
+    }
+
+    /// Whether input to `pane` is off: keys sent to it are dropped.
+    pub fn input_off(&self, pane: &str) -> bool {
+        self.input_off.contains(pane)
     }
 
     /// Exchanges two panes by name, wherever they live.

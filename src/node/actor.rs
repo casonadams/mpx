@@ -358,6 +358,7 @@ impl PaneActor {
             cursor,
             history_size,
             size,
+            input_off: None,
             marked: None,
         }
     }

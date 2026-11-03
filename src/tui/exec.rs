@@ -226,6 +226,7 @@ impl App {
                 self.mark_pane(target.as_deref()).await
             }
             Command::Pane(PaneCommand::ClearMark) => self.clear_mark().await,
+            Command::Pane(PaneCommand::InputOff { target, off }) => self.input_off(target, off).await,
             Command::Pane(PaneCommand::SelectPane { target, keep_zoom }) => {
                 self.select_pane(target, keep_zoom).await
             }
@@ -1377,6 +1378,12 @@ impl App {
 
     async fn clear_mark(&mut self) -> Flow {
         let result = self.client.mark_pane(None, true).await;
+        self.settle(result)
+    }
+
+    /// `select-pane -d` / `-e`: the pane's input is off or back on.
+    async fn input_off(&mut self, target: Option<String>, off: bool) -> Flow {
+        let result = self.client.input_off(target.as_deref(), off).await;
         self.settle(result)
     }
 

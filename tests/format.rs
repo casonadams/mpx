@@ -594,3 +594,37 @@ fn pretty_time_shows_the_clock_for_recent_times_and_the_day_for_older_ones() {
     );
     assert_eq!(expand("#{t/p:bad}", &v), "");
 }
+
+#[test]
+fn pane_input_off_is_a_flag_variable() {
+    let off = node("p", 1);
+    let on = NodeInfo {
+        input_off: Some(true),
+        ..node("p", 1)
+    };
+    assert_expands(&pane_vars(&pane_view("dev", 0, &on, &[], &[])), &[("#{pane_input_off}", "1")]);
+    assert_expands(&pane_vars(&pane_view("dev", 0, &off, &[], &[])), &[("#{pane_input_off}", "0")]);
+}
+
+#[test]
+fn session_loop_entry_carries_the_session_variables() {
+    let times = SessionTimes {
+        started_ms: 1_709_647_629_000,
+        restored_ms: Some(1_709_647_700_000),
+    };
+    let tabs = [tab(0), tab(1)];
+    let session = mpx::tui::statusline::SessionInfo {
+        name: "work",
+        times,
+        attached: 2,
+    };
+    let lists = mpx::tui::statusline::status_lists(session, &tabs, &[], false, 0);
+    assert_eq!(
+        expand_with(
+            "#{S:#{session_name} #{session_id} #{session_created} #{start_time} #{session_attached} #{session_windows}}",
+            &Vars::new(),
+            &lists,
+        ),
+        "work $1709647629000 1709647700 1709647629 2 2",
+    );
+}

@@ -425,6 +425,12 @@ async fn pane_command(tx: &Tx, ctx: &Context, command: PaneCommand) -> Result<()
         )
         .await
         .map(drop),
+        PaneCommand::InputOff { target, off } => request(
+            tx,
+            Request::Pane(PaneRequest::InputOff { name: target, off }),
+        )
+        .await
+        .map(drop),
         PaneCommand::JoinPane {
             src,
             dst,

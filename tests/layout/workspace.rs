@@ -523,3 +523,17 @@ fn window_tabs_without_zoom_fields_deserialize_as_unzoomed() {
     assert!(!tab.zoomed);
     assert_eq!(tab.focused, None);
 }
+
+#[test]
+fn input_off_is_per_pane_and_forgotten_with_the_pane() {
+    let mut ws = main_tab_ws();
+    ws.add_or_split("pane2".to_string(), Direction::Horizontal);
+    ws.set_input_off("pane1", true);
+    assert!(ws.input_off("pane1"));
+    assert!(!ws.input_off("pane2"));
+    ws.set_input_off("pane1", false);
+    assert!(!ws.input_off("pane1"));
+    ws.set_input_off("pane2", true);
+    ws.remove("pane2");
+    assert!(!ws.input_off("pane2"));
+}
