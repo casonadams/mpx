@@ -623,31 +623,15 @@ pub struct SessionTimes {
     pub restored_ms: Option<u64>,
 }
 
-impl SessionTimes {
-    /// `session_id`: `$` and the daemon's start in ms, the same for as long as the daemon runs.
-    pub fn id(&self) -> String {
-        format!("${}", self.started_ms)
-    }
-
-    /// `session_created`: the unix seconds the session was made; a restored session's is the restore.
-    pub fn created(&self) -> u64 {
-        self.restored_ms.unwrap_or(self.started_ms) / 1000
-    }
-
-    /// `start_time`: the unix seconds the daemon started.
-    pub fn start_time(&self) -> u64 {
-        self.started_ms / 1000
-    }
-}
-
 /// Variables that do not depend on the pane or session being described.
 fn shared_vars(vars: &mut Vars, session: &str, times: SessionTimes, attached: usize) {
     let host = host_name();
     let host_short = host.split('.').next().unwrap_or_default().to_string();
     vars.insert("client_session", session.to_string());
-    vars.insert("session_id", times.id());
-    vars.insert("session_created", times.created().to_string());
-    vars.insert("start_time", times.start_time().to_string());
+    vars.insert("session_id", format!("${}", times.started_ms));
+    let created = times.restored_ms.unwrap_or(times.started_ms);
+    vars.insert("session_created", (created / 1000).to_string());
+    vars.insert("start_time", (times.started_ms / 1000).to_string());
     vars.insert("session_attached", attached.to_string());
     vars.insert("host", host);
     vars.insert("host_short", host_short);
