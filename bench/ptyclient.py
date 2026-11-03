@@ -6,8 +6,8 @@ buffer. Records when a marker first appears on the PTY, which is how the
 startup benchmark detects the first status-bar frame.
 
 It also answers the terminal queries a multiplexer sends at attach, as a real
-terminal would. mpx sends OSC 10/11 (default colours), DECRQM for mode 69 and
-DA1, and waits up to 2 s for the DA1 reply. Without these replies every attach
+terminal would. mpx sends OSC 10/11 (default colours), OSC 4 (the 256 palette
+colours), DECRQM for mode 69 and DA1, and waits up to 2 s for the DA1 reply. Without these replies every attach
 would sit in that timeout, which would measure the harness, not the multiplexer.
 """
 
@@ -33,6 +33,7 @@ _QUERY = re.compile(
     rb"\x1b\[0?c"
     rb"|\x1b\]10;\?(?:\x07|\x1b\\)"
     rb"|\x1b\]11;\?(?:\x07|\x1b\\)"
+    rb"|\x1b\]4;\d+;\?(?:\x07|\x1b\\)"
     rb"|\x1b\[\?69\$p"
 )
 _DA1_ANSWER = b"\x1b[?62c"
@@ -43,7 +44,15 @@ _DECRPM_ANSWER = b"\x1b[?69;2$y"  # mode 69 is supported and reset
 _PARTIAL_MAX = 64
 
 
+def _palette_answer(query: bytes) -> bytes:
+    index = int(query[len(b"\x1b]4;"):].split(b";", 1)[0])
+    r, g, b = index * 37 % 256, index * 91 % 256, index * 53 % 256
+    return b"\x1b]4;%d;rgb:%02x/%02x/%02x\x1b\\" % (index, r, g, b)
+
+
 def _answer_for(query: bytes) -> bytes:
+    if query.startswith(b"\x1b]4;"):
+        return _palette_answer(query)
     if query.startswith(b"\x1b]10;"):
         return _FG_ANSWER
     if query.startswith(b"\x1b]11;"):
@@ -97,12 +106,15 @@ class PtyClient:
     def _answer_queries(self, buf: bytes) -> bytes:
         """Reply to every complete query in ``buf``; return the unanswered tail."""
         end = 0
+        answers = []
         for match in _QUERY.finditer(buf):
+            answers.append(_answer_for(match.group()))
+            end = match.end()
+        if answers:
             try:
-                os.write(self._fd, _answer_for(match.group()))
+                os.write(self._fd, b"".join(answers))
             except OSError:
                 return b""
-            end = match.end()
         return buf[end:][-_PARTIAL_MAX:]
 
     def wait_marker(self, timeout: float) -> float:

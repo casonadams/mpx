@@ -186,8 +186,8 @@ pub fn report_from(reply: &[u8]) -> TerminalReport {
     }
 }
 
-/// What attach sends: the default colors, the 256 palette colors and the margins mode, then the DA1
-/// that every terminal answers last.
+/// What attach sends: the default colors, the 256 palette colors, then the margins mode and the
+/// DA1 that every terminal answers last.
 pub fn attach_query() -> Vec<u8> {
     let mut query = b"\x1b]10;?\x1b\\\x1b]11;?\x1b\\".to_vec();
     for index in 0..256 {
@@ -197,18 +197,51 @@ pub fn attach_query() -> Vec<u8> {
     query
 }
 
-/// Asks the terminal for its default colors and whether it supports left/right margins. Run in raw
-/// mode before anything else reads input. The DA1 that ends the query is answered by every
-/// terminal, after the answers it does give, so one round trip covers all of it.
+/// Writes `query` to the terminal while reading what it answers into `reply`. Reading as it goes
+/// matters: a terminal that blocks on a full input queue to us while we block on a full output
+/// queue to it would hang both. False when the terminal stops taking input for too long.
+#[cfg(unix)]
+fn send_query(query: &[u8], reply: &mut Vec<u8>) -> bool {
+    const SLICE: usize = 256;
+    let deadline = std::time::Instant::now() + QUERY_TIMEOUT;
+    let mut sent = 0;
+    while sent < query.len() {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        let mut fds = [
+            libc::pollfd { fd: 0, events: libc::POLLIN, revents: 0 },
+            libc::pollfd { fd: 1, events: libc::POLLOUT, revents: 0 },
+        ];
+        let ms = left.as_millis().min(i32::MAX as u128) as i32;
+        // SAFETY: two valid pollfds for stdin and stdout.
+        if left.is_zero() || unsafe { libc::poll(fds.as_mut_ptr(), 2, ms) } <= 0 {
+            return false;
+        }
+        if fds[0].revents & libc::POLLIN != 0 {
+            read_some(reply, std::time::Duration::ZERO);
+        }
+        if fds[1].revents & libc::POLLOUT != 0 {
+            let end = (sent + SLICE).min(query.len());
+            // SAFETY: writes at most `end - sent` bytes from `query`.
+            let n = unsafe { libc::write(1, query[sent..end].as_ptr().cast(), end - sent) };
+            if n < 0 && io::Error::last_os_error().kind() != io::ErrorKind::Interrupted {
+                return false;
+            }
+            sent += n.max(0) as usize;
+        }
+    }
+    true
+}
+
+/// Asks the terminal for its default colors, its palette and whether it supports left/right
+/// margins. Run in raw mode before anything else reads input. The DA1 that ends the query is
+/// answered by every terminal, after the answers it does give, so one round trip covers all of it.
 #[cfg(unix)]
 pub fn query_terminal() -> TerminalReport {
-    let mut out = stdout();
-    let query = attach_query();
-    if out.write_all(&query).and_then(|()| out.flush()).is_err() {
-        return TerminalReport::default();
+    let mut reply = Vec::new();
+    if !send_query(&attach_query(), &mut reply) {
+        return report_from(&reply);
     }
     let deadline = std::time::Instant::now() + QUERY_TIMEOUT;
-    let mut reply = Vec::new();
     while margins_reply(&reply).is_none() {
         let left = deadline.saturating_duration_since(std::time::Instant::now());
         if left.is_zero() || !read_some(&mut reply, left) {
