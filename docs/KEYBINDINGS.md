@@ -109,8 +109,17 @@ Vim-style command line on the status row. Supports tab-completion, history (`Up`
 | `command-prompt [-1bFkN] [-I initial,...] [-p prompt,...] [-T type] [template]` | | Asks each prompt (`-p`; with a template the default is the template's command in parentheses, such as `(rename-window) `, and without one `:`). With a template the answers replace `%%` (`%1`..`%9` for the nth prompt; `%%%` quotes the answer for the command parser) and the result runs; without one the typed line runs. `-1`/`-k`: one key, no Enter. `-N`: digits only. `-F`: formats in the prompt and initial text |
 | `confirm-before [-y] [-p prompt] command` | | Asks `y`/`n` (default `Confirm 'command'? (y/n)`), then runs the command on `y`. `-y` runs it at once |
 | `show-messages` | `showmsgs` | Status-row messages of this session, oldest first (last 100) |
-| `list-buffers` | `lsb` | Paste buffers in a list: `name: N bytes: "sample"` |
+| `list-buffers [-F format]` | `lsb` | Paste buffers in a list: `name: N bytes: "sample"`, or each line formatted by `-F` (`#{buffer_name}`, `#{buffer_size}`, `#{buffer_sample}`) |
 | `choose-buffer` | | Paste buffers, newest first, with a preview: Enter pastes the highlighted one, `d` deletes it, `/` filters |
+| `set-buffer [-a] [-b name] [-n new] [data]` | `setb` | Store `data` in a buffer, or append with `-a`; `-n` renames the buffer |
+| `show-buffer [-b name]` | `showb` | The text of a buffer, in an overlay |
+| `delete-buffer [-b name]` | `deleteb` | Delete a buffer (the newest unless `-b`) |
+| `load-buffer [-b name] path` | `loadb` | Store a file in a buffer |
+| `save-buffer [-a] [-b name] path` | `saveb` | Write a buffer to a file (`-a` appends) |
+| `paste-buffer [-d] [-p] [-r] [-s sep] [-b name] [-t pane]` | `pasteb` | Paste a buffer into a pane of this session (`-d` deletes it after) |
+| `capture-pane [-p] [-e] [-J] [-S line] [-E line] [-b name] [-t pane]` | `capturep` | Capture a pane's history and screen into a buffer, or into an overlay with `-p` (see [CLI.md](CLI.md#capture-and-paste-buffers)) |
+| `set-environment [-u\|-r] name [value]` | `setenv` | Set a variable for panes started afterwards; `-u` unsets it, `-r` keeps it out of new panes |
+| `show-environment [name]` | `showenv` | The session environment, or one variable, in an overlay |
 | `suspend-client` | `suspendc` | Stop mpx as Ctrl-Z does and return to the shell; `fg` brings it back |
 | `palette [commands\|sessions\|help]` | `command-palette` | Fuzzy command palette |
 

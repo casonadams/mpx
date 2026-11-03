@@ -204,6 +204,10 @@ mpx split -h -d -- htop          # Split side by side without focus (tmux flags)
 mpx logs --plain --tail 50 &lt;name&gt; # Rendered scrollback
 mpx send-keys -t %1 C-c          # tmux key names
 mpx paste -t %1 --submit "text"  # Bracketed paste + Enter
+mpx capture-pane -p -S - -t %1   # Scrollback and screen as text
+mpx set-buffer -b notes "text"   # Paste buffers, shared by the CLI and the TUI
+mpx paste-buffer -b notes -t %1  # Paste a buffer into a pane
+mpx setenv API_URL http://x      # Environment for panes started afterwards
 mpx wait &lt;name&gt; --match 'done' --timeout 60
 mpx restore                      # Restore workspace from last snapshot
 mpx import-tmux [FILE]           # Print a config.toml fragment converted from tmux.conf (writes nothing)

@@ -63,7 +63,7 @@ Output is kept in a ring buffer addressed by **absolute byte offsets** (the last
 
 State that outlives the daemon lives in the state directory (`$XDG_STATE_HOME/mpx/<session>/`). The runtime directory holds only the socket.
 
-- **Session snapshot** (`snapshot.json`): windows, layout split trees, focus, sticky window names, and each running pane's command, live working directory, user environment, and resume rule. It is saved atomically (temp file + rename), debounced, after every change, and marked clean on `kill-server`.
+- **Session snapshot** (`snapshot.json`): windows, layout split trees, focus, sticky window names, the session environment, and each running pane's command, live working directory, user environment, and resume rule. It is saved atomically (temp file + rename), debounced, after every change, and marked clean on `kill-server`.
   - If the daemon starts and finds a snapshot (after a crash, a reboot or `kill-server`), it restores the layout before accepting clients, unless `restore = false` or the daemon was started with `--no-restore`.
   - PTY panes re-run their command in their last directory. Panes matching `[[resume]]` rules expand their resume command or fallback (e.g. `claude --resume {id}`, `omp --resume {id}`, `nvim -c 'silent! source Session.vim'`).
   - `mpx restore` restores on demand.

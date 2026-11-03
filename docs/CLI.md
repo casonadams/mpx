@@ -94,6 +94,32 @@ mpx logs [-n LINES | --tail LINES] [--plain] [--since OFFSET] [--json] [-f] <nam
 | `mpx send-keys [-t pane] [-l] KEYS...` | tmux key names (`Enter`, `Escape`, `C-c`, `M-x`, `S-Tab`, `F5`, `Up`, ...). `-l` sends everything literally. |
 | `mpx paste [-t pane] [--submit] <text \| ->` | Bracketed paste into the pane (stdin with `-`). `--submit` presses Enter afterwards. |
 
+### Capture and paste buffers
+
+Paste buffers belong to the session's daemon, so the CLI, the TUI and copy mode share them. Unnamed buffers are named `buffer0000`, `buffer0001`, ... as tmux names them. `-s` is the session flag here, so a paste separator is `--separator`.
+
+| Command | Description |
+| :--- | :--- |
+| `mpx capture-pane [-t pane] [-p] [-e] [-J] [-S line] [-E line] [-b buffer]` (`capturep`) | Capture the pane's history and screen. Without `-p` the text goes into a paste buffer (a new one, or `-b`). |
+| `mpx set-buffer [-a] [-b name] [-n new] [data]` (`setb`) | Store `data` in a buffer, replacing it, or appending with `-a` (to the newest one unless `-b`). `-n` renames the buffer (`-b`, or the newest) to `new`. |
+| `mpx show-buffer [-b name]` (`showb`) | Print a buffer's text, with no newline added. |
+| `mpx delete-buffer [-b name]` (`deleteb`) | Delete a buffer (the newest unless `-b`). |
+| `mpx load-buffer [-b name] <path \| ->` (`loadb`) | Store a file, or stdin with `-`, in a buffer. |
+| `mpx save-buffer [-a] [-b name] <path \| ->` (`saveb`) | Write a buffer to a file (`-a` appends), or to stdout with `-`. |
+| `mpx paste-buffer [-d] [-p] [-r] [--separator sep] [-b name] [-t pane]` (`pasteb`) | Paste a buffer into a pane. `-d` deletes the buffer afterwards, `-p` brackets the paste, `-r` keeps line feeds, `--separator` replaces each line feed with `sep`. |
+| `mpx list-buffers [-F format]` (`lsb`) | List the buffers, newest first: `buffer_name: N bytes: "sample"`, or each line formatted by `-F`. |
+
+`capture-pane` numbers lines as tmux does: `0` is the first visible line, negative numbers are lines of the history above it, `-S -` is the start of the history and `-E -` the last visible line. `-e` keeps the color and attribute escapes. `-J` joins wrapped lines. Known difference: trailing blanks of a line that did not wrap are trimmed even with `-J`, since the screen does not record which blanks were typed. `-a`, `-N`, `-C` and `-P` are not implemented and fail as unknown options.
+
+### Session environment
+
+| Command | Description |
+| :--- | :--- |
+| `mpx set-environment [-g] [-u] [-r] [-t session] NAME [VALUE]` (`setenv`) | Set a variable for the panes started afterwards. `-u` removes it from the session environment. `-r` keeps it out of new panes even when mpx inherited it. |
+| `mpx show-environment [-g] [-t session] [NAME]` (`showenv`) | Print `NAME=value` lines, and `-NAME` for a variable kept out. With `NAME`, only that variable (an error if it is unset). |
+
+mpx keeps one environment per session, so `-g` names the same one. `-t` picks the session as elsewhere. The environment is saved with the session snapshot and restored before the windows start. At the `:` prompt, `set-environment` and `show-environment` take no `-t`.
+
 ### `mpx wait`
 ```bash
 mpx wait [--timeout SECS] [--idle MS | --match REGEX] <name>
@@ -130,7 +156,7 @@ Timeout exits with `124`, matching coreutils `timeout`.
 
 ## Session Restore
 
-The daemon saves an atomic snapshot of the session's layout whenever it changes: windows, splits, focus, window names, and each pane's command, working directory, and environment.
+The daemon saves an atomic snapshot of the session's layout whenever it changes: windows, splits, focus, window names, the session environment, and each pane's command, working directory, and environment.
 
 Earlier versions named the default session `main`. The first plain `mpx` moves a saved `main` state to `0`, unless a `main` daemon is still running; stop it with `mpx kill-server -s main` first.
 
@@ -170,6 +196,7 @@ Variables:
 - Window: `window_index`, `window_id`, `window_name`, `window_active`, `window_panes`, `window_flags` (`#` activity, `!` bell, `*` active, `Z` zoomed, `-` last, `M` holds the marked pane), `window_zoomed_flag` (`1` when the window is zoomed).
 - Session: `session_name`, `session_windows`, `session_attached` (always `1`), `client_session`.
 - Host: `host`, `host_short`, `pid`, `version` (`3.4`).
+- Paste buffers, in `list-buffers -F`: `buffer_name`, `buffer_size` (bytes), `buffer_sample` (the first 50 characters, control characters escaped).
 - Not available, so they expand to empty: `session_id`, `session_created`, `start_time`.
 
 ### Copy mode
