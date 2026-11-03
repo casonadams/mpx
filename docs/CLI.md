@@ -47,8 +47,8 @@ Commands that take a pane accept its name or its stable id `%N` (tmux style). TU
 mpx import-tmux ~/.tmux.conf > /tmp/mpx-fragment.toml
 ```
 
-- Converted: `prefix` (`set -g prefix`), `history-limit` (to `scrollback_lines`), `remain-on-exit`, `allow-passthrough`, `automatic-rename`, `monitor-activity`, `monitor-bell`, `default-terminal`, `default-shell`, `default-command`, `display-panes-time`, `status-style` and `pane-border-style`/`pane-active-border-style` colours (`fg`/`bg` as mpx colour names or hex), `pane-border-lines` (single, double, rounded, simple as ascii), and `bind`/`bind -n`/`bind -T root`/`unbind` for commands mpx accepts.
-- Skipped or approximated lines are listed on stderr as `# line N: ...` and again in the output as `# unsupported (line N): ...` comments. Examples: `run`/`run-shell` and TPM plugins (never executed), `source-file` (only the given file is converted), `%if` blocks (skipped; use `source-file` for a live, evaluated config), `mouse` and `escape-time` (no mpx setting), `bind` of commands mpx does not have, and `split-window -c '#{pane_current_path}'` (dropped, since mpx already starts new panes in the active pane's directory).
+- Converted: `prefix` (`set -g prefix`), `history-limit` (to `scrollback_lines`), `remain-on-exit`, `allow-passthrough`, `automatic-rename`, `monitor-activity`, `monitor-bell`, `default-terminal`, `default-shell`, `default-command`, `display-panes-time`, `status-style` and `pane-border-style`/`pane-active-border-style` colours (`fg`/`bg` as mpx colour names or hex), `pane-border-lines` (single, double, rounded, simple as ascii), `bind`/`bind -n`/`bind -T root`/`unbind` for commands mpx accepts (including `if-shell` and `run-shell`, which bind like any command), and `set -s command-alias name=command` as the `[alias]` table.
+- Skipped or approximated lines are listed on stderr as `# line N: ...` and again in the output as `# unsupported (line N): ...` comments. Examples: `run-shell` and `if-shell` at the top level of the file (they run at tmux startup, which an mpx config cannot express; use `mpx run-shell` or bind them), TPM plugins (`run '~/.tmux/plugins/tpm/tpm'` is never executed), `source-file` (only the given file is converted), `%if` blocks (skipped; use `source-file` for a live, evaluated config), `mouse` and `escape-time` (no mpx setting), `bind` of commands mpx does not have, and `split-window -c '#{pane_current_path}'` (dropped, since mpx already starts new panes in the active pane's directory).
 - `unbind KEY` is written as an empty binding, which removes mpx's default for that key.
 - `~` and `$HOME` are copied as written.
 
@@ -127,6 +127,38 @@ Timeout exits with `124`, matching coreutils `timeout`.
 | `mpx layout [--width W --height H]` | Print the computed pane geometry. |
 
 ---
+
+## Shell, Channels and Hooks
+
+| Command | Description |
+| :--- | :--- |
+| `mpx run-shell [-b] [-t pane] [-d SECONDS] COMMAND...` | Run a command through the session's shell (`default-shell`, else `$SHELL`) in the daemon. `#{...}` formats are expanded for `-t` (the active pane by default), and the command starts in that pane's directory. Its output is printed; `-b` does not wait, `-d` waits first. The exit status does not change the command's own. |
+| `mpx if-shell [-F] [-t pane] CONDITION COMMAND [COMMAND]` | Run COMMAND when the shell command CONDITION exits 0, else the second COMMAND (tmux `if-shell`). With `-F`, CONDITION is a format, true when non-empty and not `0`. The daemon decides the branch and runs it through its hook executor, so the branch can be any command a hook can run; a `run-shell` branch prints nothing. `-t` is the pane the condition and the commands act on (the active pane by default). |
+| `mpx wait-for [-S \| -L \| -U] CHANNEL` | Named channels of the daemon (tmux `wait-for`). With no flag, waits until `-S` signals the channel; a signal with nobody waiting is kept for the next wait. `-L` takes the channel's lock (waiting while another holder has it), `-U` releases it (an error when it is not locked). The command blocks in the terminal and exits with status 1 when the daemon stops. |
+| `mpx set-hook [-a] HOOK COMMAND...` | Set the command a hook runs; `-a` adds one after the hook's existing commands. |
+| `mpx set-hook -u HOOK` | Remove the hook's commands. |
+| `mpx set-hook -R HOOK` | Run the hook's commands now, for the active pane. |
+| `mpx show-hooks` | Print every hook command as `HOOK COMMAND`, by hook name and then in order. |
+
+Hooks run in the daemon when their event happens, with the event's pane as the target of formats (`#{hook}` is the hook name, `#{hook_pane}` the pane's id). Hooks are kept in memory: they last as long as the session's daemon does, so set them again after `mpx kill-server`. Events:
+
+- `after-new-window`, `after-split-window`, `after-kill-pane`: after the window or pane is made or killed by a client request.
+- `after-select-window`, `after-select-pane`: after a request that changes the selected window or pane.
+- `pane-exited`: a pane's process ended. `pane-died`: the same, when the pane stays on screen (`remain-on-exit`).
+- `alert-bell`, `alert-activity`: a window that was not shown rings or shows output for the first time since the user last saw it (`monitor-bell`, `monitor-activity`).
+- `client-attached`, `client-detached`: a terminal attaches to or leaves the session.
+
+Not supported: window and pane hooks (`set-hook -w`, `-t`; a hook applies to the whole session), `after-new-session`, `window-linked`, `session-closed` and `alert-silence`, which fail with an error. A command a hook runs does not fire hooks itself.
+
+Commands a hook can run: `run-shell`, `if-shell`, `wait-for`, `split-window`, `new-window`, `kill-pane`, `kill-window`, `rename-window`, `select-window`, `next-window`, `previous-window`, `last-window`, `select-pane`, `next-pane`, `last-pane`, `break-pane`, `select-layout`, `rotate-window`, `set-hook` (including `-R`), and `set -s command-alias`. Other commands (copy mode, prompts, overlays, client commands) fail with `command not available in hooks`.
+
+`if-shell [-bF] [-t pane] SHELL-COMMAND COMMAND [COMMAND]` runs the shell command and then the first command when it exits 0, else the second. With `-F` the first argument is a format, true when non-empty and not `0`. It is a command of the `:` prompt, key bindings, config files and `source-file`, and of hooks; `mpx if-shell` runs it from a shell (see above).
+
+`source-file [-q] FILE...` (in the `:` prompt, bindings, or a config file read this way) runs each file's command lines in order. Lines ending in `\` continue on the next line; `#` starts a comment line. `%if`, `%elif`, `%else` and `%endif` select lines by a format condition, and `%hidden NAME=value` defines a variable that `#{NAME}` in later lines and conditions expands to. A missing file is an error unless `-q` is given.
+
+`set -s command-alias NAME=COMMAND` (`set -su command-alias NAME` removes it) makes `NAME` a command for the `:` prompt, bindings, hooks and files; the index in `command-alias[N]` is accepted and ignored, as aliases are looked up by name. The same aliases are read from the `[alias]` table of the config.
+
+In the TUI, a foreground `run-shell`, `if-shell` or `wait-for` does not block the screen: its output goes to the status row (one message per line, all in `show-messages`), and the commands after it on the same line run once it finishes. `-b` runs without that wait.
 
 ## Session Restore
 

@@ -201,9 +201,20 @@ vim.api.nvim_create_autocmd({ "VimLeavePre", "BufWritePost", "FocusLost" }, {
 })
 ```
 
+### Command aliases (`[alias]`)
+
+A table of command names to the command line they stand for, as tmux's `command-alias` does. The first word of a command is replaced by the alias's words, and the words you type follow it:
+
+```toml
+[alias]
+sp = "split-window -h"
+```
+
+With this, `sp -d` at the `:` prompt, in a key binding, in a hook, or in a file read by `source-file` runs `split-window -h -d`. An alias is expanded once. `set -s command-alias NAME=COMMAND` adds one at run time (`set -su command-alias NAME` removes it); the daemon's copy is what hooks use.
+
 ## Options at run time
 
-`:set-option NAME VALUE` (alias `set`; `-g`, `-w` and `-s` are accepted and ignored) changes an option of the terminal you type it in, with tmux's option names and values. `-u` restores the default, `-q` ignores an unknown name, and `--` ends the flags for a value that starts with `-`. `:show-options [-v] [NAME]` lists the values. A change lasts until `reload-config`, which re-reads the file, and applies at once; a value that does not parse, or a `prefix` that does not resolve, is refused with a message and changes nothing.
+`:set-option NAME VALUE` (alias `set`; `-g`, `-w` and `-s` are accepted and ignored, except that `-s command-alias` sets an alias; see [Command aliases](#command-aliases-alias)) changes an option of the terminal you type it in, with tmux's option names and values. `-u` restores the default, `-q` ignores an unknown name, and `--` ends the flags for a value that starts with `-`. `:show-options [-v] [NAME]` lists the values. A change lasts until `reload-config`, which re-reads the file, and applies at once; a value that does not parse, or a `prefix` that does not resolve, is refused with a message and changes nothing.
 
 Settable: `allow-passthrough`, `base-index`, `display-panes-time`, `display-time`, `mode-keys`, `mouse`, `pane-base-index`, `prefix`, `set-clipboard`, `status`, `status-interval`, `status-justify`, `status-left`, `status-left-length`, `status-position`, `status-right`, `status-right-length`, `which-key-delay`, `window-status-current-format`, `window-status-format`, `window-status-separator`.
 

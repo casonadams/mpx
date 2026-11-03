@@ -207,6 +207,11 @@ mpx paste -t %1 --submit "text"  # Bracketed paste + Enter
 mpx wait &lt;name&gt; --match 'done' --timeout 60
 mpx restore                      # Restore workspace from last snapshot
 mpx import-tmux [FILE]           # Print a config.toml fragment converted from tmux.conf (writes nothing)
+mpx run-shell -b 'touch /tmp/x'  # Run a shell command in the session (-b: do not wait)
+mpx if-shell -F '#{pane_active}' 'split-window -h' # Run the command the condition chooses
+mpx wait-for -S ready           # Signal a channel (wait-for ready waits for it)
+mpx set-hook -a after-new-window 'run-shell ...' # Hooks: set, -u removes, -R runs now
+mpx show-hooks                  # List every hook command
 mpx kill-server                  # Stop the session daemon</code></pre>
     </section>
   </main>
