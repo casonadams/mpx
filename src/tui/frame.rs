@@ -360,6 +360,7 @@ fn status_row(app: &mut App, out: &mut Vec<u8>) -> io::Result<()> {
     }
     draw_status_segments(out, &line.segs, y, bg, fg)?;
     app.status_targets = line.targets;
+    app.status_zones = (line.left_end, line.right_start);
     Ok(())
 }
 

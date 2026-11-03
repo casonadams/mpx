@@ -17,6 +17,7 @@ mod tui {
     mod placement;
     mod popup_cmds;
     mod prompt;
+    mod mouse_menu;
     mod render;
     mod status;
     mod status_bytes;

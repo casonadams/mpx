@@ -132,6 +132,8 @@ pub struct App {
     pub rows: Rows,
     /// Clickable items of the status line as last drawn: `[start, end)` columns and their target.
     pub status_targets: Vec<(usize, usize, Target)>,
+    /// Columns the status line's `status-left` ends before and `status-right` starts at, as last drawn.
+    pub status_zones: (usize, usize),
     /// When the last frame was drawn; paces `status-interval`.
     pub drawn_at: Option<Instant>,
     /// Panes drawn this frame (the zoomed pane alone when zoomed).
@@ -337,6 +339,7 @@ impl App {
             viewport: (80, 23),
             rows: statusline::rows(24, 1, false),
             status_targets: Vec::new(),
+            status_zones: (0, usize::MAX),
             drawn_at: None,
             panes: Vec::new(),
             active_pane: String::new(),
