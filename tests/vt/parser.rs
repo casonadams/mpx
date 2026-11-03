@@ -665,3 +665,55 @@ fn shell_marks_follow_their_row_into_history_and_drop_when_it_leaves() {
     feed(&mut vt, "z\r\n");
     assert!(marks(&vt).is_empty(), "p1 left the history");
 }
+
+/// The text of each row of `grid`, top to bottom.
+fn grid_rows(grid: &mpx::vt::Grid) -> Vec<String> {
+    grid.screen_lines()
+        .map(|line| {
+            line.iter()
+                .map(|cell| cell.c)
+                .collect::<String>()
+                .trim_end()
+                .to_owned()
+        })
+        .collect()
+}
+
+#[test]
+fn a_resized_grid_pulls_the_log_back_from_history_and_pads_the_top() {
+    let log = b"a\r\nb\r\nc\r\nd\r\ne";
+    let grid = VtScreen::resized_grid(log, (10, 2), (10, 5), false);
+    assert_eq!(grid_rows(&grid), ["a", "b", "c", "d", "e"]);
+    assert_eq!(grid.cursor.y, 4, "the cursor stays on the bottom row");
+    assert_eq!(grid.history_len(), 0, "live screens keep no history");
+
+    let padded = VtScreen::resized_grid(log, (10, 2), (10, 6), false);
+    assert_eq!(
+        grid_rows(&padded),
+        ["", "a", "b", "c", "d", "e"],
+        "the rows history cannot fill go on top"
+    );
+}
+
+#[test]
+fn a_resized_grid_keeps_scrollback_only_when_asked() {
+    let log = b"a\r\nb\r\nc\r\nd\r\ne";
+    let kept = VtScreen::resized_grid(log, (10, 5), (10, 1), true);
+    assert_eq!(
+        kept.history_len(),
+        4,
+        "the rows pushed off the top are kept"
+    );
+    let live = VtScreen::resized_grid(log, (10, 5), (10, 1), false);
+    assert_eq!(live.history_len(), 0);
+    assert_eq!(live.cursor.y, 0);
+}
+
+#[test]
+fn a_resized_grid_replays_at_the_new_width_when_the_width_changes() {
+    let log = b"abcdefgh\r\nx";
+    let narrow = VtScreen::resized_grid(log, (4, 3), (4, 3), false);
+    assert_eq!(grid_rows(&narrow)[..2], ["abcd", "efgh"]);
+    let wide = VtScreen::resized_grid(log, (4, 3), (8, 3), false);
+    assert_eq!(grid_rows(&wide)[..2], ["abcdefgh", "x"]);
+}

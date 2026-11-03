@@ -267,7 +267,15 @@ impl PaneActor {
     }
 
     fn resize(&mut self, cols: u16, rows: u16) -> Result<(), String> {
-        self.screen.grid_mut().resize(cols as usize, rows as usize);
+        let grid = self.screen.grid();
+        let from = (grid.cols, grid.rows);
+        let to = (cols as usize, rows as usize);
+        if from != to {
+            // As the app's screens do: rebuilt from the retained output, so the rows a grow pulls back
+            // from scrollback are the same at every end.
+            let rebuilt = VtScreen::resized_grid(&self.ring.snapshot(), from, to, false);
+            *self.screen.grid_mut() = rebuilt;
+        }
         self.history_cache = None;
         if let Some(terminal) = &self.terminal {
             terminal.resize(cols, rows);

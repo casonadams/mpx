@@ -366,3 +366,31 @@ async fn links_underlines_sync_and_overlays_keep_the_terminal_identical() {
     h.key(KeyCode::Esc).await;
     check(&mut h, "menu closed").await;
 }
+
+/// A pane that grows when the pane below it closes keeps its terminal identical to its screen,
+/// with its content bottom-anchored, on the main screen and on the alternate screen.
+#[tokio::test]
+async fn a_pane_that_grows_keeps_the_terminal_identical_to_its_screen() {
+    let config = Config {
+        which_key_delay_ms: 0,
+        ..Config::default()
+    };
+    let mut h = Harness::start(config, ECHO).await;
+    h.app.canvas.set_lr_margins(true);
+    check(&mut h, "attach").await;
+
+    split(&mut h.probe, MAIN, "below", Direction::Vertical).await;
+    check(&mut h, "stacked panes").await;
+    let fill = format!("{}PROMPT$", numbered_lines("top", 20));
+    h.emit(MAIN, &fill, "PROMPT$").await;
+    check(&mut h, "upper pane filled").await;
+    h.probe.kill("below").await.expect("kill below");
+    check(&mut h, "upper pane grows with content").await;
+
+    split(&mut h.probe, MAIN, "below", Direction::Vertical).await;
+    check(&mut h, "stacked again").await;
+    h.emit(MAIN, VIM_LIKE, "VIM-DONE").await;
+    check(&mut h, "alternate screen in the upper pane").await;
+    h.probe.kill("below").await.expect("kill below again");
+    check(&mut h, "alternate screen pane grows").await;
+}
