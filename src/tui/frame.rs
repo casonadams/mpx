@@ -13,6 +13,7 @@ use super::render::draw_status_segments;
 use super::status::{exit_badge, node_named};
 use super::status::{local_utc_offset, pane_items};
 use super::statusline::{Item, Line, Seg, Target, compose, parse_styled, status_vars, strftime, truncate};
+use crate::layout::Divider;
 use crate::layout::geometry::Rect;
 use crate::protocol::NodeInfo;
 use crate::format::expand;
@@ -50,6 +51,41 @@ pub fn send<W: Write>(out: &mut W, body: &[u8], cursor: &[u8]) -> io::Result<()>
     out.flush()
 }
 
+/// Blanks the cells of the pane area that no drawn pane or divider covers. A window laid out smaller
+/// than this client leaves such cells, and what was drawn there before must not stay on screen.
+/// Cells a pane or divider draws are left to them, so nothing is written twice.
+fn blank_uncovered<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
+    let (w, h) = app.viewport;
+    let top = app.rows.pane_top;
+    let dividers: &[Divider] = if app.zoomed() { &[] } else { &app.layout.dividers };
+    let blank = crate::vt::grid::Cell {
+        c: ' ',
+        style: Default::default(),
+    };
+    for y in top..top + h {
+        for x in 0..w {
+            let drawn = app
+                .panes
+                .iter()
+                .any(|(_, r, _)| r.width > 0 && r.height > 0 && r.contains(x, y))
+                || dividers.iter().any(|d| divider_covers(d, x, y));
+            if !drawn {
+                app.canvas.put(out, x, y, blank)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Whether the border cell of `divider` at (`x`, `y`) is one it draws.
+fn divider_covers(divider: &Divider, x: u16, y: u16) -> bool {
+    if divider.is_vertical {
+        x == divider.x && y >= divider.y && y - divider.y < divider.length
+    } else {
+        y == divider.y && x >= divider.x && x - divider.x < divider.length
+    }
+}
+
 /// Everything a frame changes on screen but the cursor: nothing at all when no cell, chrome or
 /// overlay changed.
 pub fn draw_body<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
@@ -71,6 +107,7 @@ pub fn draw_body<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
         covered.push(Rect::new(0, app.rows.prompt, screen_w, 1));
     }
     app.canvas.begin(screen_w, screen_h, covered);
+    blank_uncovered(app, out)?;
     draw_panes(app, out)?;
     if !app.zoomed() && !app.layout.dividers.is_empty() {
         let style = DividerStyle {
@@ -340,6 +377,7 @@ fn format_view(app: &App, node: &crate::protocol::NodeInfo) -> crate::format::Pa
         .unwrap_or(0);
     let mut view =
         crate::format::pane_view(&app.session, slot, node, &app.panes, &app.layout.tabs);
+    view.session_attached = app.attached;
     view.in_mode = app.parked_copy.contains_key(&node.name)
         || (matches!(app.mode, Mode::Copy(_)) && node.name == app.active_pane);
     view.window_base = app.config.base_index;

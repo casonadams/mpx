@@ -15,7 +15,7 @@ use mpx::ipc::{self, IpcListener};
 use mpx::layout::Direction;
 use mpx::layout::geometry::Rect;
 use mpx::protocol::{NewWindowOpts, SpawnOpts, SplitOpts, WaitCondition, WaitOutcome};
-use mpx::tui::app::{App, AppOptions, Clipboard, Flow, Mode, StartView, StreamRx};
+use mpx::tui::app::{App, AppOptions, AttachOpts, Clipboard, Flow, Mode, StartView, StreamRx};
 use mpx::tui::frame;
 use mpx::vt::{Cursor, VtScreen};
 
@@ -82,6 +82,30 @@ impl Sandbox {
             }
         });
     }
+}
+
+/// Attaches an `App` to `session` of the sandbox's daemons, listed as `client_name` (the terminal's
+/// device path when `None`). The returned stream must stay alive while the app is used.
+pub async fn open_app(
+    sandbox: &Sandbox,
+    session: &str,
+    config: Config,
+    attach: AttachOpts,
+    client_name: Option<String>,
+) -> (App, StreamRx) {
+    let opts = AppOptions {
+        config,
+        config_path: None,
+        socket_dir: sandbox.socket_dir.clone(),
+        size: Some(SIZE),
+        attach,
+        client_name,
+    };
+    let (mut app, rx) = App::open(&sandbox.endpoint(session), session, StartView::Panes, opts)
+        .await
+        .expect("attach app");
+    app.clipboard = Clipboard::Captured(Vec::new());
+    (app, rx)
 }
 
 pub async fn connect(endpoint: &str) -> Client {
@@ -172,11 +196,21 @@ pub struct Harness {
 impl Harness {
     /// Starts the main session with one window named `MAIN` running `script`, then attaches an app.
     pub async fn start(config: Config, script: &str) -> Self {
+        Self::start_with(config, script, AttachOpts::default(), None).await
+    }
+
+    /// `start`, with the attaching client's options and listed name.
+    pub async fn start_with(
+        config: Config,
+        script: &str,
+        attach: AttachOpts,
+        client_name: Option<String>,
+    ) -> Self {
         let sandbox = Sandbox::new();
         sandbox.serve(SESSION, &config).await;
         let mut seed = connect(&sandbox.endpoint(SESSION)).await;
         window(&mut seed, MAIN, script).await;
-        Self::attach(sandbox, SESSION, config).await
+        Self::attach_with(sandbox, SESSION, config, attach, client_name).await
     }
 
     /// Starts the main session running `script`, draws one frame and waits until it prints READY.
@@ -200,17 +234,19 @@ impl Harness {
 
     /// Attaches a fresh app to `session`, which must already be serving.
     pub async fn attach(sandbox: Sandbox, session: &str, config: Config) -> Self {
+        Self::attach_with(sandbox, session, config, AttachOpts::default(), None).await
+    }
+
+    /// Like `attach`, with the client's attach options and listed name.
+    pub async fn attach_with(
+        sandbox: Sandbox,
+        session: &str,
+        config: Config,
+        attach: AttachOpts,
+        client_name: Option<String>,
+    ) -> Self {
         let endpoint = sandbox.endpoint(session);
-        let opts = AppOptions {
-            config,
-            config_path: None,
-            socket_dir: sandbox.socket_dir.clone(),
-            size: Some(SIZE),
-        };
-        let (mut app, rx) = App::open(&endpoint, session, StartView::Panes, opts)
-            .await
-            .expect("attach app");
-        app.clipboard = Clipboard::Captured(Vec::new());
+        let (app, rx) = open_app(&sandbox, session, config, attach, client_name).await;
         let probe = connect(&endpoint).await;
         let mut terminal = VtScreen::new(SIZE.0 as usize, SIZE.1 as usize);
         terminal.feed(b"\x1b[?7l");

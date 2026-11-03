@@ -17,7 +17,7 @@ use crate::daemon::run_daemon;
 use crate::ipc;
 use crate::store;
 use crate::import_tmux::convert;
-use crate::tui::app::AppOptions;
+use crate::tui::app::{AppOptions, AttachOpts};
 use crate::tui::status::{clock_hms, local_utc_offset};
 use crate::tui::{StartView, run_tui};
 
@@ -46,6 +46,9 @@ pub async fn run_cli(cli: Cli) -> Result<i32, String> {
     let command = cli.command.unwrap_or(Commands::Attach {
         target: None,
         force: false,
+        detach_others: false,
+        exclusive: false,
+        read_only: false,
     });
     if cli.session.is_none() && matches!(command, Commands::NewSession { .. }) {
         target = numbered_session(&target);
@@ -97,7 +100,7 @@ async fn new_session(mut r: Resolved, detach: bool, force: bool) -> Result<i32, 
         ensure_client(&r).await?;
         return Ok(0);
     }
-    attach(&r, None, force).await
+    attach(&r, None, force, AttachOpts::default()).await
 }
 
 async fn dispatch(command: Commands, r: Resolved) -> Result<i32, String> {
@@ -109,8 +112,31 @@ async fn dispatch(command: Commands, r: Resolved) -> Result<i32, String> {
             Ok(0)
         }
         Commands::KillServer => kill_server(&r).await,
-        Commands::Attach { target, force } => attach(&r, target, force).await,
-        Commands::NewSession { detach, force } => new_session(r, detach, force).await,
+        Commands::Attach {
+            target,
+            force,
+            detach_others,
+            exclusive,
+            read_only,
+        } => {
+            let attach_opts = AttachOpts {
+                exclusive: detach_others || exclusive,
+                read_only,
+            };
+            attach(&r, target, force, attach_opts).await
+        }
+        Commands::NewSession {
+            target: Some(group),
+            ..
+        } => Err(format!(
+            "new-session -t {group}: session groups are not supported: each session owns its panes \
+             in its own daemon, so windows cannot share windows with another session"
+        )),
+        Commands::NewSession { detach, force, .. } => new_session(r, detach, force).await,
+        client @ (Commands::ListClients { .. }
+        | Commands::DetachClient { .. }
+        | Commands::RefreshClient { .. }
+        | Commands::SwitchClient { .. }) => super::clients::run(client, &r).await,
         Commands::ListSessions { json } => list_sessions(&r, json).await,
         Commands::ListPanes { json } => list_panes(&r, json).await,
         Commands::HasSession { target } => has_session(&r, target.as_deref()).await,
@@ -424,7 +450,12 @@ fn target_resolved(current: &Resolved, target: &str) -> Resolved {
     }
 }
 
-async fn attach(r: &Resolved, target: Option<String>, force: bool) -> Result<i32, String> {
+async fn attach(
+    r: &Resolved,
+    target: Option<String>,
+    force: bool,
+    attach_opts: AttachOpts,
+) -> Result<i32, String> {
     if nested_attach_refused(env_var("MPX_ENDPOINT").is_some(), force) {
         return Err(
             "sessions should be nested with care, unset $MPX_ENDPOINT to force".to_string(),
@@ -446,7 +477,10 @@ async fn attach(r: &Resolved, target: Option<String>, force: bool) -> Result<i32
         &target.endpoint,
         &target.session,
         StartView::Panes,
-        tui_options(&target),
+        AppOptions {
+            attach: attach_opts,
+            ..tui_options(&target)
+        },
     )
     .await?;
     Ok(0)
@@ -509,5 +543,7 @@ pub fn tui_options(r: &Resolved) -> AppOptions {
         config_path: r.config_path.clone(),
         socket_dir: r.socket_dir.clone(),
         size: None,
+        attach: AttachOpts::default(),
+        client_name: None,
     }
 }

@@ -232,7 +232,7 @@ impl App {
 
     /// Writes bytes to the active pane (focus reports, the prefix key).
     pub async fn write_active(&mut self, bytes: &[u8]) -> Result<(), String> {
-        if self.active_pane.is_empty() {
+        if self.active_pane.is_empty() || self.terminal.readonly {
             return Ok(());
         }
         let text = String::from_utf8_lossy(bytes).into_owned();
@@ -246,6 +246,9 @@ impl App {
     }
 
     pub async fn on_paste(&mut self, text: &str) -> Flow {
+        if self.terminal.readonly {
+            return Flow::Continue;
+        }
         if let Mode::Prompt(prompt) = &mut self.mode {
             for c in text.chars().filter(|c| !c.is_control()) {
                 prompt.line.insert(c);

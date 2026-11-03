@@ -252,13 +252,17 @@ fn pane_rectangles_come_from_the_layout_when_laid_out() {
 
 #[test]
 fn pane_identity_and_fixed_session_values_expand() {
-    let v = pane_vars(&pane_view("dev", 0, &node("p", 1), &[], &[]));
+    let view = mpx::format::PaneView {
+        session_attached: 2,
+        ..pane_view("dev", 0, &node("p", 1), &[], &[])
+    };
+    let v = pane_vars(&view);
     assert_eq!(
         expand(
             "#{pane_tty} #{pane_start_command} #{pane_in_mode} #{version} #{client_session} #{session_attached}",
             &v
         ),
-        "/dev/ttys004 zsh 0 3.4 dev 1"
+        "/dev/ttys004 zsh 0 3.4 dev 2"
     );
     assert_eq!(expand("#{pid}", &v), std::process::id().to_string());
     let host = expand("#{host}", &v);

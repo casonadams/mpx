@@ -62,7 +62,9 @@ impl App {
                     local_col,
                     local_row,
                     ev.modifiers,
-                ) {
+                )
+                .filter(|_| !self.terminal.readonly)
+                {
                     let text = String::from_utf8_lossy(&bytes);
                     let _ = self.client.send_input(&name, &text).await;
                     return Flow::Continue;

@@ -81,6 +81,9 @@ impl App {
 
     /// Runs a command without the interactive confirmation step (used once confirmed).
     pub async fn run(&mut self, cmd: Command) -> Flow {
+        if self.terminal.readonly && !super::command::read_only_allowed(&cmd) {
+            return self.say("read-only client: this command would change the session");
+        }
         let cmd = match self.run_windows(cmd).await {
             Ok(flow) => return flow,
             Err(cmd) => cmd,
@@ -218,6 +221,16 @@ impl App {
             Command::ListBuffers => self.list_buffers().await,
             Command::ChooseBuffer => self.open_overlay(Overlay::buffers()).await,
             Command::SuspendClient => self.suspend_client(),
+            Command::ListClients { target, format } => self.list_clients(target, format).await,
+            Command::DetachClients { target, all_others } => {
+                self.detach_clients(target, all_others).await
+            }
+            Command::RefreshClient { target, size } => self.refresh_client(target, size).await,
+            Command::ChooseClient => self.open_overlay(Overlay::clients()).await,
+            Command::LastSession => match self.previous_session.clone() {
+                Some(name) => self.go_session(&name).await,
+                None => self.say("no last session"),
+            },
             other => self.say(format!("unhandled command: {other:?}")),
         }
     }

@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use crate::clients::{Size, WindowSize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -38,6 +39,13 @@ pub struct Config {
     pub default_shell: Option<String>,
     /// Command run by a pane started without one, through the default shell (tmux `default-command`).
     pub default_command: Option<String>,
+    /// Which attached clients the window is sized for (tmux `window-size`).
+    pub window_size: WindowSize,
+    /// Window size under `window-size manual` (tmux `default-size`).
+    pub default_size: Size,
+    /// Whether a terminal whose session ends is detached (tmux `detach-on-destroy on`); `false`
+    /// switches it to another running session instead.
+    pub detach_on_destroy: bool,
     /// After a crash or reboot, recreate the last session layout and resume its processes on start.
     pub restore: bool,
     /// Milliseconds after the prefix key before the shortcut popup appears; 0 shows it at once.
@@ -347,6 +355,9 @@ impl Default for Config {
             default_terminal: "xterm-256color".to_string(),
             default_shell: None,
             default_command: None,
+            window_size: WindowSize::default(),
+            default_size: Size::default(),
+            detach_on_destroy: true,
             restore: true,
             which_key_delay_ms: 300,
             display_panes_time_ms: 1000,

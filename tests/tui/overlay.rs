@@ -404,6 +404,17 @@ fn overlays_render_into_tiny_and_empty_areas_without_panicking() {
 }
 
 #[test]
+fn text_and_buffer_overlays_draw_their_contents() {
+    let text = render_text(
+        &Overlay::text("Notes", vec!["first line".to_string()]),
+        Rect::new(0, 0, 40, 10),
+    );
+    assert!(text.contains("first line"), "{text}");
+    let buffers = render_text(&Overlay::buffers(), Rect::new(0, 0, 60, 12));
+    assert!(buffers.contains("no buffers"), "{buffers}");
+}
+
+#[test]
 fn overlays_render_their_title_and_entries() {
     let cases: [(&str, Overlay, Rect, &[&str]); 2] = [
         ("tree", Overlay::Tree(tree()), Rect::new(0, 0, 60, 20), &["main", "zsh"]),

@@ -208,7 +208,7 @@ pub struct WaitOutcome {
 
 /// Version of the client-daemon protocol. Bump it on any change an older peer cannot parse, so
 /// clients refuse an incompatible daemon instead of misreading it.
-pub const PROTOCOL: u32 = 9;
+pub const PROTOCOL: u32 = 10;
 
 fn first_protocol() -> u32 {
     1
@@ -228,6 +228,37 @@ pub struct SessionInfo {
     /// Protocol the daemon speaks; daemons that predate the field speak version 1.
     #[serde(default = "first_protocol")]
     pub protocol: u32,
+}
+
+/// An attached terminal (tmux client), as the daemon of its session sees it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ClientInfo {
+    /// Terminal device path (`/dev/ttys004`), or a generated `client-PID-N` without a terminal.
+    pub name: String,
+    /// Session the client is attached to; the daemon fills it in.
+    #[serde(default)]
+    pub session: String,
+    /// Size of the client's terminal in cells.
+    pub width: u16,
+    pub height: u16,
+    /// Attached with `-r`: keys do not reach panes.
+    #[serde(default)]
+    pub readonly: bool,
+    pub created_ms: u64,
+    /// Unix ms of the client's latest input; the `latest` window-size policy follows it.
+    #[serde(default)]
+    pub activity_ms: u64,
+}
+
+/// Which attached clients of a session a request applies to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClientTarget {
+    /// The client with this name.
+    Named(String),
+    /// Every client except the one with this name.
+    Others(String),
+    All,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -300,6 +331,41 @@ pub enum Request {
         /// With `active_window`: also send `Layout` whenever windows or panes are rearranged.
         #[serde(default)]
         layout: bool,
+        /// A terminal attaching: registered as a client of the session, with its size and flags.
+        #[serde(default)]
+        client: Option<ClientInfo>,
+        /// With `client`: detach every other client of the session first (`attach -d`).
+        #[serde(default)]
+        exclusive: bool,
+    },
+    /// The session's attached clients.
+    ListClients,
+    /// Detaches the clients `target` selects: each gets `StreamEvent::Detached` and its stream ends.
+    DetachClients {
+        target: ClientTarget,
+    },
+    /// Redraws the client `name`; `size` (cols, rows) sets the size the window-size policy uses
+    /// for it, until the terminal reports a new size.
+    RefreshClient {
+        name: String,
+        #[serde(default)]
+        size: Option<(u16, u16)>,
+    },
+    /// The client `name` received input: it becomes the most recently active client.
+    ClientActivity {
+        name: String,
+    },
+    /// The client `name`'s terminal is now `width` x `height` cells.
+    ClientResized {
+        name: String,
+        width: u16,
+        height: u16,
+    },
+    /// Sends the command line `line` to the client `name` to run as its own command (tmux
+    /// `switch-client` and friends, run from outside the client).
+    ClientCommand {
+        name: String,
+        line: String,
     },
     Screen {
         name: String,
@@ -476,6 +542,7 @@ pub enum Response {
     Bindings(Vec<(String, String)>),
     Buffer(Buffer),
     Buffers(Vec<Buffer>),
+    Clients(Vec<ClientInfo>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -510,6 +577,14 @@ pub enum StreamEvent {
     Respawned {
         name: String,
     },
+    /// This client was detached: its terminal leaves the session and the stream ends after it.
+    Detached,
+    /// Run this command line as the client's own command (the prompt's grammar).
+    Run {
+        line: String,
+    },
+    /// Redraw the whole client (`refresh-client`).
+    Refresh,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

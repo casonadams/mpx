@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 
 mod panes;
+mod clients;
 pub mod render;
 mod resolve;
 mod sessions;
@@ -117,6 +118,18 @@ pub enum Commands {
         /// Attach even when running inside an mpx pane
         #[arg(long)]
         force: bool,
+
+        /// Detach the session's other clients first (tmux attach -d)
+        #[arg(short = 'd', long = "detach-others")]
+        detach_others: bool,
+
+        /// Like -d (tmux -x; mpx does not signal the other clients' terminals)
+        #[arg(short = 'x', long = "exclusive")]
+        exclusive: bool,
+
+        /// Attach read-only: keys and paste do not reach the panes (tmux attach -r)
+        #[arg(short = 'r', long = "read-only")]
+        read_only: bool,
     },
 
     /// Create a new session, named by the next free number unless -s gives a name (tmux new-session)
@@ -125,6 +138,10 @@ pub enum Commands {
         /// Create the session without attaching to it
         #[arg(short = 'd', long = "detach")]
         detach: bool,
+
+        /// Session group target: refused, sessions cannot share windows (tmux new-session -t)
+        #[arg(short = 't', long = "group-target")]
+        target: Option<String>,
 
         /// Attach even when running inside an mpx pane
         #[arg(long)]
@@ -497,5 +514,69 @@ pub enum Commands {
         target: Option<String>,
 
         name: String,
+    },
+
+    /// List attached clients across sessions, or one session's (tmux list-clients)
+    #[command(name = "list-clients", alias = "lsc")]
+    ListClients {
+        /// Only the clients of this session (tmux -t)
+        #[arg(short = 't', long = "target")]
+        target: Option<String>,
+
+        /// Format of each line (tmux -F)
+        #[arg(short = 'F', long = "format")]
+        format: Option<String>,
+    },
+
+    /// Detach a client (tmux detach-client): the most recently active one unless -t names it
+    #[command(name = "detach-client")]
+    DetachClient {
+        /// Client to detach (tmux -t), as list-clients names it
+        #[arg(short = 't', long = "target")]
+        target: Option<String>,
+
+        /// Detach the other clients of the target's session instead (tmux -a)
+        #[arg(short = 'a')]
+        all_others: bool,
+    },
+
+    /// Redraw a client, giving it a size with -C (tmux refresh-client)
+    #[command(name = "refresh-client")]
+    RefreshClient {
+        /// Client to refresh (tmux -t); every client when omitted
+        #[arg(short = 't', long = "target")]
+        target: Option<String>,
+
+        /// Size of the client in WIDTHxHEIGHT (tmux -C)
+        #[arg(short = 'C', long = "size")]
+        size: Option<String>,
+
+        /// Status line refresh (tmux -S); a full redraw is done either way
+        #[arg(short = 'S')]
+        status: bool,
+    },
+
+    /// Switch a client to another session (tmux switch-client)
+    #[command(name = "switch-client", alias = "switchc")]
+    SwitchClient {
+        /// Client to switch (tmux -c); the most recently active one when omitted
+        #[arg(short = 'c', long = "client")]
+        client: Option<String>,
+
+        /// Session to switch to (tmux -t)
+        #[arg(short = 't', long = "target")]
+        target: Option<String>,
+
+        /// The session switched from last (tmux -l)
+        #[arg(short = 'l', conflicts_with_all = ["target", "next", "prev"])]
+        last: bool,
+
+        /// The next session (tmux -n)
+        #[arg(short = 'n', conflicts_with_all = ["target", "last", "prev"])]
+        next: bool,
+
+        /// The previous session (tmux -p)
+        #[arg(short = 'p', conflicts_with_all = ["target", "last", "next"])]
+        prev: bool,
     },
 }

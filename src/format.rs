@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use regex::{NoExpand, RegexBuilder};
 
 use crate::layout::{Rect, WindowTab};
-use crate::protocol::NodeInfo;
+use crate::protocol::{ClientInfo, NodeInfo};
 
 /// Format variables available to `#{name}` references.
 pub type Vars = BTreeMap<&'static str, String>;
@@ -56,6 +56,8 @@ pub struct PaneView {
     pub window_base: usize,
     /// `pane-base-index`: the number of the first pane, added to `index` for `#{pane_index}`.
     pub pane_base: usize,
+    /// Clients attached to the pane's session (`#{session_attached}`).
+    pub session_attached: usize,
 }
 
 /// Expands `#{...}` formats, the aliases `#S #I #P #W #T #D`, and the escapes `##`, `#,`, `#}`.
@@ -372,12 +374,11 @@ fn host_name() -> String {
 }
 
 /// Variables that do not depend on the pane or session being described.
-fn shared_vars(vars: &mut Vars, session: &str) {
+fn shared_vars(vars: &mut Vars, session: &str, attached: usize) {
     let host = host_name();
     let host_short = host.split('.').next().unwrap_or_default().to_string();
     vars.insert("client_session", session.to_string());
-    // One attached client is assumed; attachment state is not tracked.
-    vars.insert("session_attached", "1".to_string());
+    vars.insert("session_attached", attached.to_string());
     vars.insert("host", host);
     vars.insert("host_short", host_short);
     vars.insert("pid", std::process::id().to_string());
@@ -426,7 +427,29 @@ pub fn pane_vars(p: &PaneView) -> Vars {
     vars.insert("window_panes", p.window_panes.to_string());
     vars.insert("window_flags", window_flags(p));
     vars.insert("window_zoomed_flag", flag(p.window_zoomed));
-    shared_vars(&mut vars, &p.session);
+    shared_vars(&mut vars, &p.session, p.session_attached);
+    vars
+}
+
+/// Variables of one attached client, for `list-clients` formats; `attached` is how many clients
+/// its session has.
+pub fn client_vars(info: &ClientInfo, attached: usize) -> Vars {
+    let mut vars = Vars::new();
+    let tty = if info.name.starts_with("/dev/") {
+        info.name.clone()
+    } else {
+        String::new()
+    };
+    vars.insert("client_name", info.name.clone());
+    vars.insert("client_tty", tty);
+    vars.insert("client_width", info.width.to_string());
+    vars.insert("client_height", info.height.to_string());
+    vars.insert("client_session", info.session.clone());
+    vars.insert("client_readonly", flag(info.readonly));
+    vars.insert("client_created", (info.created_ms / 1000).to_string());
+    vars.insert("client_activity", (info.activity_ms / 1000).to_string());
+    vars.insert("session_name", info.session.clone());
+    vars.insert("session_attached", attached.to_string());
     vars
 }
 

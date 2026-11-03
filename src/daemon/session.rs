@@ -11,6 +11,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
 use tracing::warn;
 
+use super::clients;
 use super::idempotency::{Claim, IdemCache};
 use super::plan::{self, PaneIdentity};
 use super::snapshot::{PaneRecord, build_snapshot};
@@ -24,15 +25,18 @@ use crate::node::pane::{self, InputBuild, Notifier, PaneCtx, PaneHandle, PaneNot
 use crate::node::process::basename;
 use crate::node::sink::Sink;
 use crate::node::{SpawnSpec, now_ms};
+use crate::clients::effective_size;
 use crate::protocol::{
-    NewWindowOpts, NodeInfo, PaneId, Request, Response,
-    SessionInfo, SpawnOpts, SplitOpts, StreamEvent,
+    ClientInfo, NewWindowOpts, NodeInfo, PaneId, Request, Response, SessionInfo, SpawnOpts,
+    SplitOpts, StreamEvent,
 };
 use crate::store::{SessionSnapshot, SnapshotStore, WindowPlan, plan_restore};
 
 pub(super) type Reply<T> = oneshot::Sender<T>;
 
 const SAVE_DEBOUNCE: Duration = Duration::from_millis(400);
+/// How often the session drops clients whose connection ended, so the others see the new size.
+const CLIENT_CHECK: Duration = Duration::from_secs(1);
 
 /// Messages to the session actor.
 pub(super) enum SessionMsg {
@@ -60,6 +64,8 @@ pub(super) enum SessionMsg {
     Subscribe {
         filter: Filter,
         sink: Sink,
+        client: Option<ClientInfo>,
+        exclusive: bool,
         reply: Reply<()>,
     },
     SubscribeNode {
@@ -118,6 +124,13 @@ impl Filter {
     }
 }
 
+/// A session-wide subscriber: what it receives, where events go, and the terminal it is, if any.
+pub(super) struct Subscriber {
+    pub(super) filter: Filter,
+    pub(super) sink: Sink,
+    pub(super) client: Option<ClientInfo>,
+}
+
 /// Everything the session needs at startup.
 pub(super) struct Boot {
     pub session: String,
@@ -159,6 +172,7 @@ pub(super) enum Placement {
 enum Next {
     Msg(SessionMsg),
     Save,
+    Clients,
     Closed,
 }
 
@@ -175,7 +189,7 @@ struct Session {
     /// Exited panes removed from the layout; oldest first, capped by `history_limit`.
     history: VecDeque<Entry>,
     next_pane_id: PaneId,
-    filters: Vec<(Filter, Sink)>,
+    filters: Vec<Subscriber>,
     /// Shared with every pane: whether output must be relayed here (session-wide subscribers exist).
     relay: Arc<AtomicBool>,
     pacing: Arc<Pacing>,
@@ -226,16 +240,23 @@ pub(super) async fn run(boot: Boot, mut rx: mpsc::UnboundedReceiver<SessionMsg>)
     session.startup_restore();
     let _ = ready.send(());
 
+    let mut client_check = tokio::time::interval(CLIENT_CHECK);
     loop {
         let next = tokio::select! {
             msg = rx.recv() => msg.map_or(Next::Closed, Next::Msg),
             () = sleep_until_opt(session.save_due) => Next::Save,
+            _ = client_check.tick() => Next::Clients,
         };
         match next {
             Next::Msg(msg) => session.handle(msg).await,
             Next::Save => {
                 session.save_due = None;
                 session.save(false).await;
+            }
+            Next::Clients => {
+                if clients::gone(&session.filters) {
+                    session.fanout(&StreamEvent::Layout);
+                }
             }
             Next::Closed => break,
         }
@@ -277,10 +298,11 @@ impl Session {
             SessionMsg::Subscribe {
                 filter,
                 sink,
+                client,
+                exclusive,
                 reply,
             } => {
-                self.filters.push((filter, sink));
-                self.sync_relay();
+                self.subscribe(filter, sink, client, exclusive);
                 let _ = reply.send(());
             }
             SessionMsg::SubscribeNode {
@@ -325,11 +347,87 @@ impl Session {
         }
     }
 
+    /// Adds a session-wide subscriber. A terminal (`client`) is registered with this session; with
+    /// `exclusive` (`attach -d`) it first detaches the clients attached before it. Its arrival or
+    /// departure can change the window size the policy picks, so every subscriber lays out again.
+    fn subscribe(&mut self, filter: Filter, sink: Sink, client: Option<ClientInfo>, exclusive: bool) {
+        let client = client.map(|info| ClientInfo {
+            session: self.session.clone(),
+            activity_ms: now_ms(),
+            ..info
+        });
+        if let (true, Some(info)) = (exclusive, &client) {
+            clients::detach_others(&mut self.filters, &info.name);
+        }
+        let terminal = client.is_some();
+        self.filters.push(Subscriber {
+            filter,
+            sink,
+            client,
+        });
+        self.sync_relay();
+        if terminal {
+            self.fanout(&StreamEvent::Layout);
+        }
+    }
+
+    /// The attached clients of this session, and the requests that detach, resize or message them.
+    fn client_request(&mut self, req: Request) -> Response {
+        match req {
+            Request::ListClients => Response::Clients(clients::list(&self.filters, &self.session)),
+            Request::DetachClients { target } => match clients::detach(&mut self.filters, &target) {
+                Ok(_) => {
+                    self.fanout(&StreamEvent::Layout);
+                    Response::Ok
+                }
+                Err(e) => Response::Error(e),
+            },
+            Request::ClientActivity { name } => unit(clients::touch(&mut self.filters, &name)),
+            Request::ClientResized {
+                name,
+                width,
+                height,
+            } => match clients::resize(&mut self.filters, &name, width, height) {
+                Ok(true) => {
+                    self.fanout(&StreamEvent::Layout);
+                    Response::Ok
+                }
+                Ok(false) => Response::Ok,
+                Err(e) => Response::Error(e),
+            },
+            Request::RefreshClient { name, size } => {
+                match clients::refresh(&mut self.filters, &name, size) {
+                    Ok(true) => {
+                        self.fanout(&StreamEvent::Layout);
+                        Response::Ok
+                    }
+                    Ok(false) => Response::Ok,
+                    Err(e) => Response::Error(e),
+                }
+            }
+            Request::ClientCommand { name, line } => {
+                unit(clients::send(&mut self.filters, &name, StreamEvent::Run { line }))
+            }
+            other => Response::Error(format!("not a client request: {other:?}")),
+        }
+    }
+
+    /// The size the window is laid out for: the window-size policy over the attached clients, or
+    /// `requested` when none is attached.
+    fn window_size(&self, requested: (u16, u16)) -> (u16, u16) {
+        effective_size(
+            self.config.window_size,
+            self.config.default_size,
+            &clients::live(&self.filters),
+            requested,
+        )
+    }
+
     /// Panes relay output to the session only while session-wide subscribers exist: relaying every
     /// chunk of every pane costs a flood about half its speed, and an attached terminal subscribes
     /// anyway.
     fn sync_relay(&self) {
-        let subscribed = self.filters.iter().any(|(filter, _)| filter.session_wide());
+        let subscribed = self.filters.iter().any(|sub| sub.filter.session_wide());
         self.relay.store(subscribed, Ordering::Relaxed);
     }
 
@@ -340,13 +438,13 @@ impl Session {
             workspace.active_window().is_some_and(|w| w.contains(name))
         };
         let mut accepted = 0;
-        self.filters.retain_mut(|(filter, sink)| {
-            if filter.accepts(event, shown) {
-                let kept = sink.push(event.clone());
+        self.filters.retain_mut(|sub| {
+            if sub.filter.accepts(event, shown) {
+                let kept = sub.sink.push(event.clone());
                 accepted += usize::from(kept);
                 kept
             } else {
-                !sink.is_closed()
+                !sub.sink.is_closed()
             }
         });
         self.sync_relay();
@@ -363,6 +461,12 @@ impl Session {
             Request::Split(opts) => self.split(opts).await,
             Request::NewWindow(opts) => self.new_window(opts).await,
             Request::Layout { width, height } => self.layout(width, height).await,
+            req @ (Request::ListClients
+            | Request::DetachClients { .. }
+            | Request::ClientActivity { .. }
+            | Request::ClientResized { .. }
+            | Request::RefreshClient { .. }
+            | Request::ClientCommand { .. }) => self.client_request(req),
             Request::Status { name } => node_reply(self.status(&name).await),
             Request::RenameSession { name } => {
                 self.session = name.clone();
@@ -805,6 +909,7 @@ impl Session {
 
     async fn layout(&mut self, width: u16, height: u16) -> Response {
         self.refresh_window_names().await;
+        let (width, height) = self.window_size((width, height));
         let (rects, dividers) = self.workspace.compute_layout_with_dividers(width, height);
         Response::Layout(rects, dividers, self.workspace.window_tabs())
     }
@@ -1271,6 +1376,12 @@ fn is_read_only(req: &Request) -> bool {
             | Request::GetBuffer { .. }
             | Request::ListBuffers
             | Request::DeleteBuffer { .. }
+            | Request::ListClients
+            | Request::DetachClients { .. }
+            | Request::ClientActivity { .. }
+            | Request::ClientResized { .. }
+            | Request::RefreshClient { .. }
+            | Request::ClientCommand { .. }
     )
 }
 

@@ -23,7 +23,7 @@ use crate::config::{Config, StatusPosition};
 use crate::node::sleep_until_opt;
 use crate::keys::TermModes;
 use crate::layout::geometry::Rect;
-use crate::protocol::{NewWindowOpts, NodeInfo, SpawnOpts, StreamEvent};
+use crate::protocol::{ClientInfo, NewWindowOpts, NodeInfo, SpawnOpts, StreamEvent};
 use crate::vt::VtScreen;
 
 /// Initial screen when attaching.
@@ -167,6 +167,12 @@ pub struct App {
     pub suspend_requested: bool,
     /// Where clock mode reads the time.
     pub clock: ClockSource,
+    /// This TUI as its session's client: its name, the size it reports and its read-only flag.
+    pub terminal: ClientInfo,
+    /// Clients attached to this session, counted every tick (`session_attached`).
+    pub attached: usize,
+    /// The session this client was attached to before the current one (`switch-client -l`).
+    pub previous_session: Option<String>,
 }
 
 /// Where clock mode reads the time: the system clock, or a fixed time (for tests).
@@ -200,6 +206,18 @@ pub struct AppOptions {
     pub socket_dir: PathBuf,
     /// Screen size to lay out for; `None` follows the real terminal.
     pub size: Option<(u16, u16)>,
+    /// How this client attaches (`attach -d`, `attach -r`).
+    pub attach: AttachOpts,
+    /// The name this client is listed under; the terminal's device path when `None`.
+    pub client_name: Option<String>,
+}
+
+/// How a client attaches: `exclusive` detaches the session's other clients (`attach -d`), and
+/// `read_only` keeps every key and paste from reaching the panes (`attach -r`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AttachOpts {
+    pub exclusive: bool,
+    pub read_only: bool,
 }
 
 /// Where yanked text goes: the system clipboard, or a capture list that tests read back.
@@ -228,13 +246,15 @@ impl App {
         opts: AppOptions,
     ) -> Result<(Self, StreamRx), String> {
         let keymap = keymap::resolve(&opts.config)?;
+        let exclusive = opts.attach.exclusive;
         let mut client = Client::connect(endpoint).await?;
         let sub_client = Client::connect(endpoint).await?;
         let started = ensure_running_window(&mut client).await;
         let (tx, rx) = mpsc::channel(STREAM_QUEUE);
         let mut app = Self::new(endpoint, session, client, keymap, tx, opts);
         app.report("new-window", started);
-        app.subscribe(sub_client);
+        app.subscribe_as(sub_client, exclusive);
+        app.refresh_attached().await;
         app.apply_bindings().await;
         app.refresh_nodes().await;
         if let Ok(info) = app.client.info().await {
@@ -261,7 +281,19 @@ impl App {
             config_path,
             socket_dir,
             size,
+            attach,
+            client_name,
         } = opts;
+        let now = crate::node::now_ms();
+        let terminal = ClientInfo {
+            name: client_name.unwrap_or_else(crate::clients::terminal_name),
+            session: session.to_string(),
+            width: 0,
+            height: 0,
+            readonly: attach.read_only,
+            created_ms: now,
+            activity_ms: now,
+        };
         App {
             endpoint: endpoint.to_string(),
             session: session.to_string(),
@@ -314,20 +346,30 @@ impl App {
             message_log: Vec::new(),
             suspend_requested: false,
             clock: ClockSource::default(),
+            terminal,
+            attached: 0,
+            previous_session: None,
         }
     }
 
-    /// Replaces the event subscription with one bound to `client`'s session.
+    /// Replaces the event subscription with one bound to `client`'s session, as this client.
     pub fn subscribe(&mut self, client: Client) {
+        self.subscribe_as(client, false);
+    }
+
+    /// Replaces the event subscription with one bound to `client`'s session, registered as this
+    /// client (with `exclusive`, the session's other clients are detached first).
+    fn subscribe_as(&mut self, client: Client, exclusive: bool) {
         if let Some(task) = self.sub.task.take() {
             task.abort();
         }
         self.sub.generation += 1;
         let generation = self.sub.generation;
         let tx = self.sub.tx.clone();
+        let terminal = self.terminal.clone();
         self.sub.task = Some(tokio::spawn(async move {
             let _ = client
-                .stream_logs_into((None, None), true, tx, move |event| (generation, event))
+                .stream_as_client(terminal, exclusive, tx, move |event| (generation, event))
                 .await;
         }));
     }
@@ -347,6 +389,7 @@ impl App {
             self.canvas.invalidate();
         }
         self.viewport = (w, rows.pane_h);
+        self.report_size(w, rows.pane_h).await;
         if !self.layout.sync(&mut self.client, (0, rows.pane_top), (w, rows.pane_h)).await {
             return false;
         }
@@ -433,7 +476,7 @@ impl App {
     }
 
     async fn send_focus(&mut self, name: &str, focused: bool) {
-        if self.modes_of(name).focus_events {
+        if self.modes_of(name).focus_events && !self.terminal.readonly {
             let text = String::from_utf8_lossy(crate::keys::focus_event(focused)).into_owned();
             let _ = self.client.send_input(name, &text).await;
         }
@@ -510,6 +553,10 @@ impl App {
                 break;
             }
         }
+        let (runs, detached) = take_control_events(&mut batch);
+        if detached {
+            return Flow::Quit;
+        }
         let echo = batch.iter().any(|(_, event)| {
             matches!(event, StreamEvent::Output { name, .. } if *name == self.active_pane)
         });
@@ -519,7 +566,12 @@ impl App {
             _ => true,
         });
         self.apply_batch(batch).await;
-        if !shown {
+        for line in &runs {
+            if self.run_forwarded(line).await == Flow::Quit {
+                return Flow::Quit;
+            }
+        }
+        if !shown && runs.is_empty() {
             return Flow::Continue;
         }
         let now = Instant::now();
@@ -560,6 +612,7 @@ impl App {
     pub async fn on_tick(&mut self) -> Flow {
         self.layout.dirty = true;
         self.refresh_nodes().await;
+        self.refresh_attached().await;
         if matches!(self.mode, Mode::Overlay(_)) {
             self.refresh_overlay().await;
         }
@@ -580,6 +633,9 @@ impl App {
     }
 
     pub async fn on_event(&mut self, ev: Event) -> Flow {
+        if matches!(ev, Event::Key(_) | Event::Mouse(_) | Event::Paste(_)) {
+            self.touch_client().await;
+        }
         let flow = self.handle_event(ev).await;
         self.after_input().await;
         flow
@@ -781,6 +837,25 @@ fn drain_into(rx: &mut StreamRx, batch: &mut Vec<(u64, StreamEvent)>) -> bool {
     batch.len() > before
 }
 
+/// Removes the run and detach events from `batch`: the lines to run, and whether the client was
+/// detached.
+fn take_control_events(batch: &mut Vec<(u64, StreamEvent)>) -> (Vec<String>, bool) {
+    let mut runs = Vec::new();
+    let mut detached = false;
+    batch.retain(|(_, event)| match event {
+        StreamEvent::Detached => {
+            detached = true;
+            false
+        }
+        StreamEvent::Run { line } => {
+            runs.push(line.clone());
+            false
+        }
+        _ => true,
+    });
+    (runs, detached)
+}
+
 /// Whether to draw after a wake-up. Pane output waits for its frame unless that frame is already
 /// due (drawn now rather than through a timer, which would add up to a millisecond); a key that
 /// only went to a pane changes nothing until the pane answers; anything else shows at once.
@@ -935,7 +1010,7 @@ impl Tui {
 
     /// Draws the next frame, sending only what changed. Returns false when nothing is left to show.
     async fn draw(&mut self) -> bool {
-        if !self.app.prepare_frame().await {
+        if !self.app.prepare_frame().await && !self.app.switch_after_destroy().await {
             return false;
         }
         self.body.clear();

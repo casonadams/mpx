@@ -1,5 +1,6 @@
 //! App-level TUI tests: drive `tui::App` against in-process daemons in a temp dir.
 mod binds;
+mod clients;
 mod copy_mode;
 mod copy_commands;
 mod drawing;
