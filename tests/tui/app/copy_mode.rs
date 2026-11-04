@@ -2,9 +2,18 @@
 use crossterm::event::{KeyCode, MouseButton, MouseEventKind};
 
 use mpx::layout::Direction;
-use mpx::tui::app::Mode;
+use mpx::tui::app::{App, Mode};
 
 use super::support::{ECHO, Harness, MAIN, long_output, split, two_lines};
+
+/// Whether the main pane shows the end of the fill: `line 35`, and `READY` on the last row. The
+/// `READY` the pane printed at start is on screen too, so `READY` alone does not show the fill.
+fn fill_applied(app: &App) -> bool {
+    app.active_vt().is_some_and(|vt| {
+        let shown = vt.snapshot();
+        shown.contains("line 35") && shown.trim_end().ends_with("READY")
+    })
+}
 
 #[tokio::test]
 async fn prefix_bracket_enters_copy_mode_and_q_leaves_it() {
@@ -221,12 +230,7 @@ async fn stdout_updating_in_copy_mode_anchors_viewport_and_selection() {
     }
     fill.push_str("READY");
     h.probe.send_input(MAIN, &fill).await.expect("send");
-    // Baseline once the whole fill, through `READY`, is on screen.
-    h.until("fill lines applied", |app| {
-        app.active_vt()
-            .is_some_and(|vt| vt.snapshot().trim_end().ends_with("READY"))
-    })
-    .await;
+    h.until("fill lines applied", fill_applied).await;
     h.frame().await;
     h.prefixed_char('[').await;
     let initial_hist = history_of(&h);
