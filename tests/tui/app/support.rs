@@ -471,6 +471,49 @@ impl Harness {
         out
     }
 
+    /// What the daemon and the app each hold for `pane`, for a failing assertion: sizes, cursors,
+    /// history, the daemon's resize record, and the tail of the pane's raw output debug-escaped
+    /// (the bytes the pane really sent, which on Windows are ConPTY's rendering, not the child's).
+    pub async fn facts(&mut self, pane: &str) -> String {
+        let info = self.probe.status(pane).await.ok();
+        let (log, next) = self
+            .probe
+            .logs(pane, None, false, None)
+            .await
+            .unwrap_or_default();
+        let tail: String = {
+            let mut chars: Vec<char> = log.chars().rev().take(3000).collect();
+            chars.reverse();
+            chars.into_iter().collect()
+        };
+        let tui = self.app.vt.get(pane).map(|vt| {
+            let grid = vt.grid();
+            format!(
+                "tui grid {}x{} cursor ({}, {}) history {} history_limit {}",
+                grid.cols,
+                grid.rows,
+                grid.cursor.x,
+                grid.cursor.y,
+                grid.history_len(),
+                grid.history_limit,
+            )
+        });
+        let daemon = info.map(|info| {
+            format!(
+                "daemon size {:?} cursor {:?} history_size {:?} resized {:?} at {:?}",
+                info.size, info.cursor, info.history_size, info.resized_from, info.resized_at,
+            )
+        });
+        format!(
+            "pane {pane}: {}; {}; log {} bytes next {next}, last 3000 chars {:?}\nTUI screen:\n{}",
+            tui.unwrap_or_default(),
+            daemon.unwrap_or_default(),
+            log.len(),
+            tail,
+            self.terminal.snapshot(),
+        )
+    }
+
     /// The terminal's cursor after the last frame.
     pub fn cursor(&self) -> Cursor {
         self.terminal.grid().cursor

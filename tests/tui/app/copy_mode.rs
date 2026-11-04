@@ -251,11 +251,9 @@ async fn stdout_updating_in_copy_mode_anchors_viewport_and_selection() {
     .await;
 
     let frame = h.frame().await;
-    assert!(
-        frame.contains("VISUAL -2/"),
-        "badge reflects increased scroll offset: {frame}"
-    );
-    assert!(frame.contains("READY"), "viewport still shows READY: {frame}");
+    let facts = h.facts(MAIN).await;
+    assert!(frame.contains("VISUAL -2/"), "badge: {frame}\n{facts}");
+    assert!(frame.contains("READY"), "viewport still shows READY: {frame}\n{facts}");
 
     h.key(KeyCode::Char('y')).await;
     assert_eq!(
@@ -302,8 +300,16 @@ async fn a_copy_pane_that_grows_stays_at_the_top_of_its_history() {
     h.probe.kill("below").await.expect("kill below");
     let frame = h.frame().await;
     let after = history_of(&h);
-    assert!(after < before, "growing pulls history rows back onto the screen");
-    assert!(frame.contains(&format!("COPY -{after}/{after}")), "{frame}");
+    assert!(
+        after < before,
+        "growing pulls history rows back onto the screen (before {before}, after {after})\n{}",
+        h.facts(MAIN).await
+    );
+    assert!(
+        frame.contains(&format!("COPY -{after}/{after}")),
+        "{frame}\n{}",
+        h.facts(MAIN).await
+    );
 }
 
 #[tokio::test]

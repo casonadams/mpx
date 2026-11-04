@@ -69,7 +69,8 @@ async fn closing_the_lower_pane_keeps_the_upper_content_bottom_anchored() {
     let last = rows.len() - 1;
     assert_eq!(
         rows[last], "PROMPT$",
-        "the prompt is on the bottom row\n{drawn}"
+        "the prompt is on the bottom row\n{drawn}\n{rows:#?}\n{}",
+        h.facts(MAIN).await
     );
     assert_eq!(rows[last - 1], "top 20", "{rows:#?}");
     assert!(

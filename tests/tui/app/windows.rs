@@ -255,8 +255,10 @@ async fn a_hidden_windows_output_never_reaches_the_tui_and_shows_once_selected()
 
     h.probe.send_input("work", "BEHIND-THE-SCENES").await.expect("send");
     wait_for(&mut h.probe, "work", "BEHIND-THE-SCENES").await;
-    let quiet = tokio::time::timeout(std::time::Duration::from_millis(150), h.rx.recv()).await;
-    if let Ok(Some(item)) = quiet {
+    let quiet_end = tokio::time::Instant::now() + std::time::Duration::from_millis(150);
+    let mut quiet = Vec::new();
+    while let Ok(Some(item)) = tokio::time::timeout_at(quiet_end, h.rx.recv()).await {
+        quiet.push(format!("{item:?}"));
         h.app.on_stream(Some(item), &mut h.rx).await;
     }
     let parsed = h
@@ -265,7 +267,11 @@ async fn a_hidden_windows_output_never_reaches_the_tui_and_shows_once_selected()
         .get("work")
         .is_some_and(|vt| vt.snapshot().contains("BEHIND-THE-SCENES"));
     assert!(!parsed, "the daemon does not send a hidden window's output");
-    assert_eq!(h.app.pacing.frame_due, None, "nothing on screen changed");
+    let facts = h.facts(MAIN).await;
+    assert_eq!(
+        h.app.pacing.frame_due, None,
+        "nothing on screen changed; events in the quiet window: {quiet:#?}\n{facts}"
+    );
 
     h.prefixed_char('1').await;
     let shown = h.frame().await;
