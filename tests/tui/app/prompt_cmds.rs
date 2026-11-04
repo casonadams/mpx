@@ -73,7 +73,16 @@ async fn kill_pane_prompt_with_a_target_needs_no_confirmation() {
     h.frame().await;
 
     h.command("kill-pane -t pane-2").await;
-    assert_eq!(h.layout_panes().await, [MAIN]);
+    // The daemon drops the pane once it is gone, which under load can come after the command returns.
+    let mut panes = h.layout_panes().await;
+    for _ in 0..500 {
+        if panes == [MAIN] {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        panes = h.layout_panes().await;
+    }
+    assert_eq!(panes, [MAIN]);
     assert!(h.mode_is_normal());
 }
 

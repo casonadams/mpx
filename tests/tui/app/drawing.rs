@@ -193,23 +193,26 @@ async fn a_redraw_without_new_output_does_not_delay_the_next_output_frame() {
 async fn pane_output_schedules_a_frame_without_holding_up_input() {
     let mut h = start().await;
     h.frame().await;
+    // The budget is spent by frames whose window opens an hour from now, so the next output frame
+    // is held back for the whole test. The checks are about ordering, not wall-clock time: a
+    // daemon round trip may take longer than the budget on a busy machine.
+    let window = Instant::now() + Duration::from_secs(3600);
     for _ in 0..FRAMES_PER_BUDGET {
-        h.app.pacing.frame_due = Some(Instant::now());
-        h.app.drew(Instant::now());
+        h.app.pacing.frame_due = Some(window);
+        h.app.drew(window);
     }
     let before = h.app.expected.get(MAIN).copied().unwrap_or(0);
     h.probe.send_input(MAIN, "one").await.expect("send");
-    let took = Instant::now();
+    // Applying the output does not wait for the frame: that would hang here, not finish early.
     h.until("output applied", move |app| {
         app.expected.get(MAIN).copied().unwrap_or(0) > before
     })
     .await;
-    assert!(
-        took.elapsed() < FRAME_BUDGET,
-        "applying output must not wait for the frame budget"
-    );
     let due = h.app.pacing.frame_due.expect("a frame is scheduled");
-    assert!(due > Instant::now(), "a spent budget holds the next output frame back");
+    assert!(
+        due > Instant::now(),
+        "a spent budget holds the next output frame back"
+    );
     h.app.drew(Instant::now());
     assert_eq!(h.app.pacing.frame_due, None);
 }
@@ -293,6 +296,9 @@ async fn the_focused_panes_answer_to_a_keypress_skips_a_spent_budget() {
     h.frame().await;
     spend_budget(&mut h);
     h.key(KeyCode::Char('x')).await;
+    // The echo must come within TYPING_WINDOW of the key to count as typing; a loaded machine can
+    // take longer than that for a round trip. Stamp the key an hour ahead so the window stays open.
+    h.app.pacing.last_key = Some(Instant::now() + Duration::from_secs(3600));
     let due = output_from(&mut h, MAIN, "echo").await;
     assert!(due <= Instant::now(), "the echo waited for the budget");
 }
