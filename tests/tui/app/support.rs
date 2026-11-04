@@ -123,7 +123,7 @@ pub async fn wait_output(client: &mut Client, pane: &str, ready: impl Fn(&str) -
         }
         assert!(
             Instant::now() < deadline,
-            "output condition not met in {pane}"
+            "output condition not met in {pane}; its output so far:\n{data}"
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }

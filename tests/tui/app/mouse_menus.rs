@@ -72,7 +72,9 @@ async fn pane_menu_items_run_their_commands() {
     h.command("select-pane -e").await;
     h.type_str("ok").await;
     h.key(KeyCode::Enter).await;
-    let logs = wait_for(&mut h.probe, "plain", "ok\r").await;
+    // The text alone is awaited: ConPTY may put escape sequences between echoed text and its
+    // carriage return, so "ok\r" need not be contiguous in the pane's byte stream.
+    let logs = wait_for(&mut h.probe, "plain", "ok").await;
     assert!(!logs.contains("zz"), "logs: {logs}");
 }
 

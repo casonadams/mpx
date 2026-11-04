@@ -39,7 +39,9 @@ async fn a_read_only_client_sends_no_keys_to_the_panes() {
     h.key(KeyCode::Enter).await;
     // Keys reach the daemon in order, so a marker sent after them shows whether they arrived.
     h.probe.send_input(MAIN, "marker\r").await.expect("marker");
-    let logs = wait_for(&mut h.probe, MAIN, "marker\r").await;
+    // The text alone is awaited: ConPTY may put escape sequences between echoed text and its
+    // carriage return, so "marker\r" need not be contiguous in the pane's byte stream.
+    let logs = wait_for(&mut h.probe, MAIN, "marker").await;
     assert!(!logs.contains("hidden"), "{logs}");
 }
 
