@@ -4,7 +4,7 @@ use mpx::client::Client;
 use mpx::config::{Config, RemainOnExit, SessionOptions, WindowOptions};
 use mpx::protocol::{NewWindowOpts, SpawnOpts};
 
-use super::support::{connect, exit_code, logs_until, pty, start_with, task};
+use super::support::{connect, exit_code, logs_until, pty, sh_path, start_with, task};
 
 async fn pane_names(client: &mut Client) -> Vec<String> {
     client
@@ -53,10 +53,16 @@ async fn scrollback_lines_limits_the_history_a_pane_keeps() {
         .unwrap();
     logs_until(&mut client, "limited", "L29").await;
 
+    // Thirty lines overflow the 24-row screen by more than the limit, so the history is full at
+    // three lines. Which line opens the screen depends on the byte stream the PTY delivers (ConPTY
+    // draws it one row differently from a Unix pty), so the check does not pin that boundary: the
+    // history is capped, nothing older than it survives, and the newest line is on the screen.
+    let info = client.status("limited").await.unwrap();
+    assert_eq!(info.history_size, Some(3), "history is capped at the limit");
     let (text, _) = client.logs("limited", None, true, None).await.unwrap();
     assert!(
-        !text.contains("L03") && text.contains("L04") && text.contains("L29"),
-        "three history lines (L04-L06), then the screen: {text}"
+        !text.contains("L02") && text.contains("L29"),
+        "older lines are dropped and the newest is kept: {text}"
     );
 }
 
@@ -88,7 +94,7 @@ async fn default_shell_command_and_terminal_apply_to_panes_started_without_a_com
     let daemon = start_with(Config {
         session: SessionOptions {
             default_terminal: "screen-256color".to_string(),
-            default_shell: Some("/bin/sh".to_string()),
+            default_shell: Some(sh_path()),
             default_command: Some("printf 'READY %s' \"$TERM\"; sleep 30".to_string()),
             ..SessionOptions::default()
         },

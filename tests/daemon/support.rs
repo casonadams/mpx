@@ -186,3 +186,18 @@ pub async fn logs_until(client: &mut Client, name: &str, needle: &str) -> String
     let (data, _) = client.logs(name, None, false, None).await.expect("logs");
     data
 }
+
+/// An absolute path to a POSIX `sh`, for a daemon's `default-shell`: `/bin/sh` on unix, and on
+/// Windows the `sh.exe` that Git for Windows puts on `PATH`. Panics without one, since the tests
+/// that use it run `sh` commands.
+pub fn sh_path() -> String {
+    if !cfg!(windows) {
+        return "/bin/sh".to_string();
+    }
+    std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|dir| dir.join("sh.exe"))
+        .find(|candidate| candidate.is_file())
+        .expect("a POSIX sh.exe on PATH")
+        .to_string_lossy()
+        .into_owned()
+}
