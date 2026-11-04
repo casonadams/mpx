@@ -244,9 +244,12 @@ async fn stdout_updating_in_copy_mode_anchors_viewport_and_selection() {
         .await
         .expect("send");
 
+    // The history count reaches its mark after `more 1`; ConPTY can deliver `more 2` later, so
+    // wait for the last line written, as the frame must show all of the output.
     h.until("output absorbed into history", move |app| {
-        app.active_vt()
-            .is_some_and(|vt| vt.grid().history_len() >= initial_hist + 2)
+        app.active_vt().is_some_and(|vt| {
+            vt.grid().history_len() >= initial_hist + 2 && vt.snapshot().contains("more 2")
+        })
     })
     .await;
 
