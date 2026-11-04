@@ -58,9 +58,23 @@ fn double_quoted(chars: &mut std::str::Chars) -> Result<String, String> {
     Err("unterminated \" in command".to_string())
 }
 
+/// The text a backslash outside quotes stands for. It escapes the character after it only when
+/// that is special (`\`, `'`, `"`, `;` or whitespace); before anything else it is kept, so a
+/// Windows path such as `C:\Users\me` reads back unchanged.
+fn bare_backslash(chars: &mut std::str::Chars) -> String {
+    match chars.as_str().chars().next() {
+        Some(next) if matches!(next, '\\' | '\'' | '"' | ';') || next.is_whitespace() => {
+            chars.next();
+            next.to_string()
+        }
+        _ => "\\".to_string(),
+    }
+}
+
 /// Splits a tmux command string into commands and their words. Whitespace separates words, `'..'`
 /// is literal, `".."` honours backslash escapes, an unescaped `;` ends a command and `\;` is a
-/// literal semicolon. Empty commands are dropped.
+/// literal semicolon. Outside quotes a backslash escapes only the characters `bare_backslash`
+/// names. Empty commands are dropped.
 pub fn split_commands(line: &str) -> Result<Vec<Vec<String>>, String> {
     let mut split = Splitter::default();
     let mut chars = line.chars();
@@ -68,7 +82,7 @@ pub fn split_commands(line: &str) -> Result<Vec<Vec<String>>, String> {
         match c {
             '\'' => split.push_str(&single_quoted(&mut chars)?),
             '"' => split.push_str(&double_quoted(&mut chars)?),
-            '\\' => split.push_str(&chars.next().unwrap_or('\\').to_string()),
+            '\\' => split.push_str(&bare_backslash(&mut chars)),
             ';' => split.end_command(),
             c if c.is_whitespace() => split.end_word(),
             c => split.push_str(c.encode_utf8(&mut [0; 4])),
