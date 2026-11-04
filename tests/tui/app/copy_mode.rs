@@ -221,9 +221,10 @@ async fn stdout_updating_in_copy_mode_anchors_viewport_and_selection() {
     }
     fill.push_str("READY");
     h.probe.send_input(MAIN, &fill).await.expect("send");
+    // Baseline once the whole fill, through `READY`, is on screen.
     h.until("fill lines applied", |app| {
         app.active_vt()
-            .is_some_and(|vt| vt.snapshot().contains("line 35"))
+            .is_some_and(|vt| vt.snapshot().trim_end().ends_with("READY"))
     })
     .await;
     h.frame().await;
@@ -244,8 +245,7 @@ async fn stdout_updating_in_copy_mode_anchors_viewport_and_selection() {
         .await
         .expect("send");
 
-    // The history count reaches its mark after `more 1`; ConPTY can deliver `more 2` later, so
-    // wait for the last line written, as the frame must show all of the output.
+    // ConPTY may deliver `more 2` after the history count moved: wait for its text too.
     h.until("output absorbed into history", move |app| {
         app.active_vt().is_some_and(|vt| {
             vt.grid().history_len() >= initial_hist + 2 && vt.snapshot().contains("more 2")

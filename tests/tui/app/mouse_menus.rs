@@ -1,11 +1,12 @@
 //! Right-click menus and middle-click paste, driven through the harness mouse events.
 use crossterm::event::{KeyCode, MouseButton, MouseEventKind};
 
+use mpx::buffer::strip_ansi;
 use mpx::config::Config;
 use mpx::layout::Direction;
 use mpx::tui::app::Mode;
 
-use super::support::{ECHO, Harness, MAIN, SIZE, active_window, split, wait_for};
+use super::support::{ECHO, Harness, MAIN, SIZE, active_window, split, wait_for, wait_output};
 
 const RIGHT: MouseEventKind = MouseEventKind::Down(MouseButton::Right);
 const MIDDLE: MouseEventKind = MouseEventKind::Down(MouseButton::Middle);
@@ -72,9 +73,12 @@ async fn pane_menu_items_run_their_commands() {
     h.command("select-pane -e").await;
     h.type_str("ok").await;
     h.key(KeyCode::Enter).await;
-    // The text alone is awaited: ConPTY may put escape sequences between echoed text and its
-    // carriage return, so "ok\r" need not be contiguous in the pane's byte stream.
-    let logs = wait_for(&mut h.probe, "plain", "ok").await;
+    // ConPTY puts escape sequences between echoed characters too (`o ESC[?25l k`), so the text is
+    // matched with them stripped, not as a contiguous run of the raw bytes.
+    let logs = wait_output(&mut h.probe, "plain", |data| {
+        strip_ansi(data.as_bytes()).contains("ok")
+    })
+    .await;
     assert!(!logs.contains("zz"), "logs: {logs}");
 }
 
