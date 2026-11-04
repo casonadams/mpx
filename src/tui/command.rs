@@ -713,7 +713,13 @@ pub fn split_words(line: &str) -> Result<Vec<String>, String> {
             }
             None if c == '\\' => {
                 in_word = true;
-                cur.push(chars.next().unwrap_or('\\'));
+                match chars.peek() {
+                    Some(&next) if matches!(next, '\\' | '\'' | '"' | ';') || next.is_whitespace() => {
+                        cur.push(next);
+                        chars.next();
+                    }
+                    _ => cur.push('\\'),
+                }
             }
             None => {
                 in_word = true;

@@ -523,6 +523,10 @@ fn split_words_honours_quotes_and_escapes() {
         split_words("'keep \\ slash'").unwrap(),
         vec!["keep \\ slash"]
     );
+    assert_eq!(
+        split_words(r"C:\Users\x\in.txt").unwrap(),
+        vec![r"C:\Users\x\in.txt"]
+    );
 }
 
 #[test]
