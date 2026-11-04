@@ -231,24 +231,47 @@ async fn emacs_mode_keys_drive_copy_mode() {
     assert_eq!(copy_cursor(&h).0, start.0 + 1, "C-f moves right");
 }
 
-#[test]
-fn mouse_capture_is_written_only_when_it_changes() {
+/// Runs `wanted` through `sync_mouse_capture` from a captured start, returning the captured
+/// flag and the bytes written so far after each step.
+fn mouse_capture_steps(wanted: &[bool]) -> Vec<(bool, usize)> {
     let mut out = Vec::new();
     let mut captured = true;
-    sync_mouse_capture(&mut out, true, &mut captured);
-    assert!(out.is_empty(), "already captured");
-    sync_mouse_capture(&mut out, false, &mut captured);
+    wanted
+        .iter()
+        .map(|&want| {
+            sync_mouse_capture(&mut out, want, &mut captured);
+            (captured, out.len())
+        })
+        .collect()
+}
+
+const MOUSE_SEQUENCE: [bool; 4] = [true, false, false, true];
+
+/// Mouse reporting is written as escape sequences on unix only. crossterm's Windows
+/// `EnableMouseCapture`/`DisableMouseCapture` set the console mode through WinAPI and write no
+/// bytes (`is_ansi_code_supported` is false there), so the byte checks cannot hold on Windows.
+#[cfg(unix)]
+#[test]
+fn mouse_capture_is_written_only_when_it_changes() {
+    let steps = mouse_capture_steps(&MOUSE_SEQUENCE);
+    let written: Vec<usize> = steps.iter().map(|&(_, len)| len).collect();
+    assert_eq!(written[0], 0, "already captured");
     assert!(
-        !out.is_empty(),
+        written[1] > 0,
         "turning mouse off writes the terminal sequence"
     );
-    assert!(!captured);
-    let after_off = out.len();
-    sync_mouse_capture(&mut out, false, &mut captured);
-    assert_eq!(out.len(), after_off, "no repeat when the state holds");
-    sync_mouse_capture(&mut out, true, &mut captured);
+    assert_eq!(written[2], written[1], "no repeat when the state holds");
     assert!(
-        captured && out.len() > after_off,
+        written[3] > written[2],
         "turning mouse back on writes again"
     );
+}
+
+#[test]
+fn mouse_capture_state_follows_every_change_on_every_platform() {
+    let captured: Vec<bool> = mouse_capture_steps(&MOUSE_SEQUENCE)
+        .into_iter()
+        .map(|(captured, _)| captured)
+        .collect();
+    assert_eq!(captured, MOUSE_SEQUENCE);
 }
