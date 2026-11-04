@@ -196,6 +196,10 @@ async fn killing_a_running_task_records_it_as_exited() {
 }
 
 #[tokio::test]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "macos")),
+    ignore = "resume matches the pane's foreground process, which only Linux and macOS identify"
+)]
 async fn a_tool_that_ran_in_a_shell_resumes_in_a_shell_that_outlives_it() {
     let state = tempfile::tempdir().unwrap();
     let config = || Config {
