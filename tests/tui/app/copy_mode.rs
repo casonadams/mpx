@@ -301,15 +301,15 @@ async fn a_copy_pane_that_grows_stays_at_the_top_of_its_history() {
     let frame = h.frame().await;
     let after = history_of(&h);
     assert!(
-        after < before,
-        "growing pulls history rows back onto the screen (before {before}, after {after})\n{}",
-        h.facts(MAIN).await
-    );
-    assert!(
         frame.contains(&format!("COPY -{after}/{after}")),
         "{frame}\n{}",
         h.facts(MAIN).await
     );
+    assert!(frame.starts_with("line 1 "), "the view is at the top of history\n{frame}");
+    // Only a unix pty leaves a grow to the replay: ConPTY repaints the screen on a resize and
+    // its repaint scrolls the rows back into history. The pull-back is proven in tests/vt.
+    #[cfg(unix)]
+    assert!(after < before, "growing pulls history back (before {before}, after {after})");
 }
 
 #[tokio::test]

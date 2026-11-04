@@ -710,6 +710,43 @@ fn a_resized_grid_keeps_scrollback_only_when_asked() {
 }
 
 #[test]
+fn a_growing_copy_pane_pulls_its_scrollback_back_onto_the_screen() {
+    let log = b"a\r\nb\r\nc\r\nd\r\ne\r\nf\r\ng";
+    let grid = VtScreen::resized_grid(log, &[], (10, 2), (10, 4), true);
+    assert_eq!(grid_rows(&grid), ["d", "e", "f", "g"]);
+    assert_eq!(grid.history_len(), 3, "the two rows pulled back leave three in history");
+}
+
+/// Bytes one ConPTY pane sent on Windows (`tests/vt/fixtures/conpty_pane_grow.bin`, CI run
+/// 41775175372): 20 numbered lines and `PROMPT$` at 100x14, then the pane grows to 100x29 at
+/// offset 342. ConPTY repaints the screen from its top row at the grow and keeps no scrollback
+/// to pull rows back from, so the repaint, not the pull-back, decides what the grow shows.
+#[test]
+fn a_grow_replays_the_conpty_repaint_it_was_sent() {
+    let log: &[u8] = include_bytes!("fixtures/conpty_pane_grow.bin");
+    let (before, after) = log.split_at(342);
+    let grid = VtScreen::resized_grid(before, after, (100, 14), (100, 29), false);
+    let mut expected: Vec<String> = (8..=20).map(|i| format!("top {i:02}")).collect();
+    expected.push("PROMPT$".to_string());
+    let rows = grid_rows(&grid);
+    assert_eq!(rows[..14], expected[..]);
+    assert!(rows[14..].iter().all(String::is_empty), "{rows:#?}");
+    assert_eq!((grid.cursor.x, grid.cursor.y), (7, 13));
+}
+
+/// The same bytes without the repaint: the pull-back alone puts the prompt on the bottom row.
+#[test]
+fn the_conpty_fixture_pulls_back_to_the_bottom_without_the_repaint() {
+    let log: &[u8] = include_bytes!("fixtures/conpty_pane_grow.bin");
+    let grid = VtScreen::resized_grid(&log[..342], &[], (100, 14), (100, 29), false);
+    let rows = grid_rows(&grid);
+    assert_eq!(rows[28], "PROMPT$");
+    assert_eq!(rows[27], "top 20");
+    assert_eq!(rows[0], "", "the rows above the content are the pad");
+    assert_eq!((grid.cursor.x, grid.cursor.y), (7, 28));
+}
+
+#[test]
 fn a_resized_grid_replays_at_the_new_width_when_the_width_changes() {
     let log = b"abcdefgh\r\nx";
     let narrow = VtScreen::resized_grid(log, &[], (4, 3), (4, 3), false);

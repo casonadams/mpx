@@ -60,6 +60,10 @@ async fn stacked_then_close_below(h: &mut Harness, lines: usize) {
     h.frame().await;
 }
 
+/// A unix pty sends a program nothing on resize, so the grow replays the pane's output at the old
+/// size and pulls its history back: the prompt ends on the bottom row. ConPTY repaints a resized
+/// pane itself (see the Windows test); the pull-back is proven without a pty in `tests/vt`.
+#[cfg(unix)]
 #[tokio::test]
 async fn closing_the_lower_pane_keeps_the_upper_content_bottom_anchored() {
     let mut h = start().await;
@@ -67,20 +71,31 @@ async fn closing_the_lower_pane_keeps_the_upper_content_bottom_anchored() {
     let drawn = h.frame().await;
     let rows = pane_rows(&h, MAIN);
     let last = rows.len() - 1;
-    assert_eq!(
-        rows[last], "PROMPT$",
-        "the prompt is on the bottom row\n{drawn}\n{rows:#?}\n{}",
-        h.facts(MAIN).await
-    );
+    assert_eq!(rows[last], "PROMPT$", "the prompt is on the bottom row\n{drawn}\n{rows:#?}");
     assert_eq!(rows[last - 1], "top 20", "{rows:#?}");
     assert!(
         rows.iter().any(|row| row == "READYtop 01"),
         "the first line is kept, from history\n{rows:#?}"
     );
-    assert!(
-        rows[0].is_empty(),
-        "the rows above the content are the pad\n{rows:#?}"
-    );
+    assert!(rows[0].is_empty(), "the rows above the content are the pad\n{rows:#?}");
+}
+
+/// ConPTY repaints a pane from its top row after a resize and keeps no scrollback to pull rows
+/// back from, so the repaint overwrites the rows the grow pulled back (CI run 41775175372:
+/// `top 08..top 20` and `PROMPT$` at the top, then blank rows). The pane must show that repaint.
+/// The replay of the same bytes without a pty is `a_grow_replays_the_conpty_repaint_it_was_sent`.
+#[cfg(windows)]
+#[tokio::test]
+async fn closing_the_lower_pane_shows_the_repaint_conpty_draws() {
+    let mut h = start().await;
+    stacked_then_close_below(&mut h, 20).await;
+    let drawn = h.frame().await;
+    let rows = pane_rows(&h, MAIN);
+    let mut expected: Vec<String> = (8..=20).map(|i| format!("top {i:02}")).collect();
+    expected.push("PROMPT$".to_string());
+    let facts = h.facts(MAIN).await;
+    assert_eq!(rows[..14], expected[..], "{drawn}\n{facts}");
+    assert!(rows[14..].iter().all(String::is_empty), "{rows:#?}\n{facts}");
 }
 
 #[tokio::test]
