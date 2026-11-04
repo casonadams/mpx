@@ -115,3 +115,20 @@ async fn a_fresh_attach_after_the_close_shows_what_the_live_pane_shows() {
     fresh.frame().await;
     assert_eq!(pane_rows(&fresh, MAIN), live);
 }
+
+#[tokio::test]
+async fn a_fresh_attach_shows_a_repaint_written_after_the_close() {
+    let mut h = start().await;
+    stacked_then_close_below(&mut h, 20).await;
+    // A full-screen repaint at the new size, as a program redraws after SIGWINCH (or ConPTY does).
+    let repaint: String = std::iter::once("\x1b[H".to_string())
+        .chain((1..=29).map(|row| format!("\x1b[{row};1Hrow {row:02}")))
+        .collect();
+    h.emit(MAIN, &repaint, "row 29").await;
+    h.frame().await;
+    let live = pane_rows(&h, MAIN);
+    let Harness { sandbox, .. } = h;
+    let mut fresh = Harness::attach(sandbox, SESSION, config()).await;
+    fresh.frame().await;
+    assert_eq!(pane_rows(&fresh, MAIN), live, "live\n{live:#?}");
+}

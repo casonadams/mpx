@@ -715,25 +715,27 @@ impl VtScreen {
         screen
     }
 
-    /// The grid a pane has after it resizes from `from` to `to` (cols, rows), rebuilt from `output`,
-    /// the pane's raw log. A height change replays the log at the old size with its scrollback and
-    /// resizes the grid as `Grid::resize` does, so rows that the grow pulls back from history come
-    /// back on top: every end that rebuilds the same log at the same sizes gets the same screen.
-    /// A width change replays at the new width instead, since the lines reflow. The scrollback is
-    /// kept only when `keep_history` (a pane in copy mode).
+    /// The grid a pane has after it resizes from `from` to `to` (cols, rows), rebuilt from its raw
+    /// log. `before` is the log up to the resize and `after` what was written since. `before` replays
+    /// at the old size with its scrollback and the grid resizes as `Grid::resize` does, so rows that
+    /// a grow pulls back from history come back on top; `after` is then fed at the new size, as the
+    /// live pane took it. A width change replays both at the new width instead, since the lines
+    /// reflow. The scrollback is kept only when `keep_history` (a pane in copy mode).
     pub fn resized_grid(
-        output: &[u8],
+        before: &[u8],
+        after: &[u8],
         from: (usize, usize),
         to: (usize, usize),
         keep_history: bool,
     ) -> Grid {
         let replay_at = if from.0 == to.0 { from } else { to };
         let mut screen = Self::new(replay_at.0, replay_at.1);
-        screen.feed(output);
+        screen.feed(before);
+        screen.grid_mut().resize(to.0, to.1);
+        screen.feed(after);
         let _ = screen.take_responses();
         let _ = screen.take_passthroughs();
         let grid = screen.grid_mut();
-        grid.resize(to.0, to.1);
         if !keep_history {
             grid.set_history_limit(0);
         }

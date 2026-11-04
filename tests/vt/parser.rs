@@ -682,12 +682,12 @@ fn grid_rows(grid: &mpx::vt::Grid) -> Vec<String> {
 #[test]
 fn a_resized_grid_pulls_the_log_back_from_history_and_pads_the_top() {
     let log = b"a\r\nb\r\nc\r\nd\r\ne";
-    let grid = VtScreen::resized_grid(log, (10, 2), (10, 5), false);
+    let grid = VtScreen::resized_grid(log, &[], (10, 2), (10, 5), false);
     assert_eq!(grid_rows(&grid), ["a", "b", "c", "d", "e"]);
     assert_eq!(grid.cursor.y, 4, "the cursor stays on the bottom row");
     assert_eq!(grid.history_len(), 0, "live screens keep no history");
 
-    let padded = VtScreen::resized_grid(log, (10, 2), (10, 6), false);
+    let padded = VtScreen::resized_grid(log, &[], (10, 2), (10, 6), false);
     assert_eq!(
         grid_rows(&padded),
         ["", "a", "b", "c", "d", "e"],
@@ -698,13 +698,13 @@ fn a_resized_grid_pulls_the_log_back_from_history_and_pads_the_top() {
 #[test]
 fn a_resized_grid_keeps_scrollback_only_when_asked() {
     let log = b"a\r\nb\r\nc\r\nd\r\ne";
-    let kept = VtScreen::resized_grid(log, (10, 5), (10, 1), true);
+    let kept = VtScreen::resized_grid(log, &[], (10, 5), (10, 1), true);
     assert_eq!(
         kept.history_len(),
         4,
         "the rows pushed off the top are kept"
     );
-    let live = VtScreen::resized_grid(log, (10, 5), (10, 1), false);
+    let live = VtScreen::resized_grid(log, &[], (10, 5), (10, 1), false);
     assert_eq!(live.history_len(), 0);
     assert_eq!(live.cursor.y, 0);
 }
@@ -712,8 +712,18 @@ fn a_resized_grid_keeps_scrollback_only_when_asked() {
 #[test]
 fn a_resized_grid_replays_at_the_new_width_when_the_width_changes() {
     let log = b"abcdefgh\r\nx";
-    let narrow = VtScreen::resized_grid(log, (4, 3), (4, 3), false);
+    let narrow = VtScreen::resized_grid(log, &[], (4, 3), (4, 3), false);
     assert_eq!(grid_rows(&narrow)[..2], ["abcd", "efgh"]);
-    let wide = VtScreen::resized_grid(log, (4, 3), (8, 3), false);
+    let wide = VtScreen::resized_grid(log, &[], (4, 3), (8, 3), false);
     assert_eq!(grid_rows(&wide)[..2], ["abcdefgh", "x"]);
+}
+
+#[test]
+fn output_after_a_resize_is_fed_at_the_new_size() {
+    // Cursor addressing below the old height must reach the new rows, as it did on the live pane:
+    // replayed at the old size it would clamp onto the last old row.
+    let before = b"a\r\nb\r\nc\r\nd\r\ne";
+    let after = b"\x1b[5;1Hlast";
+    let grid = VtScreen::resized_grid(before, after, (10, 2), (10, 5), false);
+    assert_eq!(grid_rows(&grid), ["a", "b", "c", "d", "last"]);
 }

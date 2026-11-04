@@ -35,6 +35,8 @@ pub struct LogQuery {
     pub plain: bool,
     /// Raw bytes from this absolute offset.
     pub since: Option<u64>,
+    /// Raw bytes before this absolute offset, when set; `since` is then ignored.
+    pub until: Option<u64>,
 }
 
 /// Text for `query` from a pane's retained output, plus the offset to pass as `since` next time.
@@ -46,6 +48,10 @@ pub fn render_logs(
     query: &LogQuery,
     scrollback: usize,
 ) -> (String, u64) {
+    if let Some(until) = query.until {
+        let text = String::from_utf8_lossy(&ring.before(until)).into_owned();
+        return (text, until);
+    }
     match query.since {
         Some(offset) => {
             let (bytes, next) = ring.since(offset);

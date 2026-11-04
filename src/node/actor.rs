@@ -66,6 +66,9 @@ pub struct PaneActor {
     last_output_ms: u64,
     /// Size the retained output was last replayed from before a resize that changed the grid size.
     resized_from: Option<(usize, usize)>,
+    /// Output offset where the last resize that changed the grid size happened: the retained output
+    /// before it is replayed at `resized_from`, the output after it at the new size.
+    resized_at: Option<u64>,
     /// Scrollback lines of the retained output; `None` until next needed after output or a resize.
     history_cache: Option<usize>,
     next_probe: Instant,
@@ -112,6 +115,7 @@ impl PaneActor {
             last_output_ms: started_ms,
             history_cache: None,
             resized_from: None,
+            resized_at: None,
             next_probe: Instant::now(),
             exit: None,
             notify: ctx.notify,
@@ -274,11 +278,13 @@ impl PaneActor {
         let from = (grid.cols, grid.rows);
         let to = (cols as usize, rows as usize);
         if from != to {
-            // As the app's screens do: rebuilt from the retained output, so the rows a grow pulls back
-            // from scrollback are the same at every end.
-            let rebuilt = VtScreen::resized_grid(&self.ring.snapshot(), from, to, false);
+            // Rebuilt from the retained output, as the app's screens rebuild it, so the rows a grow
+            // pulls back from scrollback are the same at every end. The output after this point is
+            // fed to the new grid as it arrives.
+            let rebuilt = VtScreen::resized_grid(&self.ring.snapshot(), &[], from, to, false);
             *self.screen.grid_mut() = rebuilt;
             self.resized_from = Some(from);
+            self.resized_at = Some(self.ring.total_written());
         }
         self.history_cache = None;
         if let Some(terminal) = &self.terminal {
@@ -374,6 +380,7 @@ impl PaneActor {
             resized_from,
             input_off: None,
             marked: None,
+            resized_at: self.resized_at,
         }
     }
 

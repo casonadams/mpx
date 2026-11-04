@@ -20,7 +20,12 @@ fn screen() -> VtScreen {
 }
 
 fn query(tail: Option<usize>, plain: bool, since: Option<u64>) -> LogQuery {
-    LogQuery { tail, plain, since }
+    LogQuery {
+        tail,
+        plain,
+        since,
+        until: None,
+    }
 }
 
 #[test]
@@ -35,6 +40,17 @@ fn raw_tail_keeps_only_the_last_lines() {
     let (text, _) = render_logs(&ring(), None, &query(Some(1), false, None), SCROLLBACK);
     assert_eq!(text, "three\r\n");
 }
+#[test]
+fn until_reads_the_bytes_before_an_offset() {
+    let before = LogQuery {
+        until: Some(4),
+        ..query(None, false, None)
+    };
+    let (text, next) = render_logs(&ring(), None, &before, SCROLLBACK);
+    assert_eq!(text.as_bytes(), &COLORED[..4]);
+    assert_eq!(next, 4);
+}
+
 
 #[test]
 fn plain_history_of_a_terminal_is_the_rendered_scrollback() {

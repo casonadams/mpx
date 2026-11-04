@@ -2,8 +2,7 @@ use mpx::buffer::{RingBuffer, Utf8Stream, strip_ansi};
 
 #[test]
 fn writes_append_until_capacity() {
-    let mut rb = RingBuffer::new(10);
-    rb.write(b"hello");
+    let mut rb = ring_with(10, &[b"hello"]);
     assert_eq!(rb.snapshot(), b"hello");
     rb.write(b"world");
     assert_eq!(rb.snapshot(), b"helloworld");
@@ -13,11 +12,15 @@ fn writes_append_until_capacity() {
 
 #[test]
 fn oldest_offset_tracks_the_retained_window() {
-    let mut rb = RingBuffer::new(4);
-    rb.write(b"abcdef");
-    assert_eq!(rb.total_written(), 6);
-    assert_eq!(rb.oldest_offset(), 2);
+    let rb = ring_with(4, &[b"abcdef"]);
+    assert_eq!((rb.total_written(), rb.oldest_offset()), (6, 2));
     assert_eq!(rb.since(0).0, b"cdef");
+}
+
+fn ring_with(capacity: usize, writes: &[&[u8]]) -> RingBuffer {
+    let mut rb = RingBuffer::new(capacity);
+    writes.iter().for_each(|bytes| rb.write(bytes));
+    rb
 }
 
 #[test]
@@ -160,4 +163,13 @@ fn strip_ansi_drops_carriage_returns_and_bells_keeps_newlines() {
 fn strip_ansi_handles_charset_designation_and_truncated_escape() {
     assert_eq!(strip_ansi(b"\x1b(Bplain"), "plain");
     assert_eq!(strip_ansi(b"tail\x1b["), "tail");
+}
+
+#[test]
+fn before_returns_the_retained_bytes_ahead_of_an_offset() {
+    let mut ring = ring_with(8, &[b"abcdef"]);
+    assert_eq!(ring.before(4), b"abcd");
+    ring.write(b"ghijk");
+    let ahead: Vec<_> = [4, 11, 2].map(|offset| ring.before(offset)).into();
+    assert_eq!(ahead, [&b"d"[..], b"defghijk", b""]);
 }

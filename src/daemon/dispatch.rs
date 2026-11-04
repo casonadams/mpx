@@ -98,7 +98,16 @@ pub(super) async fn execute(state: &Arc<DaemonState>, req: Request) -> Response 
             tail,
             plain,
             since,
-        }) => logs(state, &name, LogQuery { tail, plain, since }).await,
+            until,
+        }) => {
+            let query = LogQuery {
+                tail,
+                plain,
+                since,
+                until,
+            };
+            logs(state, &name, query).await
+        }
         Request::Subscribe { .. } => {
             Response::Error("subscriptions require a streaming connection".to_string())
         }

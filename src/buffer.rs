@@ -69,6 +69,19 @@ impl RingBuffer {
         (out, self.written)
     }
 
+    /// Retained bytes before `offset` (an offset older than the retained data yields none), so a
+    /// reader can split the log at a point it recorded.
+    pub fn before(&self, offset: u64) -> Vec<u8> {
+        let oldest = self.oldest_offset();
+        let take = (offset.clamp(oldest, self.written) - oldest) as usize;
+        let (first, second) = self.buffer.as_slices();
+        let mut out = Vec::with_capacity(take);
+        let from_first = take.min(first.len());
+        out.extend_from_slice(&first[..from_first]);
+        out.extend_from_slice(&second[..take - from_first]);
+        out
+    }
+
     pub fn snapshot(&self) -> Vec<u8> {
         let (first, second) = self.buffer.as_slices();
         let mut out = Vec::with_capacity(self.buffer.len());

@@ -135,7 +135,7 @@ impl Client {
     }
 
     async fn call_node(&mut self, op: &str, req: Request) -> Result<NodeInfo, String> {
-        request!(self, op, req, Response::Node(info) => info)
+        request!(self, op, req, Response::Node(info) => *info)
     }
 
     /// Sends `req` and takes the payload of its response with `take`; another response is an error.
@@ -228,9 +228,25 @@ impl Client {
             tail,
             plain,
             since,
+            until: None,
         });
         match self.call(req).await? {
             Response::LogChunk { data, next } => Ok((data, next)),
+            other => Err(unexpected("Logs", other)),
+        }
+    }
+
+    /// The retained output of `name` before absolute offset `until`, as raw text.
+    pub async fn logs_before(&mut self, name: &str, until: u64) -> Result<String, String> {
+        let req = Request::Node(NodeRequest::Logs {
+            name: name.to_string(),
+            tail: None,
+            plain: false,
+            since: None,
+            until: Some(until),
+        });
+        match self.call(req).await? {
+            Response::LogChunk { data, .. } => Ok(data),
             other => Err(unexpected("Logs", other)),
         }
     }

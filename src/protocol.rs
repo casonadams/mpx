@@ -94,6 +94,9 @@ pub struct NodeInfo {
     /// differs from `size`: a fresh screen replays from it and resizes to `size` (absent from daemons that predate it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resized_from: Option<(u16, u16)>,
+    /// Offset in the pane's output where its last resize happened: output before it was written at `resized_from`, output after it at `size` (absent from daemons that predate it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resized_at: Option<u64>,
     /// Column and row, zero-based, of a terminal pane's screen cursor (absent from daemons that predate it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor: Option<(u16, u16)>,
@@ -132,6 +135,7 @@ impl NodeInfo {
             history_size: None,
             size: None,
             resized_from: None,
+            resized_at: None,
             input_off: None,
             marked: None,
         }
@@ -418,7 +422,8 @@ pub enum Request {
 pub enum NodeRequest {
     Spawn(SpawnOpts),
     List,
-    /// Read output. `since` is an absolute byte offset returned as `next` by a previous call.
+    /// Read output. `since` is an absolute byte offset returned as `next` by a previous call; `until`
+    /// instead reads the bytes before an offset (`next` is that offset).
     /// `plain` renders PTY scrollback as text (or strips escapes from a `since` delta).
     Logs {
         name: String,
@@ -427,6 +432,8 @@ pub enum NodeRequest {
         plain: bool,
         #[serde(default)]
         since: Option<u64>,
+        #[serde(default)]
+        until: Option<u64>,
     },
     /// Raw bytes to stdin.
     Send {
@@ -843,7 +850,8 @@ pub enum Response {
     BinaryStream,
     Pong,
     Session(SessionInfo),
-    Node(NodeInfo),
+    /// Boxed: a `NodeInfo` is large, and inline it would size every response by it.
+    Node(Box<NodeInfo>),
     NodeList(Vec<NodeInfo>),
     LogChunk {
         data: String,

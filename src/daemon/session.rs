@@ -2230,7 +2230,7 @@ pub(super) fn check(ok: bool, error: &str) -> Response {
 
 pub(super) fn node_reply(result: Result<NodeInfo, String>) -> Response {
     match result {
-        Ok(info) => Response::Node(info),
+        Ok(info) => Response::Node(Box::new(info)),
         Err(e) => Response::Error(e),
     }
 }

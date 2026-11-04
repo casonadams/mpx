@@ -171,17 +171,16 @@ pub fn pending_resizes(
 }
 
 /// Rebuilds a pane from its log into a fresh screen of the given size, with scrollback when
-/// `scrollback` is set. When the daemon's screen was last resized, the log is replayed at the size
-/// it was resized from and resized here, as the daemon did, so a fresh attach shows what the live
-/// pane shows (rows pulled back from history, bottom-anchored content). Returns the screen and the
-/// byte offset its contents end at, which is the next offset expected from the event stream.
+/// `scrollback` is set. When the daemon's screen was last resized, the log is split at that resize
+/// (see `rebuild_grid`), so a fresh attach shows what the live pane shows (rows pulled back from
+/// history, bottom-anchored content). Returns the screen and the byte offset its contents end at,
+/// which is the next offset expected from the event stream.
 pub async fn load_pane(
     client: &mut Client,
     name: &str,
     (width, height): (u16, u16),
     scrollback: bool,
 ) -> Option<(VtScreen, u64)> {
-    let (logs, next) = client.logs(name, None, false, None).await.ok()?;
     let info = client.status(name).await.ok();
     let (cols, rows) = (width as usize, height as usize);
     let mut screen = if scrollback {
@@ -189,14 +188,23 @@ pub async fn load_pane(
     } else {
         VtScreen::live(cols, rows)
     };
-    match info.as_ref().and_then(|info| info.resized_from) {
-        Some((from_cols, from_rows)) => {
+    let resized = info
+        .as_ref()
+        .and_then(|info| info.resized_from.map(|from| (from, info.resized_at)));
+    let next = match resized {
+        Some(((from_cols, from_rows), at)) => {
             let from = (from_cols as usize, from_rows as usize);
-            *screen.grid_mut() =
-                VtScreen::resized_grid(logs.as_bytes(), from, (cols, rows), scrollback);
+            let (grid, next) =
+                rebuild_grid(client, name, from, (cols, rows), scrollback, at).await?;
+            *screen.grid_mut() = grid;
+            next
         }
-        None => screen.feed(logs.as_bytes()),
-    }
+        None => {
+            let (logs, next) = client.logs(name, None, false, None).await.ok()?;
+            screen.feed(logs.as_bytes());
+            next
+        }
+    };
     let _ = screen.take_passthroughs();
     // The log holds only recent output: a mode the program set before it (focus events, cursor
     // keys) comes from the daemon's screen, which has seen everything. Asked after the log, so a
@@ -230,8 +238,9 @@ pub async fn sync_dims(
             .map(|screen| (grid_size(screen), has_scrollback(screen)))
         {
             Some((from, keep_history)) => {
+                let at = resize_cut(client, &name, from).await;
                 if let Some((grid, next)) =
-                    rebuild_grid(client, &name, from, to, keep_history).await
+                    rebuild_grid(client, &name, from, to, keep_history, at).await
                 {
                     if let Some(screen) = vt.get_mut(&name) {
                         *screen.grid_mut() = grid;
@@ -255,20 +264,43 @@ fn grid_size(screen: &VtScreen) -> (usize, usize) {
     (screen.grid().cols, screen.grid().rows)
 }
 
-/// The grid of pane `name` after it resizes from `from` to `to` (see `VtScreen::resized_grid`),
-/// rebuilt from its log, and the stream offset the log ends at.
+/// The grid of pane `name` after it resizes from `from` to `to`, rebuilt from its log, and the
+/// stream offset the log ends at. When the daemon resized it at offset `at`, the log before that is
+/// replayed at `from` and the log after it is fed at `to`, as the daemon's screen took it (see
+/// `VtScreen::resized_grid`). Without `at` the whole log is replayed at `from`.
 async fn rebuild_grid(
     client: &mut Client,
     name: &str,
     from: (usize, usize),
     to: (usize, usize),
     keep_history: bool,
+    at: Option<u64>,
 ) -> Option<(Grid, u64)> {
-    let (logs, next) = client.logs(name, None, false, None).await.ok()?;
+    let (before, after, next) = match at {
+        Some(at) => {
+            let before = client.logs_before(name, at).await.ok()?;
+            let (after, next) = client.logs(name, None, false, Some(at)).await.ok()?;
+            (before, after, next)
+        }
+        None => {
+            let (all, next) = client.logs(name, None, false, None).await.ok()?;
+            (all, String::new(), next)
+        }
+    };
     Some((
-        VtScreen::resized_grid(logs.as_bytes(), from, to, keep_history),
+        VtScreen::resized_grid(before.as_bytes(), after.as_bytes(), from, to, keep_history),
         next,
     ))
+}
+
+/// The offset the daemon's pane last resized at, when that resize was from `from`: the split point
+/// `rebuild_grid` needs. None when the last resize was from another size, or there was none.
+async fn resize_cut(client: &mut Client, name: &str, from: (usize, usize)) -> Option<u64> {
+    let info = client.status(name).await.ok()?;
+    let (cols, rows) = info.resized_from?;
+    ((cols as usize, rows as usize) == from)
+        .then_some(info.resized_at)
+        .flatten()
 }
 
 /// Panes whose terminal is not the size last sent to it: another client or `mpx resize-pane`
