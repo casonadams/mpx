@@ -511,7 +511,7 @@ pub fn default_resume_rules() -> Vec<ResumeRule> {
             ..rule(
                 "omp",
                 &["omp"],
-                &["omp", "--resume", "{id}"],
+                &["omp", "--restore", "{id}"],
                 &["omp", "--continue"],
             )
         },

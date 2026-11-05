@@ -136,7 +136,7 @@ The daemon continuously and atomically snapshots your workspace. Every time a se
 - Each pane's active working directory (`cwd`).
 - Config-driven process resumption for tools running in your panes:
   - Claude Code: resumes with `claude --resume {id}` or `claude --continue`.
-  - oh-my-pi: resumes with `omp --resume {id}` or `omp --continue`.
+  - oh-my-pi: resumes with `omp --restore {id}` or `omp --continue`.
   - Codex / rho / Antigravity / OpenCode: resumes conversation state.
   - Neovim: sources `Session.vim` from the pane's directory when it exists, and starts empty otherwise.
 

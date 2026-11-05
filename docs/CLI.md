@@ -228,7 +228,7 @@ Panes restore in their recorded working directory (`cwd`):
 - Standard panes restore their shell or command.
 - Tools matching `[[resume]]` rules in `config.toml` expand their resume command or fallback:
   - Claude Code: `claude --resume {id}` or `claude --continue`
-  - oh-my-pi: `omp --resume {id}` or `omp --continue`
+  - oh-my-pi: `omp --restore {id}` or `omp --continue`
   - Neovim: `nvim -c 'silent! source Session.vim'` (starts empty when there is no `Session.vim`)
 
 ---

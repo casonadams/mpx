@@ -68,7 +68,7 @@ env_id = "CLAUDE_SESSION_ID"
 [[resume]]
 name = "omp"
 detect = ["omp"]
-resume = ["omp", "--resume", "{id}"]
+resume = ["omp", "--restore", "{id}"]
 fallback = ["omp", "--continue"]
 env_id = "OMP_SESSION_ID"
 
