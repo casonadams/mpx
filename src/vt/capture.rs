@@ -84,7 +84,7 @@ fn push_line(out: &mut String, cells: &[Cell], escapes: bool) {
     }
 }
 
-fn push_sgr(out: &mut String, style: CellStyle) {
+pub(super) fn push_sgr(out: &mut String, style: CellStyle) {
     let mut params = vec!["0".to_string()];
     for (on, code) in [
         (style.bold, "1"),

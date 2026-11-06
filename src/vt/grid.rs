@@ -388,6 +388,11 @@ impl Grid {
         self.wrapped.truncate(new_rows);
     }
 
+    /// Whether the alternate screen is shown.
+    pub fn alternate_screen(&self) -> bool {
+        self.alternate_screen
+    }
+
     /// Turns the alternate screen on or off (DEC modes 47, 1047 and 1049).
     pub fn set_alternate_screen(&mut self, on: bool) {
         self.alternate_screen = on;

@@ -1131,6 +1131,9 @@ impl Session {
                 .await,
             ),
             NodeRequest::Screen { name } => reply(self.screen(&name).await, Response::Screen),
+            NodeRequest::Keyframe { name } => reply(self.keyframe(&name).await, |(data, next, size)| {
+                Response::Keyframe { data, next, size }
+            }),
             NodeRequest::Capture { name, spec } => {
                 reply(self.capture(&name, spec).await, Response::Capture)
             }
@@ -1534,6 +1537,10 @@ impl Session {
 
     async fn screen(&self, name: &str) -> Result<String, String> {
         self.handle_of(name)?.screen().await
+    }
+
+    async fn keyframe(&self, name: &str) -> Result<(String, u64, (u16, u16)), String> {
+        self.handle_of(name)?.keyframe().await
     }
 
     async fn capture(&self, name: &str, spec: CaptureSpec) -> Result<String, String> {
@@ -2150,6 +2157,7 @@ fn is_read_only(req: &Request) -> bool {
                 NodeRequest::List
                     | NodeRequest::Logs { .. }
                     | NodeRequest::Screen { .. }
+                    | NodeRequest::Keyframe { .. }
                     | NodeRequest::Status { .. }
                     | NodeRequest::Cwd { .. }
                     | NodeRequest::Send { .. }

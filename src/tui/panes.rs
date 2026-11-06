@@ -181,6 +181,9 @@ pub async fn load_pane(
     (width, height): (u16, u16),
     scrollback: bool,
 ) -> Option<(VtScreen, u64)> {
+    if !scrollback && let Some(loaded) = load_keyframe(client, name, (width, height)).await {
+        return Some(loaded);
+    }
     let info = client.status(name).await.ok();
     let (cols, rows) = (width as usize, height as usize);
     let mut screen = if scrollback {
@@ -210,6 +213,28 @@ pub async fn load_pane(
     // keys) comes from the daemon's screen, which has seen everything. Asked after the log, so a
     // change in between also arrives on the stream past `next`.
     if let Some(modes) = info.and_then(|info| info.modes) {
+        screen.set_modes(modes);
+    }
+    Some((screen, next))
+}
+
+/// A live pane's screen taken from the daemon's own, which has seen all of the pane's output: it is
+/// exact where a replay of the log is not once the log has dropped what the program painted once.
+/// None when the daemon's screen has another size (a replay at `size` is then needed).
+async fn load_keyframe(
+    client: &mut Client,
+    name: &str,
+    (width, height): (u16, u16),
+) -> Option<(VtScreen, u64)> {
+    let (data, next, size) = client.keyframe(name).await.ok()?;
+    if size != (width, height) {
+        return None;
+    }
+    let mut screen = VtScreen::live(width as usize, height as usize);
+    screen.feed(data.as_bytes());
+    let _ = screen.take_passthroughs();
+    // Asked after the keyframe, so a change in between also arrives on the stream past `next`.
+    if let Some(modes) = client.status(name).await.ok().and_then(|info| info.modes) {
         screen.set_modes(modes);
     }
     Some((screen, next))

@@ -22,6 +22,7 @@ use crate::buffer::{RingBuffer, Utf8Stream, strip_ansi};
 use crate::protocol::{NodeInfo, NodeState, PaneId, StreamEvent, WaitOutcome};
 use crate::vt::VtScreen;
 use crate::vt::capture::{CaptureSpec, capture_text};
+use crate::vt::keyframe::keyframe;
 
 const PROBE_EVERY: Duration = Duration::from_millis(250);
 const EXITED: &str = "Node has exited";
@@ -163,6 +164,11 @@ impl PaneActor {
             PaneMsg::Logs { query, reply } => self.logs(query, reply),
             PaneMsg::Screen { reply } => {
                 let _ = reply.send(self.screen.snapshot());
+            }
+            PaneMsg::Keyframe { reply } => {
+                let grid = self.screen.grid();
+                let size = (grid.cols as u16, grid.rows as u16);
+                let _ = reply.send((keyframe(grid), self.ring.total_written(), size));
             }
             PaneMsg::Capture { spec, reply } => {
                 let _ = reply.send(self.capture(&spec));

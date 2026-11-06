@@ -131,6 +131,9 @@ pub enum PaneMsg {
     Screen {
         reply: Reply<String>,
     },
+    Keyframe {
+        reply: Reply<(String, u64, (u16, u16))>,
+    },
     Capture {
         spec: CaptureSpec,
         reply: Reply<String>,
@@ -246,6 +249,12 @@ impl PaneHandle {
 
     pub async fn screen(&self) -> Result<String, String> {
         self.ask(|reply| PaneMsg::Screen { reply }).await
+    }
+
+    /// The live screen as sequences that rebuild it, the stream offset they are current to and the
+    /// screen's size.
+    pub async fn keyframe(&self) -> Result<(String, u64, (u16, u16)), String> {
+        self.ask(|reply| PaneMsg::Keyframe { reply }).await
     }
 
     pub async fn capture(&self, spec: CaptureSpec) -> Result<String, String> {

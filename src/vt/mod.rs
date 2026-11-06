@@ -1,5 +1,6 @@
 pub mod capture;
 pub mod grid;
+pub mod keyframe;
 pub mod link;
 pub mod parser;
 

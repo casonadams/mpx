@@ -466,6 +466,11 @@ pub enum NodeRequest {
     Screen {
         name: String,
     },
+    /// The pane's live screen as the escape sequences that rebuild it, with the stream offset it
+    /// is current to.
+    Keyframe {
+        name: String,
+    },
     Status {
         name: String,
     },
@@ -860,6 +865,13 @@ pub enum Response {
     WaitResult(WaitOutcome),
     Error(String),
     Screen(String),
+    /// A pane's screen as `Keyframe` answers it: the sequences, the stream offset they are
+    /// current to, and the screen's size in columns and rows.
+    Keyframe {
+        data: String,
+        next: u64,
+        size: (u16, u16),
+    },
     Layout(Vec<(String, Rect, bool)>, Vec<Divider>, Vec<WindowTab>),
     Cwd(Option<String>),
     Bindings(Vec<(String, String)>),

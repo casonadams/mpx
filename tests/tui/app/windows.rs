@@ -515,3 +515,36 @@ async fn a_pane_shown_again_keeps_what_was_painted_once_after_its_log_wrapped() 
     let frame = h.frame().await;
     assert!(frame.contains("HEADER-ROW") && frame.contains("STATIC-ROW"), "{frame}");
 }
+
+#[tokio::test]
+async fn a_pane_hidden_for_more_than_its_log_keeps_is_rebuilt_from_the_daemons_screen() {
+    let mut h = Harness::start(echo_config(), ECHO).await;
+    h.frame().await;
+    h.emit(MAIN, "\x1b[?1049h\x1b[2J\x1b[1;1HHEADER-ROW\x1b[5;1HSTATIC-ROW", "STATIC-ROW").await;
+    h.open_window("other").await;
+    h.frame().await;
+    h.probe.send_input(MAIN, &ticks(0..120_000)).await.unwrap();
+    wait_for(&mut h.probe, MAIN, "tick 119999").await;
+
+    h.prefixed_char('p').await;
+    h.frame().await;
+    let frame = h.frame().await;
+    assert!(frame.contains("HEADER-ROW") && frame.contains("STATIC-ROW"), "{frame}");
+    assert!(frame.contains("tick 119999"), "{frame}");
+}
+
+#[tokio::test]
+async fn a_screen_loaded_after_the_log_wrapped_shows_what_was_painted_once() {
+    let mut h = Harness::start(echo_config(), ECHO).await;
+    h.frame().await;
+    h.emit(MAIN, "\x1b[?1049h\x1b[2J\x1b[1;1HHEADER-ROW\x1b[5;1HSTATIC-ROW", "STATIC-ROW").await;
+    h.probe.send_input(MAIN, &ticks(0..120_000)).await.unwrap();
+    wait_for(&mut h.probe, MAIN, "tick 119999").await;
+
+    h.app.vt.remove(MAIN);
+    h.app.expected.remove(MAIN);
+    h.app.pane_dims.remove(MAIN);
+    let frame = h.frame().await;
+    assert!(frame.contains("HEADER-ROW") && frame.contains("STATIC-ROW"), "{frame}");
+    assert!(frame.contains("tick 119999"), "{frame}");
+}

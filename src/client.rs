@@ -681,6 +681,19 @@ impl Client {
             .await
     }
 
+    /// A pane's live screen as the sequences that rebuild it, the stream offset they are current
+    /// to, and the screen's size in columns and rows.
+    pub async fn keyframe(&mut self, name: &str) -> Result<(String, u64, (u16, u16)), String> {
+        let req = Request::Node(NodeRequest::Keyframe {
+            name: name.to_string(),
+        });
+        self.call_as("Keyframe", req, |resp| match resp {
+            Response::Keyframe { data, next, size } => Some((data, next, size)),
+            _ => None,
+        })
+        .await
+    }
+
     /// Text of a pane's history and screen, as `capture-pane` reads it.
     pub async fn capture_pane(&mut self, name: &str, spec: CaptureSpec) -> Result<String, String> {
         let req = Request::Node(NodeRequest::Capture {
