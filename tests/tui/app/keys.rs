@@ -2,9 +2,8 @@
 use crossterm::event::{Event, KeyCode};
 
 use mpx::config::{Config, TerminalOptions};
-use mpx::layout::Direction;
 
-use super::support::{ECHO, Harness, MAIN, split, wait_for};
+use super::support::{ECHO, Harness, MAIN, wait_for};
 
 fn bracketed_paste_script() -> String {
     format!(r"printf '\033[?2004h'; {ECHO}")
@@ -12,6 +11,20 @@ fn bracketed_paste_script() -> String {
 
 fn focus_script() -> String {
     format!(r"printf '\033[?1004h'; {ECHO}")
+}
+
+/// Moves focus to the next pane with the prefix key and draws the frame that reports it.
+async fn next_pane(h: &mut Harness) {
+    h.prefixed_char('o').await;
+    h.frame().await;
+}
+
+/// Waits for `MAIN` to ask for focus reports; the first frame then reports focus-in, as the
+/// pane's modes arrive with its screen.
+async fn first_focus_in(h: &mut Harness) {
+    h.until("focus events requested", |app| app.modes_of(MAIN).focus_events)
+        .await;
+    wait_for(&mut h.probe, MAIN, "\x1b[I").await;
 }
 
 #[tokio::test]
@@ -25,9 +38,7 @@ async fn typed_keys_reach_the_active_pane() {
 
 #[tokio::test]
 async fn paste_is_bracketed_only_for_panes_that_enabled_it() {
-    let mut h = Harness::start(Config::default(), &bracketed_paste_script()).await;
-    split(&mut h.probe, MAIN, "plain", Direction::Horizontal).await;
-    h.frame().await;
+    let mut h = Harness::start_split(Config::default(), &bracketed_paste_script()).await;
     h.until("bracketed paste enabled", |app| {
         app.modes_of(MAIN).bracketed_paste
     })
@@ -36,8 +47,7 @@ async fn paste_is_bracketed_only_for_panes_that_enabled_it() {
     h.event(Event::Paste("hello".into())).await;
     wait_for(&mut h.probe, MAIN, "\x1b[200~hello\x1b[201~").await;
 
-    h.prefixed_char('o').await;
-    h.frame().await;
+    next_pane(&mut h).await;
     assert_eq!(h.app.active_pane, "plain");
     h.event(Event::Paste("world".into())).await;
     let logs = wait_for(&mut h.probe, "plain", "world").await;
@@ -53,23 +63,14 @@ async fn focus_reports_reach_only_panes_that_requested_them() {
         },
         ..Config::default()
     };
-    let mut h = Harness::start(config, &focus_script()).await;
-    split(&mut h.probe, MAIN, "plain", Direction::Horizontal).await;
-    h.frame().await;
-    h.until("focus events enabled", |app| {
-        app.modes_of(MAIN).focus_events
-    })
-    .await;
-    // The first frame already reports focus-in: the pane's modes arrive with its screen.
-    wait_for(&mut h.probe, MAIN, "\x1b[I").await;
+    let mut h = Harness::start_split(config, &focus_script()).await;
+    first_focus_in(&mut h).await;
 
-    h.prefixed_char('o').await;
-    h.frame().await;
+    next_pane(&mut h).await;
     wait_for(&mut h.probe, MAIN, "\x1b[I\x1b[O").await;
 
     h.event(Event::FocusGained).await;
-    h.prefixed_char('o').await;
-    h.frame().await;
+    next_pane(&mut h).await;
     wait_for(&mut h.probe, MAIN, "\x1b[I\x1b[O\x1b[I").await;
 
     h.event(Event::FocusLost).await;
@@ -80,20 +81,15 @@ async fn focus_reports_reach_only_panes_that_requested_them() {
 }
 
 #[tokio::test]
-async fn focus_reports_stay_off_unless_focus_events_is_set() {
-    // `focus-events` is off by default: the pane still asks, but the outer terminal's focus
-    // changes are not forwarded.
-    let mut h = Harness::start(Config::default(), &focus_script()).await;
-    h.frame().await;
-    h.until("focus events requested", |app| {
-        app.modes_of(MAIN).focus_events
-    })
-    .await;
-    h.event(Event::FocusGained).await;
-    h.event(Event::FocusLost).await;
-    h.frame().await;
-    let logs = h.logs(MAIN).await;
-    assert!(!logs.contains("\x1b[I") && !logs.contains("\x1b[O"));
+async fn pane_focus_reports_without_focus_events_but_the_terminals_focus_does_not() {
+    let mut h = Harness::start_split(Config::default(), &focus_script()).await;
+    first_focus_in(&mut h).await;
+    for terminal_focus in [Event::FocusGained, Event::FocusLost] {
+        h.event(terminal_focus).await;
+    }
+    next_pane(&mut h).await;
+    let logs = wait_for(&mut h.probe, MAIN, "\x1b[I\x1b[O").await;
+    assert_eq!(logs.matches("\x1b[I").count(), 1, "the terminal's focus is not forwarded");
 }
 
 #[tokio::test]

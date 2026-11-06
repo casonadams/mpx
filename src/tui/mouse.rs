@@ -269,6 +269,7 @@ impl App {
             self.load_scrollback(&name).await;
             let grid = self.vt.get(&name).map(|vt| vt.grid());
             self.mode = Mode::Copy(CopyState::at_point(x, y, grid));
+            self.interaction.drag_started_copy = true;
         }
         if let Mode::Copy(cs) = &mut self.mode {
             let (x, y) = local_point(rect, col, row);
@@ -276,26 +277,30 @@ impl App {
         }
     }
 
-    /// Copies the selection when it covers something; the selection stays on screen.
+    /// Copies the selection when it covers something. A drag that began copy mode ends it, as
+    /// tmux's `MouseDragEnd1Pane` does; output of a pane in copy mode is not applied.
     fn mouse_release(&mut self) {
         self.interaction.press = None;
         if self.interaction.border_drag.take().is_some() {
             self.layout.dirty = true;
         }
-        let (Mode::Copy(cs), Some(vt)) = (&self.mode, self.active_vt()) else {
-            return;
-        };
-        let grid = vt.grid();
-        if cs.is_empty_selection(grid) {
-            return;
-        }
-        let text = cs.yank_text(grid);
-        if !text.trim().is_empty() {
-            if self.config.set_clipboard {
-                self.yank.clipboard.copy(&text);
+        let leave = std::mem::take(&mut self.interaction.drag_started_copy);
+        if let (Mode::Copy(cs), Some(vt)) = (&self.mode, self.active_vt()) {
+            let grid = vt.grid();
+            if !cs.is_empty_selection(grid) {
+                let text = cs.yank_text(grid);
+                if !text.trim().is_empty() {
+                    if self.config.set_clipboard {
+                        self.yank.clipboard.copy(&text);
+                    }
+                    self.yank.yanks.push(text.clone());
+                    self.yank.last_copy = Some(text);
+                }
             }
-            self.yank.yanks.push(text.clone());
-            self.yank.last_copy = Some(text);
+        }
+        if leave && matches!(self.mode, Mode::Copy(_)) {
+            self.mode = Mode::Normal;
+            self.release_scrollback(&self.active_pane.clone());
         }
     }
 

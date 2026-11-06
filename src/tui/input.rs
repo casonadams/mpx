@@ -311,8 +311,10 @@ impl App {
 
     /// The terminal's own focus changed: the active pane hears it when `focus-events` is on.
     pub async fn on_focus(&mut self, focused: bool) -> Flow {
-        let active = self.active_pane.clone();
-        self.send_focus(&active, focused).await;
+        if self.config.terminal.focus_events {
+            let active = self.active_pane.clone();
+            self.send_focus(&active, focused).await;
+        }
         Flow::Continue
     }
 

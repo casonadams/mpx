@@ -87,7 +87,7 @@ A popup (`display-popup [-E] [-w W] [-h H] [-x X] [-y Y] [-T title] [-d dir] [-t
 
 These need `mouse = true` (the default). With `mouse = false` mpx ignores mouse events. In a read-only attach (`mpx attach -r`) right click opens no menu and middle click pastes nothing.
 
-- Left click focuses the pane under the pointer. Left drag selects text from the press point, and releasing copies it to the clipboard.
+- Left click focuses the pane under the pointer. Left drag selects text from the press point, and releasing copies it to the clipboard and leaves copy mode, so the pane streams again.
 - Drag a split border to resize the panes on either side of it.
 - Scroll wheel enters copy mode and scrolls the history.
 - Middle click pastes the top paste buffer into the pane under the pointer (`paste-buffer`), focusing that pane first.

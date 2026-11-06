@@ -196,6 +196,9 @@ pub struct Interaction {
     pub prefix_at: Option<Instant>,
     /// Pane and cell of a left-button press; a drag from it starts a copy-mode selection.
     pub press: Option<(String, usize, usize)>,
+    /// The current left-button drag started copy mode: releasing it copies and leaves, so the
+    /// pane streams again.
+    pub drag_started_copy: bool,
     /// A split border held with the mouse: dragging moves it.
     pub border_drag: Option<BorderGrab>,
 }
@@ -624,10 +627,9 @@ impl App {
         self.focus_pane = Some(active);
     }
 
-    /// Reports focus in or out to pane `name`, when `focus-events` is on and the pane asked for reports.
+    /// Reports focus in or out to pane `name`, when the pane asked for reports.
     pub(super) async fn send_focus(&mut self, name: &str, focused: bool) {
         if name.is_empty()
-            || !self.config.terminal.focus_events
             || !self.modes_of(name).focus_events
             || self.attachment.terminal.readonly
         {

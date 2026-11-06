@@ -261,6 +261,14 @@ impl Harness {
     }
 
     /// Starts the main session running `script`, draws one frame and waits until it prints READY.
+    /// Like `start`, with a `plain` pane split to the right of the main pane, drawn once.
+    pub async fn start_split(config: Config, script: &str) -> Self {
+        let mut h = Self::start(config, script).await;
+        split(&mut h.probe, MAIN, "plain", Direction::Horizontal).await;
+        h.frame().await;
+        h
+    }
+
     pub async fn started(script: &str) -> Self {
         let mut h = Self::start(Config::default(), script).await;
         h.frame().await;

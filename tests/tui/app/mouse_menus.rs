@@ -3,20 +3,16 @@ use crossterm::event::{KeyCode, MouseButton, MouseEventKind};
 
 use mpx::buffer::strip_ansi;
 use mpx::config::Config;
-use mpx::layout::Direction;
 use mpx::tui::app::Mode;
 
-use super::support::{ECHO, Harness, MAIN, SIZE, active_window, split, wait_for, wait_output};
+use super::support::{ECHO, Harness, MAIN, SIZE, active_window, wait_for, wait_output};
 
 const RIGHT: MouseEventKind = MouseEventKind::Down(MouseButton::Right);
 const MIDDLE: MouseEventKind = MouseEventKind::Down(MouseButton::Middle);
 
 /// A harness with a `plain` pane split to the right of the main pane, drawn once.
 async fn two_panes(config: Config) -> Harness {
-    let mut h = Harness::start(config, ECHO).await;
-    split(&mut h.probe, MAIN, "plain", Direction::Horizontal).await;
-    h.frame().await;
-    h
+    Harness::start_split(config, ECHO).await
 }
 
 /// Column of the first `needle` in the status row, as drawn.

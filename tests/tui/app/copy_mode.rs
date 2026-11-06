@@ -46,10 +46,28 @@ async fn mouse_drag_selects_and_release_copies() {
     h.mouse(MouseEventKind::Drag(MouseButton::Left), 4, 0).await;
     h.mouse(MouseEventKind::Up(MouseButton::Left), 4, 0).await;
     assert_eq!(h.clipboard(), ["hello"]);
-    assert!(
-        matches!(h.app.mode, Mode::Copy(_)),
-        "selection stays on screen"
-    );
+    assert!(h.mode_is_normal(), "a copy by drag leaves copy mode");
+}
+
+#[tokio::test]
+async fn a_drag_on_a_clicked_pane_leaves_it_streaming_after_release() {
+    let mut h = Harness::started(ECHO).await;
+    split(&mut h.probe, MAIN, "plain", Direction::Horizontal).await;
+    h.frame().await;
+    let target = h.rect_of("plain");
+    let (col, row) = (target.x + 1, target.y + 1);
+    h.mouse(MouseEventKind::Down(MouseButton::Left), col, row)
+        .await;
+    h.mouse(MouseEventKind::Drag(MouseButton::Left), col + 1, row)
+        .await;
+    h.mouse(MouseEventKind::Up(MouseButton::Left), col + 1, row)
+        .await;
+    assert_eq!(h.app.active_pane, "plain");
+    assert!(h.mode_is_normal());
+
+    h.frame().await;
+    h.emit("plain", "LATE-OUTPUT\r", "LATE-OUTPUT").await;
+    assert!(h.frame().await.contains("LATE-OUTPUT"));
 }
 
 #[tokio::test]
