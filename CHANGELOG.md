@@ -1,5 +1,109 @@
 # Changelog
 
+## [0.3.0](https://github.com/casonadams/mpx/compare/v0.2.0...v0.3.0) (2026-11-06)
+
+
+### ⚠ BREAKING CHANGES
+
+* **protocol:** a client and a daemon on different protocol versions refuse each other at handshake. After upgrading, stop the running daemon with `mpx kill-server` and start it again; session restore brings the layout back.
+* **status:** the status line defaults are tmux's, as format strings
+* **style:** dim inactive panes toward black instead of desaturating
+* **config:** inactive panes are not desaturated by default
+* tmux_compat is no longer a config key, the daemon protocol version is 8, and tmux-only prompt commands are gone.
+
+### Features
+
+* **agents:** add antigravity and opencode as built-in harnesses ([50342dd](https://github.com/casonadams/mpx/commit/50342dd71d36b52ed6e2b393f00e1a83f7fe1915))
+* **agents:** add first-class lifecycle hooks and --hook-dir for rho ([0f128ac](https://github.com/casonadams/mpx/commit/0f128ac9c593556d897f6277d552463dd4c0709e))
+* **agents:** agents sidebar and peer awareness ([abc7725](https://github.com/casonadams/mpx/commit/abc77252a69695483525b6384cb13363c91d387c))
+* **agents:** oh-my-pi gets the same agent awareness as Claude Code ([9e20838](https://github.com/casonadams/mpx/commit/9e20838fd7c24dd249828bfc51dd2daedad5e386))
+* **clients:** register attached clients and manage them from the CLI and TUI ([a17d4cf](https://github.com/casonadams/mpx/commit/a17d4cf31a134272093c7a4ea9dee3a3eafceeec))
+* **config:** inactive panes are not desaturated by default ([af60329](https://github.com/casonadams/mpx/commit/af603297a34c1276e2b88209be0c23e61f90f934))
+* **config:** restore omp sessions with --restore ([4924804](https://github.com/casonadams/mpx/commit/49248042a3c507eb91cb17e0e40a63ac47f53dff))
+* **copy:** copy-mode marks (set-mark/jump-to-mark), rectangle-on/off, next/previous ([d5c901f](https://github.com/casonadams/mpx/commit/d5c901fb0cb79c055e93bd3a08263479ae233d4c))
+* **daemon:** capture-pane, paste-buffer and set/show-environment ([b67e7b1](https://github.com/casonadams/mpx/commit/b67e7b18d81a3cda43389b9163b661f4beb94ecb))
+* **format:** add session_id, session_created and start_time ([a911c4f](https://github.com/casonadams/mpx/commit/a911c4f9b1fc27c045b66e66458ce6b955b64ec4))
+* **format:** pass the session's times and attach count to #{S:} loops ([d81c70d](https://github.com/casonadams/mpx/commit/d81c70d17fda39ac4c56617ab360a751f1f12db2))
+* **keys:** forward kitty flags 2, 4, 8 and 16 to panes ([a158e97](https://github.com/casonadams/mpx/commit/a158e97bdb6bc47b021b8765b4fbc945c18e9223))
+* **keys:** runtime bind-key/unbind-key/list-keys, set-hook, chained commands, %if in source-file ([8920e47](https://github.com/casonadams/mpx/commit/8920e4768c39d5439fd6cf36a064e282199b4520))
+* **keys:** tmux default key table (rotate, display-panes, clock, buffers, layouts, arrows), overlays, rotate/respawn/find-window ([e5504ce](https://github.com/casonadams/mpx/commit/e5504ce121134fbf18be5a948377d5151159a761))
+* **mcp:** mpx_agent_prompt returns the agent's answer, never types into a waiting agent ([9142908](https://github.com/casonadams/mpx/commit/914290886b9e20f8221134d482aff89e1e9fc591))
+* **mouse:** right-click menus and middle-click paste ([d6e3189](https://github.com/casonadams/mpx/commit/d6e31897ea9892db5dc4e8cbc20dadfa56decd64))
+* **options:** tmux options take effect (base-index, mouse, status line, mode-keys, synchronize-panes, monitors, defaults...) ([e0d4cda](https://github.com/casonadams/mpx/commit/e0d4cda17e51e21e708128269e89d023fe4280cf))
+* **panes:** join/move-pane, respawn-pane/window, rotate/swap/move-window, -Z forms ([d5c901f](https://github.com/casonadams/mpx/commit/d5c901fb0cb79c055e93bd3a08263479ae233d4c))
+* **panes:** turn a pane's input off with select-pane -d and -e ([100656d](https://github.com/casonadams/mpx/commit/100656d46c0213ed649b87ed31adb97d82bbc499))
+* **protocol:** group requests and bump the wire protocol to 16 ([a8784d1](https://github.com/casonadams/mpx/commit/a8784d1552cf9dc4c0b75439aa25d9dc853acf81))
+* redraw at once on layout changes, keep pane input modes ([180b15c](https://github.com/casonadams/mpx/commit/180b15cfa89ed8ddd46525b3203351427e1e37bd))
+* **restore:** resume a tool that ran in a shell inside a fresh shell ([0b2019b](https://github.com/casonadams/mpx/commit/0b2019babe8cc8b198772d22bf4382f3ad8c40f2))
+* **script:** run every daemon-side command in hooks, add hook events ([e86e2f9](https://github.com/casonadams/mpx/commit/e86e2f9dcc393ce66cf3f31d15a6dab34b15f54a))
+* **script:** run-shell, if-shell, wait-for, set-hook, show-hooks, command-alias and source-file %if ([180b899](https://github.com/casonadams/mpx/commit/180b8996c9f84f60906ee4af03850a6cc552a6fa))
+* **status:** the status line defaults are tmux's, as format strings ([97d166a](https://github.com/casonadams/mpx/commit/97d166a0c5eec3b0802028b167015864618f1f3f))
+* **style:** dim inactive panes toward black instead of desaturating ([b8515ce](https://github.com/casonadams/mpx/commit/b8515ce0470f46c849a3e258b62def71f4e38a71))
+* **style:** dimming follows palette changes a theme switcher makes ([caa60ca](https://github.com/casonadams/mpx/commit/caa60cacb13c5d6e75028cd8d67e6cc61fba2b1b))
+* **term:** focus events, extended keys, popups and menus, outer-terminal titles and bells ([c08aeee](https://github.com/casonadams/mpx/commit/c08aeee90015da7da18f2bd02b846d7de42f6f45))
+* tmux-compatible shim, session 0, restore-on-start, desaturating inactive panes ([7bbfb55](https://github.com/casonadams/mpx/commit/7bbfb552bfee58d05317837c8020fbb8b8699585))
+* **tmux:** display-popup, copy-mode commands and key tables, daemon-side zoom, command-prompt templates, confirm-before ([2c5e005](https://github.com/casonadams/mpx/commit/2c5e005ab0aa39c7d6246dd665ba7d69cd891e54))
+* **tui:** add active/inactive style templates, passthrough forwarding, and pane swap ([4522800](https://github.com/casonadams/mpx/commit/4522800e7484020a48379ab6bcad153b3fd0eae0))
+* **tui:** add unified command palette via Ctrl-Space ([ca010e3](https://github.com/casonadams/mpx/commit/ca010e35e981aa5d2d60b788b4f112c5f90263e1))
+* **tui:** agents rail, tmux layouts and mouse resizing ([26a8029](https://github.com/casonadams/mpx/commit/26a802909792fa8696a17a5d9b173e23268e8491))
+* **tui:** alerts, styles, scopes, renumbering and status rows for tmux options ([ec8e701](https://github.com/casonadams/mpx/commit/ec8e701603956c976dabbdc9f30792f66deb57d3))
+* **tui:** dim normal colors in inactive panes and keep faint text ([0e54fb1](https://github.com/casonadams/mpx/commit/0e54fb159d9a9ac439985401a8b8c4d84d67c524))
+* **tui:** format loops, cursor and history variables, status row 0 override ([2bf317c](https://github.com/casonadams/mpx/commit/2bf317c5f530371c4e95dab648fb648872ca9517))
+* **tui:** join-pane, swap-window, respawn-pane and find-window ([9f0f4b2](https://github.com/casonadams/mpx/commit/9f0f4b2cefa1ea680eb14160708f3e5e62a78a98))
+* **tui:** load pane screens from the daemon's own screen ([0683ba3](https://github.com/casonadams/mpx/commit/0683ba337dfc572074e20fbcddf728cf0d5f8757))
+* **tui:** pin copy mode scroll position on background history updates ([c05119c](https://github.com/casonadams/mpx/commit/c05119c329d3f6e27a9e677f507ddb40b1a40f00))
+* **tui:** redesign agents overlay, per-pane copy mode, claude titles, vt private CSI ([fd40417](https://github.com/casonadams/mpx/commit/fd4041755a3621f62062b60efb6a9e3b5002ccd1))
+* **tui:** redesign the sessions overlay ([7d83426](https://github.com/casonadams/mpx/commit/7d8342690150945831c298fcebfb90697bbc7f43))
+* **tui:** remove collapsed rail, rebind drawer to prefix dot, and add window flags ([13db1f3](https://github.com/casonadams/mpx/commit/13db1f3594ce122d45af0ff97958e00011e4b079))
+* **tui:** route prefix s, w, and ? to command palette tabs ([67646da](https://github.com/casonadams/mpx/commit/67646dab5e256b1f15277e4a67c66c297d9f4f39))
+* **tui:** set-option and show-options for the UI options ([c7dd772](https://github.com/casonadams/mpx/commit/c7dd772a2cf68c4be56c96d2dd895cf34848d78b))
+* **vt:** capture pane text from the screen and its history ([78a8149](https://github.com/casonadams/mpx/commit/78a814940810b44058708c2089b913d4631bb293))
+* **windows:** link-window, unlink-window and resize-window, and attach -x ([43d48d2](https://github.com/casonadams/mpx/commit/43d48d2d5bf98b8e68a3633651971f36ac884946))
+
+
+### Bug Fixes
+
+* **ci,ipc,client:** prevent Windows test hangs with timeouts and pipe cleanup ([e96cfcb](https://github.com/casonadams/mpx/commit/e96cfcb5ec6a1ad39612324a64a3e325d23695f2))
+* open PTYs one at a time, and steady the test suite ([1ccf1e7](https://github.com/casonadams/mpx/commit/1ccf1e71cc041f49a27040d7f1f776f06b1e33a5))
+* **resume:** nvim fallback sources Session.vim only when it exists ([1a4dd63](https://github.com/casonadams/mpx/commit/1a4dd633fdacd5cc2cdced1e5711113ea2a5376e))
+* **style:** dim ANSI colors from the terminal's own palette ([38bb52b](https://github.com/casonadams/mpx/commit/38bb52bf32579cf9e6bbbf8e467c2ff5befedf8c))
+* **test:** check mouse-capture bytes only on unix ([058a210](https://github.com/casonadams/mpx/commit/058a21086596e4d2dde6210657f10e6c0e57168b))
+* **test:** keep pacing and kill-pane checks independent of machine load ([b6ef869](https://github.com/casonadams/mpx/commit/b6ef869d7ef0cfa9103d29647b260b3f74713c24))
+* **test:** probe a removed variable the Windows shell does not derive ([d9da17c](https://github.com/casonadams/mpx/commit/d9da17c8ad9cbeb9c0640eb47c13748fc92a03af))
+* **test:** skip resume-by-foreground where processes are not identified ([cbc1517](https://github.com/casonadams/mpx/commit/cbc1517e395ce02bca2d0d098aa09394b650a315))
+* **test:** use an absolute sh and a boundary-independent scrollback check ([ad5e0be](https://github.com/casonadams/mpx/commit/ad5e0beb1abc91eea906a4eb9e1c9676a4ba474e))
+* **test:** use forward-slash paths in shell hook commands ([eb89d46](https://github.com/casonadams/mpx/commit/eb89d4625e5d41a94510a3d0d81f2609c1209364))
+* **test:** wait for echoed text, not text before a carriage return ([94f954d](https://github.com/casonadams/mpx/commit/94f954de70221f047fce89de0edf731a2f3ee319))
+* **test:** wait for the last pasted line instead of a multi-line match ([1c17e1c](https://github.com/casonadams/mpx/commit/1c17e1c87091638a03fc085beeb87e2f01abba04))
+* **tui:** align palette columns, one selection bar, ellipsis for long descriptions ([5df02f5](https://github.com/casonadams/mpx/commit/5df02f5ff82ff1e3f69f20d3e6c995f88ee2f655))
+* **tui:** complete display-message, move-window and rotate-window at the prompt ([270a86c](https://github.com/casonadams/mpx/commit/270a86cc6f488eb82ebfaac55b64595049cd8389))
+* **tui:** freeze the copy-mode view while the pane streams ([0b6c92f](https://github.com/casonadams/mpx/commit/0b6c92ff08a1a8bb325c272b145d42c0e0de8394))
+* **tui:** keep copy-mode scroll offsets and marks through a pane resize ([d3a853a](https://github.com/casonadams/mpx/commit/d3a853a0fc684aab9d052747728903c6a9ae3314))
+* **tui:** keep panes live after a mouse drag and report pane focus changes ([22d6f5a](https://github.com/casonadams/mpx/commit/22d6f5a43dd8d992a7fba0a568a867c9351f78e9))
+* **tui:** read the terminal's replies while writing the attach query ([3b7266e](https://github.com/casonadams/mpx/commit/3b7266e65fd58e2def3e57a6c0d3f82cf0bd4476))
+* **tui:** repaint the cells a palette does not draw, so the shortcut popup does not linger ([35b7d68](https://github.com/casonadams/mpx/commit/35b7d68a46229d85d510ab9b95d91fe73b9f49b8))
+* **tui:** replay a fresh attach at the pane's pre-resize size ([19ddf9a](https://github.com/casonadams/mpx/commit/19ddf9a46e0c08e509c5f3aa201176d75aae7cef))
+* **tui:** session switching never ends the TUI; the prompt names its command ([cf95995](https://github.com/casonadams/mpx/commit/cf959955d2050fda46c948e8c5948a05b7dff060))
+* **vt:** keep pane content bottom-anchored when rows change ([9ea255b](https://github.com/casonadams/mpx/commit/9ea255b1f40e1e053c3fb9c69964288c9fe8eaf0))
+* **windows:** keep backslashes that escape nothing in prompt words ([b7dff2d](https://github.com/casonadams/mpx/commit/b7dff2dd34df5e91372c5f3c5da95db532f864b2))
+* **windows:** keep unquoted backslashes that escape nothing ([91e2e7f](https://github.com/casonadams/mpx/commit/91e2e7ff5b1edc92e121cad09b4daef1e93ad8fd))
+* **windows:** local time, UTC offset and path separators on Windows ([25d0c86](https://github.com/casonadams/mpx/commit/25d0c86808dcdf4fa890d108e4cd71a013e4165e))
+* **windows:** one fallback shell and clear copy-pipe failures ([312ee22](https://github.com/casonadams/mpx/commit/312ee226db15b4f6708d27be5389b1a45324b1d9))
+* **windows:** replay output written after a resize at the size it was written ([7d86591](https://github.com/casonadams/mpx/commit/7d86591c9b31eb1466cc0c3932887d7da4055adb))
+
+
+### Performance Improvements
+
+* 2 ms daemon readiness poll, lazily grown scrollback ring; bench kill race fix ([d999e50](https://github.com/casonadams/mpx/commit/d999e507cca4151e7372f42d7001552fddb963f9))
+* render, stream and parse output faster ([6dec2f2](https://github.com/casonadams/mpx/commit/6dec2f2d885f405c9d12cec23049c975542b5d43))
+* **tui:** ask the terminal for its colors only when dimming needs them ([da1b4dd](https://github.com/casonadams/mpx/commit/da1b4dd2224314f197eac6e6a280083eae6b4793))
+* **tui:** catch panes up from the log instead of rebuilding them ([53b3c0c](https://github.com/casonadams/mpx/commit/53b3c0cc50c905d994112e7c3192308511cfc9fe))
+
+
+### Code Refactoring
+
+* remove the tmux shim and the surface only it reached ([54a3f67](https://github.com/casonadams/mpx/commit/54a3f6732d58ecd39e93134a0a5b515655242ca9))
+
 ## [0.2.0](https://github.com/casonadams/mpx/compare/v0.1.2...v0.2.0) (2026-10-28)
 
 
