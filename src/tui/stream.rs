@@ -1,7 +1,7 @@
 //! Gap-free pane output: each screen tracks the byte offset it has absorbed, and every event is
 //! checked against that offset. Missing bytes are fetched from the daemon's log.
 
-use super::app::{App, Mode};
+use super::app::App;
 use super::panes::{has_scrollback, load_pane};
 use crate::protocol::StreamEvent;
 use crate::vt::{Alert, VtScreen};
@@ -77,38 +77,22 @@ impl App {
         }
     }
 
+    /// Output for a pane in copy mode is not applied: the view stays as it was entered, like
+    /// tmux's, and leaving copy mode rebuilds the screen from the pane's log.
     async fn apply_output(&mut self, name: &str, data: &str, offset: u64, next: u64) {
         if !self.keeps_screen(name) {
             self.forget_screen(name);
             return;
         }
-        let old_hist = self
-            .vt
-            .get(name)
-            .map(|v| v.grid().history_len())
-            .unwrap_or(0);
+        if self.in_copy_mode(name) {
+            return;
+        }
         match plan_output(self.expected.get(name).copied(), offset, next) {
             OutputPlan::Skip => {}
             OutputPlan::Feed => self.feed(name, data, next),
             OutputPlan::Fetch => {
                 self.catch_up(name).await;
                 self.apply_after_fetch(name, data, offset, next).await;
-            }
-        }
-        let new_hist = self
-            .vt
-            .get(name)
-            .map(|v| v.grid().history_len())
-            .unwrap_or(0);
-        if new_hist > old_hist {
-            let pushed = new_hist - old_hist;
-            if self.active_pane == name
-                && let Mode::Copy(cs) = &mut self.mode
-            {
-                cs.scroll_offset = (cs.scroll_offset + pushed).min(new_hist);
-            }
-            if let Some(cs) = self.parked_copy.get_mut(name) {
-                cs.scroll_offset = (cs.scroll_offset + pushed).min(new_hist);
             }
         }
     }
@@ -231,11 +215,10 @@ impl App {
         }
     }
 
-    /// Drops `name`'s scrollback once it has left copy mode.
+    /// Drops `name`'s frozen copy-mode screen once it has left copy mode; the next frame rebuilds
+    /// it from the log, which holds the output that arrived meanwhile.
     pub fn release_scrollback(&mut self, name: &str) {
-        if let Some(vt) = self.vt.get_mut(name) {
-            vt.grid_mut().set_history_limit(0);
-        }
+        self.forget_screen(name);
     }
 
     /// After the subscriber lagged: every initialized pane is rebuilt from its log.

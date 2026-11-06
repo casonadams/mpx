@@ -4,7 +4,7 @@ use crossterm::event::{KeyCode, MouseButton, MouseEventKind};
 use mpx::layout::Direction;
 use mpx::tui::app::{App, Mode};
 
-use super::support::{ECHO, Harness, MAIN, long_output, split, two_lines};
+use super::support::{ECHO, Harness, MAIN, long_output, split, two_lines, wait_for};
 
 /// Whether the main pane shows the end of the fill: `line 35`, and `READY` on the last row. The
 /// `READY` the pane printed at start is on screen too, so `READY` alone does not show the fill.
@@ -221,8 +221,16 @@ async fn a_live_pane_keeps_no_scrollback_and_copy_mode_brings_it_back() {
     assert!(h.frame().await.contains("line 40"));
 }
 
+/// Applies the stream events that arrive while `quiet` passes without a new one.
+async fn drain_stream(h: &mut Harness) {
+    let quiet = std::time::Duration::from_millis(300);
+    while let Ok(Some(item)) = tokio::time::timeout(quiet, h.rx.recv()).await {
+        h.app.on_stream(Some(item), &mut h.rx).await;
+    }
+}
+
 #[tokio::test]
-async fn stdout_updating_in_copy_mode_anchors_viewport_and_selection() {
+async fn output_scrolling_the_pane_in_copy_mode_leaves_the_view_and_selection_alone() {
     let mut h = Harness::started(ECHO).await;
     let mut fill = String::new();
     for i in 1..=35 {
@@ -248,34 +256,46 @@ async fn stdout_updating_in_copy_mode_anchors_viewport_and_selection() {
         .send_input(MAIN, "\r\nmore 1\r\nmore 2")
         .await
         .expect("send");
-
-    // ConPTY may deliver `more 2` after the history count moved: wait for its text too.
-    h.until("output absorbed into history", move |app| {
-        app.active_vt().is_some_and(|vt| {
-            vt.grid().history_len() >= initial_hist + 2 && vt.snapshot().contains("more 2")
-        })
-    })
-    .await;
+    wait_for(&mut h.probe, MAIN, "more 2").await;
+    drain_stream(&mut h).await;
 
     let frame = h.frame().await;
-    let facts = h.facts(MAIN).await;
-    assert!(frame.contains("VISUAL -2/"), "badge: {frame}\n{facts}");
-    assert!(frame.contains("READY"), "viewport still shows READY: {frame}\n{facts}");
+    assert_eq!(history_of(&h), initial_hist, "{frame}");
+    assert!(frame.contains("VISUAL -0/"), "badge: {frame}");
+    assert!(!frame.contains("more"), "the view is frozen: {frame}");
+    assert!(frame.contains("READY"), "viewport still shows READY: {frame}");
 
     h.key(KeyCode::Char('y')).await;
-    assert_eq!(
-        h.clipboard(),
-        ["READY"],
-        "selection remained on READY despite stdout updates"
-    );
-
-    h.key(KeyCode::Char('q')).await;
+    assert_eq!(h.clipboard(), ["READY"], "selection stays on READY");
     assert!(h.mode_is_normal());
     let live_frame = h.frame().await;
     assert!(
         live_frame.contains("more 2"),
-        "leaving copy mode shows live screen: {live_frame}"
+        "leaving copy mode shows the output that arrived meanwhile: {live_frame}"
     );
+}
+
+#[tokio::test]
+async fn output_redrawing_the_live_rows_does_not_change_the_copy_view() {
+    let mut h = Harness::started(&long_output()).await;
+    h.frame().await;
+    h.prefixed_char('[').await;
+    let before = h.frame().await;
+    assert!(before.contains("READY"), "{before}");
+
+    h.probe
+        .send_input(MAIN, "\x1b[H\x1b[2JREDRAWN")
+        .await
+        .expect("send");
+    wait_for(&mut h.probe, MAIN, "REDRAWN").await;
+    drain_stream(&mut h).await;
+
+    let frame = h.frame().await;
+    assert!(frame.contains("READY") && !frame.contains("REDRAWN"), "{frame}");
+
+    h.key(KeyCode::Char('q')).await;
+    let live = h.frame().await;
+    assert!(live.contains("REDRAWN") && !live.contains("READY"), "{live}");
 }
 
 /// Runs `line` as typed at the `:` prompt, as `copy_commands` does.

@@ -58,6 +58,8 @@ Windows never cross sessions. Each session is its own daemon, with its own panes
 
 Output is kept in a ring buffer addressed by **absolute byte offsets** (the last 2 MB per pane). It is the single source of scrollback: live screens, in the daemon and in the TUI, keep only what is on screen, so floods cost no history work. Copy mode and plain log reads rebuild scrollback on demand by replaying the ring into a fresh screen at the pane's size. A resize records the offset it happened at (`resized_at`): output before it replays at the size the pane had, the screen then resizes, and output after it replays at the new size, as the live pane took it. Every `Output` event carries `offset` and `next`, the range of the stream it covers. Multi-byte characters split across reads are held back until complete.
 
+While a pane is in copy mode the TUI applies none of its `Output` events, so the view is frozen as it was entered (as in tmux). Leaving copy mode drops that screen and the next frame rebuilds it from the ring, which holds the output that arrived meanwhile.
+
 - `Subscribe { name, since }`: the pane actor first replays everything from `since`, then switches to live output atomically. `logs -f` uses this so history and live output join seamlessly without duplicate bytes.
 - **Pacing** (`src/node/pacing.rs`): output flows at the speed it can be shown, as in a real terminal, so a flood never queues ahead of a keystroke's echo.
 - **Only what is on screen**: the TUI subscribes with `active_window`, so of pane output it receives only the active window's. Busy panes in other windows cost the TUI nothing.
