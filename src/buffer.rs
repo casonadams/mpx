@@ -223,10 +223,12 @@ fn skip_string(bytes: &[u8], from: usize) -> usize {
     bytes.len()
 }
 
+/// Bytes of output a node's log keeps.
+pub const RING_CAPACITY: usize = 2 * 1024 * 1024;
+
 impl Default for RingBuffer {
     fn default() -> Self {
-        // Default 2MB scrollback buffer per stream node
-        Self::new(2 * 1024 * 1024)
+        Self::new(RING_CAPACITY)
     }
 }
 

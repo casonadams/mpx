@@ -118,6 +118,23 @@ async fn mouse_click_focuses_the_clicked_pane_without_copy_mode() {
 }
 
 #[tokio::test]
+async fn leaving_copy_mode_shows_output_that_arrived_meanwhile_without_scrollback() {
+    let mut h = Harness::started(&long_output()).await;
+    h.frame().await;
+    h.mouse(MouseEventKind::ScrollUp, 5, 5).await;
+    assert!(h.frame().await.contains("COPY -3/"));
+
+    h.probe.send_input(MAIN, "MISSED-WHILE-SCROLLED\r").await.unwrap();
+    wait_for(&mut h.probe, MAIN, "MISSED-WHILE-SCROLLED").await;
+    h.mouse(MouseEventKind::ScrollDown, 5, 5).await;
+    assert!(h.mode_is_normal());
+    let frame = h.frame().await;
+    assert!(frame.contains("MISSED-WHILE-SCROLLED"), "{frame}");
+    assert!(!frame.contains("COPY"));
+    assert_eq!(h.app.vt[MAIN].grid().history_len(), 0, "a live pane keeps no scrollback");
+}
+
+#[tokio::test]
 async fn leaving_a_pane_in_copy_mode_keeps_its_view_and_returning_resumes_it() {
     let mut h = Harness::started(&long_output()).await;
     h.frame().await;

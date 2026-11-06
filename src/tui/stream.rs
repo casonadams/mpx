@@ -6,9 +6,10 @@ use super::panes::{has_scrollback, load_pane};
 use crate::protocol::StreamEvent;
 use crate::vt::{Alert, VtScreen};
 
-/// Largest gap a pane coming into view catches up on by reading it; well inside the 2 MB a pane's
-/// log keeps, so the bytes are still there. Larger gaps rebuild the pane from its log.
-const CATCH_UP_MAX: u64 = 512 * 1024;
+/// Largest gap a pane coming into view catches up on by reading it: three quarters of the log a
+/// pane keeps, so the bytes are still there. Reading them replays the program's output exactly;
+/// a rebuild from the log cannot once the log has dropped what the program painted only once.
+const CATCH_UP_MAX: u64 = (crate::buffer::RING_CAPACITY as u64) * 3 / 4;
 
 /// Size of a screen whose pane has not been sized yet.
 const DEFAULT_SIZE: (u16, u16) = (80, 24);
@@ -78,13 +79,11 @@ impl App {
     }
 
     /// Output for a pane in copy mode is not applied: the view stays as it was entered, like
-    /// tmux's, and leaving copy mode rebuilds the screen from the pane's log.
+    /// tmux's, and leaving copy mode brings the screen up to date from the pane's log. Output
+    /// for a pane that is not shown is not applied either: its screen keeps its offset and
+    /// catches up when the pane comes into view.
     async fn apply_output(&mut self, name: &str, data: &str, offset: u64, next: u64) {
-        if !self.keeps_screen(name) {
-            self.forget_screen(name);
-            return;
-        }
-        if self.in_copy_mode(name) {
+        if !self.keeps_screen(name) || self.in_copy_mode(name) {
             return;
         }
         match plan_output(self.expected.get(name).copied(), offset, next) {
@@ -215,18 +214,35 @@ impl App {
         }
     }
 
-    /// Drops `name`'s frozen copy-mode screen once it has left copy mode; the next frame rebuilds
-    /// it from the log, which holds the output that arrived meanwhile.
+    /// Ends `name`'s frozen copy-mode view: its scrollback is dropped now and the output that
+    /// arrived meanwhile is fed from the log before the next frame, instead of replaying the
+    /// whole log.
     pub fn release_scrollback(&mut self, name: &str) {
-        self.forget_screen(name);
+        if let Some(vt) = self.vt.get_mut(name) {
+            vt.grid_mut().set_history_limit(0);
+            self.released.push(name.to_string());
+        }
     }
 
-    /// After the subscriber lagged: every initialized pane is rebuilt from its log.
+    /// Brings the screens just released from copy mode up to date.
+    pub async fn catch_up_released(&mut self) {
+        for name in std::mem::take(&mut self.released) {
+            self.bring_up_to_date(&name).await;
+        }
+    }
+
+    /// After the subscriber lagged: every shown pane is rebuilt from its log. Panes that are not
+    /// shown keep their offset and catch up when they come into view.
     async fn resync_all(&mut self) {
-        let names: Vec<String> = self.expected.keys().cloned().collect();
-        for name in names {
+        for name in self.shown_screens() {
             self.resync_pane(&name).await;
         }
+    }
+
+    /// Panes with a screen the TUI keeps up to date.
+    fn shown_screens(&self) -> Vec<String> {
+        let screens = self.expected.keys();
+        screens.filter(|name| self.keeps_screen(name)).cloned().collect()
     }
 
 }

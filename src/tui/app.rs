@@ -119,6 +119,8 @@ pub struct App {
     /// Copy-mode state of panes that are not in the foreground: a pane keeps its scroll position,
     /// cursor and selection while the prefix is pending or focus moves elsewhere.
     pub parked_copy: HashMap<String, CopyState>,
+    /// Panes that just left copy mode, whose screens still miss the output they froze through.
+    pub released: Vec<String>,
     pub vt: HashMap<String, VtScreen>,
     pub passthroughs: Vec<Vec<u8>>,
     pub pane_dims: HashMap<String, (u16, u16)>,
@@ -433,6 +435,7 @@ impl App {
             keymap,
             mode: Mode::Normal,
             parked_copy: HashMap::new(),
+            released: Vec::new(),
             vt: HashMap::new(),
             passthroughs: Vec::new(),
             pane_dims: HashMap::new(),
@@ -552,6 +555,7 @@ impl App {
                 .find(|(name, ..)| name == m)
                 .map(|(_, r, _)| *r)
         });
+        self.catch_up_released().await;
         self.refresh_newly_shown(&shown_before).await;
         if self.focus_pane.as_deref() != Some(self.active_pane.as_str()) {
             self.recheck_size(&self.active_pane.clone()).await;
@@ -1234,6 +1238,7 @@ impl Tui {
             popup,
             self.app.pacing.frame_due,
             self.app.display_deadline(),
+            self.app.sync_deadline(),
         ]);
         tokio::select! {
             Some(event) = super::popup::next_event(&mut self.app.mode) => Wake::Popup(event),

@@ -111,6 +111,18 @@ impl App {
             .is_some_and(|since| since.elapsed() < SYNC_HOLD)
     }
 
+    /// When the first held synchronized update waits out `SYNC_HOLD`, if any is still held: the
+    /// frame that draws the pane is due then, even when nothing else wakes the loop.
+    pub fn sync_deadline(&self) -> Option<Instant> {
+        let now = Instant::now();
+        self.outer
+            .sync_since
+            .values()
+            .map(|since| *since + SYNC_HOLD)
+            .filter(|due| *due > now)
+            .min()
+    }
+
     /// The name of the window that holds pane `name`, empty when it is unknown.
     fn window_of(&self, pane: &str) -> String {
         let index = self

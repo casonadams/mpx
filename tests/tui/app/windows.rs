@@ -483,3 +483,35 @@ async fn next_window_with_a_steps_to_the_window_that_has_activity() {
         "visiting the window cleared its alert"
     );
 }
+
+/// Cursor-addressed in-place updates, as a program that repaints one line sends.
+fn ticks(range: std::ops::Range<usize>) -> String {
+    range.map(|i| format!("\x1b[10;1Htick {i:06}")).collect()
+}
+
+#[tokio::test]
+async fn a_pane_shown_again_keeps_what_was_painted_once_after_its_log_wrapped() {
+    let mut h = Harness::start(echo_config(), ECHO).await;
+    h.frame().await;
+    let ui = "\x1b[?1049h\x1b[2J\x1b[1;1HHEADER-ROW\x1b[5;1HSTATIC-ROW";
+    h.emit(MAIN, ui, "STATIC-ROW").await;
+    h.probe.send_input(MAIN, &ticks(0..60_000)).await.unwrap();
+    h.until("shown updates", |app| {
+        app.vt.get(MAIN).is_some_and(|vt| vt.snapshot().contains("tick 059999"))
+    })
+    .await;
+
+    h.open_window("other").await;
+    h.frame().await;
+    h.probe.send_input(MAIN, &ticks(60_000..135_000)).await.unwrap();
+    wait_for(&mut h.probe, MAIN, "tick 134999").await;
+
+    h.prefixed_char('p').await;
+    h.frame().await;
+    h.until("hidden updates", |app| {
+        app.vt.get(MAIN).is_some_and(|vt| vt.snapshot().contains("tick 134999"))
+    })
+    .await;
+    let frame = h.frame().await;
+    assert!(frame.contains("HEADER-ROW") && frame.contains("STATIC-ROW"), "{frame}");
+}

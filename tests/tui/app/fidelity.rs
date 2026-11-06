@@ -394,3 +394,24 @@ async fn a_pane_that_grows_keeps_the_terminal_identical_to_its_screen() {
     h.probe.kill("below").await.expect("kill below again");
     check(&mut h, "alternate screen pane grows").await;
 }
+
+#[tokio::test]
+async fn a_held_synchronized_update_has_a_deadline_that_ends_the_hold() {
+    use std::time::Instant;
+    use mpx::tui::outer::SYNC_HOLD;
+
+    let mut h = Harness::started(ECHO).await;
+    h.frame().await;
+    assert!(h.app.sync_deadline().is_none(), "nothing is held");
+
+    h.probe.send_input(MAIN, "\x1b[?2026hHELD-TEXT").await.expect("send");
+    h.until("update begun", |app| app.vt.get(MAIN).is_some_and(|vt| vt.sync_output())).await;
+    assert!(!h.frame().await.contains("HELD-TEXT"));
+    let due = h.app.sync_deadline().expect("a held pane wakes the loop");
+    assert!(due <= Instant::now() + SYNC_HOLD);
+
+    let began = Instant::now().checked_sub(SYNC_HOLD * 2).expect("clock");
+    h.app.outer.sync_since.insert(MAIN.to_string(), began);
+    assert!(h.app.sync_deadline().is_none(), "an expired hold does not wake the loop again");
+    assert!(h.frame().await.contains("HELD-TEXT"), "the expired hold draws the pane");
+}
