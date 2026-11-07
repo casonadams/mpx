@@ -222,18 +222,15 @@ pub async fn load_pane(
     client: &mut Client,
     name: &str,
     (width, height): (u16, u16),
-    scrollback: bool,
+    history: usize,
 ) -> Option<(VtScreen, u64)> {
-    if !scrollback && let Some(loaded) = load_keyframe(client, name, (width, height)).await {
+    if history == 0 && let Some(loaded) = load_keyframe(client, name, (width, height)).await {
         return Some(loaded);
     }
     let info = client.status(name).await.ok();
     let (cols, rows) = (width as usize, height as usize);
-    let mut screen = if scrollback {
-        VtScreen::new(cols, rows)
-    } else {
-        VtScreen::live(cols, rows)
-    };
+    let mut screen = VtScreen::live(cols, rows);
+    screen.grid_mut().set_history_limit(history);
     let resized = info
         .as_ref()
         .and_then(|info| info.resized_from.map(|from| (from, info.resized_at)));
@@ -241,7 +238,7 @@ pub async fn load_pane(
         Some(((from_cols, from_rows), at)) => {
             let from = (from_cols as usize, from_rows as usize);
             let (grid, next) =
-                rebuild_grid(client, name, from, (cols, rows), scrollback, at).await?;
+                rebuild_grid(client, name, from, (cols, rows), history, at).await?;
             *screen.grid_mut() = grid;
             next
         }
@@ -303,12 +300,12 @@ pub async fn sync_dims(
         let to = (width as usize, height as usize);
         match vt
             .get(&name)
-            .map(|screen| (grid_size(screen), has_scrollback(screen)))
+            .map(|screen| (grid_size(screen), screen.grid().history_limit))
         {
-            Some((from, keep_history)) => {
+            Some((from, history)) => {
                 let at = resize_cut(client, &name, from).await;
                 if let Some((grid, next)) =
-                    rebuild_grid(client, &name, from, to, keep_history, at).await
+                    rebuild_grid(client, &name, from, to, history, at).await
                 {
                     if let Some(screen) = vt.get_mut(&name) {
                         *screen.grid_mut() = grid;
@@ -317,8 +314,7 @@ pub async fn sync_dims(
                 }
             }
             None => {
-                if let Some((screen, next)) = load_pane(client, &name, (width, height), false).await
-                {
+                if let Some((screen, next)) = load_pane(client, &name, (width, height), 0).await {
                     expected.insert(name.clone(), next);
                     vt.insert(name, screen);
                 }
@@ -341,7 +337,7 @@ async fn rebuild_grid(
     name: &str,
     from: (usize, usize),
     to: (usize, usize),
-    keep_history: bool,
+    history: usize,
     at: Option<u64>,
 ) -> Option<(Grid, u64)> {
     let (before, after, next) = match at {
@@ -356,7 +352,7 @@ async fn rebuild_grid(
         }
     };
     Some((
-        VtScreen::resized_grid(before.as_bytes(), after.as_bytes(), from, to, keep_history),
+        VtScreen::resized_grid(before.as_bytes(), after.as_bytes(), from, to, history),
         next,
     ))
 }

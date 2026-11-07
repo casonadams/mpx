@@ -134,7 +134,7 @@ impl PaneActor {
             started_ms,
             process: Some(process),
             terminal,
-            ring: RingBuffer::default(),
+            ring: RingBuffer::for_scrollback(spec.scrollback),
             scrollback: spec.scrollback,
             screen: VtScreen::live(80, 24),
             utf8: Utf8Stream::default(),
@@ -311,7 +311,7 @@ impl PaneActor {
             // Rebuilt from the retained output, as the app's screens rebuild it, so the rows a grow
             // pulls back from scrollback are the same at every end. The output after this point is
             // fed to the new grid as it arrives.
-            let rebuilt = VtScreen::resized_grid(&self.ring.snapshot(), &[], from, to, false);
+            let rebuilt = VtScreen::resized_grid(&self.ring.snapshot(), &[], from, to, 0);
             *self.screen.grid_mut() = rebuilt;
             self.resized_from = Some(from);
             self.resized_at = Some(self.ring.total_written());

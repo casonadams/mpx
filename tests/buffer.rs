@@ -203,3 +203,67 @@ fn slices_join_to_the_snapshot_after_wrapping() {
     assert_eq!([first, second].concat(), rb.snapshot());
     assert_eq!(rb.snapshot(), b"cdefghij");
 }
+
+fn numbered_lines(count: usize, width: usize) -> Vec<u8> {
+    (0..count)
+        .flat_map(|i| format!("{i:0width$}\n").into_bytes())
+        .collect()
+}
+
+fn newlines(ring: &RingBuffer) -> usize {
+    ring.snapshot().iter().filter(|&&b| b == b'\n').count()
+}
+
+#[test]
+fn a_scrollback_ring_keeps_the_lines_it_was_asked_for_beyond_the_byte_floor() {
+    let mut ring = RingBuffer::for_scrollback(40_000);
+    // 40,000 lines of 100 bytes are 4 MB, twice the byte floor.
+    for chunk in numbered_lines(40_000, 99).chunks(4096) {
+        ring.write(chunk);
+    }
+    assert_eq!(newlines(&ring), 40_000, "no line is dropped before the limit");
+    ring.write(&numbered_lines(1_000, 99));
+    assert_eq!(newlines(&ring), 40_000, "older lines go once the limit is passed");
+    assert!(ring.len() > mpx::buffer::RING_CAPACITY);
+}
+
+#[test]
+fn a_limited_ring_never_drops_below_its_byte_floor_or_beyond_its_cap() {
+    let mut ring = RingBuffer::with_limits(1_000, 10_000, 5);
+    for chunk in numbered_lines(2_000, 9).chunks(100) {
+        ring.write(chunk);
+    }
+    assert_eq!(ring.len(), 1_000, "only the floor stays once the lines are covered");
+    assert!(newlines(&ring) >= 5);
+
+    let mut many = RingBuffer::with_limits(1_000, 10_000, usize::MAX);
+    for chunk in numbered_lines(2_000, 9).chunks(100) {
+        many.write(chunk);
+    }
+    assert_eq!(many.len(), 10_000, "lines never push it past the cap");
+    let (_, next) = many.since(0);
+    assert_eq!(many.oldest_offset(), next - 10_000);
+}
+
+#[test]
+fn one_write_larger_than_the_cap_keeps_its_newest_bytes() {
+    let mut ring = RingBuffer::with_limits(100, 1_000, usize::MAX);
+    ring.write(b"old\n");
+    let data = numbered_lines(500, 9);
+    ring.write(&data);
+    assert_eq!(ring.snapshot(), data[data.len() - 1_000..]);
+    assert_eq!(newlines(&ring), 100);
+}
+
+#[test]
+fn offsets_stay_absolute_when_a_limited_ring_drops_lines() {
+    let mut ring = RingBuffer::with_limits(1_000, 100_000, 100);
+    let data = numbered_lines(3_000, 9);
+    for chunk in data.chunks(100) {
+        ring.write(chunk);
+    }
+    assert_eq!(ring.total_written(), data.len() as u64);
+    let (tail, next) = ring.since(ring.oldest_offset());
+    assert_eq!(next, data.len() as u64);
+    assert_eq!(tail, data[data.len() - tail.len()..]);
+}

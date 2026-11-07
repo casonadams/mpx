@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use mpx::node::actor::PaneActor;
-use mpx::node::pane::{PaneCtx, PaneMsg, PaneNotice};
+use mpx::node::pane::{LogQuery, PaneCtx, PaneMsg, PaneNotice};
 use mpx::node::sink::Sink;
 use mpx::node::waits::Cond;
 use mpx::node::{NodeError, Process, SpawnSpec};
@@ -267,4 +267,21 @@ fn input_to_an_exited_pane_is_refused() {
     });
     assert!(sent.try_recv().unwrap().is_err());
     assert!(p.input.lock().unwrap().is_empty());
+}
+
+#[test]
+fn the_log_holds_the_lines_the_scrollback_limit_asks_for_beyond_the_byte_floor() {
+    let mut p = plain();
+    let line = format!("{}\n", "x".repeat(99));
+    for _ in 0..30_000 {
+        p.actor.handle(output(line.as_bytes()));
+    }
+    let (reply, rx) = oneshot::channel();
+    let query = LogQuery {
+        since: Some(0),
+        ..LogQuery::default()
+    };
+    p.actor.handle(PaneMsg::Logs { query, reply });
+    let (text, _) = rx.blocking_recv().expect("log");
+    assert_eq!(text.matches('\n').count(), 30_000, "3 MB of lines, past the 2 MB floor");
 }

@@ -193,13 +193,13 @@ impl App {
     /// Rebuilds one pane's screen from its full log at its current size, keeping scrollback if it
     /// had some.
     async fn resync_pane(&mut self, name: &str) {
-        let scrollback = self.vt.get(name).is_some_and(has_scrollback);
-        self.reload_pane(name, scrollback).await;
+        let history = self.vt.get(name).map_or(0, |vt| vt.grid().history_limit);
+        self.reload_pane(name, history).await;
     }
 
-    async fn reload_pane(&mut self, name: &str, scrollback: bool) {
+    async fn reload_pane(&mut self, name: &str, history: usize) {
         let size = self.pane_dims.get(name).copied().unwrap_or(DEFAULT_SIZE);
-        if let Some((mut screen, next)) = load_pane(&mut self.client, name, size, scrollback).await {
+        if let Some((mut screen, next)) = load_pane(&mut self.client, name, size, history).await {
             let _ = screen.take_passthroughs();
             self.vt.insert(name.to_string(), screen);
             self.expected.insert(name.to_string(), next);
@@ -210,7 +210,8 @@ impl App {
     /// none in the TUI.
     pub async fn load_scrollback(&mut self, name: &str) {
         if !self.vt.get(name).is_some_and(has_scrollback) {
-            self.reload_pane(name, true).await;
+            self.reload_pane(name, self.config.session.scrollback_lines)
+                .await;
         }
     }
 

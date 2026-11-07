@@ -5,39 +5,97 @@ use std::collections::VecDeque;
 #[derive(Debug, Clone)]
 pub struct RingBuffer {
     buffer: VecDeque<u8>,
-    capacity: usize,
+    /// Bytes that are kept once written, whatever else is asked for.
+    floor: usize,
+    /// Most bytes ever kept.
+    max: usize,
+    /// Lines (newlines) to keep beyond `floor` bytes, up to `max` bytes.
+    line_floor: usize,
+    /// Newlines in `buffer`.
+    lines: usize,
     written: u64,
 }
 
 impl RingBuffer {
+    /// A ring that keeps exactly the newest `capacity` bytes.
     pub fn new(capacity: usize) -> Self {
         Self {
             buffer: VecDeque::new(),
-            capacity,
+            floor: capacity,
+            max: capacity,
+            line_floor: 0,
+            lines: 0,
             written: 0,
+        }
+    }
+
+    /// A ring that keeps the newest `RING_CAPACITY` bytes and, beyond them, as much older output
+    /// as it takes to hold `lines` lines, up to `RING_MAX` bytes, so scrollback rebuilt from it
+    /// reaches the pane's scrollback limit instead of stopping at a byte count.
+    pub fn for_scrollback(lines: usize) -> Self {
+        Self::with_limits(RING_CAPACITY, RING_MAX, lines)
+    }
+
+    /// A ring that always keeps the newest `floor` bytes, keeps older output while it takes to
+    /// hold `lines` lines, and never keeps more than `max` bytes (`max` of at least `floor`).
+    pub fn with_limits(floor: usize, max: usize, lines: usize) -> Self {
+        Self {
+            floor,
+            max: max.max(floor),
+            line_floor: lines,
+            ..Self::new(floor)
         }
     }
 
     pub fn write(&mut self, data: &[u8]) {
         self.written += data.len() as u64;
-        if data.is_empty() {
-            return;
-        }
-
-        if data.len() >= self.capacity {
+        let data = &data[data.len().saturating_sub(self.max)..];
+        if data.len() == self.max {
             self.buffer.clear();
-            let start = data.len() - self.capacity;
-            self.buffer.extend(&data[start..]);
+            self.lines = 0;
+        }
+        self.buffer.extend(data);
+        self.lines += data.iter().filter(|&&b| b == b'\n').count();
+        self.evict();
+    }
+
+    /// Drops the oldest bytes the limits no longer need: those beyond `max`, and those beyond
+    /// `floor` that hold lines beyond `line_floor`.
+    fn evict(&mut self) {
+        let len = self.buffer.len();
+        if len <= self.floor {
             return;
         }
+        let over_max = len.saturating_sub(self.max);
+        let spare_lines = self.lines.saturating_sub(self.line_floor);
+        let spare_bytes = self.bytes_holding(spare_lines, len - self.floor);
+        self.drop_front(over_max.max(spare_bytes));
+    }
 
-        let available = self.capacity - self.buffer.len();
-        if data.len() > available {
-            let to_remove = data.len() - available;
-            self.buffer.drain(0..to_remove);
+    /// Bytes at the front that hold `lines` newlines, at most `limit`.
+    fn bytes_holding(&self, lines: usize, limit: usize) -> usize {
+        if lines == 0 {
+            return 0;
         }
+        let mut seen = 0;
+        for (at, &byte) in self.buffer.iter().take(limit).enumerate() {
+            seen += usize::from(byte == b'\n');
+            if seen == lines {
+                return at + 1;
+            }
+        }
+        limit
+    }
 
-        self.buffer.extend(data);
+    fn drop_front(&mut self, bytes: usize) {
+        let dropped = self
+            .buffer
+            .iter()
+            .take(bytes)
+            .filter(|&&b| b == b'\n')
+            .count();
+        self.lines -= dropped;
+        self.buffer.drain(..bytes);
     }
 
     /// Total bytes ever written; the absolute offset just past the newest byte.
@@ -133,6 +191,7 @@ impl RingBuffer {
 
     pub fn clear(&mut self) {
         self.buffer.clear();
+        self.lines = 0;
     }
 }
 
@@ -266,8 +325,11 @@ fn skip_string(bytes: &[u8], from: usize) -> usize {
     bytes.len()
 }
 
-/// Bytes of output a node's log keeps.
+/// Bytes of output a node's log always keeps once that much was written.
 pub const RING_CAPACITY: usize = 2 * 1024 * 1024;
+
+/// Most bytes a node's log keeps while it holds the lines its scrollback asks for.
+pub const RING_MAX: usize = 64 * 1024 * 1024;
 
 impl Default for RingBuffer {
     fn default() -> Self {

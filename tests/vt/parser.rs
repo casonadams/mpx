@@ -682,12 +682,12 @@ fn grid_rows(grid: &mpx::vt::Grid) -> Vec<String> {
 #[test]
 fn a_resized_grid_pulls_the_log_back_from_history_and_pads_the_top() {
     let log = b"a\r\nb\r\nc\r\nd\r\ne";
-    let grid = VtScreen::resized_grid(log, &[], (10, 2), (10, 5), false);
+    let grid = VtScreen::resized_grid(log, &[], (10, 2), (10, 5), 0);
     assert_eq!(grid_rows(&grid), ["a", "b", "c", "d", "e"]);
     assert_eq!(grid.cursor.y, 4, "the cursor stays on the bottom row");
     assert_eq!(grid.history_len(), 0, "live screens keep no history");
 
-    let padded = VtScreen::resized_grid(log, &[], (10, 2), (10, 6), false);
+    let padded = VtScreen::resized_grid(log, &[], (10, 2), (10, 6), 0);
     assert_eq!(
         grid_rows(&padded),
         ["", "a", "b", "c", "d", "e"],
@@ -698,13 +698,13 @@ fn a_resized_grid_pulls_the_log_back_from_history_and_pads_the_top() {
 #[test]
 fn a_resized_grid_keeps_scrollback_only_when_asked() {
     let log = b"a\r\nb\r\nc\r\nd\r\ne";
-    let kept = VtScreen::resized_grid(log, &[], (10, 5), (10, 1), true);
+    let kept = VtScreen::resized_grid(log, &[], (10, 5), (10, 1), 100_000);
     assert_eq!(
         kept.history_len(),
         4,
         "the rows pushed off the top are kept"
     );
-    let live = VtScreen::resized_grid(log, &[], (10, 5), (10, 1), false);
+    let live = VtScreen::resized_grid(log, &[], (10, 5), (10, 1), 0);
     assert_eq!(live.history_len(), 0);
     assert_eq!(live.cursor.y, 0);
 }
@@ -712,7 +712,7 @@ fn a_resized_grid_keeps_scrollback_only_when_asked() {
 #[test]
 fn a_growing_copy_pane_pulls_its_scrollback_back_onto_the_screen() {
     let log = b"a\r\nb\r\nc\r\nd\r\ne\r\nf\r\ng";
-    let grid = VtScreen::resized_grid(log, &[], (10, 2), (10, 4), true);
+    let grid = VtScreen::resized_grid(log, &[], (10, 2), (10, 4), 100_000);
     assert_eq!(grid_rows(&grid), ["d", "e", "f", "g"]);
     assert_eq!(grid.history_len(), 3, "the two rows pulled back leave three in history");
 }
@@ -725,7 +725,7 @@ fn a_growing_copy_pane_pulls_its_scrollback_back_onto_the_screen() {
 fn a_grow_replays_the_conpty_repaint_it_was_sent() {
     let log: &[u8] = include_bytes!("fixtures/conpty_pane_grow.bin");
     let (before, after) = log.split_at(342);
-    let grid = VtScreen::resized_grid(before, after, (100, 14), (100, 29), false);
+    let grid = VtScreen::resized_grid(before, after, (100, 14), (100, 29), 0);
     let mut expected: Vec<String> = (8..=20).map(|i| format!("top {i:02}")).collect();
     expected.push("PROMPT$".to_string());
     let rows = grid_rows(&grid);
@@ -738,7 +738,7 @@ fn a_grow_replays_the_conpty_repaint_it_was_sent() {
 #[test]
 fn the_conpty_fixture_pulls_back_to_the_bottom_without_the_repaint() {
     let log: &[u8] = include_bytes!("fixtures/conpty_pane_grow.bin");
-    let grid = VtScreen::resized_grid(&log[..342], &[], (100, 14), (100, 29), false);
+    let grid = VtScreen::resized_grid(&log[..342], &[], (100, 14), (100, 29), 0);
     let rows = grid_rows(&grid);
     assert_eq!(rows[28], "PROMPT$");
     assert_eq!(rows[27], "top 20");
@@ -749,9 +749,9 @@ fn the_conpty_fixture_pulls_back_to_the_bottom_without_the_repaint() {
 #[test]
 fn a_resized_grid_replays_at_the_new_width_when_the_width_changes() {
     let log = b"abcdefgh\r\nx";
-    let narrow = VtScreen::resized_grid(log, &[], (4, 3), (4, 3), false);
+    let narrow = VtScreen::resized_grid(log, &[], (4, 3), (4, 3), 0);
     assert_eq!(grid_rows(&narrow)[..2], ["abcd", "efgh"]);
-    let wide = VtScreen::resized_grid(log, &[], (4, 3), (8, 3), false);
+    let wide = VtScreen::resized_grid(log, &[], (4, 3), (8, 3), 0);
     assert_eq!(grid_rows(&wide)[..2], ["abcdefgh", "x"]);
 }
 
@@ -761,7 +761,7 @@ fn output_after_a_resize_is_fed_at_the_new_size() {
     // replayed at the old size it would clamp onto the last old row.
     let before = b"a\r\nb\r\nc\r\nd\r\ne";
     let after = b"\x1b[5;1Hlast";
-    let grid = VtScreen::resized_grid(before, after, (10, 2), (10, 5), false);
+    let grid = VtScreen::resized_grid(before, after, (10, 2), (10, 5), 0);
     assert_eq!(grid_rows(&grid), ["a", "b", "c", "d", "last"]);
 }
 
@@ -778,4 +778,14 @@ fn reverse_index_moves_up_and_scrolls_down_at_the_top_margin() {
     assert_eq!(row(&vt, 0), "");
     assert_eq!(row(&vt, 1), "a");
     assert_eq!(row(&vt, 2), "b");
+}
+
+#[test]
+fn a_resized_grid_keeps_at_most_the_history_it_is_given() {
+    let log = b"a\r\nb\r\nc\r\nd\r\ne\r\nf\r\ng";
+    let capped = VtScreen::resized_grid(log, &[], (10, 2), (10, 2), 3);
+    assert_eq!(capped.history_len(), 3);
+    assert_eq!(grid_rows(&capped), ["f", "g"]);
+    let all = VtScreen::resized_grid(log, &[], (10, 2), (10, 2), 100);
+    assert_eq!(all.history_len(), 5);
 }

@@ -38,25 +38,25 @@ impl VtScreen {
     /// at the old size with its scrollback and the grid resizes as `Grid::resize` does, so rows that
     /// a grow pulls back from history come back on top; `after` is then fed at the new size, as the
     /// live pane took it. A width change replays both at the new width instead, since the lines
-    /// reflow. The scrollback is kept only when `keep_history` (a pane in copy mode).
+    /// reflow. The grid keeps at most `history` lines of scrollback (0 for a live pane, the
+    /// scrollback limit for a pane in copy mode).
     pub fn resized_grid(
         before: &[u8],
         after: &[u8],
         from: (usize, usize),
         to: (usize, usize),
-        keep_history: bool,
+        history: usize,
     ) -> Grid {
         let replay_at = if from.0 == to.0 { from } else { to };
         let mut screen = Self::new(replay_at.0, replay_at.1);
+        let replay_limit = screen.grid().history_limit.max(history);
+        screen.grid_mut().set_history_limit(replay_limit);
         screen.feed(before);
         screen.grid_mut().resize(to.0, to.1);
         screen.feed(after);
         let _ = screen.take_responses();
         let _ = screen.take_passthroughs();
-        let grid = screen.grid_mut();
-        if !keep_history {
-            grid.set_history_limit(0);
-        }
+        screen.grid_mut().set_history_limit(history);
         let VtScreen { handler, .. } = screen;
         handler.grid
     }

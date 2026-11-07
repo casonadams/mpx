@@ -91,7 +91,7 @@ fallback = ["nvim", "-c", "silent! source Session.vim"]
 | `restore` | bool | `true` | Daemon | On startup, automatically restore the last saved session layout and resume registered processes, however the previous run ended. `mpx --no-restore` skips it for one start. |
 | `which_key_delay_ms` | integer | `300` | TUI | Milliseconds to wait after pressing the prefix before displaying the which-key HUD popup (`0` displays immediately). |
 | `display_panes_time_ms` | integer | `1000` | TUI | Milliseconds the `display-panes` numbers stay on screen before they go away (`0` keeps them until a key is pressed). |
-| `scrollback_lines` | integer | `100000` | Daemon | Lines of scrollback each pane keeps for captures (`capture-pane`, `logs --plain`), for panes started after the setting. Unlike `history_limit`, which counts exited panes. |
+| `scrollback_lines` | integer | `100000` | Daemon | Lines of scrollback each pane keeps for captures (`capture-pane`, `logs --plain`) and in the terminal's copy mode, for panes started after the setting. The pane's output log grows beyond its 2 MB minimum to hold that many lines, up to 64 MB. Unlike `history_limit`, which counts exited panes. |
 | `automatic_rename` | bool | `true` | Daemon | Name each window after its foreground process. `false` keeps the name it was created with. |
 | `monitor_activity` | bool | `true` | Daemon | Flag background windows that print output (`#` in the window list). Flags are tracked while a terminal is attached. |
 | `monitor_bell` | bool | `true` | Daemon | Flag background windows whose panes ring the bell (`!`); same rule as `monitor_activity`. |
@@ -128,7 +128,7 @@ These tmux options have an mpx file key; `mpx import-tmux` maps them. Each row n
 | tmux option | mpx behavior | Default |
 |---|---|---|
 | `remain-on-exit on\|off\|failed` | `remain_on_exit`. `failed` keeps only panes that exited non-zero (a signal counts). Decided when a pane exits, so panes already running follow a change. | `off` |
-| `history-limit N` | `scrollback_lines`: scrollback lines per pane for captures, for panes started after the change. The TUI's copy mode keeps mpx's built-in 100000-line limit. The file key `history_limit` is a different setting (exited panes) and is not changed. | `100000` (tmux: `2000`) |
+| `history-limit N` | `scrollback_lines`: scrollback lines per pane for captures and for the TUI's copy mode, for panes started after the change. The file key `history_limit` is a different setting (exited panes) and is not changed. | `100000` (tmux: `2000`) |
 | `allow-passthrough on\|off\|all` | `allow_passthrough`. `all` covers every pane the terminal shows (the attached window); background windows are not streamed to the terminal, so their passthrough is not forwarded. | `on` (tmux: `off`) |
 | `automatic-rename on\|off` | `automatic_rename`. | `on` |
 | `monitor-activity on\|off` | `monitor_activity`. Background windows get the `#` flag on output, with or without an attached terminal. | `on` |
