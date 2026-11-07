@@ -1,6 +1,6 @@
 use clap::Subcommand;
-use super::Commands;
 
+use super::Commands;
 use super::panes::{
     command_and_args, current_layout, daemon_call, daemon_result, keyed_call, keyed_client,
     keyed_on_target, pid_label, resolve_name, resolve_optional, spawn_opts, terminal_size,
@@ -8,7 +8,7 @@ use super::panes::{
 use super::resolve::Resolved;
 use super::sessions::ensure_client;
 use crate::client::Client;
-use crate::layout::{LinkPlace, WindowTab};
+use crate::layout::LinkPlace;
 use crate::protocol::{LayoutPreset, NewWindowOpts, Side, WindowFit, WindowResize};
 use crate::tui::command::window_target;
 
@@ -455,21 +455,29 @@ async fn run_window(cmd: WindowCommands, r: &Resolved) -> Result<i32, String> {
             pty,
             detach,
             argv,
-        } => new_window(
-            r,
-            NewWindowRequest {
+        } => {
+            let req = NewWindowRequest {
                 name,
                 cwd,
                 env,
                 pty,
                 focus: !detach,
                 argv,
-            },
-        )
-        .await,
-        WindowCommands::KillWindow { index } => kill_window(r, index).await,
-        WindowCommands::RenameWindow { index, name } => rename_window(r, index, &name).await,
-        WindowCommands::SelectWindow { index } => select_window(r, index).await,
+            };
+            new_window(r, req).await
+        }
+        WindowCommands::KillWindow { index } => {
+            keyed_call(r, "kill-window", async |c| c.kill_window(index).await).await
+        }
+        WindowCommands::RenameWindow { index, name } => {
+            keyed_call(r, "rename-window", async |c| {
+                c.rename_window(index, &name).await
+            })
+            .await
+        }
+        WindowCommands::SelectWindow { index } => {
+            daemon_call(r, "select-window", async |c| c.select_window(index).await).await
+        }
         WindowCommands::LastWindow => {
             daemon_call(r, "last-window", async |c| c.last_window().await).await
         }
@@ -479,7 +487,9 @@ async fn run_window(cmd: WindowCommands, r: &Resolved) -> Result<i32, String> {
 /// Pane focus, marks, breaks and layouts.
 async fn run_pane(cmd: PaneCommands, r: &Resolved) -> Result<i32, String> {
     match cmd {
-        PaneCommands::LastPane { keep_zoom } => last_pane(r, keep_zoom).await,
+        PaneCommands::LastPane { keep_zoom } => {
+            daemon_call(r, "last-pane", async |c| c.focus_last_with(keep_zoom).await).await
+        }
         PaneCommands::SelectPane {
             target,
             mark,
@@ -497,7 +507,9 @@ async fn run_pane(cmd: PaneCommands, r: &Resolved) -> Result<i32, String> {
             };
             select_pane(r, target.as_deref(), flags).await
         }
-        PaneCommands::BreakPane { name } => break_pane(r, &name).await,
+        PaneCommands::BreakPane { name } => {
+            daemon_call(r, "break-pane", async |c| c.break_pane(&name).await).await
+        }
         PaneCommands::SelectLayout { preset, spread } => {
             select_layout(r, preset.as_deref(), spread).await
         }
@@ -556,13 +568,28 @@ async fn run_respawn(cmd: RespawnCommands, r: &Resolved) -> Result<i32, String> 
             kill,
             cwd,
             argv,
-        } => respawn_pane(r, target, kill, cwd, argv).await,
+        } => {
+            keyed_on_target(
+                r,
+                target.as_deref(),
+                "respawn-pane",
+                true,
+                async |c, name| c.respawn(&name, kill, cwd, respawn_command(argv)).await,
+            )
+            .await
+        }
         RespawnCommands::RespawnWindow {
             target,
             kill,
             cwd,
             argv,
-        } => respawn_window(r, target, kill, cwd, argv).await,
+        } => {
+            keyed_call(r, "respawn-window", async |c| {
+                c.respawn_window(target, kill, cwd, respawn_command(argv))
+                    .await
+            })
+            .await
+        }
     }
 }
 
@@ -570,7 +597,12 @@ async fn run_window_order(cmd: WindowOrderCommands, r: &Resolved) -> Result<i32,
     match cmd {
         WindowOrderCommands::RotateWindow {
             down, keep_zoom, ..
-        } => rotate_window(r, down, keep_zoom).await,
+        } => {
+            daemon_call(r, "rotate-window", async |c| {
+                c.rotate_window(down, keep_zoom).await
+            })
+            .await
+        }
         WindowOrderCommands::SwapWindow { source, target } => swap_window(r, source, target).await,
         WindowOrderCommands::MoveWindow { source, target } => move_window(r, source, target).await,
     }
@@ -587,23 +619,25 @@ async fn run_window_link(cmd: WindowLinkCommands, r: &Resolved) -> Result<i32, S
             kill,
             detached,
         } => {
-            let src = source.map(|s| window_ref(&s, &r.session)).transpose()?;
-            let dst = target.map(|t| window_ref(&t, &r.session)).transpose()?;
+            let src = window_ref(source, &r.session)?;
+            let dst = window_ref(target, &r.session)?;
             let place = LinkPlace {
                 after,
                 before,
                 kill,
                 detached,
             };
-            let mut client = ensure_client(r).await?;
-            daemon_result(client.link_window(src, dst, place).await, "link-window")?;
-            Ok(0)
+            daemon_call(r, "link-window", async |c| {
+                c.link_window(src, dst, place).await
+            })
+            .await
         }
         WindowLinkCommands::UnlinkWindow { target, kill } => {
-            let index = target.map(|t| window_ref(&t, &r.session)).transpose()?;
-            let mut client = ensure_client(r).await?;
-            daemon_result(client.unlink_window(index, kill).await, "unlink-window")?;
-            Ok(0)
+            let index = window_ref(target, &r.session)?;
+            daemon_call(r, "unlink-window", async |c| {
+                c.unlink_window(index, kill).await
+            })
+            .await
         }
         WindowLinkCommands::ResizeWindow {
             target,
@@ -617,21 +651,18 @@ async fn run_window_link(cmd: WindowLinkCommands, r: &Resolved) -> Result<i32, S
             down,
             adjustment,
         } => {
-            let index = target.map(|t| window_ref(&t, &r.session)).transpose()?;
+            let index = window_ref(target, &r.session)?;
             let resize = WindowResize {
                 width,
                 height,
                 side: side_flag(left, right, up, down)?,
                 cells: adjustment,
-                fit: match (largest, smallest) {
-                    (true, _) => Some(WindowFit::Largest),
-                    (_, true) => Some(WindowFit::Smallest),
-                    _ => None,
-                },
+                fit: window_fit(largest, smallest),
             };
-            let mut client = ensure_client(r).await?;
-            daemon_result(client.resize_window(index, resize).await, "resize-window")?;
-            Ok(0)
+            daemon_call(r, "resize-window", async |c| {
+                c.resize_window(index, resize).await
+            })
+            .await
         }
     }
 }
@@ -648,33 +679,21 @@ fn side_flag(left: bool, right: bool, up: bool, down: bool) -> Result<Option<Sid
     })
 }
 
-/// A window index for a link or resize flag: `N`, or `session:N` naming this session. A window of
-/// another session is refused: each session runs in its own daemon, so its windows cannot be shared.
-fn window_ref(raw: &str, session: &str) -> Result<usize, String> {
-    window_target(raw, Some(session))
+/// The size a resize fits the window to: the largest or the smallest attached client.
+fn window_fit(largest: bool, smallest: bool) -> Option<WindowFit> {
+    match (largest, smallest) {
+        (true, _) => Some(WindowFit::Largest),
+        (_, true) => Some(WindowFit::Smallest),
+        _ => None,
+    }
 }
 
-async fn kill_window(r: &Resolved, index: Option<usize>) -> Result<i32, String> {
-    keyed_call(r, "kill-window", async |c| c.kill_window(index).await).await
-}
-
-async fn rename_window(r: &Resolved, index: Option<usize>, name: &str) -> Result<i32, String> {
-    keyed_call(r, "rename-window", async |c| {
-        c.rename_window(index, name).await
-    })
-    .await
-}
-
-async fn select_window(r: &Resolved, index: usize) -> Result<i32, String> {
-    daemon_call(r, "select-window", async |c| c.select_window(index).await).await
-}
-
-async fn last_pane(r: &Resolved, keep_zoom: bool) -> Result<i32, String> {
-    daemon_call(r, "last-pane", async |c| c.focus_last_with(keep_zoom).await).await
-}
-
-async fn break_pane(r: &Resolved, name: &str) -> Result<i32, String> {
-    daemon_call(r, "break-pane", async |c| c.break_pane(name).await).await
+/// A window index for a link, unlink or resize flag: `N`, or `session:N` naming this session. A
+/// window of another session is refused: each session runs in its own daemon, so its windows cannot
+/// be shared.
+fn window_ref(raw: Option<String>, session: &str) -> Result<Option<usize>, String> {
+    raw.map(|raw| window_target(&raw, Some(session)))
+        .transpose()
 }
 
 fn shell_command(argv: Vec<String>) -> (String, Vec<String>) {
@@ -703,21 +722,19 @@ pub struct NewWindowRequest {
 }
 
 async fn new_window(r: &Resolved, req: NewWindowRequest) -> Result<i32, String> {
-    let NewWindowRequest {
-        name,
-        cwd,
-        env,
-        pty,
-        focus,
-        argv,
-    } = req;
-    let (command, args) = shell_command(argv);
+    let (command, args) = shell_command(req.argv);
     let mut client = keyed_client(r).await?;
-    let spawn = spawn_opts(name.clone(), command, args, pty, cwd, &env)?;
-    let info = client
-        .new_window(NewWindowOpts { name, spawn, focus })
-        .await
-        .map_err(|e| format!("new-window error: {e}"))?;
+    let spawn = spawn_opts(req.name.clone(), command, args, req.pty, req.cwd, &req.env)?;
+    let info = daemon_result(
+        client
+            .new_window(NewWindowOpts {
+                name: req.name,
+                spawn,
+                focus: req.focus,
+            })
+            .await,
+        "new-window",
+    )?;
     println!(
         "Window created: '{}' (pid: {})",
         info.name,
@@ -756,10 +773,7 @@ async fn select_pane(
         )?;
     } else if let Some(off) = input {
         let name = resolve_optional(&mut client, target).await?;
-        daemon_result(
-            client.input_off(name.as_deref(), off).await,
-            "select-pane",
-        )?;
+        daemon_result(client.input_off(name.as_deref(), off).await, "select-pane")?;
     } else if let Some(target) = target {
         let name = resolve_name(&mut client, Some(target)).await?;
         daemon_result(client.focus_with(&name, keep_zoom).await, "select-pane")?;
@@ -833,26 +847,18 @@ async fn zoom_pane(r: &Resolved, target: Option<String>) -> Result<i32, String> 
     Ok(0)
 }
 
-/// The window tabs of the layout the daemon reports.
-async fn window_tabs(client: &mut Client) -> Result<Vec<WindowTab>, String> {
-    Ok(current_layout(client).await?.2)
-}
-
-/// Index of the active window, from the layout the daemon reports.
-async fn active_window(client: &mut Client) -> Result<usize, String> {
-    let tabs = window_tabs(client).await?;
-    let active = tabs.into_iter().find(|tab| tab.is_active);
-    active
-        .map(|tab| tab.index)
-        .ok_or("no active window".to_string())
-}
-
-/// The pane marked in the session, from the layout the daemon reports.
-async fn marked_pane(client: &mut Client) -> Result<String, String> {
-    let tabs = window_tabs(client).await?;
-    tabs.iter()
-        .find_map(|t| t.marked_pane.clone())
-        .ok_or_else(|| "no marked pane".to_string())
+/// The window a swap or move acts on: `source`, or the active window when none is given.
+async fn source_window(client: &mut Client, source: Option<usize>) -> Result<usize, String> {
+    match source {
+        Some(index) => Ok(index),
+        None => current_layout(client)
+            .await?
+            .2
+            .into_iter()
+            .find(|tab| tab.is_active)
+            .map(|tab| tab.index)
+            .ok_or_else(|| "no active window".to_string()),
+    }
 }
 
 async fn join_pane(
@@ -865,7 +871,12 @@ async fn join_pane(
     let mut client = ensure_client(r).await?;
     let src = match source {
         Some(s) => resolve_name(&mut client, Some(&s)).await?,
-        None => marked_pane(&mut client).await?,
+        None => current_layout(&mut client)
+            .await?
+            .2
+            .into_iter()
+            .find_map(|tab| tab.marked_pane)
+            .ok_or_else(|| "no marked pane".to_string())?,
     };
     let dst = resolve_name(&mut client, target.as_deref()).await?;
     daemon_result(
@@ -873,48 +884,6 @@ async fn join_pane(
         "join-pane",
     )?;
     Ok(0)
-}
-
-async fn respawn_pane(
-    r: &Resolved,
-    target: Option<String>,
-    kill: bool,
-    cwd: Option<String>,
-    argv: Vec<String>,
-) -> Result<i32, String> {
-    keyed_on_target(r, target.as_deref(), "respawn-pane", async |c, name| {
-        c.respawn(&name, kill, cwd, respawn_command(argv)).await
-    })
-    .await
-}
-
-async fn respawn_window(
-    r: &Resolved,
-    target: Option<usize>,
-    kill: bool,
-    cwd: Option<String>,
-    argv: Vec<String>,
-) -> Result<i32, String> {
-    keyed_call(r, "respawn-window", async |c| {
-        c.respawn_window(target, kill, cwd, respawn_command(argv))
-            .await
-    })
-    .await
-}
-
-async fn rotate_window(r: &Resolved, down: bool, keep_zoom: bool) -> Result<i32, String> {
-    daemon_call(r, "rotate-window", async |c| {
-        c.rotate_window(down, keep_zoom).await
-    })
-    .await
-}
-
-/// The window a swap or move acts on: `source`, or the active window when none is given.
-async fn source_window(client: &mut Client, source: Option<usize>) -> Result<usize, String> {
-    match source {
-        Some(index) => Ok(index),
-        None => active_window(client).await,
-    }
 }
 
 async fn swap_window(r: &Resolved, source: Option<usize>, target: usize) -> Result<i32, String> {

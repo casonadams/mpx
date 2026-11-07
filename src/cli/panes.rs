@@ -157,6 +157,11 @@ pub fn command_and_args(argv: Vec<String>) -> Option<(String, Vec<String>)> {
     Some((command, argv.collect()))
 }
 
+/// The command and arguments of a `run` or `split`, which must name one.
+fn required_command(argv: Vec<String>) -> Result<(String, Vec<String>), String> {
+    command_and_args(argv).ok_or_else(|| "no command given".to_string())
+}
+
 pub fn pid_label(pid: Option<u32>) -> String {
     pid.map(|p| p.to_string()).unwrap_or_else(|| "-".into())
 }
@@ -281,15 +286,25 @@ pub async fn keyed_call(
 }
 
 /// Resolves a pane target, then runs one mutating request on that node with the idempotency key
-/// applied. A failed lookup is returned as is; a failed request reads `"<what> error: <e>"`.
+/// applied. A failed lookup is returned as is; a failed request reads `"<what> error: <e>"`. With
+/// `key_first` the key is applied before the lookup, otherwise after it: a lookup that makes a
+/// request of its own would consume the key.
 pub async fn keyed_on_target(
     r: &Resolved,
     target: Option<&str>,
     what: &str,
+    key_first: bool,
     op: impl AsyncFnOnce(&mut Client, String) -> Result<(), String>,
 ) -> Result<i32, String> {
-    let mut client = keyed_client(r).await?;
+    let key = r.idempotency_key.as_deref();
+    let mut client = ensure_client(r).await?;
+    if key_first {
+        apply_key(&mut client, key);
+    }
     let name = resolve_name(&mut client, target).await?;
+    if !key_first {
+        apply_key(&mut client, key);
+    }
     daemon_result(op(&mut client, name).await, what)?;
     Ok(0)
 }
@@ -349,16 +364,7 @@ async fn node_control(cmd: NodeControlCommands, r: &Resolved) -> Result<i32, Str
             timeout,
             idle,
             pattern,
-        } => {
-            wait(
-                r,
-                &name,
-                timeout,
-                idle,
-                pattern.as_deref(),
-            )
-            .await
-        }
+        } => wait(r, &name, timeout, idle, pattern.as_deref()).await,
         NodeControlCommands::Screen { name } => screen_node(r, &name).await,
     }
 }
@@ -372,7 +378,19 @@ pub async fn run(cmd: Commands, r: &Resolved) -> Result<i32, String> {
             env,
             remain,
             argv,
-        } => run_command(r, name, pty, cwd, env, remain, argv).await,
+        } => {
+            let (command, args) = required_command(argv)?;
+            let req = RunRequest {
+                name,
+                pty,
+                cwd,
+                env,
+                remain,
+                command,
+                args,
+            };
+            run_node(r, req).await
+        }
         Commands::Nodes(cmd) => node_command(cmd, r).await,
         Commands::Split {
             target,
@@ -387,8 +405,7 @@ pub async fn run(cmd: Commands, r: &Resolved) -> Result<i32, String> {
             argv,
             ..
         } => {
-            let (command, args) =
-                command_and_args(argv).ok_or_else(|| "no command given".to_string())?;
+            let (command, args) = required_command(argv)?;
             let req = SplitRequest {
                 target,
                 name,
@@ -411,21 +428,10 @@ pub async fn run(cmd: Commands, r: &Resolved) -> Result<i32, String> {
 }
 
 async fn run_node(r: &Resolved, req: RunRequest) -> Result<i32, String> {
-    let mut client = ensure_client(r).await?;
-    let node_name = req.name.unwrap_or_else(|| default_node_name(&req.command));
-    apply_key(&mut client, r.idempotency_key.as_deref());
-    let info = client
-        .spawn(SpawnOpts {
-            name: node_name,
-            command: req.command,
-            args: req.args,
-            pty: req.pty,
-            cwd: req.cwd,
-            env: parse_env_pairs(&req.env)?,
-            remain_on_exit: req.remain.then_some(true),
-        })
-        .await
-        .map_err(|e| format!("Run error: {e}"))?;
+    let mut client = keyed_client(r).await?;
+    let mut spawn = spawn_opts(req.name, req.command, req.args, req.pty, req.cwd, &req.env)?;
+    spawn.remain_on_exit = req.remain.then_some(true);
+    let info = daemon_result(client.spawn(spawn).await, "Run")?;
     println!(
         "Node '{}' started (pid: {}, pty: {})",
         info.name,
@@ -435,55 +441,23 @@ async fn run_node(r: &Resolved, req: RunRequest) -> Result<i32, String> {
     Ok(0)
 }
 
-async fn run_command(
-    r: &Resolved,
-    name: Option<String>,
-    pty: bool,
-    cwd: Option<String>,
-    env: Vec<String>,
-    remain: bool,
-    argv: Vec<String>,
-) -> Result<i32, String> {
-    let (command, args) = command_and_args(argv).ok_or_else(|| "no command given".to_string())?;
-    let req = RunRequest {
-        name,
-        pty,
-        cwd,
-        env,
-        remain,
-        command,
-        args,
-    };
-    run_node(r, req).await
-}
-
 async fn kill_node(r: &Resolved, name: &str) -> Result<i32, String> {
-    let mut client = ensure_client(r).await?;
-    apply_key(&mut client, r.idempotency_key.as_deref());
-    client
-        .kill(name)
-        .await
-        .map_err(|e| format!("Kill error: {e}"))?;
+    let mut client = keyed_client(r).await?;
+    daemon_result(client.kill(name).await, "Kill")?;
     println!("Node '{name}' terminated");
     Ok(0)
 }
 
 async fn screen_node(r: &Resolved, name: &str) -> Result<i32, String> {
     let mut client = ensure_client(r).await?;
-    let screen = client
-        .screen(name)
-        .await
-        .map_err(|e| format!("Screen error: {e}"))?;
+    let screen = daemon_result(client.screen(name).await, "Screen")?;
     print!("{screen}");
     Ok(0)
 }
 
 async fn focus_node(r: &Resolved, name: &str) -> Result<i32, String> {
     let mut client = ensure_client(r).await?;
-    client
-        .focus(name)
-        .await
-        .map_err(|e| format!("Focus error: {e}"))?;
+    daemon_result(client.focus(name).await, "Focus")?;
     println!("Focused pane '{name}'");
     Ok(0)
 }
@@ -500,10 +474,12 @@ pub struct LogsRequest {
 
 async fn logs(r: &Resolved, req: LogsRequest) -> Result<i32, String> {
     let mut client = ensure_client(r).await?;
-    let (data, next) = client
-        .logs(&req.name, req.lines, req.plain, req.since)
-        .await
-        .map_err(|e| format!("Logs error: {e}"))?;
+    let (data, next) = daemon_result(
+        client
+            .logs(&req.name, req.lines, req.plain, req.since)
+            .await,
+        "Logs",
+    )?;
     if req.json {
         println!("{}", serde_json::json!({ "data": data, "next": next }));
         return Ok(0);
@@ -555,10 +531,8 @@ async fn follow_logs(r: &Resolved, name: &str, mut cursor: u64) -> Result<(), St
             return Ok(());
         }
         let mut reader = Client::connect(&r.endpoint).await?;
-        let (data, next) = reader
-            .logs(name, None, false, Some(cursor))
-            .await
-            .map_err(|e| format!("Logs error: {e}"))?;
+        let (data, next) =
+            daemon_result(reader.logs(name, None, false, Some(cursor)).await, "Logs")?;
         print_flushed(&data);
         cursor = next;
     }
@@ -571,17 +545,13 @@ fn print_flushed(data: &str) {
 }
 
 async fn send(r: &Resolved, name: &str, data: &str) -> Result<i32, String> {
-    let mut client = ensure_client(r).await?;
-    apply_key(&mut client, r.idempotency_key.as_deref());
+    let mut client = keyed_client(r).await?;
     let payload = if data.ends_with('\n') {
         data.to_string()
     } else {
         format!("{data}\n")
     };
-    client
-        .send_input(name, &payload)
-        .await
-        .map_err(|e| format!("Send error: {e}"))?;
+    daemon_result(client.send_input(name, &payload).await, "Send")?;
     println!("Input sent to '{name}'");
     Ok(0)
 }
@@ -592,14 +562,18 @@ async fn send_keys(
     literal: bool,
     keys: Vec<String>,
 ) -> Result<i32, String> {
-    let mut client = ensure_client(r).await?;
-    let name = resolve_name(&mut client, target).await?;
-    apply_key(&mut client, r.idempotency_key.as_deref());
-    client
-        .send_keys(&name, keys, literal)
-        .await
-        .map_err(|e| format!("send-keys error: {e}"))?;
-    Ok(0)
+    keyed_on_target(r, target, "send-keys", false, async |c, name| {
+        c.send_keys(&name, keys, literal).await
+    })
+    .await
+}
+
+fn paste_text(text: &str) -> Result<String, String> {
+    if text == "-" {
+        std::io::read_to_string(std::io::stdin()).map_err(|e| format!("Paste error: {e}"))
+    } else {
+        Ok(text.to_string())
+    }
 }
 
 async fn paste(
@@ -608,19 +582,11 @@ async fn paste(
     submit: bool,
     text: &str,
 ) -> Result<i32, String> {
-    let text = if text == "-" {
-        std::io::read_to_string(std::io::stdin()).map_err(|e| format!("Paste error: {e}"))?
-    } else {
-        text.to_string()
-    };
-    let mut client = ensure_client(r).await?;
-    let name = resolve_name(&mut client, target).await?;
-    apply_key(&mut client, r.idempotency_key.as_deref());
-    client
-        .paste(&name, &text, submit)
-        .await
-        .map_err(|e| format!("Paste error: {e}"))?;
-    Ok(0)
+    let text = paste_text(text)?;
+    keyed_on_target(r, target, "Paste", false, async |c, name| {
+        c.paste(&name, &text, submit).await
+    })
+    .await
 }
 
 async fn wait(
@@ -632,10 +598,12 @@ async fn wait(
 ) -> Result<i32, String> {
     let condition = wait_condition(idle, pattern)?;
     let mut client = ensure_client(r).await?;
-    let outcome = client
-        .wait(name, condition.clone(), timeout.map(|s| s * 1000))
-        .await
-        .map_err(|e| format!("Wait error: {e}"))?;
+    let outcome = daemon_result(
+        client
+            .wait(name, condition.clone(), timeout.map(|s| s * 1000))
+            .await,
+        "Wait",
+    )?;
     Ok(wait_exit_code(&condition, &outcome))
 }
 
@@ -656,17 +624,19 @@ async fn split(r: &Resolved, req: SplitRequest) -> Result<i32, String> {
         current_dir(),
         &req.env,
     )?;
-    let info = client
-        .split(SplitOpts {
-            target,
-            spawn,
-            direction,
-            percent: req.percent,
-            focus: !req.detach,
-            keep_zoom: req.keep_zoom,
-        })
-        .await
-        .map_err(|e| format!("Split error: {e}"))?;
+    let info = daemon_result(
+        client
+            .split(SplitOpts {
+                target,
+                spawn,
+                direction,
+                percent: req.percent,
+                focus: !req.detach,
+                keep_zoom: req.keep_zoom,
+            })
+            .await,
+        "Split",
+    )?;
     println!(
         "Split pane created: '{}' (pid: {}, pty: {})",
         info.name,
@@ -678,10 +648,7 @@ async fn split(r: &Resolved, req: SplitRequest) -> Result<i32, String> {
 
 async fn status(r: &Resolved, name: &str) -> Result<i32, String> {
     let mut client = ensure_client(r).await?;
-    let info = client
-        .status(name)
-        .await
-        .map_err(|e| format!("Status error: {e}"))?;
+    let info = daemon_result(client.status(name).await, "Status")?;
     println!("Node: {}", info.name);
     println!("ID: {}", info.pane_ref());
     println!("PID: {}", pid_label(info.pid));
@@ -695,13 +662,10 @@ async fn status(r: &Resolved, name: &str) -> Result<i32, String> {
 
 async fn layout(r: &Resolved, width: Option<u16>, height: Option<u16>) -> Result<i32, String> {
     let mut client = ensure_client(r).await?;
-    let (term_w, term_h) = crossterm::terminal::size().unwrap_or((80, 24));
+    let (term_w, term_h) = terminal_size();
     let w = width.unwrap_or(term_w);
     let h = height.unwrap_or(term_h);
-    let (rects, _dividers, _tabs) = client
-        .layout(w, h)
-        .await
-        .map_err(|e| format!("Layout error: {e}"))?;
+    let (rects, _dividers, _tabs) = daemon_result(client.layout(w, h).await, "Layout")?;
     println!("Workspace Layout ({w}x{h}):");
     println!(
         "{:<16} {:<10} {:<10} {:<10}",
