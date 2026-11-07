@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use futures_util::future::join_all;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
 use tracing::warn;
@@ -464,7 +465,7 @@ impl Session {
             let pane = self.workspace.focused_at(number);
             self.fire("alert-silence", pane);
         }
-        self.fanout(&StreamEvent::Layout);
+        self.fanout(StreamEvent::Layout);
     }
 
     /// The ids of the session's indices, to tell which were added or removed by a message.
@@ -493,7 +494,7 @@ impl Session {
     /// Re-reports the layout when a client that sized a window has gone.
     fn check_clients(&mut self) {
         if clients::gone(&self.filters) {
-            self.fanout(&StreamEvent::Layout);
+            self.fanout(StreamEvent::Layout);
         }
     }
 
@@ -514,7 +515,7 @@ impl Session {
             self.schedule_save();
         }
         if before.is_some_and(|before| before != self.workspace) {
-            self.fanout(&StreamEvent::Layout);
+            self.fanout(StreamEvent::Layout);
         }
         if origin == Origin::Client && !matches!(resp, Response::Error(_)) {
             if let (Some(event), Response::Node(info)) = (made, &resp) {
@@ -605,7 +606,7 @@ impl Session {
             }
             self.workspace.note_output(name, std::time::Instant::now());
         }
-        self.fanout(&event);
+        self.fanout(event);
     }
 
     /// A pane's process ended: its exit fires the hooks and reaches the subscribers.
@@ -615,7 +616,7 @@ impl Session {
             if self.nodes.contains_key(&name) {
                 self.fire("pane-died", Some(name.clone()));
             }
-            self.fanout(&StreamEvent::Exit {
+            self.fanout(StreamEvent::Exit {
                 name: name.clone(),
                 code,
             });
@@ -816,7 +817,7 @@ impl Session {
         });
         self.sync_relay();
         if terminal {
-            self.fanout(&StreamEvent::Layout);
+            self.fanout(StreamEvent::Layout);
         }
     }
 
@@ -826,7 +827,7 @@ impl Session {
             ClientRequest::List => Response::Clients(clients::list(&self.filters, &self.session)),
             ClientRequest::Detach { target } => match clients::detach(&mut self.filters, &target) {
                 Ok(_) => {
-                    self.fanout(&StreamEvent::Layout);
+                    self.fanout(StreamEvent::Layout);
                     Response::Ok
                 }
                 Err(e) => Response::Error(e),
@@ -838,7 +839,7 @@ impl Session {
                 height,
             } => match clients::resize(&mut self.filters, &name, width, height) {
                 Ok(true) => {
-                    self.fanout(&StreamEvent::Layout);
+                    self.fanout(StreamEvent::Layout);
                     Response::Ok
                 }
                 Ok(false) => Response::Ok,
@@ -847,7 +848,7 @@ impl Session {
             ClientRequest::Refresh { name, size } => {
                 match clients::refresh(&mut self.filters, &name, size) {
                     Ok(true) => {
-                        self.fanout(&StreamEvent::Layout);
+                        self.fanout(StreamEvent::Layout);
                         Response::Ok
                     }
                     Ok(false) => Response::Ok,
@@ -881,18 +882,41 @@ impl Session {
         self.relay.store(subscribed, Ordering::Relaxed);
     }
 
-    /// Sends `event` to every subscriber it reaches; returns how many subscribers accepted it.
-    fn fanout(&mut self, event: &StreamEvent) -> usize {
+    /// Sends `event` to every subscriber it reaches, the last of them getting the event itself
+    /// rather than a copy; returns how many subscribers accepted it.
+    fn fanout(&mut self, event: StreamEvent) -> usize {
         let workspace = &self.workspace;
-        let shown = |name: &str| workspace.active_window().is_some_and(|w| w.contains(name));
+        let in_active_window = match &event {
+            StreamEvent::Output { name, .. } => workspace
+                .active_window()
+                .is_some_and(|w| w.contains(name)),
+            _ => false,
+        };
+        let reaches = |sub: &Subscriber| sub.filter.accepts(&event, |_| in_active_window);
+        let last = self.filters.iter().rposition(reaches);
+        let mut pending = Some(event);
         let mut accepted = 0;
+        let mut index = 0;
         self.filters.retain_mut(|sub| {
-            if sub.filter.accepts(event, shown) {
-                let kept = sub.sink.push(event.clone());
-                accepted += usize::from(kept);
-                kept
-            } else {
-                !sub.sink.is_closed()
+            let at = index;
+            index += 1;
+            let owned = match &pending {
+                Some(event) if sub.filter.accepts(event, |_| in_active_window) => {
+                    if Some(at) == last {
+                        pending.take()
+                    } else {
+                        Some(event.clone())
+                    }
+                }
+                _ => None,
+            };
+            match owned {
+                Some(event) => {
+                    let kept = sub.sink.push(event);
+                    accepted += usize::from(kept);
+                    kept
+                }
+                None => !sub.sink.is_closed(),
             }
         });
         self.sync_relay();
@@ -968,7 +992,7 @@ impl Session {
             }
             SessionRequest::SetBinding { name, line } => {
                 self.stores.set_binding(name, line);
-                self.fanout(&StreamEvent::Bindings);
+                self.fanout(StreamEvent::Bindings);
                 Response::Ok
             }
             SessionRequest::GetBindings => Response::Bindings(self.stores.bindings()),
@@ -1063,7 +1087,7 @@ impl Session {
             self.next_pane_id += 1;
         }
         self.register(name.clone(), handle, opts);
-        self.fanout(&StreamEvent::Respawned { name });
+        self.fanout(StreamEvent::Respawned { name });
         Response::Ok
     }
 
@@ -1512,25 +1536,23 @@ impl Session {
         self.info_of(&name, true).await
     }
 
+    /// Every pane's info, asked of all the panes at once. History holds exited panes that left
+    /// the layout; a live pane may reuse their name.
     async fn list(&self) -> Vec<NodeInfo> {
-        let mut infos = Vec::new();
-        for entry in self.nodes.values() {
-            if let Ok(mut info) = entry.handle.info(true).await {
-                info.window = self.workspace.number_of(entry.handle.name());
-                info.marked =
-                    Some(self.workspace.marked_pane.as_deref() == Some(entry.handle.name()));
-                info.input_off = Some(self.workspace.input_off(entry.handle.name()));
-                infos.push(info);
+        let live = self.nodes.values().map(|entry| (entry, true));
+        let exited = self.history.iter().map(|entry| (entry, false));
+        let infos = join_all(live.chain(exited).map(|(entry, in_layout)| async move {
+            let mut info = entry.handle.info(true).await.ok()?;
+            let name = entry.handle.name();
+            if in_layout {
+                info.window = self.workspace.number_of(name);
+                info.input_off = Some(self.workspace.input_off(name));
             }
-        }
-        // History holds exited panes that left the layout; a live pane may reuse their name.
-        for entry in &self.history {
-            if let Ok(mut info) = entry.handle.info(true).await {
-                info.marked =
-                    Some(self.workspace.marked_pane.as_deref() == Some(entry.handle.name()));
-                infos.push(info);
-            }
-        }
+            info.marked = Some(self.workspace.marked_pane.as_deref() == Some(name));
+            Some(info)
+        }))
+        .await;
+        let mut infos: Vec<NodeInfo> = infos.into_iter().flatten().collect();
         infos.sort_by_key(|i| i.id);
         infos
     }
@@ -1859,7 +1881,7 @@ impl Session {
     }
 
     fn register(&mut self, name: String, handle: PaneHandle, opts: SpawnOpts) {
-        self.fanout(&StreamEvent::Spawned {
+        self.fanout(StreamEvent::Spawned {
             name: name.clone(),
             pid: handle.pid(),
         });
@@ -2088,13 +2110,20 @@ impl Session {
     }
 
     async fn snapshot(&self, clean: bool) -> SessionSnapshot {
-        let mut records = Vec::new();
-        for window in &self.workspace.windows {
-            for leaf in window.leaves() {
-                let Some(entry) = self.nodes.get(&leaf) else {
-                    continue;
-                };
-                let info = entry.handle.info(true).await.ok();
+        let panes: Vec<(String, &Entry)> = self
+            .workspace
+            .windows
+            .iter()
+            .flat_map(|window| window.leaves())
+            .filter_map(|leaf| self.nodes.get(&leaf).map(|entry| (leaf, entry)))
+            .collect();
+        let infos = join_all(panes.iter().map(|(_, entry)| entry.handle.info(true))).await;
+        let home = crate::config::home_dir();
+        let records: Vec<PaneRecord> = panes
+            .into_iter()
+            .zip(infos)
+            .map(|((leaf, entry), info)| {
+                let info = info.ok();
                 let cwd = info.as_ref().and_then(|i| i.cwd.clone());
                 let fg = info.as_ref().and_then(|i| i.foreground.clone());
                 let lookup_name = fg.as_deref().unwrap_or(&entry.opts.command);
@@ -2102,19 +2131,18 @@ impl Session {
                     lookup_name,
                     &self.config.resume,
                     info.as_ref(),
-                    crate::config::home_dir().as_deref(),
+                    home.as_deref(),
                 );
-
-                records.push(PaneRecord {
-                    name: leaf.clone(),
+                PaneRecord {
+                    name: leaf,
                     opts: entry.opts.clone(),
                     running: !entry.exited,
                     cwd,
                     resume_rule,
                     session_id,
-                });
-            }
-        }
+                }
+            })
+            .collect();
         let mut snapshot =
             build_snapshot(&self.session, now_ms(), clean, &self.workspace, &records);
         snapshot.environment = self.stores.environment();

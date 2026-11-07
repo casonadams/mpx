@@ -48,3 +48,10 @@ fn synchronize_toggles_the_active_window_or_a_named_one() {
         Err("No window 7".to_string())
     );
 }
+
+#[test]
+fn output_from_a_pane_in_no_window_starts_no_silence_timer() {
+    let mut ws = two_windows();
+    ws.note_output("ghost", Instant::now());
+    assert_eq!(ws.next_silence(10), None);
+}

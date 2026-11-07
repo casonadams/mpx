@@ -61,6 +61,15 @@ struct Replay {
     fed: u64,
 }
 
+/// Facts about a pane's foreground process.
+struct Probed {
+    at: Instant,
+    pid: Option<u32>,
+    foreground: Option<String>,
+    cwd: Option<String>,
+    tty: Option<String>,
+}
+
 pub struct PaneActor {
     /// Output chunks its reader handed over and this actor has yet to process.
     inflight: Arc<Inflight>,
@@ -89,7 +98,7 @@ pub struct PaneActor {
     resized_at: Option<u64>,
     /// The retained output replayed with scrollback; `None` until first needed and after a resize.
     replay: Option<Replay>,
-    next_probe: Instant,
+    probed: Option<Probed>,
     /// `None` while running, `Some(code)` once exited.
     exit: Option<Option<i32>>,
     notify: Notifier,
@@ -134,7 +143,7 @@ impl PaneActor {
             replay: None,
             resized_from: None,
             resized_at: None,
-            next_probe: Instant::now(),
+            probed: None,
             exit: None,
             notify: ctx.notify,
             relay: ctx.relay,
@@ -171,11 +180,9 @@ impl PaneActor {
             }
             PaneMsg::Exited(code) => self.on_exit(code),
             PaneMsg::Info { full, reply } => {
-                self.refresh();
                 let _ = reply.send(self.info(full));
             }
             PaneMsg::Label { reply } => {
-                self.refresh();
                 let _ = reply.send(self.label());
             }
             PaneMsg::Logs { query, reply } => self.logs(query, reply),
@@ -221,9 +228,6 @@ impl PaneActor {
         self.ring.write(bytes);
         self.last_output_ms = now_ms();
         self.emit_text(bytes);
-        if Instant::now() >= self.next_probe {
-            self.probe();
-        }
         for waiter in &mut self.waiters {
             waiter.feed(bytes);
         }
@@ -254,6 +258,7 @@ impl PaneActor {
         self.exit = Some(code);
         self.process = None;
         self.terminal = None;
+        self.probed = None;
         let exit = StreamEvent::Exit {
             name: self.name.clone(),
             code,
@@ -355,11 +360,12 @@ impl PaneActor {
             None => (NodeState::Running, None),
         };
         let (foreground, cwd, foreground_pid, tty) = if full {
+            let probed = self.probed();
             (
-                self.foreground(),
-                self.cwd(),
-                self.fg_pid(),
-                self.terminal.as_ref().and_then(|t| t.tty_name()),
+                probed.foreground.clone(),
+                probed.cwd.clone(),
+                probed.pid,
+                probed.tty.clone(),
             )
         } else {
             (None, None, None, None)
@@ -437,14 +443,8 @@ impl PaneActor {
             .or_else(|| self.spawn_cwd.clone())
     }
 
-    fn label(&self) -> Option<String> {
-        self.foreground()
-    }
-
-    fn foreground(&self) -> Option<String> {
-        self.fg_pid()
-            .map(process::identity)
-            .and_then(|id| fg_name(&id))
+    fn label(&mut self) -> Option<String> {
+        self.probed().foreground.clone()
     }
 
     fn add_waiter(&mut self, cond: Cond, timeout: Option<Duration>, reply: Reply<WaitOutcome>) {
@@ -528,12 +528,29 @@ impl PaneActor {
         self.check_waiters();
     }
 
-    fn refresh(&mut self) {
-        self.probe();
+    /// The foreground process's facts, looked up at most once per `PROBE_EVERY`: each lookup is
+    /// several system calls made on the thread that also processes the pane's output.
+    fn probed(&mut self) -> &Probed {
+        match self.probed.take() {
+            Some(probed) if probed.at.elapsed() < PROBE_EVERY => self.probed.insert(probed),
+            _ => {
+                let probed = self.lookup();
+                self.probed.insert(probed)
+            }
+        }
     }
 
-    fn probe(&mut self) {
-        self.next_probe = Instant::now() + PROBE_EVERY;
+    fn lookup(&self) -> Probed {
+        let pid = self.fg_pid();
+        Probed {
+            at: Instant::now(),
+            pid,
+            foreground: pid.map(process::identity).and_then(|id| fg_name(&id)),
+            cwd: pid
+                .and_then(process::cwd_of)
+                .or_else(|| self.spawn_cwd.clone()),
+            tty: self.terminal.as_ref().and_then(|t| t.tty_name()),
+        }
     }
 
     fn fg_pid(&self) -> Option<u32> {

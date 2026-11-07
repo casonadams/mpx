@@ -537,13 +537,16 @@ impl Workspace {
     /// Sets an alert flag on every index showing the window of `pane` but the active one. True when
     /// a flag was newly set.
     fn mark_alert(&mut self, pane: &str, flag: impl Fn(&mut Link) -> &mut bool) -> bool {
+        let Some(window) = self.window_holding(pane) else {
+            return false;
+        };
         let active = self.active_idx;
         let mut marked = false;
-        for pos in self.links_showing(pane) {
-            if pos == active {
+        for (pos, link) in self.links.iter_mut().enumerate() {
+            if pos == active || link.window != window {
                 continue;
             }
-            let target = flag(&mut self.links[pos]);
+            let target = flag(link);
             if !*target {
                 *target = true;
                 marked = true;
@@ -563,8 +566,10 @@ impl Workspace {
     /// Records output from a pane: the silence timer of every index showing its window restarts and
     /// their silence flags clear.
     pub fn note_output(&mut self, pane_name: &str, now: Instant) {
-        for pos in self.links_showing(pane_name) {
-            let link = &mut self.links[pos];
+        let Some(window) = self.window_holding(pane_name) else {
+            return;
+        };
+        for link in self.links.iter_mut().filter(|l| l.window == window) {
             link.last_output = Some(now);
             link.has_silence = false;
         }
@@ -1189,17 +1194,9 @@ impl Workspace {
             .collect()
     }
 
-    /// The positions in `links` of the indices showing the window that holds pane `name`.
-    fn links_showing(&self, name: &str) -> Vec<usize> {
-        self.links
-            .iter()
-            .enumerate()
-            .filter(|(_, l)| {
-                self.window_by_id(l.window)
-                    .is_some_and(|w| w.contains(name))
-            })
-            .map(|(pos, _)| pos)
-            .collect()
+    /// The id of the window that holds pane `name`.
+    fn window_holding(&self, name: &str) -> Option<usize> {
+        self.windows.iter().find(|w| w.contains(name)).map(|w| w.id)
     }
 
     fn window_by_id(&self, id: usize) -> Option<&Window> {

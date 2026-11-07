@@ -299,3 +299,31 @@ async fn a_terminal_hears_of_rearranged_windows_and_other_subscribers_do_not() {
     }
     assert!(!seen.iter().any(|e| matches!(e, StreamEvent::Layout)), "{seen:?}");
 }
+
+#[tokio::test]
+async fn every_subscriber_of_the_session_gets_the_same_output() {
+    let daemon = start().await;
+    let mut client = connect(&daemon.endpoint).await;
+    client.spawn(task("shared", "cat", &[])).await.unwrap();
+
+    let ep = daemon.endpoint.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        let mut writer = connect(&ep).await;
+        writer.send_input("shared", "fan-out\n").await.unwrap();
+    });
+    let heard = |events: &[Chunk], _: &StreamEvent| {
+        events
+            .iter()
+            .map(|(_, _, d)| d.as_str())
+            .collect::<String>()
+            .contains("fan-out")
+    };
+    let (a, b, c) = tokio::join!(
+        collect_chunks(&daemon.endpoint, None, None, heard),
+        collect_chunks(&daemon.endpoint, None, None, heard),
+        collect_chunks(&daemon.endpoint, Some("shared"), None, heard),
+    );
+    assert_eq!(a, b, "session-wide subscribers see identical chunks");
+    assert!(c.iter().any(|(_, _, d)| d.contains("fan-out")));
+}
