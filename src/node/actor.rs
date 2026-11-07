@@ -10,7 +10,6 @@ use tokio::time::Instant;
 use super::pacing::Inflight;
 use super::pane::{
     InputBuild, LogQuery, Notifier, PaneCtx, PaneMsg, PaneNotice, Reply, TermView, render_logs,
-    replay_history_len,
 };
 use super::process::{self, foreground_name as fg_name};
 use super::pty::PtyTerminal;
@@ -18,7 +17,7 @@ use super::sink::Sink;
 use super::sleep_until_opt;
 use super::waits::{self, Cond, Observed};
 use super::{Process, SpawnSpec, now_ms};
-use crate::buffer::{RingBuffer, Utf8Stream, strip_ansi};
+use crate::buffer::{PlainStream, RingBuffer, Utf8Stream, lossy};
 use crate::protocol::{NodeInfo, NodeState, PaneId, StreamEvent, WaitOutcome};
 use crate::vt::VtScreen;
 use crate::vt::capture::{CaptureSpec, capture_text};
@@ -29,19 +28,37 @@ const EXITED: &str = "Node has exited";
 
 struct Waiter {
     cond: Cond,
-    /// Output offset when the wait began (match only).
-    from: u64,
-    /// Screen text when the wait began (match only).
-    screen: String,
+    /// Text a `Match` searches: the screen at the request plus the plain output since.
+    text: String,
+    /// Length of `text` the last search covered.
+    scanned: usize,
+    plain: PlainStream,
     deadline: Option<Instant>,
     reply: Option<Reply<WaitOutcome>>,
 }
 
 impl Waiter {
-    fn outcome(&self, obs: &Observed, ring: &RingBuffer) -> Option<WaitOutcome> {
-        let text = || format!("{}\n{}", self.screen, strip_ansi(&ring.since(self.from).0));
-        waits::satisfied(&self.cond, obs, &text)
+    fn feed(&mut self, bytes: &[u8]) {
+        if matches!(self.cond, Cond::Match(_)) {
+            self.plain.feed(bytes, &mut self.text);
+        }
     }
+
+    fn outcome(&mut self, obs: &Observed) -> Option<WaitOutcome> {
+        if matches!(self.cond, Cond::Match(_)) {
+            if self.text.len() == self.scanned {
+                return None;
+            }
+            self.scanned = self.text.len();
+        }
+        waits::satisfied(&self.cond, obs, &self.text)
+    }
+}
+
+/// Retained output replayed into a screen with scrollback, and the offset it has consumed up to.
+struct Replay {
+    screen: VtScreen,
+    fed: u64,
 }
 
 pub struct PaneActor {
@@ -70,8 +87,8 @@ pub struct PaneActor {
     /// Output offset where the last resize that changed the grid size happened: the retained output
     /// before it is replayed at `resized_from`, the output after it at the new size.
     resized_at: Option<u64>,
-    /// Scrollback lines of the retained output; `None` until next needed after output or a resize.
-    history_cache: Option<usize>,
+    /// The retained output replayed with scrollback; `None` until first needed and after a resize.
+    replay: Option<Replay>,
     next_probe: Instant,
     /// `None` while running, `Some(code)` once exited.
     exit: Option<Option<i32>>,
@@ -114,7 +131,7 @@ impl PaneActor {
             utf8: Utf8Stream::default(),
             emitted: 0,
             last_output_ms: started_ms,
-            history_cache: None,
+            replay: None,
             resized_from: None,
             resized_at: None,
             next_probe: Instant::now(),
@@ -203,10 +220,12 @@ impl PaneActor {
         let _ = self.screen.take_passthroughs();
         self.ring.write(bytes);
         self.last_output_ms = now_ms();
-        self.history_cache = None;
         self.emit_text(bytes);
         if Instant::now() >= self.next_probe {
             self.probe();
+        }
+        for waiter in &mut self.waiters {
+            waiter.feed(bytes);
         }
         self.check_waiters();
     }
@@ -217,7 +236,7 @@ impl PaneActor {
         let offset = self.emitted;
         let next = self.ring.total_written() - held as u64;
         self.emitted = next;
-        if !data.is_empty() {
+        if !data.is_empty() && self.has_consumers() {
             let name = self.name.clone();
             self.emit(StreamEvent::Output {
                 name,
@@ -292,7 +311,7 @@ impl PaneActor {
             self.resized_from = Some(from);
             self.resized_at = Some(self.ring.total_written());
         }
-        self.history_cache = None;
+        self.replay = None;
         if let Some(terminal) = &self.terminal {
             terminal.resize(cols, rows);
         }
@@ -305,7 +324,7 @@ impl PaneActor {
             if !bytes.is_empty() {
                 sink.push(StreamEvent::Output {
                     name: self.name.clone(),
-                    data: String::from_utf8_lossy(&bytes).into_owned(),
+                    data: lossy(bytes),
                     offset: since,
                     next,
                 });
@@ -325,14 +344,9 @@ impl PaneActor {
         let _ = reply.send(render_logs(&self.ring, screen, &query, self.scrollback));
     }
 
-    /// The retained output replayed at the pane's size, as the history and screen `capture-pane`
-    /// reads from.
-    fn capture(&self, spec: &CaptureSpec) -> String {
-        let grid = self.screen.grid();
-        let mut replay = VtScreen::new(grid.cols, grid.rows);
-        replay.grid_mut().set_history_limit(self.scrollback);
-        replay.feed(&self.ring.snapshot());
-        capture_text(replay.grid(), spec)
+    /// The history and screen `capture-pane` reads from.
+    fn capture(&mut self, spec: &CaptureSpec) -> String {
+        capture_text(self.replay().grid(), spec)
     }
 
     fn info(&mut self, full: bool) -> NodeInfo {
@@ -362,7 +376,9 @@ impl PaneActor {
             (at.x as u16, at.y as u16)
         });
         let history_size = self.pty.then(|| self.history_size());
-        let resized_from = self.resized_from.map(|(cols, rows)| (cols as u16, rows as u16));
+        let resized_from = self
+            .resized_from
+            .map(|(cols, rows)| (cols as u16, rows as u16));
         NodeInfo {
             name: self.name.clone(),
             id: self.id,
@@ -390,21 +406,31 @@ impl PaneActor {
         }
     }
 
-    /// Scrollback lines a terminal's captures reach. Replayed from the retained output on first
-    /// use after output or a resize, then cached until the next one.
-    fn history_size(&mut self) -> usize {
-        if let Some(lines) = self.history_cache {
-            return lines;
-        }
-        let grid = self.screen.grid();
-        let lines = replay_history_len(
-            &self.ring.snapshot(),
-            (grid.cols, grid.rows),
-            self.scrollback,
-        );
-        self.history_cache = Some(lines);
-        lines
+    /// The retained output replayed with scrollback at the pane's size, brought up to date by
+    /// feeding it only the output since its last use. A resize drops it.
+    fn replay(&mut self) -> &VtScreen {
+        let replay = self.replay.get_or_insert_with(|| {
+            let grid = self.screen.grid();
+            let mut screen = VtScreen::new(grid.cols, grid.rows);
+            screen.grid_mut().set_history_limit(self.scrollback);
+            Replay {
+                screen,
+                fed: self.ring.oldest_offset(),
+            }
+        });
+        let (bytes, next) = self.ring.since(replay.fed);
+        replay.screen.feed(&bytes);
+        let _ = replay.screen.take_responses();
+        let _ = replay.screen.take_passthroughs();
+        let _ = replay.screen.take_alerts();
+        replay.fed = next;
+        &replay.screen
     }
+
+    fn history_size(&mut self) -> usize {
+        self.replay().grid().history_len()
+    }
+
     fn cwd(&self) -> Option<String> {
         self.fg_pid()
             .and_then(process::cwd_of)
@@ -422,18 +448,21 @@ impl PaneActor {
     }
 
     fn add_waiter(&mut self, cond: Cond, timeout: Option<Duration>, reply: Reply<WaitOutcome>) {
-        let from = self.ring.total_written();
-        let screen = self.screen.snapshot();
+        let text = match cond {
+            Cond::Match(_) => format!("{}\n", self.screen.snapshot()),
+            _ => String::new(),
+        };
         let deadline = timeout.map(|d| Instant::now() + d);
-        let waiter = Waiter {
+        let mut waiter = Waiter {
             cond,
-            from,
-            screen,
+            text,
+            scanned: 0,
+            plain: PlainStream::default(),
             deadline,
             reply: Some(reply),
         };
         let obs = self.observed();
-        if let Some(outcome) = waiter.outcome(&obs, &self.ring) {
+        if let Some(outcome) = waiter.outcome(&obs) {
             if let Some(reply) = waiter.reply {
                 let _ = reply.send(outcome);
             }
@@ -443,35 +472,37 @@ impl PaneActor {
     }
 
     fn check_waiters(&mut self) {
+        self.settle_waiters(Waiter::outcome);
+    }
+
+    fn expire_waiters(&mut self, now: Instant) {
+        self.settle_waiters(|waiter, obs| {
+            waiter
+                .deadline
+                .is_some_and(|d| now >= d)
+                .then(|| waits::timed_out(obs))
+        });
+    }
+
+    /// Answers and drops each waiter for which `outcome` yields a result.
+    fn settle_waiters(
+        &mut self,
+        mut outcome: impl FnMut(&mut Waiter, &Observed) -> Option<WaitOutcome>,
+    ) {
         if self.waiters.is_empty() {
             return;
         }
         let obs = self.observed();
-        let ring = &self.ring;
-        self.waiters.retain_mut(|waiter| {
-            if let Some(outcome) = waiter.outcome(&obs, ring) {
-                if let Some(reply) = waiter.reply.take() {
-                    let _ = reply.send(outcome);
+        self.waiters
+            .retain_mut(|waiter| match outcome(waiter, &obs) {
+                Some(outcome) => {
+                    if let Some(reply) = waiter.reply.take() {
+                        let _ = reply.send(outcome);
+                    }
+                    false
                 }
-                false
-            } else {
-                true
-            }
-        });
-    }
-
-    fn expire_waiters(&mut self, now: Instant) {
-        let obs = self.observed();
-        self.waiters.retain_mut(|waiter| {
-            if waiter.deadline.is_some_and(|d| now >= d) {
-                if let Some(reply) = waiter.reply.take() {
-                    let _ = reply.send(waits::timed_out(&obs));
-                }
-                false
-            } else {
-                true
-            }
-        });
+                None => true,
+            });
     }
 
     fn observed(&self) -> Observed {
@@ -514,10 +545,26 @@ impl PaneActor {
     }
 
     fn emit(&mut self, event: StreamEvent) {
-        self.subs.retain_mut(|sink| sink.push(event.clone()));
-        if self.relay.load(Ordering::Relaxed) {
+        let relay = self.relay.load(Ordering::Relaxed);
+        let last = self.subs.len().checked_sub(1);
+        let mut pending = Some(event);
+        let mut index = 0;
+        self.subs.retain_mut(|sink| {
+            let owned = if !relay && Some(index) == last {
+                pending.take()
+            } else {
+                pending.clone()
+            };
+            index += 1;
+            owned.is_some_and(|event| sink.push(event))
+        });
+        if let Some(event) = pending.filter(|_| relay) {
             (self.notify)(PaneNotice::Event(event));
         }
+    }
+
+    fn has_consumers(&self) -> bool {
+        !self.subs.is_empty() || self.relay.load(Ordering::Relaxed)
     }
 }
 

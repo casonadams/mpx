@@ -1,4 +1,4 @@
-use mpx::buffer::{RingBuffer, Utf8Stream, strip_ansi};
+use mpx::buffer::{PlainStream, RingBuffer, Utf8Stream, lossy, strip_ansi};
 
 #[test]
 fn writes_append_until_capacity() {
@@ -172,4 +172,34 @@ fn before_returns_the_retained_bytes_ahead_of_an_offset() {
     ring.write(b"ghijk");
     let ahead: Vec<_> = [4, 11, 2].map(|offset| ring.before(offset)).into();
     assert_eq!(ahead, [&b"d"[..], b"defghijk", b""]);
+}
+
+#[test]
+fn plain_stream_equals_strip_ansi_at_every_split() {
+    let stream: &[u8] =
+        b"a\x1b[31mred\x1b[0m \x1b]0;title\x07caf\xC3\xA9\x1b(Bx\x1bPdcs\x1b\\\r\ny\x1b[2";
+    let expected = strip_ansi(stream);
+    for cut in 0..=stream.len() {
+        let mut plain = PlainStream::default();
+        let mut text = String::new();
+        plain.feed(&stream[..cut], &mut text);
+        plain.feed(&stream[cut..], &mut text);
+        assert_eq!(text, expected, "split at {cut}");
+    }
+}
+
+#[test]
+fn lossy_replaces_invalid_bytes_and_keeps_valid_text() {
+    assert_eq!(lossy("caf\u{e9}".as_bytes().to_vec()), "caf\u{e9}");
+    assert_eq!(lossy(vec![b'a', 0xFF, b'b']), "a\u{fffd}b");
+}
+
+#[test]
+fn slices_join_to_the_snapshot_after_wrapping() {
+    let mut rb = RingBuffer::new(8);
+    rb.write(b"abcdef");
+    rb.write(b"ghij");
+    let (first, second) = rb.slices();
+    assert_eq!([first, second].concat(), rb.snapshot());
+    assert_eq!(rb.snapshot(), b"cdefghij");
 }

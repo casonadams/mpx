@@ -12,7 +12,7 @@ use super::sink::Sink;
 use super::task::TaskNode;
 use super::waits::Cond;
 use super::{NodeError, Process, SpawnSpec};
-use crate::buffer::{RingBuffer, strip_ansi};
+use crate::buffer::{RingBuffer, lossy, strip_ansi};
 use crate::keys::TermModes;
 use crate::protocol::{NodeInfo, PaneId, StreamEvent, WaitCondition, WaitOutcome};
 use crate::vt::VtScreen;
@@ -49,7 +49,7 @@ pub fn render_logs(
     scrollback: usize,
 ) -> (String, u64) {
     if let Some(until) = query.until {
-        let text = String::from_utf8_lossy(&ring.before(until)).into_owned();
+        let text = lossy(ring.before(until));
         return (text, until);
     }
     match query.since {
@@ -57,7 +57,7 @@ pub fn render_logs(
             let (bytes, next) = ring.since(offset);
             let text = match screen {
                 Some(_) if query.plain => strip_ansi(&bytes),
-                _ => String::from_utf8_lossy(&bytes).into_owned(),
+                _ => lossy(bytes),
             };
             (text, next)
         }
@@ -80,35 +80,28 @@ fn history_text(
     match (rendered, tail) {
         (Some(vt), _) => {
             let grid = vt.grid();
-            replay_text(&ring.snapshot(), (grid.cols, grid.rows), tail, scrollback)
+            replay_text(ring.slices(), (grid.cols, grid.rows), tail, scrollback)
         }
         (None, Some(n)) => ring.tail_lines(n),
         (None, None) => ring.snapshot_str(),
     }
 }
 
-/// Retained output replayed into a fresh screen of `size` (cols, rows), as plain text with
-/// scrollback of at most `scrollback` lines. The live screen keeps none, so scrolled-off rows cost
-/// nothing at output rates; rendering them is paid only when a plain read asks for them.
+/// Retained output (as the ring's two slices) replayed into a fresh screen of `size` (cols, rows),
+/// as plain text with scrollback of at most `scrollback` lines. The live screen keeps none, so
+/// scrolled-off rows cost nothing at output rates; rendering them is paid only when a plain read
+/// asks for them.
 pub fn replay_text(
-    output: &[u8],
+    output: (&[u8], &[u8]),
     size: (usize, usize),
     tail: Option<usize>,
     scrollback: usize,
 ) -> String {
-    replay(output, size, scrollback).scrollback_text(tail)
-}
-
-/// Scrollback lines `replay_text` would reach for the same input, as tmux `history_size`.
-pub fn replay_history_len(output: &[u8], size: (usize, usize), scrollback: usize) -> usize {
-    replay(output, size, scrollback).grid().history_len()
-}
-
-fn replay(output: &[u8], size: (usize, usize), scrollback: usize) -> VtScreen {
     let mut screen = VtScreen::new(size.0, size.1);
     screen.grid_mut().set_history_limit(scrollback);
-    screen.feed(output);
-    screen
+    screen.feed(output.0);
+    screen.feed(output.1);
+    screen.scrollback_text(tail)
 }
 
 /// Messages to a pane actor.

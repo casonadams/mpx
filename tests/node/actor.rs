@@ -38,6 +38,7 @@ struct Pane {
     input: Arc<Mutex<Vec<u8>>>,
     kills: Arc<AtomicUsize>,
     notices: Arc<Mutex<Vec<PaneNotice>>>,
+    relay: Arc<AtomicBool>,
 }
 
 fn pane_with(pid: Option<u32>) -> Pane {
@@ -46,11 +47,12 @@ fn pane_with(pid: Option<u32>) -> Pane {
         ..FakeProcess::default()
     };
     let (input, kills) = (Arc::clone(&process.input), Arc::clone(&process.kills));
+    let relay = Arc::new(AtomicBool::new(false));
     let notices = Arc::new(Mutex::new(Vec::new()));
     let sink = Arc::clone(&notices);
     let ctx = PaneCtx {
         notify: Arc::new(move |notice| sink.lock().unwrap().push(notice)),
-        relay: Arc::new(AtomicBool::new(false)),
+        relay: Arc::clone(&relay),
         pacing: Arc::default(),
     };
     let spec = SpawnSpec {
@@ -69,6 +71,7 @@ fn pane_with(pid: Option<u32>) -> Pane {
         input,
         kills,
         notices,
+        relay,
     }
 }
 
@@ -164,22 +167,67 @@ fn exit_reaches_subscribers() {
     ));
 }
 
-#[test]
-fn match_wait_resolves_on_the_output_that_matches() {
+fn match_after(chunks: &[&[u8]], pattern: &str) -> Option<String> {
     let mut p = plain();
     let (msg, mut rx) = wait_msg(
         WaitCondition::Match {
-            pattern: "ready".to_string(),
+            pattern: pattern.to_string(),
         },
         None,
     );
     p.actor.handle(msg);
-    p.actor.handle(output(b"not yet"));
-    assert!(rx.try_recv().is_err(), "no match yet");
-    p.actor.handle(output(b"ready now"));
-    let outcome = rx.try_recv().expect("resolved by output");
-    assert!(outcome.satisfied);
-    assert_eq!(outcome.matched.as_deref(), Some("ready"));
+    for chunk in chunks {
+        p.actor.handle(output(chunk));
+    }
+    rx.try_recv().ok().and_then(|outcome| outcome.matched)
+}
+
+#[test]
+fn match_wait_resolves_only_on_the_output_that_matches() {
+    assert_eq!(match_after(&[b"not yet"], "ready"), None);
+    assert_eq!(
+        match_after(&[b"not yet", b"ready now"], "ready").as_deref(),
+        Some("ready")
+    );
+}
+
+#[test]
+fn match_wait_sees_through_escapes_and_characters_split_across_chunks() {
+    let chunks: [&[u8]; 6] = [b"re", b"\x1b[3", b"1mad", b"y \xC3", b"\xA9\x1b", b"[0m!"];
+    assert_eq!(
+        match_after(&chunks, "ready é!").as_deref(),
+        Some("ready é!")
+    );
+}
+
+#[test]
+fn match_wait_is_satisfied_by_what_the_screen_already_shows() {
+    let mut p = plain();
+    p.actor.handle(output(b"before"));
+    let (msg, mut rx) = wait_msg(
+        WaitCondition::Match {
+            pattern: "before".to_string(),
+        },
+        None,
+    );
+    p.actor.handle(msg);
+    assert!(rx.try_recv().expect("resolved at once").satisfied);
+}
+
+#[test]
+fn every_subscriber_and_the_session_receive_each_output() {
+    let mut p = plain();
+    p.relay.store(true, Ordering::SeqCst);
+    let mut first = subscribe(&mut p, None);
+    let mut second = subscribe(&mut p, None);
+    p.actor.handle(output(b"abc"));
+    let expected = vec![("abc".to_string(), 0, 3)];
+    assert_eq!(outputs(&mut first), expected);
+    assert_eq!(outputs(&mut second), expected);
+    assert!(matches!(
+        p.notices.lock().unwrap().as_slice(),
+        [PaneNotice::Event(StreamEvent::Output { data, .. })] if data == "abc"
+    ));
 }
 
 #[test]

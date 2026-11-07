@@ -82,6 +82,11 @@ impl RingBuffer {
         out
     }
 
+    /// The retained bytes, oldest first, as the two contiguous halves of the ring.
+    pub fn slices(&self) -> (&[u8], &[u8]) {
+        self.buffer.as_slices()
+    }
+
     pub fn snapshot(&self) -> Vec<u8> {
         let (first, second) = self.buffer.as_slices();
         let mut out = Vec::with_capacity(self.buffer.len());
@@ -91,7 +96,7 @@ impl RingBuffer {
     }
 
     pub fn snapshot_str(&self) -> String {
-        String::from_utf8_lossy(&self.snapshot()).into_owned()
+        lossy(self.snapshot())
     }
 
     pub fn tail_lines(&self, n: usize) -> String {
@@ -166,10 +171,28 @@ fn find_tail_start(first: &[u8], second: &[u8], n: usize) -> usize {
 /// carriage returns and other control bytes dropped; newlines and tabs kept.
 pub fn strip_ansi(bytes: &[u8]) -> String {
     let mut out = Vec::with_capacity(bytes.len());
+    strip_into(bytes, &mut out);
+    lossy(out)
+}
+
+/// UTF-8 text of `bytes`, invalid sequences replaced by U+FFFD; valid input is reused, not copied.
+pub fn lossy(bytes: Vec<u8>) -> String {
+    String::from_utf8(bytes).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
+}
+
+/// Appends the plain text of `bytes` to `out` and returns how many bytes it consumed. A trailing
+/// escape sequence that later bytes may continue is left unconsumed.
+fn strip_into(bytes: &[u8], out: &mut Vec<u8>) -> usize {
     let mut i = 0;
     while i < bytes.len() {
         match bytes[i] {
-            0x1b => i = skip_escape(bytes, i),
+            0x1b => {
+                let end = skip_escape(bytes, i);
+                if end == bytes.len() {
+                    return i;
+                }
+                i = end;
+            }
             b'\n' | b'\t' => {
                 out.push(bytes[i]);
                 i += 1;
@@ -181,7 +204,27 @@ pub fn strip_ansi(bytes: &[u8]) -> String {
             }
         }
     }
-    String::from_utf8_lossy(&out).into_owned()
+    i
+}
+
+/// Incremental `strip_ansi` over a stream: escape sequences and multi-byte characters split
+/// across chunks come out as if the whole stream had been stripped at once.
+#[derive(Debug, Clone, Default)]
+pub struct PlainStream {
+    pending: Vec<u8>,
+    utf8: Utf8Stream,
+}
+
+impl PlainStream {
+    /// Appends the plain text `bytes` completes to `out`.
+    pub fn feed(&mut self, bytes: &[u8], out: &mut String) {
+        let mut buf = std::mem::take(&mut self.pending);
+        buf.extend_from_slice(bytes);
+        let mut plain = Vec::with_capacity(buf.len());
+        let consumed = strip_into(&buf, &mut plain);
+        self.pending = buf.split_off(consumed);
+        out.push_str(&self.utf8.feed(&plain).0);
+    }
 }
 
 /// Index just past the escape sequence starting at `start` (which holds ESC).

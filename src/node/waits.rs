@@ -40,18 +40,17 @@ pub struct Observed {
     pub exit: Option<Option<i32>>,
 }
 
-/// The outcome when the condition holds, or `None` while it does not. `text` yields the plain text
+/// The outcome when the condition holds, or `None` while it does not. `text` is the plain text
 /// a `Match` searches (screen at the request plus output since).
-pub fn satisfied(cond: &Cond, obs: &Observed, text: &dyn Fn() -> String) -> Option<WaitOutcome> {
+pub fn satisfied(cond: &Cond, obs: &Observed, text: &str) -> Option<WaitOutcome> {
     match cond {
         Cond::Exit => obs.exit.map(|code| done(code, None)),
-        Cond::Idle { quiet_ms } => (obs.now_ms.saturating_sub(obs.last_output_ms) >= *quiet_ms)
-            .then(|| done(None, None)),
-        Cond::Match(re) => {
-            let plain = text();
-            re.find(&plain)
-                .map(|m| done(None, Some(m.as_str().to_string())))
+        Cond::Idle { quiet_ms } => {
+            (obs.now_ms.saturating_sub(obs.last_output_ms) >= *quiet_ms).then(|| done(None, None))
         }
+        Cond::Match(re) => re
+            .find(text)
+            .map(|m| done(None, Some(m.as_str().to_string()))),
     }
 }
 

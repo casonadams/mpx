@@ -58,3 +58,39 @@ async fn cursor_and_scrollback_are_reported_for_terminal_panes_only() {
     assert_eq!(plain.history_size, None);
     client.kill("plain").await.unwrap();
 }
+
+#[tokio::test]
+async fn scrollback_count_stays_exact_as_output_arrives_between_reads() {
+    let daemon = start().await;
+    let mut client = connect(&daemon.endpoint).await;
+    let script = "stty -echo; echo ready; while read line; do echo \"$line\"; done";
+    client
+        .spawn(pty("echo", "sh", &["-c", script]))
+        .await
+        .unwrap();
+    logs_until(&mut client, "echo", "ready").await;
+    let (_, rows) = client
+        .status("echo")
+        .await
+        .unwrap()
+        .size
+        .expect("terminal pane reports its size");
+
+    let mut printed = 1usize;
+    for (marker, count) in [("one", 30usize), ("two", 25), ("three", 25)] {
+        let filler = "x\n".repeat(count - 1);
+        client
+            .send_input("echo", &format!("{filler}{marker}\n"))
+            .await
+            .unwrap();
+        logs_until(&mut client, "echo", marker).await;
+        printed += count;
+        let info = client.status("echo").await.unwrap();
+        assert_eq!(
+            info.history_size,
+            Some(printed + 1 - rows as usize),
+            "after {marker}"
+        );
+    }
+    client.kill("echo").await.unwrap();
+}
