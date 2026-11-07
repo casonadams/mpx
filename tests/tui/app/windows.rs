@@ -485,10 +485,13 @@ async fn next_window_with_a_steps_to_the_window_that_has_activity() {
 }
 
 /// Cursor-addressed in-place updates, as a program that repaints one line sends.
+#[cfg(unix)]
 fn ticks(range: std::ops::Range<usize>) -> String {
     range.map(|i| format!("\x1b[10;1Htick {i:06}")).collect()
 }
 
+/// Unix only: ConPTY repaints the screen, so the log never holds the bytes this floods.
+#[cfg(unix)]
 #[tokio::test]
 async fn a_pane_shown_again_keeps_what_was_painted_once_after_its_log_wrapped() {
     let mut h = Harness::start(echo_config(), ECHO).await;
@@ -516,6 +519,8 @@ async fn a_pane_shown_again_keeps_what_was_painted_once_after_its_log_wrapped() 
     assert!(frame.contains("HEADER-ROW") && frame.contains("STATIC-ROW"), "{frame}");
 }
 
+/// Unix only: ConPTY repaints the screen, so the log never holds the bytes this floods.
+#[cfg(unix)]
 #[tokio::test]
 async fn a_pane_hidden_for_more_than_its_log_keeps_is_rebuilt_from_the_daemons_screen() {
     let mut h = Harness::start(echo_config(), ECHO).await;
@@ -533,6 +538,8 @@ async fn a_pane_hidden_for_more_than_its_log_keeps_is_rebuilt_from_the_daemons_s
     assert!(frame.contains("tick 119999"), "{frame}");
 }
 
+/// Unix only: ConPTY repaints the screen, so the log never holds the bytes this floods.
+#[cfg(unix)]
 #[tokio::test]
 async fn a_screen_loaded_after_the_log_wrapped_shows_what_was_painted_once() {
     let mut h = Harness::start(echo_config(), ECHO).await;

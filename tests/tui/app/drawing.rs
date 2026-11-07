@@ -271,7 +271,8 @@ async fn a_key_typed_into_a_pane_is_marked_as_forwarded_and_others_are_not() {
 
 /// Draws enough output frames that the budget is spent for the next one.
 fn spend_budget(h: &mut Harness) {
-    let recent = Instant::now() + Duration::from_secs(1);
+    // Stamped an hour ahead so a slow round trip on a loaded machine cannot outlast the budget.
+    let recent = Instant::now() + Duration::from_secs(3600);
     for _ in 0..FRAMES_PER_BUDGET {
         h.app.pacing.frame_due = Some(recent);
         h.app.drew(recent);

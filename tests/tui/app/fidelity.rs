@@ -395,6 +395,8 @@ async fn a_pane_that_grows_keeps_the_terminal_identical_to_its_screen() {
     check(&mut h, "alternate screen pane grows").await;
 }
 
+/// Unix only: ConPTY holds a synchronized update itself, so the text is not delivered during it.
+#[cfg(unix)]
 #[tokio::test]
 async fn a_held_synchronized_update_has_a_deadline_that_ends_the_hold() {
     use std::time::Instant;
