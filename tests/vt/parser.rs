@@ -789,3 +789,12 @@ fn a_resized_grid_keeps_at_most_the_history_it_is_given() {
     let all = VtScreen::resized_grid(log, &[], (10, 2), (10, 2), 100);
     assert_eq!(all.history_len(), 5);
 }
+
+#[test]
+fn growing_after_a_terminal_reset_still_pulls_the_kept_scrollback_back() {
+    let log = b"a\r\nb\r\nc\r\nd\x1bc";
+    let grid = VtScreen::resized_grid(log, &[], (10, 2), (10, 5), 100);
+    assert_eq!(grid_rows(&grid), ["a", "b", "", "", ""]);
+    assert_eq!(grid.history_len(), 0);
+    assert_eq!(grid.cursor.y, 2, "the cursor keeps its place below the pulled rows");
+}

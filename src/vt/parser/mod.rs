@@ -54,11 +54,7 @@ impl VtHandler {
     }
 
     fn full_reset(&mut self) {
-        let history = std::mem::take(&mut self.grid.history);
-        let limit = self.grid.history_limit;
-        self.grid = Grid::new(self.grid.cols, self.grid.rows);
-        self.grid.history = history;
-        self.grid.history_limit = limit;
+        self.grid.reset();
         self.modes = TermModes::default();
         self.kitty_stack.clear();
         self.sync_output = false;

@@ -103,4 +103,16 @@ impl Grid {
             alternate_screen: false,
         }
     }
+
+    /// The screen as it is after a terminal reset (RIS) at the same size. Scrollback stays, with
+    /// its limit and the count of rows scrolled off, so its rows keep their numbers.
+    pub fn reset(&mut self) {
+        let fresh = Self::new(self.cols, self.rows);
+        *self = Self {
+            history: std::mem::take(&mut self.history),
+            history_limit: self.history_limit,
+            scrolled_off: self.scrolled_off,
+            ..fresh
+        };
+    }
 }
