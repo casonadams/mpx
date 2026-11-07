@@ -140,11 +140,10 @@ impl Workspace {
             if let Some(root) = win.root.as_mut() {
                 root.map_leaves(&mut swap_name);
             }
-            for slot in [&mut win.focused, &mut win.last_focused] {
-                if let Some(n) = slot.as_mut() {
-                    swap_name(n);
-                }
+            if let Some(n) = win.focused.as_mut() {
+                swap_name(n);
             }
+            win.focus_history.iter_mut().for_each(&mut swap_name);
         }
         true
     }

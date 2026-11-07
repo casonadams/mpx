@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use mpx::layout::{Divider, Rect};
 use mpx::protocol::{NodeInfo, Side};
 use mpx::tui::panes::{
-    BorderGrab, PaneRect, border_at, border_move, neighbor_pane, pending_resizes,
-    resized_elsewhere, wrap_step,
+    BorderGrab, PaneRect, border_at, border_move, find_directional, neighbor_pane,
+    pending_resizes, resized_elsewhere, wrap_step,
 };
 
 fn pane(name: &str, width: u16, height: u16) -> PaneRect {
@@ -149,4 +149,57 @@ fn panes_resized_by_something_else_are_found_by_their_reported_size() {
     .map(|(name, size)| (name.to_string(), size))
     .collect();
     assert_eq!(resized_elsewhere(&sent, &nodes), ["changed"]);
+}
+
+/// `a` fills the left column; `b` over `c` share the right one (a one-cell border between them).
+fn left_and_stacked_right() -> Vec<PaneRect> {
+    let at = |name: &str, x, y, w, h| (name.to_string(), Rect::new(x, y, w, h), false);
+    vec![
+        at("a", 0, 0, 10, 10),
+        at("b", 11, 0, 10, 4),
+        at("c", 11, 5, 10, 5),
+    ]
+}
+
+fn recent(names: &[&str]) -> Vec<String> {
+    names.iter().map(|n| n.to_string()).collect()
+}
+
+#[test]
+fn directional_selection_prefers_the_most_recently_focused_neighbor() {
+    let panes = left_and_stacked_right();
+    let go = |side, names: &[&str]| find_directional(&panes, "a", side, &recent(names));
+    assert_eq!(go(Side::Right, &["c", "b"]).as_deref(), Some("c"));
+    assert_eq!(go(Side::Right, &["b", "c"]).as_deref(), Some("b"));
+    assert_eq!(go(Side::Right, &[]).as_deref(), Some("b"), "layout order breaks the tie");
+    assert_eq!(go(Side::Right, &["a", "c"]).as_deref(), Some("c"), "unlisted panes rank last");
+}
+
+#[test]
+fn directional_selection_only_reaches_panes_that_touch_the_edge() {
+    let panes = left_and_stacked_right();
+    let from = |name, side| find_directional(&panes, name, side, &[]);
+    assert_eq!(from("b", Side::Left).as_deref(), Some("a"));
+    assert_eq!(from("c", Side::Up).as_deref(), Some("b"));
+    assert_eq!(from("b", Side::Down).as_deref(), Some("c"));
+    assert_eq!(from("b", Side::Up).as_deref(), Some("c"), "wraps to the bottom of the column");
+}
+
+#[test]
+fn directional_selection_wraps_to_the_opposite_edge() {
+    let panes = left_and_stacked_right();
+    let from = |name, side, names: &[&str]| find_directional(&panes, name, side, &recent(names));
+    assert_eq!(from("a", Side::Left, &["c"]).as_deref(), Some("c"));
+    assert_eq!(from("c", Side::Right, &[]).as_deref(), Some("a"));
+    assert_eq!(from("a", Side::Down, &[]), None, "nothing shares a's columns at the top edge");
+}
+
+#[test]
+fn directional_selection_ignores_the_status_row_offset() {
+    let shifted: Vec<PaneRect> = left_and_stacked_right()
+        .into_iter()
+        .map(|(n, r, f)| (n, Rect::new(r.x, r.y + 1, r.width, r.height), f))
+        .collect();
+    assert_eq!(find_directional(&shifted, "b", Side::Up, &[]).as_deref(), Some("c"));
+    assert_eq!(find_directional(&shifted, "c", Side::Down, &[]).as_deref(), Some("b"));
 }

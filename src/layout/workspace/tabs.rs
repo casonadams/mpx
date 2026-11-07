@@ -26,6 +26,7 @@ impl Workspace {
                     synchronized: w.synchronized,
                     zoomed: w.zoomed,
                     focused: w.focused.clone(),
+                    recent: w.recent_panes(),
                     has_marked: marked_pane.is_some(),
                     marked_pane,
                     agent_badge: None,

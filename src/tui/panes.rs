@@ -97,42 +97,85 @@ fn shift(r: Rect, dx: u16, dy: u16) -> Rect {
     Rect::new(r.x + dx, r.y + dy, r.width, r.height)
 }
 
-fn center(r: Rect) -> (i32, i32) {
-    (
-        r.x as i32 + r.width as i32 / 2,
-        r.y as i32 + r.height as i32 / 2,
-    )
+/// An interval of cells along one axis, relative to the panes' top-left corner.
+#[derive(Clone, Copy)]
+struct Span {
+    start: i32,
+    len: i32,
 }
 
-/// True when `candidate` lies on the `side` of `cur` (touching or beyond its edge).
-fn beyond(cur: Rect, candidate: Rect, side: Side) -> bool {
-    match side {
-        Side::Left => candidate.x + candidate.width <= cur.x + 2,
-        Side::Right => candidate.x + 2 >= cur.x + cur.width,
-        Side::Up => candidate.y + candidate.height <= cur.y + 2,
-        Side::Down => candidate.y + 2 >= cur.y + cur.height,
+impl Span {
+    fn end(self) -> i32 {
+        self.start + self.len
+    }
+
+    /// tmux's overlap test: `other` covers `self`'s ends or lies inside it.
+    fn overlaps(self, other: Span) -> bool {
+        let last = other.end() - 1;
+        let inside = self.start..=self.end();
+        (other.start < self.start && last > self.end())
+            || inside.contains(&other.start)
+            || inside.contains(&last)
     }
 }
 
-/// Nearest pane in `side`, weighting the cross-axis distance three times more than the main axis.
-pub fn find_directional(panes: &[PaneRect], active: &str, side: Side) -> Option<String> {
+/// `rect` as spans along the axis `side` moves on and across it.
+fn spans(rect: Rect, side: Side, origin: (i32, i32)) -> (Span, Span) {
+    let x = Span {
+        start: i32::from(rect.x) - origin.0,
+        len: i32::from(rect.width),
+    };
+    let y = Span {
+        start: i32::from(rect.y) - origin.1,
+        len: i32::from(rect.height),
+    };
+    match side {
+        Side::Up | Side::Down => (y, x),
+        Side::Left | Side::Right => (x, y),
+    }
+}
+
+/// The pane next to `active` on `side`, chosen as tmux does: of the panes touching its edge on
+/// that side, the one focused most recently (`recent` lists panes latest first, never-focused
+/// panes rank last, ties go to layout order). A pane on the window's edge wraps to the opposite
+/// edge.
+pub fn find_directional(
+    panes: &[PaneRect],
+    active: &str,
+    side: Side,
+    recent: &[String],
+) -> Option<String> {
     let cur = panes.iter().find(|(name, ..)| name == active)?.1;
-    let (cx, cy) = center(cur);
+    let origin = (
+        panes.iter().map(|(_, r, _)| i32::from(r.x)).min()?,
+        panes.iter().map(|(_, r, _)| i32::from(r.y)).min()?,
+    );
+    let extent = panes
+        .iter()
+        .map(|(_, r, _)| spans(*r, side, origin).0.end())
+        .max()?;
+    let (from, across) = spans(cur, side, origin);
+    let forward = matches!(side, Side::Down | Side::Right);
+    let edge = match (forward, from.end() + 1 >= extent, from.start == 0) {
+        (true, true, _) => 0,
+        (true, false, _) => from.end() + 1,
+        (false, _, true) => extent + 1,
+        (false, _, false) => from.start,
+    };
+    let touches = |rect: Rect| {
+        let (main, cross) = spans(rect, side, origin);
+        let adjacent = if forward {
+            main.start == edge
+        } else {
+            main.end() + 1 == edge
+        };
+        adjacent && across.overlaps(cross)
+    };
     panes
         .iter()
-        .filter(|(name, ..)| name != active)
-        .filter(|(_, rect, _)| beyond(cur, *rect, side))
-        .map(|(name, rect, _)| {
-            let (ox, oy) = center(*rect);
-            let (dx, dy) = ((cx - ox).abs(), (cy - oy).abs());
-            let score = match side {
-                Side::Left | Side::Right => dx + dy * 3,
-                Side::Up | Side::Down => dy + dx * 3,
-            };
-            (score, name)
-        })
-        .min_by_key(|(score, _)| *score)
-        .map(|(_, name)| name.clone())
+        .filter(|(name, rect, _)| name != active && touches(*rect))
+        .min_by_key(|(name, ..)| recent.iter().position(|n| n == name).unwrap_or(usize::MAX))
+        .map(|(name, ..)| name.clone())
 }
 
 /// The previous or next pane in layout order, wrapping around.

@@ -43,6 +43,9 @@ pub struct WindowTab {
     /// The window's active pane (tmux `pane_active`), whether or not the window is shown.
     #[serde(default)]
     pub focused: Option<String>,
+    /// The window's panes other than the active one, most recently focused first.
+    #[serde(default)]
+    pub recent: Vec<String>,
     /// Every index the window is linked at, this one included, in number order (tmux
     /// `window_linked`).
     #[serde(default)]
@@ -63,8 +66,9 @@ pub struct Window {
     pub renamed: bool,
     pub root: Option<LayoutNode>,
     pub focused: Option<String>,
+    /// Panes focused before the current one, most recently focused first.
     #[serde(default)]
-    pub last_focused: Option<String>,
+    pub focus_history: Vec<String>,
     /// Preset most recently applied by `select-layout`, used to cycle.
     #[serde(default)]
     pub preset: Option<LayoutPreset>,

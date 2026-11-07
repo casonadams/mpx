@@ -537,3 +537,51 @@ fn input_off_is_per_pane_and_forgotten_with_the_pane() {
     ws.remove("pane2");
     assert!(!ws.input_off("pane2"));
 }
+
+#[test]
+fn closing_the_focused_pane_focuses_the_most_recently_focused_one() {
+    let mut ws = main_tab_ws();
+    ws.add_or_split("pane2".to_string(), Direction::Horizontal);
+    ws.add_or_split("pane3".to_string(), Direction::Horizontal);
+    ws.focus("pane1");
+    ws.remove("pane1");
+    assert_eq!(focused(&ws).as_deref(), Some("pane3"));
+    ws.remove("pane3");
+    assert_eq!(focused(&ws).as_deref(), Some("pane2"));
+}
+
+#[test]
+fn closing_an_unfocused_pane_keeps_focus_and_forgets_it_for_later() {
+    let mut ws = main_tab_ws();
+    ws.add_or_split("pane2".to_string(), Direction::Horizontal);
+    ws.add_or_split("pane3".to_string(), Direction::Horizontal);
+    ws.remove("pane2");
+    assert_eq!(focused(&ws).as_deref(), Some("pane3"));
+    ws.remove("pane3");
+    assert_eq!(focused(&ws).as_deref(), Some("pane1"));
+}
+
+#[test]
+fn closing_without_history_focuses_the_pane_before_it_then_the_one_after() {
+    let mut win = mpx::layout::Window::new(0, "w".to_string(), "a".to_string());
+    for name in ["b", "c"] {
+        win.split_at(Some("a"), name.to_string(), Direction::Horizontal, None, false);
+    }
+    assert_eq!(win.leaves(), ["a", "c", "b"]);
+    win.focused = Some("c".to_string());
+    win.remove("c");
+    assert_eq!(win.focused.as_deref(), Some("a"));
+    win.remove("a");
+    assert_eq!(win.focused.as_deref(), Some("b"));
+}
+
+#[test]
+fn focus_last_alternates_between_the_two_most_recent_panes() {
+    let mut ws = main_tab_ws();
+    ws.add_or_split("pane2".to_string(), Direction::Horizontal);
+    ws.add_or_split("pane3".to_string(), Direction::Horizontal);
+    assert!(ws.focus_last());
+    assert_eq!(focused(&ws).as_deref(), Some("pane2"));
+    assert!(ws.focus_last());
+    assert_eq!(focused(&ws).as_deref(), Some("pane3"));
+}

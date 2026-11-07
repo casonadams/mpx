@@ -30,7 +30,7 @@ If you pause after the prefix, a shortcut popup lists common action keys after `
 | :--- | :--- | :--- |
 | `%` / `\|` | `split-window -h` | Split side by side |
 | `"` / `-` | `split-window` | Split stacked |
-| `h` `j` `k` `l` / arrows | `select-pane -L/-D/-U/-R` | Move focus |
+| `h` `j` `k` `l` / arrows | `select-pane -L/-D/-U/-R` | Move focus to the pane touching this one on that side; of several, the most recently focused one. At the window's edge it wraps to the opposite side (as tmux) |
 | `o` / `Tab` | `next-pane` | Cycle panes |
 | `;` | `last-pane` | Previously focused pane |
 | `H` `J` `K` `L` | `resize-pane -L/-D/-U/-R` | Resize by 5 cells (repeatable without prefix for 500ms) |
@@ -38,7 +38,7 @@ If you pause after the prefix, a shortcut popup lists common action keys after `
 | `Ctrl-o` / `Alt-o` | `rotate-window` / `rotate-window -D` | Rotate pane positions |
 | `q` | `display-panes` | Show pane numbers; press a digit to select that pane |
 | `z` | `resize-pane -Z` | Toggle zoom |
-| `x` | `kill-pane` | Kill pane (asks y/n) |
+| `x` | `kill-pane` | Kill pane (asks y/n); focus goes to the most recently focused remaining pane (or the previous pane in layout order when none was) |
 | `!` | `break-pane` | Move pane into its own window |
 | `{` / `}` | `swap-pane -U/-D` | Swap with previous / next pane |
 | `Space` | `next-layout` | Cycle layouts (even-horizontal, even-vertical, main-vertical, main-vertical-mirrored, main-horizontal, main-horizontal-mirrored, tiled) |

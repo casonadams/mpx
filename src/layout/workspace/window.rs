@@ -23,7 +23,7 @@ impl Window {
             renamed: false,
             root: Some(root),
             focused,
-            last_focused: None,
+            focus_history: Vec::new(),
             preset: None,
             synchronized: false,
             zoomed: false,
@@ -74,41 +74,56 @@ impl Window {
         true
     }
 
+    /// Removes a pane. When it was focused, focus goes to the most recently focused pane left,
+    /// else to the pane before it in layout order, else the one after (as tmux does).
     pub fn remove(&mut self, node_name: &str) {
         if self.contains(node_name) {
             self.zoomed = false;
         }
+        let position = self.leaves().iter().position(|n| n == node_name);
         if let Some(root) = self.root.take() {
             self.root = root.remove_leaf(node_name);
         }
-        if self.last_focused.as_deref() == Some(node_name) {
-            self.last_focused = None;
-        }
+        self.focus_history.retain(|n| n != node_name);
         if self.focused.as_deref() == Some(node_name) {
-            self.focused = self.leaves().into_iter().next();
+            let leaves = self.leaves();
+            self.focused = self
+                .recent_panes()
+                .into_iter()
+                .next()
+                .or_else(|| leaves.get(position.unwrap_or(0).saturating_sub(1)).cloned());
+            self.focus_history
+                .retain(|n| Some(n) != self.focused.as_ref());
         }
     }
 
-    /// Focuses a leaf; the previously focused pane becomes the `last_focused` pane.
+    /// The panes focused before the current one, most recent first.
+    pub fn recent_panes(&self) -> Vec<String> {
+        self.focus_history
+            .iter()
+            .filter(|n| self.contains(n))
+            .cloned()
+            .collect()
+    }
+
+    /// Focuses a leaf; the previously focused pane becomes the most recent in the focus history.
     pub fn set_focus(&mut self, name: &str) -> bool {
         if !self.contains(name) {
             return false;
         }
         if self.focused.as_deref() != Some(name) {
-            self.last_focused = self.focused.take();
-            self.focused = Some(name.to_string());
+            self.focus_history.retain(|n| n != name);
+            if let Some(previous) = self.focused.replace(name.to_string()) {
+                self.focus_history.insert(0, previous);
+            }
         }
         true
     }
 
     pub fn focus_last(&mut self) -> bool {
-        match self.last_focused.clone() {
-            Some(last) if self.contains(&last) => {
-                self.last_focused = self.focused.take();
-                self.focused = Some(last);
-                true
-            }
-            _ => false,
+        match self.recent_panes().into_iter().next() {
+            Some(last) => self.set_focus(&last),
+            None => false,
         }
     }
 

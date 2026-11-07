@@ -24,6 +24,7 @@ fn tab(index: usize, name: &str, active: bool) -> WindowTab {
         marked_pane: None,
         agent_badge: None,
         focused: None,
+        recent: Vec::new(),
         zoomed: false,
         has_silence: false,
         synchronized: false,

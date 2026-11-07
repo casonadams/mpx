@@ -85,9 +85,16 @@ impl App {
         self.settle(result)
     }
 
-    /// `select-pane -L/-R/-U/-D`: focuses the pane next to the active one in that direction.
+    /// `select-pane -L/-R/-U/-D`: focuses the pane next to the active one in that direction,
+    /// preferring the one focused most recently, as tmux does.
     async fn select_dir(&mut self, side: Side, keep_zoom: bool) -> Flow {
-        match find_directional(&self.panes, &self.active_pane, side) {
+        let recent = self
+            .layout
+            .tabs
+            .iter()
+            .find(|t| t.is_active)
+            .map_or(&[][..], |t| t.recent.as_slice());
+        match find_directional(&self.panes, &self.active_pane, side, recent) {
             Some(pane) => {
                 let result = self.client.focus_with(&pane, keep_zoom).await;
                 self.settle(result)
