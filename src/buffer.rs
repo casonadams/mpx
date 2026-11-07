@@ -55,7 +55,7 @@ impl RingBuffer {
             self.lines = 0;
         }
         self.buffer.extend(data);
-        self.lines += data.iter().filter(|&&b| b == b'\n').count();
+        self.lines += count_newlines(data);
         self.evict();
     }
 
@@ -77,24 +77,29 @@ impl RingBuffer {
         if lines == 0 {
             return 0;
         }
+        let (first, second) = self.buffer.as_slices();
         let mut seen = 0;
-        for (at, &byte) in self.buffer.iter().take(limit).enumerate() {
-            seen += usize::from(byte == b'\n');
-            if seen == lines {
-                return at + 1;
+        let mut scanned = 0;
+        for part in [first, second] {
+            let mut rest = &part[..part.len().min(limit - scanned)];
+            while let Some(at) = rest.iter().position(|&b| b == b'\n') {
+                seen += 1;
+                scanned += at + 1;
+                if seen == lines {
+                    return scanned;
+                }
+                rest = &rest[at + 1..];
             }
+            scanned += rest.len();
         }
-        limit
+        scanned
     }
 
     fn drop_front(&mut self, bytes: usize) {
-        let dropped = self
-            .buffer
-            .iter()
-            .take(bytes)
-            .filter(|&&b| b == b'\n')
-            .count();
-        self.lines -= dropped;
+        let (first, second) = self.buffer.as_slices();
+        let in_first = bytes.min(first.len());
+        self.lines -=
+            count_newlines(&first[..in_first]) + count_newlines(&second[..bytes - in_first]);
         self.buffer.drain(..bytes);
     }
 
@@ -193,6 +198,10 @@ impl RingBuffer {
         self.buffer.clear();
         self.lines = 0;
     }
+}
+
+fn count_newlines(bytes: &[u8]) -> usize {
+    bytes.iter().filter(|&&b| b == b'\n').count()
 }
 
 fn find_tail_start(first: &[u8], second: &[u8], n: usize) -> usize {

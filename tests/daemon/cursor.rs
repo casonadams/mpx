@@ -94,3 +94,34 @@ async fn scrollback_count_stays_exact_as_output_arrives_between_reads() {
     }
     client.kill("echo").await.unwrap();
 }
+
+#[tokio::test]
+async fn scrollback_count_follows_the_pane_through_resizes() {
+    let daemon = start().await;
+    let mut client = connect(&daemon.endpoint).await;
+    client
+        .spawn(pty(
+            "sized",
+            "sh",
+            &[
+                "-c",
+                "for i in $(seq 1 50); do echo line$i; done; printf abc; sleep 30",
+            ],
+        ))
+        .await
+        .unwrap();
+    logs_until(&mut client, "sized", "abc").await;
+    let (cols, rows) = client.status("sized").await.unwrap().size.unwrap();
+
+    for rows in [rows + 10, rows - 10, rows] {
+        client.resize_pane("sized", cols, rows).await.unwrap();
+        let info = client.status("sized").await.unwrap();
+        assert_eq!(info.size, Some((cols, rows)));
+        assert_eq!(
+            info.history_size,
+            Some(51usize.saturating_sub(rows as usize)),
+            "at {rows} rows"
+        );
+    }
+    client.kill("sized").await.unwrap();
+}

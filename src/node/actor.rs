@@ -381,7 +381,9 @@ impl PaneActor {
             let at = self.screen.grid().cursor;
             (at.x as u16, at.y as u16)
         });
-        let history_size = self.pty.then(|| self.history_size());
+        let history_size = self
+            .pty
+            .then(|| self.screen.grid().rows_scrolled_off().min(self.scrollback));
         let resized_from = self
             .resized_from
             .map(|(cols, rows)| (cols as u16, rows as u16));
@@ -431,10 +433,6 @@ impl PaneActor {
         let _ = replay.screen.take_alerts();
         replay.fed = next;
         &replay.screen
-    }
-
-    fn history_size(&mut self) -> usize {
-        self.replay().grid().history_len()
     }
 
     fn cwd(&self) -> Option<String> {

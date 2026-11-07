@@ -111,6 +111,12 @@ impl Grid {
         self.history.len()
     }
 
+    /// Rows that have scrolled off the top, kept in history or not. With no scrollback limit
+    /// beyond this, it is the scrollback a replay of the output would hold.
+    pub fn rows_scrolled_off(&self) -> usize {
+        self.scrolled_off
+    }
+
     /// Whether line `abs_line` (history or live screen) wrapped at the right margin.
     pub fn line_wrapped(&self, abs_line: usize) -> bool {
         let total_hist = self.history.len();
