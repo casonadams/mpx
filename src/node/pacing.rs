@@ -38,7 +38,7 @@ impl Inflight {
     pub fn done(&self) {
         let _ = self
             .0
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1));
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1));
     }
 
     pub fn full(&self) -> bool {
@@ -86,7 +86,7 @@ impl Backlog {
     pub fn sent(&self, now_ms: u64) {
         let _ = self
             .queued
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1));
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1));
         self.progress_ms.store(now_ms, Ordering::Relaxed);
     }
 
