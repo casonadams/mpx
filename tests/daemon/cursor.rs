@@ -59,6 +59,7 @@ async fn cursor_and_scrollback_are_reported_for_terminal_panes_only() {
     client.kill("plain").await.unwrap();
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn scrollback_count_stays_exact_as_output_arrives_between_reads() {
     let daemon = start().await;
