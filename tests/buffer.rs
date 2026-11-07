@@ -267,3 +267,15 @@ fn offsets_stay_absolute_when_a_limited_ring_drops_lines() {
     assert_eq!(next, data.len() as u64);
     assert_eq!(tail, data[data.len() - tail.len()..]);
 }
+
+#[test]
+fn tail_returns_the_newest_bytes_across_a_wrapped_ring() {
+    let mut rb = RingBuffer::new(8);
+    rb.write(b"abcdef");
+    rb.write(b"ghij");
+    assert_eq!(rb.snapshot(), b"cdefghij");
+    assert_eq!(rb.tail(3), b"hij");
+    assert_eq!(rb.tail(8), b"cdefghij");
+    assert_eq!(rb.tail(100), b"cdefghij", "fewer bytes held than asked for");
+    assert!(rb.tail(0).is_empty());
+}

@@ -17,7 +17,7 @@ use super::sink::Sink;
 use super::sleep_until_opt;
 use super::waits::{self, Cond, Observed};
 use super::{Process, SpawnSpec, now_ms};
-use crate::buffer::{PlainStream, RingBuffer, Utf8Stream, lossy};
+use crate::buffer::{PlainStream, RING_CAPACITY, RingBuffer, Utf8Stream, lossy};
 use crate::protocol::{NodeInfo, NodeState, PaneId, StreamEvent, WaitOutcome};
 use crate::vt::VtScreen;
 use crate::vt::capture::{CaptureSpec, capture_text};
@@ -308,10 +308,12 @@ impl PaneActor {
         let from = (grid.cols, grid.rows);
         let to = (cols as usize, rows as usize);
         if from != to {
-            // Rebuilt from the retained output, as the app's screens rebuild it, so the rows a grow
-            // pulls back from scrollback are the same at every end. The output after this point is
-            // fed to the new grid as it arrives.
-            let rebuilt = VtScreen::resized_grid(&self.ring.snapshot(), &[], from, to, 0);
+            // Rebuilt from the newest `RING_CAPACITY` bytes of the retained output, as the app's
+            // screens rebuild it, so the rows a grow pulls back from scrollback are the same at
+            // every end. The output after this point is fed to the new grid as it arrives. A
+            // longer log (kept for scrollback) would make every resize replay all of it.
+            let log = self.ring.tail(RING_CAPACITY);
+            let rebuilt = VtScreen::resized_grid(&log, &[], from, to, 0);
             *self.screen.grid_mut() = rebuilt;
             self.resized_from = Some(from);
             self.resized_at = Some(self.ring.total_written());

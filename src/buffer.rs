@@ -158,6 +158,16 @@ impl RingBuffer {
         out
     }
 
+    /// The newest `n` retained bytes (all of them when fewer are held).
+    pub fn tail(&self, n: usize) -> Vec<u8> {
+        let (first, second) = self.buffer.as_slices();
+        let skip = (first.len() + second.len()).saturating_sub(n);
+        let mut out = Vec::with_capacity(first.len() + second.len() - skip);
+        out.extend_from_slice(&first[skip.min(first.len())..]);
+        out.extend_from_slice(&second[skip.saturating_sub(first.len())..]);
+        out
+    }
+
     pub fn snapshot_str(&self) -> String {
         lossy(self.snapshot())
     }

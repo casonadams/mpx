@@ -297,29 +297,42 @@ pub async fn sync_dims(
     for (name, width, height) in pending_resizes(panes, dims) {
         dims.insert(name.clone(), (width, height));
         let _ = client.resize_pane(&name, width, height).await;
-        let to = (width as usize, height as usize);
-        match vt
-            .get(&name)
-            .map(|screen| (grid_size(screen), screen.grid().history_limit))
-        {
-            Some((from, history)) => {
-                let at = resize_cut(client, &name, from).await;
-                if let Some((grid, next)) =
-                    rebuild_grid(client, &name, from, to, history, at).await
-                {
-                    if let Some(screen) = vt.get_mut(&name) {
-                        *screen.grid_mut() = grid;
-                    }
-                    expected.insert(name, next);
-                }
-            }
-            None => {
-                if let Some((screen, next)) = load_pane(client, &name, (width, height), 0).await {
-                    expected.insert(name.clone(), next);
-                    vt.insert(name, screen);
-                }
-            }
+        resync_resized(client, name, (width, height), vt, expected).await;
+    }
+}
+
+/// Brings the screen of pane `name`, which the daemon just resized to `size`, up to date: a pane
+/// without a screen is loaded, a live pane takes the daemon's own screen, and a pane in copy mode
+/// is rebuilt from its log with its scrollback.
+async fn resync_resized(
+    client: &mut Client,
+    name: String,
+    (width, height): (u16, u16),
+    vt: &mut HashMap<String, VtScreen>,
+    expected: &mut HashMap<String, u64>,
+) {
+    let Some(screen) = vt.get(&name) else {
+        if let Some((screen, next)) = load_pane(client, &name, (width, height), 0).await {
+            expected.insert(name.clone(), next);
+            vt.insert(name, screen);
         }
+        return;
+    };
+    let (from, history) = (grid_size(screen), screen.grid().history_limit);
+    if history == 0
+        && let Some((screen, next)) = load_keyframe(client, &name, (width, height)).await
+    {
+        expected.insert(name.clone(), next);
+        vt.insert(name, screen);
+        return;
+    }
+    let at = resize_cut(client, &name, from).await;
+    let to = (width as usize, height as usize);
+    if let Some((grid, next)) = rebuild_grid(client, &name, from, to, history, at).await {
+        if let Some(screen) = vt.get_mut(&name) {
+            *screen.grid_mut() = grid;
+        }
+        expected.insert(name, next);
     }
 }
 
