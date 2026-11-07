@@ -304,6 +304,9 @@ async fn the_focused_panes_answer_to_a_keypress_skips_a_spent_budget() {
     assert!(due <= Instant::now(), "the echo waited for the budget");
 }
 
+/// Unix only: ConPTY may split the focused pane's echo, and a stray chunk in the flood's batch
+/// counts as typing.
+#[cfg(unix)]
 #[tokio::test]
 async fn other_panes_output_after_a_keypress_keeps_the_budget() {
     let mut h = start().await;

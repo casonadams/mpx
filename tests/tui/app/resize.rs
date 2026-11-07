@@ -1,6 +1,8 @@
 //! Panes that change height keep their content anchored like a terminal's: a pane whose cursor
 //! sat on its bottom row keeps it there, and the daemon's screen, the app's screen and a fresh
 //! attach agree.
+use std::time::{Duration, Instant};
+
 use mpx::config::Config;
 use mpx::layout::Direction;
 
@@ -48,6 +50,25 @@ async fn start() -> Harness {
     Harness::start(config(), ECHO).await
 }
 
+/// Feeds the app the output a pty sends after a resize (ConPTY repaints the pane) until its screen
+/// agrees with the daemon's. The app takes the daemon's screen at the resize; the repaint reaches
+/// it afterwards as a stream event.
+async fn caught_up_with_the_daemon(h: &mut Harness) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let daemon = h.probe.screen(MAIN).await.expect("daemon screen");
+        let daemon = without_trailing_blanks(daemon.lines().map(str::to_string).collect());
+        h.frame().await;
+        if without_trailing_blanks(pane_rows(h, MAIN)) == daemon || Instant::now() >= deadline {
+            return;
+        }
+        if let Ok(Some(item)) = tokio::time::timeout(Duration::from_millis(100), h.rx.recv()).await
+        {
+            h.app.on_stream(Some(item), &mut h.rx).await;
+        }
+    }
+}
+
 /// Splits the main pane with a pane below it, prints `lines` numbered lines and then `PROMPT$`
 /// in the main pane, and closes the pane below.
 async fn stacked_then_close_below(h: &mut Harness, lines: usize) {
@@ -58,6 +79,7 @@ async fn stacked_then_close_below(h: &mut Harness, lines: usize) {
     h.frame().await;
     h.probe.kill("below").await.expect("kill below");
     h.frame().await;
+    caught_up_with_the_daemon(h).await;
 }
 
 /// A unix pty sends a program nothing on resize, so the grow replays the pane's output at the old
