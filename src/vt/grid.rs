@@ -518,14 +518,9 @@ impl Grid {
     /// Returns the text of line `abs_line` (history or live screen), trailing blanks trimmed.
     pub fn line_text(&self, abs_line: usize) -> Option<String> {
         let cells = self.line_cells(abs_line)?;
-        Some(
-            cells
-                .iter()
-                .map(|c| c.c)
-                .collect::<String>()
-                .trim_end()
-                .to_string(),
-        )
+        let mut text: String = cells.iter().map(|c| c.c).collect();
+        text.truncate(text.trim_end().len());
+        Some(text)
     }
 
     pub fn put_char(&mut self, c: char) {
@@ -565,8 +560,6 @@ impl Grid {
         }
     }
 
-    /// Scrolls the region up by `count` rows; rows leaving a region that starts at the top of the
-    /// screen move into history.
     /// Caps scrollback at `limit` rows, dropping the oldest beyond it; 0 keeps none.
     pub fn set_history_limit(&mut self, limit: usize) {
         self.history_limit = limit;

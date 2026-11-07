@@ -443,6 +443,9 @@ impl PaneActor {
     }
 
     fn check_waiters(&mut self) {
+        if self.waiters.is_empty() {
+            return;
+        }
         let obs = self.observed();
         let ring = &self.ring;
         self.waiters.retain_mut(|waiter| {
