@@ -7,7 +7,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::layout::Rect;
 use crate::tui::command::{Command, PaletteTab, PaneCommand, SessionCommand, WindowCommand};
 use crate::tui::overlay::nav::{ListState, fuzzy_match, has_ctrl};
-use crate::tui::overlay::tree_view::{TreePane, TreeSession, TreeWindow, load_session};
+use crate::tui::overlay::tree_view::{TreePane, TreeSession, TreeWindow, load_sessions};
 use crate::tui::overlay::widgets::{self, Span, Tone, fit, put_row};
 use crate::tui::overlay::{HelpEntry, OverlayAction, OverlayCtx};
 use crate::tui::prompt::PromptState;
@@ -166,12 +166,7 @@ impl PaletteView {
     }
 
     pub async fn refresh(&mut self, ctx: &mut OverlayCtx<'_>) {
-        let mut sessions = Vec::new();
-        for endpoint in crate::ipc::list_sessions(ctx.socket_dir) {
-            if let Some(session) = load_session(&endpoint.endpoint).await {
-                sessions.push(session);
-            }
-        }
+        let mut sessions = load_sessions(ctx.socket_dir).await;
         sessions.sort_by_key(|s| s.name != self.current_session);
         self.sessions = sessions;
         self.rebuild_items();
