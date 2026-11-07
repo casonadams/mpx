@@ -764,3 +764,18 @@ fn output_after_a_resize_is_fed_at_the_new_size() {
     let grid = VtScreen::resized_grid(before, after, (10, 2), (10, 5), false);
     assert_eq!(grid_rows(&grid), ["a", "b", "c", "d", "last"]);
 }
+
+#[test]
+fn reverse_index_moves_up_and_scrolls_down_at_the_top_margin() {
+    let mut vt = VtScreen::new(10, 3);
+    feed(&mut vt, "a\r\nb\r\nc");
+    feed(&mut vt, "\x1bM");
+    assert_eq!(cursor(&vt).1, 1);
+    assert_eq!(row(&vt, 2), "c");
+
+    feed(&mut vt, "\x1b[1;1H\x1bM");
+    assert_eq!(cursor(&vt).1, 0);
+    assert_eq!(row(&vt, 0), "");
+    assert_eq!(row(&vt, 1), "a");
+    assert_eq!(row(&vt, 2), "b");
+}
