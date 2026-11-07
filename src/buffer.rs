@@ -313,9 +313,4 @@ impl Utf8Stream {
         }
         (out, 0)
     }
-
-    /// Bytes waiting for their sequence to complete.
-    pub fn held_len(&self) -> usize {
-        self.held.len()
-    }
 }

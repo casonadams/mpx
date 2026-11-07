@@ -511,10 +511,6 @@ impl Grid {
         Some(Cow::Owned(row.to_cells(self.cols)))
     }
 
-    pub fn get_line_cells(&self, abs_line: usize) -> Option<Vec<Cell>> {
-        self.line_cells(abs_line).map(Cow::into_owned)
-    }
-
     /// Returns the text of line `abs_line` (history or live screen), trailing blanks trimmed.
     pub fn line_text(&self, abs_line: usize) -> Option<String> {
         let cells = self.line_cells(abs_line)?;
