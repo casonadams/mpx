@@ -1,11 +1,14 @@
 use mpx::config::IdSource;
-use mpx::store::{claude_session_id, lookup_session_id, omp_session_id};
+use mpx::store::{claude_session_id, lookup_session_id, omp_session_id, rho_session_id};
 use std::fs;
 
 #[test]
 fn claude_id_requires_matching_pid() {
     let json = r#"{"pid":40368,"sessionId":"9d70037d-9306","cwd":"/x"}"#;
-    assert_eq!(claude_session_id(json, 40368).as_deref(), Some("9d70037d-9306"));
+    assert_eq!(
+        claude_session_id(json, 40368).as_deref(),
+        Some("9d70037d-9306")
+    );
     assert_eq!(claude_session_id(json, 1), None);
     assert_eq!(claude_session_id("not json", 40368), None);
     assert_eq!(claude_session_id(r#"{"pid":1,"sessionId":""}"#, 1), None);
@@ -20,6 +23,17 @@ fn omp_id_comes_from_session_file_name() {
 }
 
 #[test]
+fn rho_id_is_the_first_line() {
+    assert_eq!(
+        rho_session_id("20261108_192507_46b8ae52\n").as_deref(),
+        Some("20261108_192507_46b8ae52")
+    );
+    assert_eq!(rho_session_id("  abc  \nignored\n").as_deref(), Some("abc"));
+    assert_eq!(rho_session_id(""), None);
+    assert_eq!(rho_session_id("\n"), None);
+}
+
+#[test]
 fn lookup_reads_each_tools_state_file() {
     let home = tempfile::tempdir().unwrap();
     let claude = home.path().join(".claude/sessions");
@@ -28,11 +42,23 @@ fn lookup_reads_each_tools_state_file() {
     let omp = home.path().join(".omp/agent/terminal-sessions");
     fs::create_dir_all(&omp).unwrap();
     fs::write(omp.join("ttys004"), "/w\n/s/2026_def.jsonl\n").unwrap();
+    let rho = home.path().join(".config/rho/terminal-sessions");
+    fs::create_dir_all(&rho).unwrap();
+    fs::write(rho.join("ttys004"), "20261108_192507_46b8ae52\n").unwrap();
 
     let id = |source, pid, tty| lookup_session_id(source, home.path(), pid, tty);
     assert_eq!(id(IdSource::Claude, Some(77), None).as_deref(), Some("abc"));
     assert_eq!(id(IdSource::Claude, Some(78), None), None);
-    assert_eq!(id(IdSource::Omp, None, Some("ttys004")).as_deref(), Some("def"));
+    assert_eq!(
+        id(IdSource::Omp, None, Some("ttys004")).as_deref(),
+        Some("def")
+    );
     assert_eq!(id(IdSource::Omp, None, Some("ttys005")), None);
     assert_eq!(id(IdSource::Omp, None, Some("../ttys004")), None);
+    assert_eq!(
+        id(IdSource::Rho, None, Some("ttys004")).as_deref(),
+        Some("20261108_192507_46b8ae52")
+    );
+    assert_eq!(id(IdSource::Rho, None, Some("ttys005")), None);
+    assert_eq!(id(IdSource::Rho, None, Some("../ttys004")), None);
 }

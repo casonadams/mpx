@@ -23,9 +23,20 @@ pub fn omp_session_id(terminal_session: &str) -> Option<String> {
     (!id.is_empty()).then(|| id.to_string())
 }
 
+/// Session id from rho's `~/.config/rho/terminal-sessions/<tty>`: the first line.
+pub fn rho_session_id(terminal_session: &str) -> Option<String> {
+    let id = terminal_session.lines().next()?.trim();
+    (!id.is_empty()).then(|| id.to_string())
+}
+
 /// Reads the state file of `source` under `home` for the pane process `pid` on terminal `tty`
 /// (device name without `/dev/`, e.g. `ttys004`).
-pub fn lookup(source: IdSource, home: &Path, pid: Option<u32>, tty: Option<&str>) -> Option<String> {
+pub fn lookup(
+    source: IdSource,
+    home: &Path,
+    pid: Option<u32>,
+    tty: Option<&str>,
+) -> Option<String> {
     match source {
         IdSource::Claude => {
             let pid = pid?;
@@ -36,6 +47,11 @@ pub fn lookup(source: IdSource, home: &Path, pid: Option<u32>, tty: Option<&str>
             let tty = tty.filter(|t| !t.is_empty() && !t.contains('/'))?;
             let file = home.join(".omp/agent/terminal-sessions").join(tty);
             omp_session_id(&std::fs::read_to_string(file).ok()?)
+        }
+        IdSource::Rho => {
+            let tty = tty.filter(|t| !t.is_empty() && !t.contains('/'))?;
+            let file = home.join(".config/rho/terminal-sessions").join(tty);
+            rho_session_id(&std::fs::read_to_string(file).ok()?)
         }
     }
 }

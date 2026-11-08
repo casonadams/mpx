@@ -13,7 +13,9 @@ mod snapshot;
 
 pub use files::{adopt_legacy_dir, component, state_dir_with};
 pub use restore::plan_restore;
-pub use session_id::{claude_session_id, lookup as lookup_session_id, omp_session_id};
+pub use session_id::{
+    claude_session_id, lookup as lookup_session_id, omp_session_id, rho_session_id,
+};
 pub use snapshot::{decode_snapshot, encode_snapshot};
 
 pub const SNAPSHOT_VERSION: u32 = 1;

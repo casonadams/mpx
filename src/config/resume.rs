@@ -24,6 +24,8 @@ pub enum IdSource {
     Claude,
     /// oh-my-pi: `~/.omp/agent/terminal-sessions/<tty>`.
     Omp,
+    /// rho: `~/.config/rho/terminal-sessions/<tty>`.
+    Rho,
 }
 
 pub fn default_resume_rules() -> Vec<ResumeRule> {
@@ -54,12 +56,15 @@ pub fn default_resume_rules() -> Vec<ResumeRule> {
             &["codex", "resume", "{id}"],
             &["codex", "resume", "--last"],
         ),
-        rule(
-            "rho",
-            &["rho"],
-            &["rho", "--resume", "{id}"],
-            &["rho", "--resume"],
-        ),
+        ResumeRule {
+            id_source: Some(IdSource::Rho),
+            ..rule(
+                "rho",
+                &["rho"],
+                &["rho", "--resume", "{id}"],
+                &["rho", "-c"],
+            )
+        },
         rule(
             "antigravity",
             &["antigravity", "agy"],

@@ -191,6 +191,20 @@ fn nvim_pane_restores_with_a_session_file_sourced_only_when_present() {
 }
 
 #[test]
+fn rho_pane_resumes_its_session_or_continues_the_last_one() {
+    let rules = mpx::config::default_resume_rules();
+
+    let known = restore_agent(
+        tool_pane("rho", "rho", Some("20261108_192507_46b8ae52")),
+        &rules,
+    );
+    let unknown = restore_agent(tool_pane("rho", "rho", None), &rules);
+
+    assert_spawn(&known, "rho", &["--resume", "20261108_192507_46b8ae52"]);
+    assert_spawn(&unknown, "rho", &["-c"]);
+}
+
+#[test]
 fn agent_with_unknown_harness_keeps_its_original_command() {
     let spawn = restore_agent(tool_pane("ghost", "unknown-tool", Some("abc")), &[claude()]);
     assert_spawn(&spawn, "unknown-tool", &[]);
