@@ -11,54 +11,13 @@ A modern, ultra-fast terminal multiplexer in Rust: tmux key bindings and `mpx im
 
 ---
 
-## What Sets `mpx` Apart?
+## Features
 
-Traditional multiplexers like `tmux` rely on 30-year-old C architectures (`libevent`) and external scripts (`tmux-resurrect`) that scrape process tables to save state. Heavyweight alternatives like `zellij` consume 60–120MB+ idle RAM with WebAssembly runtimes.
-
-`mpx` provides a pure, modern terminal multiplexer in Tokio async Rust:
-
-```mermaid
-graph TD
-    subgraph ClientInterfaces [Client & Invocation Interfaces]
-        direction LR
-        CLI["<b>mpx CLI</b><br/>(run, attach, restore, list)"]
-        TUI["<b>Human TUI (60 FPS)</b><br/>• DEC 2026 Synchronized Updates<br/>• 3-Tab Command Palette (Ctrl-Space)<br/>• Vi Copy Mode (100k lines)"]
-    end
-
-    subgraph DaemonEngine [mpx Daemon Engine (~5MB)]
-        direction TB
-        IPC["<b>Local Socket / Named Pipe IPC</b><br/>• Typed JSON-RPC Protocol"]
-        
-        subgraph SessionCore [Session & Layout Core]
-            direction LR
-            WORKSPACE["<b>Workspace & Split Tree</b><br/>(Even, Tiled, Main-Vertical)"]
-            RECOVERY["<b>Continuous Snapshot Store</b><br/>• Auto-save layout, cwd, env<br/>• Config-driven [[resume]] rules"]
-        end
-
-        subgraph ExecutionNodes [Execution Nodes]
-            direction LR
-            PTY["<b>Interactive PTY Panes</b><br/>(zsh / nvim / htop / claude / omp)"]
-            VT["<b>Dual-Buffer Engine</b><br/>• Raw Byte Stream + 2D VT Grid"]
-        end
-
-        IPC --> SessionCore
-        SessionCore --> ExecutionNodes
-    end
-
-    ClientInterfaces --> IPC
-```
-
-| Dimension | `tmux` | `zellij` | `mpx` |
-| :--- | :--- | :--- | :--- |
-| **Language** | C (libevent) | Rust (multi-thread actor + async-std) | **Rust (Tokio async)** |
-| **Idle Memory** | ~5 MB | ~60–120 MB | **~5 MB** |
-| **WASM Runtime** | None | Yes (wasmer/WASI) | **None (Zero Bloat)** |
-| **Crash & Reboot Recovery** | External cron scripts (`tmux-resurrect`) | Basic session save | **Built-in Continuous Atomic Snapshots (`mpx restore`)** |
-| **Tool Resumption** | Re-runs command name only | None | **Config-driven `[[resume]]` (Claude, omp, nvim, etc.)** |
-| **Flicker Protection** | None (tearing on redraw) | Terminal dependent | **DEC 2026 Synchronized Updates** |
-| **Quick Navigation** | Clunky `choose-tree` | Search tab | **Instant Fuzzy Command Palette (`Ctrl-Space`)** |
-| **Windows Support** | Cygwin / WSL required | WSL required | **Native (Windows Named Pipes + ConPTY)** |
-| **Telemetry** | None | None | **100% Offline (Zero Telemetry)** |
+- tmux key bindings, and `mpx import-tmux` to convert your `.tmux.conf`.
+- Sessions survive crashes and reboots: layout, working directories and tools are snapshotted continuously and brought back with `mpx restore`.
+- Flicker-free rendering with DEC 2026 synchronized updates.
+- Fuzzy command palette (`Ctrl-Space`) and vi copy mode.
+- Runs on Linux, macOS and Windows (ConPTY), talking over local sockets or named pipes.
 
 ---
 

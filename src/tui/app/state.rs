@@ -23,6 +23,7 @@ use crate::tui::prompt::PromptRun;
 use crate::tui::render::{HostColors, copy_to_clipboard};
 use crate::tui::status::{local_utc_offset, time_of_day};
 use crate::tui::statusline::{self, Rows, Target};
+use crate::tui::warm::Warm;
 use crate::vt::VtScreen;
 
 /// Initial screen when attaching.
@@ -87,6 +88,8 @@ pub struct App {
     pub pane_dims: HashMap<String, (u16, u16)>,
     /// Byte offset each pane's screen has absorbed; the next output chunk must start there.
     pub expected: HashMap<String, u64>,
+    /// The focused pane's scrollback built ahead of copy mode (see `warm`).
+    pub warm: Option<Warm>,
     pub layout: LayoutCache,
     /// Terminal width and height available to panes (status row excluded).
     pub viewport: (u16, u16),
@@ -323,6 +326,7 @@ impl App {
             passthroughs: Vec::new(),
             pane_dims: HashMap::new(),
             expected: HashMap::new(),
+            warm: None,
             layout: LayoutCache::new(),
             viewport: (80, 23),
             rows: statusline::rows(24, 1, false),

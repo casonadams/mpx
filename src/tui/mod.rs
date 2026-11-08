@@ -22,6 +22,7 @@ pub mod statusline;
 pub mod stream;
 pub mod style;
 pub mod terminal;
+pub mod warm;
 
 mod exec;
 mod mouse;

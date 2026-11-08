@@ -287,6 +287,48 @@ async fn wheeling_during_a_drag_loads_history_and_keeps_the_anchor() {
     assert_eq!(h.clipboard().len(), 1);
 }
 
+/// Ticks until the focused pane's history has been built ahead of copy mode.
+async fn warm_up(h: &mut Harness) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !h.app.scrollback_warm() {
+        assert!(std::time::Instant::now() < deadline, "history was never built");
+        h.app.on_tick().await;
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}
+
+#[tokio::test]
+async fn copy_mode_takes_the_history_built_ahead_and_shows_output_since() {
+    let mut h = Harness::started(&long_output()).await;
+    h.frame().await;
+    assert!(!h.app.scrollback_warm(), "nothing is built before a tick");
+    warm_up(&mut h).await;
+    assert_eq!(history_of(&h), 0, "the live pane still keeps no scrollback");
+
+    h.probe.send_input(MAIN, "AFTER-WARM\r").await.unwrap();
+    wait_for(&mut h.probe, MAIN, "AFTER-WARM").await;
+    h.prefixed_char('[').await;
+    assert!(!h.app.scrollback_warm(), "copy mode used up the built history");
+    assert!(history_of(&h) >= 10, "the history came with it");
+    let frame = h.frame().await;
+    assert!(frame.contains("COPY -0/"), "{frame}");
+    assert!(frame.contains("AFTER-WARM"), "output since the build is fed: {frame}");
+
+    h.key(KeyCode::Char('q')).await;
+    assert!(h.mode_is_normal());
+    assert_eq!(history_of(&h), 0, "leaving copy mode drops it again");
+}
+
+#[tokio::test]
+async fn the_wheel_takes_the_history_built_ahead() {
+    let mut h = Harness::started(&long_output()).await;
+    h.frame().await;
+    warm_up(&mut h).await;
+    h.mouse(MouseEventKind::ScrollUp, 5, 5).await;
+    assert!(!h.app.scrollback_warm());
+    assert!(h.frame().await.contains("COPY -3/"));
+}
+
 /// Applies the stream events that arrive while `quiet` passes without a new one.
 async fn drain_stream(h: &mut Harness) {
     let quiet = std::time::Duration::from_millis(300);

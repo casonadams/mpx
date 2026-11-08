@@ -159,6 +159,7 @@ impl App {
         if matches!(self.mode, Mode::Overlay(_)) {
             self.refresh_overlay().await;
         }
+        self.warm_scrollback();
         Flow::Continue
     }
 

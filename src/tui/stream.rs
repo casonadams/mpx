@@ -9,10 +9,10 @@ use crate::vt::{Alert, VtScreen};
 /// Largest gap a pane coming into view catches up on by reading it: three quarters of the log a
 /// pane keeps, so the bytes are still there. Reading them replays the program's output exactly;
 /// a rebuild from the log cannot once the log has dropped what the program painted only once.
-const CATCH_UP_MAX: u64 = (crate::buffer::RING_CAPACITY as u64) * 3 / 4;
+pub(super) const CATCH_UP_MAX: u64 = (crate::buffer::RING_CAPACITY as u64) * 3 / 4;
 
 /// Size of a screen whose pane has not been sized yet.
-const DEFAULT_SIZE: (u16, u16) = (80, 24);
+pub(super) const DEFAULT_SIZE: (u16, u16) = (80, 24);
 
 /// What to do with one output chunk, given the offset the pane's screen expects next.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -177,7 +177,7 @@ impl App {
     }
 
     /// Feeds the bytes a pane is missing, read from the log since its expected offset.
-    async fn catch_up(&mut self, name: &str) {
+    pub(super) async fn catch_up(&mut self, name: &str) {
         let Some(since) = self.expected.get(name).copied() else {
             return;
         };
@@ -209,10 +209,11 @@ impl App {
     /// Gives `name` its scrollback for copy mode, rebuilt from the pane's log: live panes keep
     /// none in the TUI.
     pub async fn load_scrollback(&mut self, name: &str) {
-        if !self.vt.get(name).is_some_and(has_scrollback) {
-            self.reload_pane(name, self.config.session.scrollback_lines)
-                .await;
+        if self.vt.get(name).is_some_and(has_scrollback) || self.adopt_warm(name).await {
+            return;
         }
+        self.reload_pane(name, self.config.session.scrollback_lines)
+            .await;
     }
 
     /// Ends `name`'s frozen copy-mode view: its scrollback is dropped now and the output that
