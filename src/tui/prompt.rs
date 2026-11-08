@@ -181,27 +181,27 @@ impl PromptState {
             && !comp.candidates.is_empty()
         {
             let n = comp.candidates.len();
-                let next_idx = match comp.index {
-                    None => {
-                        if forward {
-                            0
-                        } else {
-                            n - 1
-                        }
+            let next_idx = match comp.index {
+                None => {
+                    if forward {
+                        0
+                    } else {
+                        n - 1
                     }
-                    Some(i) => {
-                        if forward {
-                            (i + 1) % n
-                        } else {
-                            (i + n - 1) % n
-                        }
+                }
+                Some(i) => {
+                    if forward {
+                        (i + 1) % n
+                    } else {
+                        (i + n - 1) % n
                     }
-                };
-                comp.index = Some(next_idx);
-                let choice = &comp.candidates[next_idx];
-                self.show(choice);
-                self.comp = Some(comp);
-                return;
+                }
+            };
+            comp.index = Some(next_idx);
+            let choice = &comp.candidates[next_idx];
+            self.show(choice);
+            self.comp = Some(comp);
+            return;
         }
 
         let prefix = text;

@@ -79,7 +79,11 @@ fn program_of(node: &NodeInfo) -> String {
         return foreground.clone();
     }
     let first = node.command.split_whitespace().next().unwrap_or("");
-    first.rsplit(['/', '\\']).next().unwrap_or(first).to_string()
+    first
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(first)
+        .to_string()
 }
 
 fn pane_from_node(node: &NodeInfo, focused: Option<&str>) -> TreePane {

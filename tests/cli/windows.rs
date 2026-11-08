@@ -153,11 +153,19 @@ fn select_layout_applies_a_preset_and_rejects_unknown_names() {
     assert_eq!(run_command(&f, &["select-layout", "bogus"]), 1);
 
     assert_eq!(run_command(&f, &["select-layout", "even-horizontal"]), 0);
-    assert_eq!(run_command(&f, &["resize-pane", "-t", "base", "-R", "10"]), 0);
+    assert_eq!(
+        run_command(&f, &["resize-pane", "-t", "base", "-R", "10"]),
+        0
+    );
     assert!(place(&f, "base").w > place(&f, "side").w + 1);
     assert_eq!(run_command(&f, &["select-layout", "-E"]), 0);
     let (base, side) = (place(&f, "base"), place(&f, "side"));
-    assert!(base.w.abs_diff(side.w) <= 1, "widths {} and {}", base.w, side.w);
+    assert!(
+        base.w.abs_diff(side.w) <= 1,
+        "widths {} and {}",
+        base.w,
+        side.w
+    );
 }
 
 #[test]
@@ -275,11 +283,20 @@ fn respawn_window_refuses_a_running_window_unless_killed() {
 fn swap_window_and_move_window_reorder_windows_by_index() {
     let f = Fixture::start();
     for name in ["first", "second", "third"] {
-        assert_eq!(run_command(&f, &["new-window", "-d", "-n", name, "sleep", "30"]), 0);
+        assert_eq!(
+            run_command(&f, &["new-window", "-d", "-n", name, "sleep", "30"]),
+            0
+        );
     }
-    assert_eq!(run_command(&f, &["swap-window", "--source", "0", "-t", "2"]), 0);
+    assert_eq!(
+        run_command(&f, &["swap-window", "--source", "0", "-t", "2"]),
+        0
+    );
     assert_eq!(window_names(&f), ["third", "second", "first"]);
-    assert_eq!(run_command(&f, &["move-window", "--source", "0", "-t", "2"]), 0);
+    assert_eq!(
+        run_command(&f, &["move-window", "--source", "0", "-t", "2"]),
+        0
+    );
     assert_eq!(window_names(&f), ["second", "first", "third"]);
     assert_eq!(run_command(&f, &["swap-window", "-t", "7"]), 1);
 }
@@ -294,7 +311,13 @@ fn zoom_flags_keep_the_window_zoomed_where_tmux_keeps_it() {
     assert!(zoomed(&f), "select-pane -Z keeps the zoom");
     assert_eq!(run_command(&f, &["rotate-window", "-Z"]), 0);
     assert!(zoomed(&f), "rotate-window -Z keeps the zoom");
-    assert_eq!(run_command(&f, &["split", "-Z", "-t", "base", "-n", "third", "sleep", "30"]), 0);
+    assert_eq!(
+        run_command(
+            &f,
+            &["split", "-Z", "-t", "base", "-n", "third", "sleep", "30"]
+        ),
+        0
+    );
     assert!(zoomed(&f), "split-window -Z keeps the zoom");
     assert_eq!(run_command(&f, &["rotate-window"]), 0);
     assert!(!zoomed(&f), "rotate-window without -Z unzooms");
@@ -303,12 +326,22 @@ fn zoom_flags_keep_the_window_zoomed_where_tmux_keeps_it() {
 #[test]
 fn link_window_shows_a_window_at_a_second_index_until_unlinked() {
     let f = Fixture::start();
-    assert_eq!(run_command(&f, &["new-window", "-n", "a", "sleep", "30"]), 0);
-    assert_eq!(run_command(&f, &["link-window", "--source", "0", "-t", "3"]), 0);
+    assert_eq!(
+        run_command(&f, &["new-window", "-n", "a", "sleep", "30"]),
+        0
+    );
+    assert_eq!(
+        run_command(&f, &["link-window", "--source", "0", "-t", "3"]),
+        0
+    );
     assert_eq!(f.info().windows, 2);
     assert_eq!(run_command(&f, &["unlink-window", "-t", "3"]), 0);
     assert_eq!(f.info().windows, 1);
-    assert_eq!(run_command(&f, &["unlink-window"]), 1, "its only index needs -k");
+    assert_eq!(
+        run_command(&f, &["unlink-window"]),
+        1,
+        "its only index needs -k"
+    );
     assert_eq!(f.info().windows, 1);
     assert_eq!(run_command(&f, &["unlink-window", "-k"]), 0);
     assert_eq!(f.info().windows, 0);
@@ -317,8 +350,14 @@ fn link_window_shows_a_window_at_a_second_index_until_unlinked() {
 #[test]
 fn resize_window_sets_a_size_the_layout_follows_and_adjusts_it() {
     let f = Fixture::start();
-    assert_eq!(run_command(&f, &["new-window", "-n", "a", "sleep", "30"]), 0);
-    assert_eq!(run_command(&f, &["resize-window", "-x", "10", "-y", "5"]), 0);
+    assert_eq!(
+        run_command(&f, &["new-window", "-n", "a", "sleep", "30"]),
+        0
+    );
+    assert_eq!(
+        run_command(&f, &["resize-window", "-x", "10", "-y", "5"]),
+        0
+    );
     let pane = place(&f, "a");
     assert_eq!((pane.w, pane.h), (10, 5));
     assert_eq!(run_command(&f, &["resize-window", "-R", "5"]), 0);

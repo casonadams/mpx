@@ -518,13 +518,25 @@ fn window_pane_and_nested_loops_expand_body_once_per_item() {
         ..Lists::default()
     };
     let cases: &[(&Lists, &str, &str)] = &[
-        (&windows, "#{W:#{window_index}=#{window_name} }", "1=shell 2=logs "),
+        (
+            &windows,
+            "#{W:#{window_index}=#{window_name} }",
+            "1=shell 2=logs ",
+        ),
         (&panes, "#{P:#{pane_index}#{?pane_active,*,}}", "0*1"),
-        (&nested, "#{W:#{?window_active,[#{window_name}],#{window_name}}}", "[shell]logs"),
+        (
+            &nested,
+            "#{W:#{?window_active,[#{window_name}],#{window_name}}}",
+            "[shell]logs",
+        ),
         (&nested, "#{W:a#,b#}c}", "a,b}ca,b}c"),
     ];
     for (lists, format, want) in cases {
-        assert_eq!(expand_with(format, &Vars::new(), lists), *want, "format {format:?}");
+        assert_eq!(
+            expand_with(format, &Vars::new(), lists),
+            *want,
+            "format {format:?}"
+        );
     }
 }
 
@@ -588,8 +600,14 @@ fn pane_input_off_is_a_flag_variable() {
         input_off: Some(true),
         ..node("p", 1)
     };
-    assert_expands(&pane_vars(&pane_view("dev", 0, &on, &[], &[])), &[("#{pane_input_off}", "1")]);
-    assert_expands(&pane_vars(&pane_view("dev", 0, &off, &[], &[])), &[("#{pane_input_off}", "0")]);
+    assert_expands(
+        &pane_vars(&pane_view("dev", 0, &on, &[], &[])),
+        &[("#{pane_input_off}", "1")],
+    );
+    assert_expands(
+        &pane_vars(&pane_view("dev", 0, &off, &[], &[])),
+        &[("#{pane_input_off}", "0")],
+    );
 }
 
 #[test]

@@ -3,11 +3,11 @@
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
 use super::app::{App, Flow, Mode};
+use super::command;
 use super::copy::CopyState;
+use super::mouse_menu::MouseMenu;
 use super::panes::{BorderGrab, border_at, border_move};
 use crate::layout::geometry::Rect;
-use super::command;
-use super::mouse_menu::MouseMenu;
 
 /// Cell position inside `rect`, clamped to its edges.
 fn local_point(rect: Rect, col: u16, row: u16) -> (usize, usize) {
@@ -23,10 +23,7 @@ impl App {
         }
         if matches!(
             self.mode,
-            Mode::Overlay(_)
-                | Mode::Prompt(_)
-                | Mode::Confirm(..)
-                | Mode::Clock { .. }
+            Mode::Overlay(_) | Mode::Prompt(_) | Mode::Confirm(..) | Mode::Clock { .. }
         ) {
             return Flow::Continue;
         }
@@ -35,7 +32,8 @@ impl App {
             return self.on_multiplexer_mouse(ev).await;
         }
 
-        if ev.kind == MouseEventKind::Down(MouseButton::Left) && self.grab_border(ev.column, ev.row) {
+        if ev.kind == MouseEventKind::Down(MouseButton::Left) && self.grab_border(ev.column, ev.row)
+        {
             return Flow::Continue;
         }
 
@@ -98,7 +96,8 @@ impl App {
         if Some(row) == self.rows.status {
             let at = col as usize;
             let target = self
-                .status_hits.targets
+                .status_hits
+                .targets
                 .iter()
                 .find(|(start, end, _)| (*start..*end).contains(&at))
                 .map(|(_, _, target)| target.clone());
@@ -144,7 +143,8 @@ impl App {
         }
         if Some(row) == self.rows.status {
             let target = self
-                .status_hits.targets
+                .status_hits
+                .targets
                 .iter()
                 .find(|(start, end, _)| (*start..*end).contains(&(col as usize)))
                 .map(|(_, _, target)| target.clone());
@@ -160,10 +160,12 @@ impl App {
                         .find(|t| t.index == idx)
                         .map(|t| format!("{}:{}", t.index + self.config.base_index, t.name))
                         .unwrap_or_default();
-                    self.open_mouse_menu(MouseMenu::Window { label }, col, row).await;
+                    self.open_mouse_menu(MouseMenu::Window { label }, col, row)
+                        .await;
                 }
                 Some(super::statusline::Target::Pane(name)) => {
-                    if let Some(rect) = self.panes.iter().find(|(n, _, _)| *n == name).map(|p| p.1) {
+                    if let Some(rect) = self.panes.iter().find(|(n, _, _)| *n == name).map(|p| p.1)
+                    {
                         self.pane_menu(&name, rect, col, row).await;
                     }
                 }
@@ -172,7 +174,8 @@ impl App {
                     let at = col as usize;
                     if at < left || at >= right {
                         let name = self.session.clone();
-                        self.open_mouse_menu(MouseMenu::Session { name }, col, row).await;
+                        self.open_mouse_menu(MouseMenu::Session { name }, col, row)
+                            .await;
                     }
                 }
             }

@@ -10,7 +10,12 @@ fn ctrl_a() -> KeyEvent {
 }
 
 fn said(h: &Harness) -> String {
-    h.app.interaction.message.as_ref().map(|(m, _)| m.clone()).unwrap_or_default()
+    h.app
+        .interaction
+        .message
+        .as_ref()
+        .map(|(m, _)| m.clone())
+        .unwrap_or_default()
 }
 
 #[tokio::test]

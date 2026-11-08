@@ -114,8 +114,13 @@ async fn a_key_whose_request_is_cancelled_runs_its_repeat() {
     };
 
     let mut first = raw_conn(&state);
-    first.send(&Request::Node(NodeRequest::Spawn(task("sink", "cat", &[])))).await;
-    assert!(matches!(first.reply().await, DaemonMessage::Response(Response::Node(_))));
+    first
+        .send(&Request::Node(NodeRequest::Spawn(task("sink", "cat", &[]))))
+        .await;
+    assert!(matches!(
+        first.reply().await,
+        DaemonMessage::Response(Response::Node(_))
+    ));
 
     // The request claims the key, then waits for output the pane never prints.
     let waiting = Request::Node(NodeRequest::Wait {

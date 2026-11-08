@@ -113,9 +113,7 @@ const SESSION_BINDINGS: &[(&str, &str)] = &[
 ];
 
 /// Bindings for keys pressed without the prefix: they never reach the pane.
-const ROOT_BINDINGS: &[(&str, &str)] = &[
-    ("C-Space", "palette"),
-];
+const ROOT_BINDINGS: &[(&str, &str)] = &[("C-Space", "palette")];
 
 /// The copy-mode table of `mode-keys vi`: a `send-keys -X` command per key. mpx keeps its own
 /// behavior for `w`, `b`, `y`, `Enter` and `Escape` (see `docs/KEYBINDINGS.md`).
@@ -310,7 +308,10 @@ impl Keymap {
             && table.is_copy()
             && !matches!(b.command, Command::CopyCommand { .. })
         {
-            return Err(format!("{}: only send-keys -X commands can be bound", table.name()));
+            return Err(format!(
+                "{}: only send-keys -X commands can be bound",
+                table.name()
+            ));
         }
         let rows = match table {
             Table::Prefix => &mut self.bindings,
@@ -348,7 +349,6 @@ impl Keymap {
         let root = (self.root.iter()).map(|b| entry(b, format!("{} (no prefix)", b.key.display())));
         prefixed.chain(root).collect()
     }
-
 }
 
 /// Resolves the prefix and bindings: defaults, then `config.bind` replacing or adding keys.

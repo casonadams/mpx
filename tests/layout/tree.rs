@@ -10,20 +10,17 @@ fn rects_of(node: &LayoutNode, bounds: Rect) -> Vec<(String, Rect)> {
     node.compute_rects(bounds)
 }
 
+fn rect_of(rects: &[(String, Rect)], name: &str) -> Rect {
+    let (_, rect) = rects.iter().find(|(n, _)| n == name).unwrap();
+    *rect
+}
+
 fn width_of(rects: &[(String, Rect)], name: &str) -> u16 {
-    rects
-        .iter()
-        .find(|(n, _)| n == name)
-        .map(|(_, r)| r.width)
-        .unwrap()
+    rect_of(rects, name).width
 }
 
 fn height_of(rects: &[(String, Rect)], name: &str) -> u16 {
-    rects
-        .iter()
-        .find(|(n, _)| n == name)
-        .map(|(_, r)| r.height)
-        .unwrap()
+    rect_of(rects, name).height
 }
 
 const VIEW: Rect = Rect {
@@ -154,6 +151,10 @@ fn spreading_evens_out_panes_and_keeps_their_arrangement() {
     for name in ["a", "b", "c"] {
         assert!((25..=27).contains(&width_of(&rects, name)), "{name} width");
     }
-    assert_eq!(width_of(&rects, "c"), width_of(&rects, "d"), "c and d stay stacked");
+    assert_eq!(
+        width_of(&rects, "c"),
+        width_of(&rects, "d"),
+        "c and d stay stacked"
+    );
     assert!(height_of(&rects, "c").abs_diff(height_of(&rects, "d")) <= 1);
 }

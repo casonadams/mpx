@@ -36,7 +36,11 @@ fn full_history_drops_its_oldest_rows_first() {
     for _ in 0..4 {
         grid.newline();
     }
-    let kept: Vec<String> = grid.history.iter().map(|row| text(&row.to_cells(0))).collect();
+    let kept: Vec<String> = grid
+        .history
+        .iter()
+        .map(|row| text(&row.to_cells(0)))
+        .collect();
     assert_eq!(
         kept,
         ["", ""],
@@ -47,7 +51,11 @@ fn full_history_drops_its_oldest_rows_first() {
     let mut grid = numbered(4, 3);
     grid.history_limit = 2;
     grid.scroll_up(3);
-    let kept: Vec<String> = grid.history.iter().map(|row| text(&row.to_cells(0))).collect();
+    let kept: Vec<String> = grid
+        .history
+        .iter()
+        .map(|row| text(&row.to_cells(0)))
+        .collect();
     assert_eq!(kept, ["r1", "r2"]);
 }
 
@@ -406,7 +414,11 @@ fn history_rows_keep_every_cell_up_to_the_last_non_blank() {
         Cell::default(),
     ];
     let row = HistoryRow::from_cells(&cells);
-    assert_eq!(row.len(), 5, "default blanks after the last styled cell are dropped");
+    assert_eq!(
+        row.len(),
+        5,
+        "default blanks after the last styled cell are dropped"
+    );
     for (x, cell) in cells.iter().enumerate().take(5) {
         assert_eq!(row.cell(x), Some(*cell), "column {x}");
     }
@@ -419,7 +431,10 @@ fn history_rows_of_blanks_and_ascii_round_trip() {
     let blank = HistoryRow::from_cells(&[Cell::default(); 4]);
     assert!(blank.is_empty());
     assert_eq!(blank.to_cells(4), vec![Cell::default(); 4]);
-    let plain: Vec<Cell> = "plain text".chars().map(|c| styled(c, None, None, false)).collect();
+    let plain: Vec<Cell> = "plain text"
+        .chars()
+        .map(|c| styled(c, None, None, false))
+        .collect();
     assert_eq!(HistoryRow::from_cells(&plain).to_cells(0), plain);
 }
 
@@ -432,9 +447,14 @@ fn scrolled_views_and_line_cells_read_history_as_full_width_rows() {
     grid.newline();
     grid.newline();
     assert!(grid.history_len() >= 1);
-    let first = grid.get_cell_scrolled(0, 0, grid.history_len()).expect("cell");
+    let first = grid
+        .get_cell_scrolled(0, 0, grid.history_len())
+        .expect("cell");
     assert_eq!((first.c, first.style.fg), ('a', Some(Color::Green)));
-    assert_eq!(grid.get_cell_scrolled(5, 0, grid.history_len()), Some(Cell::default()));
+    assert_eq!(
+        grid.get_cell_scrolled(5, 0, grid.history_len()),
+        Some(Cell::default())
+    );
     let row = grid.line_cells(0).expect("history row");
     assert_eq!(row.len(), 6);
     assert_eq!(text(&row), "ab");

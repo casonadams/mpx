@@ -41,12 +41,18 @@ fn menus_open_at_the_pointer() {
 #[test]
 fn pane_menu_labels_follow_the_pane_state() {
     let off = pane(true, true, true).command_line(0, 0);
-    assert!(off.contains("\"Enable Input\" \"i\" \"select-pane -e\""), "{off}");
+    assert!(
+        off.contains("\"Enable Input\" \"i\" \"select-pane -e\""),
+        "{off}"
+    );
     assert!(off.contains("\"Unmark\" \"m\""), "{off}");
     assert!(off.contains("\"Unzoom\" \"z\""), "{off}");
 
     let on = pane(false, false, false).command_line(0, 0);
-    assert!(on.contains("\"Disable Input\" \"i\" \"select-pane -d\""), "{on}");
+    assert!(
+        on.contains("\"Disable Input\" \"i\" \"select-pane -d\""),
+        "{on}"
+    );
     assert!(on.contains("\"Mark\" \"m\""), "{on}");
     assert!(on.contains("\"Zoom\" \"z\""), "{on}");
 }
@@ -58,6 +64,9 @@ fn menu_titles_keep_quotes_and_format_signs_literal() {
     }
     .command_line(0, 0);
     let cmd = parse(&line).unwrap_or_else(|e| panic!("`{line}` should parse: {e}"));
-    assert!(matches!(cmd, Command::Popup(PopupCommand::Menu { .. })), "{line}");
+    assert!(
+        matches!(cmd, Command::Popup(PopupCommand::Menu { .. })),
+        "{line}"
+    );
     assert!(line.contains("-T \"a'b##c\""), "{line}");
 }

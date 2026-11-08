@@ -227,8 +227,14 @@ fn a_template_prompt_without_a_text_names_the_command_it_will_run() {
 #[test]
 fn the_default_label_is_the_templates_command_as_tmux_shows_it() {
     use mpx::tui::prompt::default_label;
-    assert_eq!(default_label(Some("rename-window -- '%%'")), "(rename-window) ");
-    assert_eq!(default_label(Some("  move-window -t '%%'")), "(move-window) ");
+    assert_eq!(
+        default_label(Some("rename-window -- '%%'")),
+        "(rename-window) "
+    );
+    assert_eq!(
+        default_label(Some("  move-window -t '%%'")),
+        "(move-window) "
+    );
     assert_eq!(default_label(Some("")), "(command) ");
     assert_eq!(default_label(None), ":");
 }

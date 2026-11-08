@@ -202,11 +202,7 @@ fn sample_notes_name_the_skipped_command() {
             .cloned()
             .unwrap_or_default()
     };
-    assert!(
-        note(32).contains("runs at tmux startup"),
-        "{}",
-        note(32)
-    );
+    assert!(note(32).contains("runs at tmux startup"), "{}", note(32));
     assert!(note(33).contains("%if"), "{}", note(33));
     assert!(note(31).contains("'select-layout'"), "{}", note(31));
     assert!(
@@ -256,7 +252,10 @@ fn semicolon_separates_top_level_commands_and_escaped_semicolon_chains_binds() {
     );
     assert_eq!(config.prefix, "C-a");
     assert_eq!(config.session.scrollback_lines, 5);
-    assert_eq!(config.session.history_limit, Config::default().session.history_limit);
+    assert_eq!(
+        config.session.history_limit,
+        Config::default().session.history_limit
+    );
     assert_eq!(
         config.bind.get("x").map(String::as_str),
         Some("split-window ; select-layout tiled")
@@ -375,26 +374,45 @@ fn refused_scopes_and_style_items_are_noted_per_line() {
 fn command_aliases_become_the_alias_table() {
     let c = convert("set -s command-alias[0] 'sp=split-window -h'\n");
     assert!(c.toml.contains("[alias]"), "{}", c.toml);
-    assert!(c.toml.contains("\"sp\" = \"split-window -h\""), "{}", c.toml);
+    assert!(
+        c.toml.contains("\"sp\" = \"split-window -h\""),
+        "{}",
+        c.toml
+    );
     assert!(c.notes.is_empty(), "{:?}", c.notes);
     let config = mpx::config::Config::parse(&c.toml).unwrap();
-    assert_eq!(config.alias.get("sp").map(String::as_str), Some("split-window -h"));
+    assert_eq!(
+        config.alias.get("sp").map(String::as_str),
+        Some("split-window -h")
+    );
 }
 
 #[test]
 fn if_shell_and_run_shell_binds_convert() {
-    let c = convert("bind x if-shell -F '#{pane_active}' 'next-window' 'prev-window'\nbind y run-shell 'echo hi'\n");
+    let c = convert(
+        "bind x if-shell -F '#{pane_active}' 'next-window' 'prev-window'\nbind y run-shell 'echo hi'\n",
+    );
     let config = mpx::config::Config::parse(&c.toml).unwrap();
     let binds: Vec<&str> = ["x", "y"]
         .iter()
         .filter_map(|key| config.bind.get(*key))
         .map(String::as_str)
         .collect();
-    assert_eq!(binds, ["if-shell -F #{pane_active} next-window prev-window", "run-shell 'echo hi'"]);
+    assert_eq!(
+        binds,
+        [
+            "if-shell -F #{pane_active} next-window prev-window",
+            "run-shell 'echo hi'"
+        ]
+    );
 }
 
 #[test]
 fn startup_run_shell_has_no_config_equivalent_and_is_noted() {
     let c = convert("run-shell 'echo hi'\n");
-    assert!(c.notes.iter().any(|n| n.contains("mpx run-shell")), "{:?}", c.notes);
+    assert!(
+        c.notes.iter().any(|n| n.contains("mpx run-shell")),
+        "{:?}",
+        c.notes
+    );
 }

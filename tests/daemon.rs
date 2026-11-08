@@ -1,7 +1,7 @@
 mod daemon {
-    mod clients;
     mod basics;
     mod capture;
+    mod clients;
     mod config_policy;
     mod cursor;
     mod env;
@@ -12,8 +12,8 @@ mod daemon {
     mod idempotent;
     mod input;
     mod layout;
-    mod links;
     mod lifecycle;
+    mod links;
     mod logs;
     mod moves;
     mod pacing;

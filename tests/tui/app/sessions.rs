@@ -41,13 +41,22 @@ async fn paren_keys_skip_a_session_with_no_panes_instead_of_ending_the_tui() {
     h.frame().await;
 
     let said = h.prefixed_message(')').await.unwrap_or_default();
-    assert_eq!(said, "no other session", "an empty session is not one to cycle to");
+    assert_eq!(
+        said, "no other session",
+        "an empty session is not one to cycle to"
+    );
     assert_eq!(h.app.session, SESSION);
-    assert!(h.app.prepare_frame().await, "the TUI is still showing its own session");
+    assert!(
+        h.app.prepare_frame().await,
+        "the TUI is still showing its own session"
+    );
 
     serve_with_window(&h, "other").await;
     h.prefixed_char(')').await;
-    assert_eq!(h.app.session, "other", "the empty one between them is skipped");
+    assert_eq!(
+        h.app.session, "other",
+        "the empty one between them is skipped"
+    );
     h.prefixed_char('(').await;
     assert_eq!(h.app.session, SESSION);
 }
@@ -58,7 +67,10 @@ async fn switching_to_a_session_with_no_panes_is_refused_and_leaves_the_current_
     h.sandbox.serve("empty", &Config::default()).await;
     h.frame().await;
 
-    let said = h.command_message("switch-client -t empty").await.unwrap_or_default();
+    let said = h
+        .command_message("switch-client -t empty")
+        .await
+        .unwrap_or_default();
     assert_eq!(said, "session 'empty' has no panes");
     assert_eq!(h.app.session, SESSION);
     assert!(h.app.prepare_frame().await);
@@ -76,7 +88,11 @@ async fn a_renamed_session_is_found_by_its_new_name_even_when_another_socket_has
 
     h.command("switch-client -t work").await;
     assert_eq!(h.app.session, "work");
-    assert_eq!(h.app.endpoint, h.sandbox.endpoint("kept"), "the daemon that owns the name");
+    assert_eq!(
+        h.app.endpoint,
+        h.sandbox.endpoint("kept"),
+        "the daemon that owns the name"
+    );
     assert!(h.app.prepare_frame().await, "and it has panes to show");
 }
 

@@ -1,6 +1,8 @@
 use std::time::{Duration, Instant};
 
-use mpx::node::pacing::{Inflight, PACE_HIGH, PACE_STUCK_MS, PANE_INFLIGHT, Pacing, holds, pane_full};
+use mpx::node::pacing::{
+    Inflight, PACE_HIGH, PACE_STUCK_MS, PANE_INFLIGHT, Pacing, holds, pane_full,
+};
 
 #[test]
 fn a_terminal_holds_readers_only_while_behind_and_progressing() {
@@ -27,7 +29,10 @@ fn pacing_follows_live_backlogs_and_forgets_dropped_ones() {
     backlog.queued();
     assert!(pacing.congested(1_020));
     drop(backlog);
-    assert!(!pacing.congested(1_020), "a closed subscription no longer counts");
+    assert!(
+        !pacing.congested(1_020),
+        "a closed subscription no longer counts"
+    );
 }
 
 #[test]
@@ -49,7 +54,10 @@ fn a_closed_terminal_never_holds_readers() {
     let alive = std::sync::Arc::clone(&backlog);
     drop(mpx::node::pacing::CloseOnDrop(Some(backlog)));
     assert!(!alive.holds(1_000));
-    assert!(!pacing.congested(1_000), "still referenced, but its subscription ended");
+    assert!(
+        !pacing.congested(1_000),
+        "still referenced, but its subscription ended"
+    );
 }
 
 #[test]

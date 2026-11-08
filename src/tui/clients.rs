@@ -20,7 +20,11 @@ impl App {
 
     /// Tells the daemon the size of the area this client shows the window in, when it changed.
     pub async fn report_size(&mut self, width: u16, height: u16) {
-        if (self.attachment.terminal.width, self.attachment.terminal.height) == (width, height) {
+        if (
+            self.attachment.terminal.width,
+            self.attachment.terminal.height,
+        ) == (width, height)
+        {
             return;
         }
         let name = self.attachment.terminal.name.clone();

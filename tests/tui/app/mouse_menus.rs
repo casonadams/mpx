@@ -22,13 +22,7 @@ fn status_column(drawn: &str, needle: &str) -> u16 {
 }
 
 /// Clicks `button` at (`x`, `y`), draws, and asserts a menu opened showing every entry in `items`.
-async fn click_opens_menu(
-    h: &mut Harness,
-    button: MouseEventKind,
-    x: u16,
-    y: u16,
-    items: &[&str],
-) {
+async fn click_opens_menu(h: &mut Harness, button: MouseEventKind, x: u16, y: u16, items: &[&str]) {
     h.mouse(button, x, y).await;
     let drawn = h.frame().await;
     assert!(matches!(h.app.mode, Mode::Menu(_)), "{drawn}");
@@ -51,7 +45,10 @@ async fn right_click_opens_the_menu_for_the_pane_or_border_under_the_pointer() {
         let plain = h.rect_of("plain");
         let x = plain.x.wrapping_add_signed(dx);
         click_opens_menu(&mut h, RIGHT, x, plain.y + 1, items).await;
-        assert_eq!(h.app.active_pane, active, "a click at offset {dx} focuses {active}");
+        assert_eq!(
+            h.app.active_pane, active,
+            "a click at offset {dx} focuses {active}"
+        );
     }
 }
 
@@ -63,7 +60,10 @@ async fn pane_menu_items_run_their_commands() {
     h.frame().await;
     // "Disable Input" is the menu's `i` item: keys typed into the pane are dropped from now on.
     h.key(KeyCode::Char('i')).await;
-    assert!(matches!(h.app.mode, Mode::Normal), "the item closes the menu");
+    assert!(
+        matches!(h.app.mode, Mode::Normal),
+        "the item closes the menu"
+    );
     h.type_str("zz").await;
     h.key(KeyCode::Enter).await;
     h.command("select-pane -e").await;
@@ -117,7 +117,10 @@ async fn middle_click_pastes_the_top_buffer_into_the_pane() {
     h.mouse(MIDDLE, plain.x + 1, plain.y + 1).await;
     h.frame().await;
     assert_eq!(h.app.active_pane, "plain");
-    assert!(matches!(h.app.mode, Mode::Normal), "middle click opens no menu");
+    assert!(
+        matches!(h.app.mode, Mode::Normal),
+        "middle click opens no menu"
+    );
     let logs = wait_for(&mut h.probe, "plain", "pasted-text").await;
     assert!(logs.contains("pasted-text"), "logs: {logs}");
 }

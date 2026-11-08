@@ -27,7 +27,10 @@ fn if_shell_with_a_format_takes_the_else_branch_for_zero() {
     let no = f.path().join("no");
     let then = format!("run-shell touch {}", sh_path(&yes));
     let otherwise = format!("run-shell touch {}", sh_path(&no));
-    assert_eq!(run_command(&f, &["if-shell", "-F", "0", &then, &otherwise]), 0);
+    assert_eq!(
+        run_command(&f, &["if-shell", "-F", "0", &then, &otherwise]),
+        0
+    );
     assert!(!yes.exists());
     assert!(no.exists());
 }

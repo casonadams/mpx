@@ -102,7 +102,10 @@ fn legacy_state_moves_only_when_the_new_name_has_none() {
     );
 
     std::fs::create_dir(&legacy).unwrap();
-    assert!(!adopt_legacy_dir(root.path(), "main", "0"), "0 already has state");
+    assert!(
+        !adopt_legacy_dir(root.path(), "main", "0"),
+        "0 already has state"
+    );
     assert!(legacy.exists());
     assert!(!adopt_legacy_dir(root.path(), "gone", "1"));
 }

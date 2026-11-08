@@ -73,10 +73,7 @@ pub fn cwd_anchor<'a>(
 }
 
 /// Environment for a pane: identity variables, then the spawn's own env (which wins on conflicts).
-pub fn pane_env(
-    pane: &PaneIdentity,
-    extra: &[(String, String)],
-) -> Vec<(String, String)> {
+pub fn pane_env(pane: &PaneIdentity, extra: &[(String, String)]) -> Vec<(String, String)> {
     let mut env = vec![
         ("MPX_ENDPOINT".to_string(), pane.endpoint.to_string()),
         ("MPX_SESSION".to_string(), pane.session.to_string()),

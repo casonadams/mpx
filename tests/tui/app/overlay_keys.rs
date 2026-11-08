@@ -55,10 +55,16 @@ async fn the_shortcut_popup_goes_away_when_a_key_opens_the_palette() {
     h.terminal = VtScreen::new(100, 80);
     h.app.config.which_key_delay_ms = 0;
     h.ctrl('b').await;
-    assert!(h.frame().await.contains("find window/pane"), "the popup shows while the prefix waits");
+    assert!(
+        h.frame().await.contains("find window/pane"),
+        "the popup shows while the prefix waits"
+    );
 
     h.key(KeyCode::Char('s')).await;
     let drawn = h.frame().await;
     assert!(drawn.contains("mpx palette"), "{drawn}");
-    assert!(!drawn.contains("find window/pane"), "the popup is gone under the palette\n{drawn}");
+    assert!(
+        !drawn.contains("find window/pane"),
+        "the popup is gone under the palette\n{drawn}"
+    );
 }

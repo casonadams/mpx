@@ -67,7 +67,10 @@ async fn since_replays_the_tail_then_continues_live_without_gap_or_duplicates() 
 #[tokio::test]
 async fn since_without_a_node_name_is_an_error() {
     let (_daemon, mut client) = fresh().await;
-    assert_refused(client.stream_logs(None, Some(0), |_| false).await, "node name");
+    assert_refused(
+        client.stream_logs(None, Some(0), |_| false).await,
+        "node name",
+    );
 }
 
 #[tokio::test]
@@ -128,22 +131,40 @@ async fn a_stalled_subscriber_does_not_stall_the_pane() {
             .await;
     });
     tokio::time::sleep(Duration::from_millis(100)).await;
-    let before = client.logs("firehose", None, false, Some(u64::MAX)).await.unwrap().1;
+    let before = client
+        .logs("firehose", None, false, Some(u64::MAX))
+        .await
+        .unwrap()
+        .1;
     tokio::time::sleep(Duration::from_millis(300)).await;
-    let after = client.logs("firehose", None, false, Some(u64::MAX)).await.unwrap().1;
-    assert!(after > before, "the pane kept producing: {before} -> {after}");
+    let after = client
+        .logs("firehose", None, false, Some(u64::MAX))
+        .await
+        .unwrap()
+        .1;
+    assert!(
+        after > before,
+        "the pane kept producing: {before} -> {after}"
+    );
 
     client.kill("firehose").await.unwrap();
     let outcome = client
         .wait("firehose", WaitCondition::Exit, Some(2_000))
         .await
         .unwrap();
-    assert!(outcome.satisfied, "the firehose pane still stops on request");
+    assert!(
+        outcome.satisfied,
+        "the firehose pane still stops on request"
+    );
     let _ = stalled.await;
 }
 
 /// Output text and `(offset, next)` ranges of pane `name`, up to and including `marker`.
-fn output_until(events: &[StreamEvent], name: &str, marker: &str) -> Option<(String, Vec<(u64, u64)>)> {
+fn output_until(
+    events: &[StreamEvent],
+    name: &str,
+    marker: &str,
+) -> Option<(String, Vec<(u64, u64)>)> {
     let mut text = String::new();
     let mut ranges = Vec::new();
     for event in events {
@@ -180,7 +201,9 @@ async fn binary_and_json_subscribers_receive_the_same_output() {
     let (bin_tx, mut bin_rx) = tokio::sync::mpsc::channel(4096);
     let bin_sub = connect(&daemon.endpoint).await;
     tokio::spawn(async move {
-        let _ = bin_sub.stream_logs_into((None, None), false, bin_tx, |event| event).await;
+        let _ = bin_sub
+            .stream_logs_into((None, None), false, bin_tx, |event| event)
+            .await;
     });
     tokio::time::sleep(Duration::from_millis(100)).await;
 
@@ -194,7 +217,10 @@ async fn binary_and_json_subscribers_receive_the_same_output() {
     let (mut from_json, mut from_bin) = (Vec::new(), Vec::new());
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
     while output_of(&mut from_json).is_none() || output_of(&mut from_bin).is_none() {
-        assert!(tokio::time::Instant::now() < deadline, "both streams end with the marker");
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "both streams end with the marker"
+        );
         tokio::select! {
             Some(event) = json_rx.recv() => from_json.push(event),
             Some(event) = bin_rx.recv() => from_bin.push(event),
@@ -204,10 +230,16 @@ async fn binary_and_json_subscribers_receive_the_same_output() {
     let (json_text, json_ranges) = output_of(&mut from_json).expect("json output");
     let (bin_text, bin_ranges) = output_of(&mut from_bin).expect("binary output");
     assert_eq!(bin_text, json_text);
-    assert!(bin_text.contains("\x1b[31mred\x1b[0m é€😀 漢字 3"), "{bin_text:?}");
+    assert!(
+        bin_text.contains("\x1b[31mred\x1b[0m é€😀 漢字 3"),
+        "{bin_text:?}"
+    );
     let contiguous = |ranges: &[(u64, u64)]| ranges.windows(2).all(|w| w[0].1 == w[1].0);
     assert!(contiguous(&bin_ranges) && contiguous(&json_ranges));
-    assert_eq!(bin_ranges.last().map(|r| r.1), json_ranges.last().map(|r| r.1));
+    assert_eq!(
+        bin_ranges.last().map(|r| r.1),
+        json_ranges.last().map(|r| r.1)
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -219,19 +251,33 @@ async fn an_active_window_subscriber_gets_only_that_windows_output_but_every_exi
         spawn: pty(name, "sh", &["-c", script]),
         focus: true,
     };
-    client.new_window(window("front", "cat")).await.expect("front");
-    client.new_window(window("back", "cat")).await.expect("back");
+    client
+        .new_window(window("front", "cat"))
+        .await
+        .expect("front");
+    client
+        .new_window(window("back", "cat"))
+        .await
+        .expect("back");
     client.select_window(0).await.expect("front is active");
 
     let (tx, mut rx) = tokio::sync::mpsc::channel(256);
     let sub = connect(&daemon.endpoint).await;
     tokio::spawn(async move {
-        let _ = sub.stream_logs_into((None, None), true, tx, |event| event).await;
+        let _ = sub
+            .stream_logs_into((None, None), true, tx, |event| event)
+            .await;
     });
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    client.send_input("back", "HIDDEN\n").await.expect("back input");
-    client.send_input("front", "SHOWN\n").await.expect("front input");
+    client
+        .send_input("back", "HIDDEN\n")
+        .await
+        .expect("back input");
+    client
+        .send_input("front", "SHOWN\n")
+        .await
+        .expect("front input");
     client.kill("back").await.expect("kill back");
 
     let mut seen = Vec::new();
@@ -270,12 +316,16 @@ async fn a_terminal_hears_of_rearranged_windows_and_other_subscribers_do_not() {
     let (term_tx, mut term_rx) = tokio::sync::mpsc::channel(64);
     let terminal = connect(&daemon.endpoint).await;
     tokio::spawn(async move {
-        let _ = terminal.stream_logs_into((None, None), true, term_tx, |e| e).await;
+        let _ = terminal
+            .stream_logs_into((None, None), true, term_tx, |e| e)
+            .await;
     });
     let (all_tx, mut all_rx) = tokio::sync::mpsc::channel(64);
     let everything = connect(&daemon.endpoint).await;
     tokio::spawn(async move {
-        let _ = everything.stream_logs_into((None, None), false, all_tx, |e| e).await;
+        let _ = everything
+            .stream_logs_into((None, None), false, all_tx, |e| e)
+            .await;
     });
     tokio::time::sleep(Duration::from_millis(100)).await;
 
@@ -297,7 +347,10 @@ async fn a_terminal_hears_of_rearranged_windows_and_other_subscribers_do_not() {
         let event = tokio::time::timeout(Duration::from_secs(2), all_rx.recv()).await;
         seen.push(event.expect("events in time").expect("event"));
     }
-    assert!(!seen.iter().any(|e| matches!(e, StreamEvent::Layout)), "{seen:?}");
+    assert!(
+        !seen.iter().any(|e| matches!(e, StreamEvent::Layout)),
+        "{seen:?}"
+    );
 }
 
 #[tokio::test]

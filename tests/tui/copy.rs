@@ -19,7 +19,12 @@ fn code(code: KeyCode) -> KeyEvent {
 }
 
 /// The vi table, which the tests here drive unless they say otherwise.
-fn apply_key(cs: &mut CopyState, key: &KeyEvent, grid: Option<&Grid>, pane: (u16, u16)) -> CopyOutcome {
+fn apply_key(
+    cs: &mut CopyState,
+    key: &KeyEvent,
+    grid: Option<&Grid>,
+    pane: (u16, u16),
+) -> CopyOutcome {
     apply_key_in(cs, key, grid, pane, ModeKeys::Vi)
 }
 
@@ -242,19 +247,31 @@ fn searches_stop_at_the_ends_of_history_when_wrap_search_is_off() {
     for c in "foo first".chars() {
         grid.put_char(c);
     }
-    assert_eq!(find_next_match(&grid, "foo", (1, 0), SearchDirection::Down, false), None);
+    assert_eq!(
+        find_next_match(&grid, "foo", (1, 0), SearchDirection::Down, false),
+        None
+    );
     assert_eq!(
         find_next_match(&grid, "foo", (1, 0), SearchDirection::Down, true),
         Some((0, 0))
     );
-    assert_eq!(find_next_match(&grid, "foo", (0, 0), SearchDirection::Up, false), None);
+    assert_eq!(
+        find_next_match(&grid, "foo", (0, 0), SearchDirection::Up, false),
+        None
+    );
 }
 
 #[test]
 fn line_matches_supports_smart_case() {
-    assert_eq!(line_matches("Error: syntax error", "error", true), vec![0, 14]);
+    assert_eq!(
+        line_matches("Error: syntax error", "error", true),
+        vec![0, 14]
+    );
     assert_eq!(line_matches("Error: syntax error", "Error", false), vec![0]);
-    assert_eq!(line_matches("no match here", "test", true), Vec::<usize>::new());
+    assert_eq!(
+        line_matches("no match here", "test", true),
+        Vec::<usize>::new()
+    );
 }
 
 #[test]
@@ -270,24 +287,36 @@ fn search_down_finds_forward_match_and_positions_cursor() {
     }
     let mut cs = fresh_at_origin();
     // Press '/' to start search down
-    assert_eq!(apply_key(&mut cs, &key('/'), Some(&grid), (25, 5)), CopyOutcome::Stay);
+    assert_eq!(
+        apply_key(&mut cs, &key('/'), Some(&grid), (25, 5)),
+        CopyOutcome::Stay
+    );
     assert!(cs.search_prompt.is_some());
     for c in "beta".chars() {
         apply_key(&mut cs, &key(c), Some(&grid), (20, 5));
     }
     // Press Enter to submit
-    assert_eq!(apply_key(&mut cs, &code(KeyCode::Enter), Some(&grid), (20, 5)), CopyOutcome::Stay);
+    assert_eq!(
+        apply_key(&mut cs, &code(KeyCode::Enter), Some(&grid), (20, 5)),
+        CopyOutcome::Stay
+    );
     assert!(cs.search_prompt.is_none());
     assert_eq!(cs.cursor_y, 0);
     assert_eq!(cs.cursor_x, 6, "first 'beta' starts at column 6");
 
     // Press 'n' to find next
-    assert_eq!(apply_key(&mut cs, &key('n'), Some(&grid), (25, 5)), CopyOutcome::Stay);
+    assert_eq!(
+        apply_key(&mut cs, &key('n'), Some(&grid), (25, 5)),
+        CopyOutcome::Stay
+    );
     assert_eq!(cs.cursor_y, 1);
     assert_eq!(cs.cursor_x, 6, "second 'beta' starts on row 1 at column 6");
 
     // Press 'N' to search in reverse (up)
-    assert_eq!(apply_key(&mut cs, &key('N'), Some(&grid), (25, 5)), CopyOutcome::Stay);
+    assert_eq!(
+        apply_key(&mut cs, &key('N'), Some(&grid), (25, 5)),
+        CopyOutcome::Stay
+    );
     assert_eq!(cs.cursor_y, 0);
     assert_eq!(cs.cursor_x, 6, "returns to first 'beta'");
 }
@@ -305,11 +334,17 @@ fn search_up_finds_backward_match_in_scrollback() {
         grid.put_char(c);
     }
     let mut cs = CopyState::enter(Some(&grid));
-    assert_eq!(apply_key(&mut cs, &key('?'), Some(&grid), (20, 3)), CopyOutcome::Stay);
+    assert_eq!(
+        apply_key(&mut cs, &key('?'), Some(&grid), (20, 3)),
+        CopyOutcome::Stay
+    );
     for c in "target".chars() {
         apply_key(&mut cs, &key(c), Some(&grid), (20, 3));
     }
-    assert_eq!(apply_key(&mut cs, &code(KeyCode::Enter), Some(&grid), (20, 3)), CopyOutcome::Stay);
+    assert_eq!(
+        apply_key(&mut cs, &code(KeyCode::Enter), Some(&grid), (20, 3)),
+        CopyOutcome::Stay
+    );
     assert_eq!(cs.cursor_x, 0);
     assert!(cs.scroll_offset > 0, "view scrolled back into history");
     assert_eq!(cs.cursor_abs_y(&grid), 0, "match is on history line 0");

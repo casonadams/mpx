@@ -30,7 +30,10 @@ pub fn pick<'a>(temp: &'a mut Option<Client>, main: &'a mut Client) -> &'a mut C
 /// Whether the session behind `client` has a pane to show; one without has nothing to attach to,
 /// and the TUI would end on its first frame.
 async fn shows_panes(client: &mut Client) -> bool {
-    client.layout(80, 24).await.is_ok_and(|(panes, ..)| !panes.is_empty())
+    client
+        .layout(80, 24)
+        .await
+        .is_ok_and(|(panes, ..)| !panes.is_empty())
 }
 
 /// The running session `name` refers to. A session's name is the one its daemon reports, which

@@ -256,9 +256,7 @@ async fn run_paste(cmd: BufferPasteCommands, r: &Resolved) -> Result<i32, String
             .await?;
             Ok(0)
         }
-        BufferPasteCommands::ListBuffers { format } => {
-            list_buffers(r, format.as_deref()).await
-        }
+        BufferPasteCommands::ListBuffers { format } => list_buffers(r, format.as_deref()).await,
     }
 }
 

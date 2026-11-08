@@ -1,6 +1,8 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use mpx::config::{Config, ExtendedKeys};
-use mpx::keys::{KeyPolicy, KeySpec, TermModes, encode_key, encode_key_names, focus_event, wrap_paste};
+use mpx::keys::{
+    KeyPolicy, KeySpec, TermModes, encode_key, encode_key_names, focus_event, wrap_paste,
+};
 
 const NONE: KeyModifiers = KeyModifiers::NONE;
 const CTRL: KeyModifiers = KeyModifiers::CONTROL;
@@ -109,7 +111,11 @@ fn decckm_switches_unmodified_cursor_keys_and_leaves_the_rest_alone() {
         (KeyCode::PageUp, NONE, "\x1b[5~"),
     ];
     for (code, mods, expected) in cases {
-        assert_eq!(enc(*code, *mods, &app_cursor()), expected.as_bytes(), "{code:?}");
+        assert_eq!(
+            enc(*code, *mods, &app_cursor()),
+            expected.as_bytes(),
+            "{code:?}"
+        );
     }
 }
 
@@ -145,7 +151,10 @@ fn key_names_honour_decckm_for_arrows() {
 #[test]
 fn key_spec_encode_matches_encode_key() {
     let up = KeySpec::parse("S-Up").unwrap();
-    assert_eq!(up.encode(&plain(), default_policy()), enc(KeyCode::Up, SHIFT, &plain()));
+    assert_eq!(
+        up.encode(&plain(), default_policy()),
+        enc(KeyCode::Up, SHIFT, &plain())
+    );
     let ctrl_c = KeySpec::parse("C-c").unwrap();
     assert_eq!(ctrl_c.encode(&plain(), default_policy()), b"\x03");
 }
@@ -200,17 +209,28 @@ fn sgr_mouse_encoding_formats_clicks_and_wheel() {
         ..Default::default()
     };
 
-    let down = encode_mouse_event(&modes, MouseEventKind::Down(MouseButton::Left), 15, 5, NONE).unwrap();
+    let down =
+        encode_mouse_event(&modes, MouseEventKind::Down(MouseButton::Left), 15, 5, NONE).unwrap();
     assert_eq!(down, b"\x1b[<0;15;5M");
 
-    let up = encode_mouse_event(&modes, MouseEventKind::Up(MouseButton::Left), 15, 5, NONE).unwrap();
+    let up =
+        encode_mouse_event(&modes, MouseEventKind::Up(MouseButton::Left), 15, 5, NONE).unwrap();
     assert_eq!(up, b"\x1b[<0;15;5m");
 
     let scroll = encode_mouse_event(&modes, MouseEventKind::ScrollUp, 10, 20, NONE).unwrap();
     assert_eq!(scroll, b"\x1b[<64;10;20M");
 
     let disabled = TermModes::default();
-    assert_eq!(encode_mouse_event(&disabled, MouseEventKind::Down(MouseButton::Left), 15, 5, NONE), None);
+    assert_eq!(
+        encode_mouse_event(
+            &disabled,
+            MouseEventKind::Down(MouseButton::Left),
+            15,
+            5,
+            NONE
+        ),
+        None
+    );
 }
 
 fn default_policy() -> KeyPolicy {
@@ -227,7 +247,11 @@ fn modified(extended: ExtendedKeys, xterm_keys: bool) -> KeyPolicy {
 /// Asserts each `(code, mods, modes, policy, expected)` encodes to its bytes.
 fn assert_encodes(cases: &[(KeyCode, KeyModifiers, TermModes, KeyPolicy, &[u8])]) {
     for (code, mods, modes, policy, want) in cases {
-        assert_eq!(enc_with(*code, *mods, modes, *policy), *want, "{code:?} {mods:?}");
+        assert_eq!(
+            enc_with(*code, *mods, modes, *policy),
+            *want,
+            "{code:?} {mods:?}"
+        );
     }
 }
 
@@ -249,11 +273,29 @@ fn kitty_modes(flags: u8) -> TermModes {
 fn modify_other_keys_sends_ctrl_and_modified_keys_as_csi_27_and_leaves_plain_keys_alone() {
     let on = modified(ExtendedKeys::On, true);
     assert_encodes(&[
-        (KeyCode::Char('a'), CTRL, modify_modes(2), on, b"\x1b[27;5;97~"),
-        (KeyCode::Char('A'), CTRL | SHIFT, modify_modes(2), on, b"\x1b[27;6;65~"),
+        (
+            KeyCode::Char('a'),
+            CTRL,
+            modify_modes(2),
+            on,
+            b"\x1b[27;5;97~",
+        ),
+        (
+            KeyCode::Char('A'),
+            CTRL | SHIFT,
+            modify_modes(2),
+            on,
+            b"\x1b[27;6;65~",
+        ),
         (KeyCode::Enter, SHIFT, modify_modes(2), on, b"\x1b[27;2;13~"),
         (KeyCode::Esc, ALT, modify_modes(2), on, b"\x1b[27;3;27~"),
-        (KeyCode::Char('i'), CTRL, modify_modes(2), on, b"\x1b[27;5;105~"),
+        (
+            KeyCode::Char('i'),
+            CTRL,
+            modify_modes(2),
+            on,
+            b"\x1b[27;5;105~",
+        ),
         (KeyCode::Tab, NONE, modify_modes(2), on, b"\t"),
         (KeyCode::Char('x'), NONE, modify_modes(2), on, b"x"),
         (KeyCode::Char('A'), SHIFT, modify_modes(2), on, b"A"),
@@ -269,14 +311,32 @@ fn kitty_disambiguation_and_extended_keys_policy_pick_the_encoding() {
         (KeyCode::Esc, NONE, kitty_modes(1), on, b"\x1b[27u"),
         (KeyCode::Enter, SHIFT, kitty_modes(1), on, b"\x1b[13;2u"),
         (KeyCode::Char('i'), CTRL, kitty_modes(1), on, b"\x1b[105;5u"),
-        (KeyCode::Char('A'), CTRL | SHIFT, kitty_modes(1), on, b"\x1b[97;6u"),
+        (
+            KeyCode::Char('A'),
+            CTRL | SHIFT,
+            kitty_modes(1),
+            on,
+            b"\x1b[97;6u",
+        ),
         (KeyCode::Tab, NONE, kitty_modes(1), on, b"\t"),
         (KeyCode::Enter, NONE, kitty_modes(1), on, b"\r"),
         (KeyCode::Char('A'), SHIFT, kitty_modes(1), on, b"A"),
         // extended-keys decides whether a pane's modifyOtherKeys request counts
         (KeyCode::Char('a'), CTRL, TermModes::default(), on, b"\x01"),
-        (KeyCode::Char('a'), CTRL, modify_modes(2), modified(ExtendedKeys::Off, true), b"\x01"),
-        (KeyCode::Char('a'), CTRL, modify_modes(2), on, b"\x1b[27;5;97~"),
+        (
+            KeyCode::Char('a'),
+            CTRL,
+            modify_modes(2),
+            modified(ExtendedKeys::Off, true),
+            b"\x01",
+        ),
+        (
+            KeyCode::Char('a'),
+            CTRL,
+            modify_modes(2),
+            on,
+            b"\x1b[27;5;97~",
+        ),
         (
             KeyCode::Char('a'),
             CTRL,
@@ -290,7 +350,26 @@ fn kitty_disambiguation_and_extended_keys_policy_pick_the_encoding() {
 #[test]
 fn xterm_keys_off_sends_function_and_cursor_keys_without_modifiers() {
     let modes = TermModes::default();
-    assert_eq!(enc_with(KeyCode::Up, CTRL, &modes, modified(ExtendedKeys::Off, false)), b"\x1b[A");
-    assert_eq!(enc_with(KeyCode::F(5), SHIFT, &modes, modified(ExtendedKeys::Off, false)), b"\x1b[15~");
-    assert_eq!(enc_with(KeyCode::Up, CTRL, &modes, modified(ExtendedKeys::Off, true)), b"\x1b[1;5A");
+    assert_eq!(
+        enc_with(
+            KeyCode::Up,
+            CTRL,
+            &modes,
+            modified(ExtendedKeys::Off, false)
+        ),
+        b"\x1b[A"
+    );
+    assert_eq!(
+        enc_with(
+            KeyCode::F(5),
+            SHIFT,
+            &modes,
+            modified(ExtendedKeys::Off, false)
+        ),
+        b"\x1b[15~"
+    );
+    assert_eq!(
+        enc_with(KeyCode::Up, CTRL, &modes, modified(ExtendedKeys::Off, true)),
+        b"\x1b[1;5A"
+    );
 }

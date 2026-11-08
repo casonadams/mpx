@@ -85,20 +85,12 @@ fn session_name<'a>(dir: &Path, entry: &'a str) -> Option<&'a str> {
         {
             return None;
         }
-        if name.is_empty() {
-            None
-        } else {
-            Some(name)
-        }
+        if name.is_empty() { None } else { Some(name) }
     } else {
         let hash = fnv1a_64(dir.to_string_lossy().as_bytes());
         let prefix = format!("mpx-{hash:08x}-");
         let rest = entry.strip_prefix(&prefix)?;
-        if rest.is_empty() {
-            None
-        } else {
-            Some(rest)
-        }
+        if rest.is_empty() { None } else { Some(rest) }
     }
 }
 

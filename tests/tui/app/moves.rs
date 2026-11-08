@@ -50,10 +50,15 @@ async fn respawn_with_kill_shows_the_new_process_in_the_pane_or_the_window() {
     ] {
         let mut h = Harness::idle().await;
         h.command(command).await;
-        h.until("the old screen dropped", |app| !app.expected.contains_key(MAIN)).await;
+        h.until("the old screen dropped", |app| {
+            !app.expected.contains_key(MAIN)
+        })
+        .await;
         h.frame().await;
         h.until("the respawned output", |app| {
-            app.vt.get(MAIN).is_some_and(|vt| vt.snapshot().contains("AGAIN"))
+            app.vt
+                .get(MAIN)
+                .is_some_and(|vt| vt.snapshot().contains("AGAIN"))
         })
         .await;
         assert_eq!(h.layout_panes().await, [MAIN]);

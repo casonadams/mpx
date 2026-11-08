@@ -217,7 +217,10 @@ impl Conv {
             Some((name, command)) if !name.is_empty() && !command.is_empty() => {
                 self.alias.insert(name.to_string(), command.to_string());
             }
-            _ => self.note(line, format!("set -s command-alias: '{value}' is not name=command")),
+            _ => self.note(
+                line,
+                format!("set -s command-alias: '{value}' is not name=command"),
+            ),
         }
     }
 

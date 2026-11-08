@@ -60,7 +60,13 @@ async fn paste_and_expect(spawn: SpawnOpts, text: &str, submit: bool, needle: &s
 
 #[tokio::test]
 async fn literal_send_keys_are_written_as_text() {
-    keys_output(task("lit", "cat", &[]), &["lit", "eral", "\n"], true, "literal").await;
+    keys_output(
+        task("lit", "cat", &[]),
+        &["lit", "eral", "\n"],
+        true,
+        "literal",
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -95,10 +101,19 @@ async fn keys_sent_to_an_input_off_pane_are_dropped_until_input_is_back_on() {
     let (_daemon, mut client) = started_with(task("io-a", "cat", &[])).await;
     client.input_off(Some("io-a"), true).await.unwrap();
     let nodes = client.list().await.unwrap();
-    assert_eq!(nodes.iter().find(|n| n.name == "io-a").unwrap().input_off, Some(true));
-    client.send_keys("io-a", vec!["dropped".into()], true).await.unwrap();
+    assert_eq!(
+        nodes.iter().find(|n| n.name == "io-a").unwrap().input_off,
+        Some(true)
+    );
+    client
+        .send_keys("io-a", vec!["dropped".into()], true)
+        .await
+        .unwrap();
     client.input_off(Some("io-a"), false).await.unwrap();
-    client.send_keys("io-a", vec!["kept".into()], true).await.unwrap();
+    client
+        .send_keys("io-a", vec!["kept".into()], true)
+        .await
+        .unwrap();
     let logs = output_then_kill(&mut client, "io-a", "kept").await;
     assert!(!logs.contains("dropped"), "logs: {logs}");
 }

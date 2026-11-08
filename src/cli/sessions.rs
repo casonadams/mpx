@@ -155,7 +155,6 @@ async fn session_command(command: Commands, r: Resolved) -> Result<i32, String> 
     }
 }
 
-
 /// Connects to the session, starting its daemon when it is not running.
 pub async fn ensure_client(r: &Resolved) -> Result<Client, String> {
     match probe(&r.endpoint).await {

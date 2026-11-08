@@ -578,9 +578,15 @@ async fn window_linked_and_unlinked_fire_for_new_windows_and_for_link_and_unlink
         .link_window(None, None, LinkPlace::default())
         .await
         .unwrap();
-    assert!(appears(&linked).await, "window-linked did not run for the link");
+    assert!(
+        appears(&linked).await,
+        "window-linked did not run for the link"
+    );
     client.unlink_window(Some(1), false).await.unwrap();
-    assert!(appears(&unlinked).await, "window-unlinked did not run for the unlink");
+    assert!(
+        appears(&unlinked).await,
+        "window-unlinked did not run for the unlink"
+    );
 }
 
 #[tokio::test]

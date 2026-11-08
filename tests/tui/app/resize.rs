@@ -93,13 +93,19 @@ async fn closing_the_lower_pane_keeps_the_upper_content_bottom_anchored() {
     let drawn = h.frame().await;
     let rows = pane_rows(&h, MAIN);
     let last = rows.len() - 1;
-    assert_eq!(rows[last], "PROMPT$", "the prompt is on the bottom row\n{drawn}\n{rows:#?}");
+    assert_eq!(
+        rows[last], "PROMPT$",
+        "the prompt is on the bottom row\n{drawn}\n{rows:#?}"
+    );
     assert_eq!(rows[last - 1], "top 20", "{rows:#?}");
     assert!(
         rows.iter().any(|row| row == "READYtop 01"),
         "the first line is kept, from history\n{rows:#?}"
     );
-    assert!(rows[0].is_empty(), "the rows above the content are the pad\n{rows:#?}");
+    assert!(
+        rows[0].is_empty(),
+        "the rows above the content are the pad\n{rows:#?}"
+    );
 }
 
 /// ConPTY repaints a pane from its top row after a resize and keeps no scrollback to pull rows
@@ -117,7 +123,10 @@ async fn closing_the_lower_pane_shows_the_repaint_conpty_draws() {
     expected.push("PROMPT$".to_string());
     let facts = h.facts(MAIN).await;
     assert_eq!(rows[..14], expected[..], "{drawn}\n{facts}");
-    assert!(rows[14..].iter().all(String::is_empty), "{rows:#?}\n{facts}");
+    assert!(
+        rows[14..].iter().all(String::is_empty),
+        "{rows:#?}\n{facts}"
+    );
 }
 
 #[tokio::test]

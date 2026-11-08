@@ -54,7 +54,9 @@ impl widgets::ListView for TextView {
     }
 
     fn rows(&self) -> impl Iterator<Item = Vec<Span>> + '_ {
-        self.lines.iter().map(|line| vec![Span::plain(printable(line))])
+        self.lines
+            .iter()
+            .map(|line| vec![Span::plain(printable(line))])
     }
 
     fn cursor(&self) -> &ListState {

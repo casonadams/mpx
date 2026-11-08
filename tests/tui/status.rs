@@ -67,10 +67,22 @@ fn status_hit_detects_clicked_window_tab() {
     // "0:editor* " is 10 chars (6..16)
     // "1:server- " is 10 chars (16..26)
     assert_eq!(status_hit("dev", &tabs, &[], false, 2), None);
-    assert_eq!(status_hit("dev", &tabs, &[], false, 6), Some(StatusTarget::Window(0)));
-    assert_eq!(status_hit("dev", &tabs, &[], false, 15), Some(StatusTarget::Window(0)));
-    assert_eq!(status_hit("dev", &tabs, &[], false, 16), Some(StatusTarget::Window(1)));
-    assert_eq!(status_hit("dev", &tabs, &[], false, 25), Some(StatusTarget::Window(1)));
+    assert_eq!(
+        status_hit("dev", &tabs, &[], false, 6),
+        Some(StatusTarget::Window(0))
+    );
+    assert_eq!(
+        status_hit("dev", &tabs, &[], false, 15),
+        Some(StatusTarget::Window(0))
+    );
+    assert_eq!(
+        status_hit("dev", &tabs, &[], false, 16),
+        Some(StatusTarget::Window(1))
+    );
+    assert_eq!(
+        status_hit("dev", &tabs, &[], false, 25),
+        Some(StatusTarget::Window(1))
+    );
     assert_eq!(status_hit("dev", &tabs, &[], false, 26), None);
 }
 
@@ -84,10 +96,22 @@ fn status_hit_detects_clicked_pane_when_no_tabs() {
     // offset of [sess]  is 7 chars (0..7)
     // "0:main* " is 8 chars (7..15)
     // "1:worker- " is 10 chars (15..25)
-    assert_eq!(status_hit("sess", &[], &panes, false, 7), Some(StatusTarget::Pane("main")));
-    assert_eq!(status_hit("sess", &[], &panes, false, 14), Some(StatusTarget::Pane("main")));
-    assert_eq!(status_hit("sess", &[], &panes, false, 15), Some(StatusTarget::Pane("worker")));
-    assert_eq!(status_hit("sess", &[], &panes, false, 24), Some(StatusTarget::Pane("worker")));
+    assert_eq!(
+        status_hit("sess", &[], &panes, false, 7),
+        Some(StatusTarget::Pane("main"))
+    );
+    assert_eq!(
+        status_hit("sess", &[], &panes, false, 14),
+        Some(StatusTarget::Pane("main"))
+    );
+    assert_eq!(
+        status_hit("sess", &[], &panes, false, 15),
+        Some(StatusTarget::Pane("worker"))
+    );
+    assert_eq!(
+        status_hit("sess", &[], &panes, false, 24),
+        Some(StatusTarget::Pane("worker"))
+    );
 }
 
 #[test]

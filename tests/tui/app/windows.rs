@@ -54,7 +54,10 @@ async fn rename_window_through_the_command_prompt() {
     let mut h = start().await;
     h.frame().await;
     h.prefixed_char(',').await;
-    assert!(h.frame().await.contains("(rename-window) "), "the prompt says what it will do");
+    assert!(
+        h.frame().await.contains("(rename-window) "),
+        "the prompt says what it will do"
+    );
     // `,` starts with the current name, which the user replaces.
     h.ctrl('u').await;
     h.type_str("logs").await;
@@ -253,7 +256,10 @@ async fn a_hidden_windows_output_never_reaches_the_tui_and_shows_once_selected()
     }
     h.app.pacing.frame_due = None;
 
-    h.probe.send_input("work", "BEHIND-THE-SCENES").await.expect("send");
+    h.probe
+        .send_input("work", "BEHIND-THE-SCENES")
+        .await
+        .expect("send");
     wait_for(&mut h.probe, "work", "BEHIND-THE-SCENES").await;
     let quiet_end = tokio::time::Instant::now() + std::time::Duration::from_millis(150);
     let mut quiet = Vec::new();
@@ -275,7 +281,10 @@ async fn a_hidden_windows_output_never_reaches_the_tui_and_shows_once_selected()
 
     h.prefixed_char('1').await;
     let shown = h.frame().await;
-    assert!(shown.contains("BEHIND-THE-SCENES"), "rebuilt from the log: {shown}");
+    assert!(
+        shown.contains("BEHIND-THE-SCENES"),
+        "rebuilt from the log: {shown}"
+    );
 }
 
 /// Applies stream events until `name` has exited, then prepares a frame; false means nothing is
@@ -299,7 +308,10 @@ async fn the_shown_windows_last_pane_exiting_moves_on_to_another_window() {
     h.probe.send_input("work", "hidden").await.expect("send");
     wait_for(&mut h.probe, "work", "hidden").await;
 
-    assert!(frame_after_exit(&mut h, MAIN).await, "another window still has a pane");
+    assert!(
+        frame_after_exit(&mut h, MAIN).await,
+        "another window still has a pane"
+    );
     assert!(h.frame().await.contains("hidden"));
 }
 
@@ -322,11 +334,18 @@ async fn a_window_that_flooded_while_hidden_is_rebuilt_when_selected() {
 
     h.probe.send_input("bulk", "\n").await.expect("trigger");
     let log = wait_for(&mut h.probe, "bulk", "BIG-END").await;
-    assert!(log.len() > 512 * 1024, "more than a catch-up's worth: {}", log.len());
+    assert!(
+        log.len() > 512 * 1024,
+        "more than a catch-up's worth: {}",
+        log.len()
+    );
 
     h.prefixed_char('1').await;
     let shown = h.frame().await;
-    assert!(shown.contains("8000") && shown.contains("BIG-END"), "{shown}");
+    assert!(
+        shown.contains("8000") && shown.contains("BIG-END"),
+        "{shown}"
+    );
 }
 
 #[tokio::test]
@@ -335,7 +354,8 @@ async fn panes_split_or_focused_from_outside_are_laid_out_without_waiting_for_a_
     h.frame().await;
     h.app.layout.dirty = false;
     split(&mut h.probe, MAIN, "agent", Direction::Horizontal).await;
-    h.until("the split is laid out", |app| app.layout.dirty).await;
+    h.until("the split is laid out", |app| app.layout.dirty)
+        .await;
 
     h.frame().await;
     h.app.layout.dirty = false;
@@ -352,16 +372,20 @@ async fn dragging_a_border_with_the_mouse_resizes_the_panes_beside_it() {
     h.frame().await;
     let before = width_of(&h, MAIN);
     let border = h.rect_of(MAIN).x + before;
-    h.mouse(MouseEventKind::Down(MouseButton::Left), border, 3).await;
+    h.mouse(MouseEventKind::Down(MouseButton::Left), border, 3)
+        .await;
     h.frame().await;
-    h.mouse(MouseEventKind::Drag(MouseButton::Left), border + 3, 3).await;
+    h.mouse(MouseEventKind::Drag(MouseButton::Left), border + 3, 3)
+        .await;
     h.frame().await;
-    h.mouse(MouseEventKind::Drag(MouseButton::Left), border + 6, 4).await;
+    h.mouse(MouseEventKind::Drag(MouseButton::Left), border + 6, 4)
+        .await;
     h.frame().await;
     let height = h.rect_of(MAIN).height;
     let size = h.probe.status(MAIN).await.expect("status").size;
     assert_eq!(size, Some((before, height)), "not while dragging");
-    h.mouse(MouseEventKind::Up(MouseButton::Left), border + 6, 4).await;
+    h.mouse(MouseEventKind::Up(MouseButton::Left), border + 6, 4)
+        .await;
     h.frame().await;
     let width = width_of(&h, MAIN);
     assert!(width.abs_diff(before + 6) <= 1, "{before} -> {width}");
@@ -376,7 +400,10 @@ async fn focusing_a_pane_resized_elsewhere_gives_it_back_its_size() {
     split(&mut h.probe, MAIN, "side", Direction::Horizontal).await;
     h.frame().await;
     let rect = h.rect_of("side");
-    h.probe.resize_pane("side", 30, 8).await.expect("resize elsewhere");
+    h.probe
+        .resize_pane("side", 30, 8)
+        .await
+        .expect("resize elsewhere");
     h.prefixed_char('o').await;
     h.frame().await;
     assert_eq!(h.app.active_pane, "side");
@@ -393,7 +420,11 @@ async fn prefix_space_cycles_layouts_and_prefix_e_spreads_panes() {
         h.prefixed(KeyCode::Char(' ')).await;
         h.frame().await;
     }
-    assert_eq!(h.rect_of(MAIN).x, h.rect_of("side").x, "stacked after two cycles");
+    assert_eq!(
+        h.rect_of(MAIN).x,
+        h.rect_of("side").x,
+        "stacked after two cycles"
+    );
 
     h.probe
         .resize_split(MAIN, mpx::protocol::Side::Down, 8, h.app.pane_viewport())
@@ -419,7 +450,13 @@ async fn select_window_finds_a_window_by_name() {
     assert_eq!(active_window(&h), first);
 
     h.command("select-window -t ':nosuch'").await;
-    assert!(h.app.interaction.message.as_ref().is_some_and(|(m, _)| m.contains("can't find window: nosuch")));
+    assert!(
+        h.app
+            .interaction
+            .message
+            .as_ref()
+            .is_some_and(|(m, _)| m.contains("can't find window: nosuch"))
+    );
     assert_eq!(active_window(&h), first);
 }
 
@@ -452,13 +489,20 @@ async fn move_window_puts_the_active_window_at_the_index() {
 async fn next_window_with_a_steps_to_the_window_that_has_activity() {
     let mut h = start().await;
     window(&mut h.probe, "bg", ECHO).await;
-    h.probe.select_window(0).await.expect("back to the first window");
+    h.probe
+        .select_window(0)
+        .await
+        .expect("back to the first window");
     h.frame().await;
     let first = active_window(&h);
 
     h.command("next-window -a").await;
     assert!(
-        h.app.interaction.message.as_ref().is_some_and(|(m, _)| m.contains("no next window with an alert")),
+        h.app
+            .interaction
+            .message
+            .as_ref()
+            .is_some_and(|(m, _)| m.contains("no next window with an alert")),
         "no window has an alert yet"
     );
     assert_eq!(active_window(&h), first);
@@ -472,14 +516,24 @@ async fn next_window_with_a_steps_to_the_window_that_has_activity() {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
     h.frame().await;
-    assert!(h.app.layout.tabs.iter().any(|t| t.name == "bg" && t.has_activity));
+    assert!(
+        h.app
+            .layout
+            .tabs
+            .iter()
+            .any(|t| t.name == "bg" && t.has_activity)
+    );
     h.command("next-window -a").await;
     h.frame().await;
     assert_eq!(active_window(&h), "bg");
 
     h.command("previous-window -a").await;
     assert!(
-        h.app.interaction.message.as_ref().is_some_and(|(m, _)| m.contains("no previous window with an alert")),
+        h.app
+            .interaction
+            .message
+            .as_ref()
+            .is_some_and(|(m, _)| m.contains("no previous window with an alert")),
         "visiting the window cleared its alert"
     );
 }
@@ -500,23 +554,33 @@ async fn a_pane_shown_again_keeps_what_was_painted_once_after_its_log_wrapped() 
     h.emit(MAIN, ui, "STATIC-ROW").await;
     h.probe.send_input(MAIN, &ticks(0..60_000)).await.unwrap();
     h.until("shown updates", |app| {
-        app.vt.get(MAIN).is_some_and(|vt| vt.snapshot().contains("tick 059999"))
+        app.vt
+            .get(MAIN)
+            .is_some_and(|vt| vt.snapshot().contains("tick 059999"))
     })
     .await;
 
     h.open_window("other").await;
     h.frame().await;
-    h.probe.send_input(MAIN, &ticks(60_000..135_000)).await.unwrap();
+    h.probe
+        .send_input(MAIN, &ticks(60_000..135_000))
+        .await
+        .unwrap();
     wait_for(&mut h.probe, MAIN, "tick 134999").await;
 
     h.prefixed_char('p').await;
     h.frame().await;
     h.until("hidden updates", |app| {
-        app.vt.get(MAIN).is_some_and(|vt| vt.snapshot().contains("tick 134999"))
+        app.vt
+            .get(MAIN)
+            .is_some_and(|vt| vt.snapshot().contains("tick 134999"))
     })
     .await;
     let frame = h.frame().await;
-    assert!(frame.contains("HEADER-ROW") && frame.contains("STATIC-ROW"), "{frame}");
+    assert!(
+        frame.contains("HEADER-ROW") && frame.contains("STATIC-ROW"),
+        "{frame}"
+    );
 }
 
 /// Unix only: ConPTY repaints the screen, so the log never holds the bytes this floods.
@@ -525,7 +589,12 @@ async fn a_pane_shown_again_keeps_what_was_painted_once_after_its_log_wrapped() 
 async fn a_pane_hidden_for_more_than_its_log_keeps_is_rebuilt_from_the_daemons_screen() {
     let mut h = Harness::start(echo_config(), ECHO).await;
     h.frame().await;
-    h.emit(MAIN, "\x1b[?1049h\x1b[2J\x1b[1;1HHEADER-ROW\x1b[5;1HSTATIC-ROW", "STATIC-ROW").await;
+    h.emit(
+        MAIN,
+        "\x1b[?1049h\x1b[2J\x1b[1;1HHEADER-ROW\x1b[5;1HSTATIC-ROW",
+        "STATIC-ROW",
+    )
+    .await;
     h.open_window("other").await;
     h.frame().await;
     h.probe.send_input(MAIN, &ticks(0..120_000)).await.unwrap();
@@ -534,7 +603,10 @@ async fn a_pane_hidden_for_more_than_its_log_keeps_is_rebuilt_from_the_daemons_s
     h.prefixed_char('p').await;
     h.frame().await;
     let frame = h.frame().await;
-    assert!(frame.contains("HEADER-ROW") && frame.contains("STATIC-ROW"), "{frame}");
+    assert!(
+        frame.contains("HEADER-ROW") && frame.contains("STATIC-ROW"),
+        "{frame}"
+    );
     assert!(frame.contains("tick 119999"), "{frame}");
 }
 
@@ -544,7 +616,12 @@ async fn a_pane_hidden_for_more_than_its_log_keeps_is_rebuilt_from_the_daemons_s
 async fn a_screen_loaded_after_the_log_wrapped_shows_what_was_painted_once() {
     let mut h = Harness::start(echo_config(), ECHO).await;
     h.frame().await;
-    h.emit(MAIN, "\x1b[?1049h\x1b[2J\x1b[1;1HHEADER-ROW\x1b[5;1HSTATIC-ROW", "STATIC-ROW").await;
+    h.emit(
+        MAIN,
+        "\x1b[?1049h\x1b[2J\x1b[1;1HHEADER-ROW\x1b[5;1HSTATIC-ROW",
+        "STATIC-ROW",
+    )
+    .await;
     h.probe.send_input(MAIN, &ticks(0..120_000)).await.unwrap();
     wait_for(&mut h.probe, MAIN, "tick 119999").await;
 
@@ -552,6 +629,9 @@ async fn a_screen_loaded_after_the_log_wrapped_shows_what_was_painted_once() {
     h.app.expected.remove(MAIN);
     h.app.pane_dims.remove(MAIN);
     let frame = h.frame().await;
-    assert!(frame.contains("HEADER-ROW") && frame.contains("STATIC-ROW"), "{frame}");
+    assert!(
+        frame.contains("HEADER-ROW") && frame.contains("STATIC-ROW"),
+        "{frame}"
+    );
     assert!(frame.contains("tick 119999"), "{frame}");
 }

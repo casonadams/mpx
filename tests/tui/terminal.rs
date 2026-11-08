@@ -1,5 +1,6 @@
 use mpx::tui::terminal::{
-    enter_sequence, leave_sequence, attach_query, margins_reply, osc_color_reply, palette_reply, parse_color_spec, report_from,
+    attach_query, enter_sequence, leave_sequence, margins_reply, osc_color_reply, palette_reply,
+    parse_color_spec, report_from,
 };
 
 #[test]
@@ -13,15 +14,27 @@ fn a_terminal_reporting_mode_69_supports_margins() {
 #[test]
 fn an_unknown_or_unanswered_mode_means_no_margins() {
     assert_eq!(margins_reply(b"\x1b[?69;0$y\x1b[?62c"), Some(false));
-    assert_eq!(margins_reply(b"\x1b[?69;4$y\x1b[?1;2c"), Some(false), "permanently reset");
-    assert_eq!(margins_reply(b"\x1b[?65;1;9c"), Some(false), "only DA1 came back");
+    assert_eq!(
+        margins_reply(b"\x1b[?69;4$y\x1b[?1;2c"),
+        Some(false),
+        "permanently reset"
+    );
+    assert_eq!(
+        margins_reply(b"\x1b[?65;1;9c"),
+        Some(false),
+        "only DA1 came back"
+    );
 }
 
 #[test]
 fn the_answer_waits_for_device_attributes() {
     assert_eq!(margins_reply(b""), None);
     assert_eq!(margins_reply(b"\x1b[?69;1$y"), None);
-    assert_eq!(margins_reply(b"\x1b[?69;1$y\x1b[?62;22"), None, "DA1 cut short");
+    assert_eq!(
+        margins_reply(b"\x1b[?69;1$y\x1b[?62;22"),
+        None,
+        "DA1 cut short"
+    );
 }
 
 #[test]
@@ -31,14 +44,24 @@ fn terminal_color_specs_scale_every_digit_width_to_eight_bits() {
     assert_eq!(parse_color_spec("rgb:f/8/0"), Some((255, 136, 0)));
     assert_eq!(parse_color_spec("rgb:2e2e/3434/4040"), Some((46, 52, 64)));
     assert_eq!(parse_color_spec("#2e3440"), Some((46, 52, 64)));
-    for bad in ["", "rgb:", "rgb:ff/ff", "rgb:ff/ff/ff/ff", "rgb:fffff/0/0", "rgb:zz/0/0", "#fff", "red"] {
+    for bad in [
+        "",
+        "rgb:",
+        "rgb:ff/ff",
+        "rgb:ff/ff/ff/ff",
+        "rgb:fffff/0/0",
+        "rgb:zz/0/0",
+        "#fff",
+        "red",
+    ] {
         assert_eq!(parse_color_spec(bad), None, "{bad}");
     }
 }
 
 #[test]
 fn color_answers_are_found_among_the_other_replies_whatever_ends_them() {
-    let reply = b"\x1b]10;rgb:d8d8/dede/e9e9\x1b\\\x1b]11;rgb:2e2e/3434/4040\x07\x1b[?69;2$y\x1b[?62c";
+    let reply =
+        b"\x1b]10;rgb:d8d8/dede/e9e9\x1b\\\x1b]11;rgb:2e2e/3434/4040\x07\x1b[?69;2$y\x1b[?62c";
     let report = report_from(reply);
     assert_eq!(report.fg, Some((216, 222, 233)));
     assert_eq!(report.bg, Some((46, 52, 64)));
@@ -46,8 +69,16 @@ fn color_answers_are_found_among_the_other_replies_whatever_ends_them() {
 
     let silent = report_from(b"\x1b[?62c");
     assert_eq!((silent.fg, silent.bg, silent.margins), (None, None, false));
-    assert_eq!(osc_color_reply(b"\x1b]11;rgb:0000/0000/0000", 11), None, "unterminated");
-    assert_eq!(osc_color_reply(b"\x1b]10;rgb:ffff/ffff/ffff\x07", 11), None, "other code");
+    assert_eq!(
+        osc_color_reply(b"\x1b]11;rgb:0000/0000/0000", 11),
+        None,
+        "unterminated"
+    );
+    assert_eq!(
+        osc_color_reply(b"\x1b]10;rgb:ffff/ffff/ffff\x07", 11),
+        None,
+        "other code"
+    );
 }
 
 #[test]
@@ -56,12 +87,24 @@ fn entering_the_tui_switches_screens_and_leaving_hands_the_shell_its_own_back() 
     for wanted in ["\x1b[?1049h", "\x1b[?25l", "\x1b[?2004h", "\x1b[?7l"] {
         assert!(enter.contains(wanted), "enter lacks {wanted:?}");
     }
-    assert!(!enter.contains("\x1b[?1004h"), "focus reports wait for focus-events");
+    assert!(
+        !enter.contains("\x1b[?1004h"),
+        "focus reports wait for focus-events"
+    );
     let leave = String::from_utf8(leave_sequence()).unwrap();
-    for wanted in ["\x1b[?1049l", "\x1b[?25h", "\x1b[?2004l", "\x1b[?1004l", "\x1b[?7h"] {
+    for wanted in [
+        "\x1b[?1049l",
+        "\x1b[?25h",
+        "\x1b[?2004l",
+        "\x1b[?1004l",
+        "\x1b[?7h",
+    ] {
         assert!(leave.contains(wanted), "leave lacks {wanted:?}");
     }
-    assert!(!leave.contains("\x1b[?1049h"), "leave must not enter the alternate screen");
+    assert!(
+        !leave.contains("\x1b[?1049h"),
+        "leave must not enter the alternate screen"
+    );
     assert!(!enter.contains("\x1b[?1049l"), "enter must not leave it");
 }
 
@@ -69,7 +112,10 @@ fn entering_the_tui_switches_screens_and_leaving_hands_the_shell_its_own_back() 
 fn the_attach_query_asks_for_every_palette_color_before_the_da1_that_ends_it() {
     let query = String::from_utf8(attach_query(true)).unwrap();
     for index in 0..256 {
-        assert!(query.contains(&format!("\x1b]4;{index};?\x1b\\")), "color {index}");
+        assert!(
+            query.contains(&format!("\x1b]4;{index};?\x1b\\")),
+            "color {index}"
+        );
     }
     assert!(query.ends_with("\x1b[c"), "DA1 last");
 }
@@ -82,7 +128,10 @@ fn palette_answers_are_matched_by_index_not_by_prefix() {
     assert_eq!(report.palette.get(10), Some((0, 255, 0)));
     assert_eq!(report.palette.get(0), None);
     assert_eq!(palette_reply(reply, 11), None);
-    assert_eq!(report.fg, None, "an OSC 4 answer for color 10 is not the default foreground");
+    assert_eq!(
+        report.fg, None,
+        "an OSC 4 answer for color 10 is not the default foreground"
+    );
 }
 
 #[test]

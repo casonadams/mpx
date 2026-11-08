@@ -39,7 +39,11 @@ fn a_box_stays_on_the_screen_whatever_the_offset() {
 fn a_popup_defaults_to_eighty_percent_centred() {
     let rect = popup_rect(&PopupOpts::default(), (100, 30));
     assert_eq!(rect, Rect::new(10, 3, 80, 24));
-    assert_eq!(inner_size(rect), (78, 22), "the box's border is not part of the command's area");
+    assert_eq!(
+        inner_size(rect),
+        (78, 22),
+        "the box's border is not part of the command's area"
+    );
 }
 
 #[test]

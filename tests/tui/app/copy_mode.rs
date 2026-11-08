@@ -82,7 +82,10 @@ async fn mouse_wheel_scrolls_into_history() {
     h.mouse(MouseEventKind::ScrollDown, 5, 5).await;
     assert!(h.frame().await.contains("COPY -3/"));
     h.mouse(MouseEventKind::ScrollDown, 5, 5).await;
-    assert!(h.mode_is_normal(), "back at the live screen, copy mode ends");
+    assert!(
+        h.mode_is_normal(),
+        "back at the live screen, copy mode ends"
+    );
     assert!(!h.frame().await.contains("COPY"));
 }
 
@@ -93,7 +96,10 @@ async fn copy_mode_entered_from_the_keyboard_outlasts_the_wheel_and_keys_at_the_
     h.prefixed_char('[').await;
     h.ctrl('u').await;
     h.ctrl('d').await;
-    assert!(matches!(h.app.mode, Mode::Copy(_)), "keys back at the bottom");
+    assert!(
+        matches!(h.app.mode, Mode::Copy(_)),
+        "keys back at the bottom"
+    );
     h.mouse(MouseEventKind::ScrollDown, 5, 5).await;
     assert!(matches!(h.app.mode, Mode::Copy(_)), "only q or Esc leave");
 }
@@ -124,14 +130,21 @@ async fn leaving_copy_mode_shows_output_that_arrived_meanwhile_without_scrollbac
     h.mouse(MouseEventKind::ScrollUp, 5, 5).await;
     assert!(h.frame().await.contains("COPY -3/"));
 
-    h.probe.send_input(MAIN, "MISSED-WHILE-SCROLLED\r").await.unwrap();
+    h.probe
+        .send_input(MAIN, "MISSED-WHILE-SCROLLED\r")
+        .await
+        .unwrap();
     wait_for(&mut h.probe, MAIN, "MISSED-WHILE-SCROLLED").await;
     h.mouse(MouseEventKind::ScrollDown, 5, 5).await;
     assert!(h.mode_is_normal());
     let frame = h.frame().await;
     assert!(frame.contains("MISSED-WHILE-SCROLLED"), "{frame}");
     assert!(!frame.contains("COPY"));
-    assert_eq!(h.app.vt[MAIN].grid().history_len(), 0, "a live pane keeps no scrollback");
+    assert_eq!(
+        h.app.vt[MAIN].grid().history_len(),
+        0,
+        "a live pane keeps no scrollback"
+    );
 }
 
 #[tokio::test]
@@ -242,10 +255,17 @@ fn history_of(h: &Harness) -> usize {
 async fn a_live_pane_keeps_no_scrollback_and_copy_mode_brings_it_back() {
     let mut h = Harness::started(&long_output()).await;
     h.frame().await;
-    assert_eq!(history_of(&h), 0, "the daemon keeps scrollback, not the live view");
+    assert_eq!(
+        history_of(&h),
+        0,
+        "the daemon keeps scrollback, not the live view"
+    );
 
     h.prefixed_char('[').await;
-    assert!(history_of(&h) >= 10, "copy mode rebuilds it from the pane's log");
+    assert!(
+        history_of(&h) >= 10,
+        "copy mode rebuilds it from the pane's log"
+    );
     let shown = h.frame().await;
     assert!(shown.contains("COPY -0/"), "{shown}");
     assert!(shown.contains("line 40"), "the view is unchanged: {shown}");
@@ -282,7 +302,11 @@ async fn wheeling_during_a_drag_loads_history_and_keeps_the_anchor() {
         panic!("still in copy mode");
     };
     let grid = h.app.active_vt().expect("vt").grid();
-    assert_eq!(cs.anchor_abs_y, grid.abs_line(5, 0), "anchor stays on the pressed row");
+    assert_eq!(
+        cs.anchor_abs_y,
+        grid.abs_line(5, 0),
+        "anchor stays on the pressed row"
+    );
     h.mouse(MouseEventKind::Up(MouseButton::Left), 5, 0).await;
     assert_eq!(h.clipboard().len(), 1);
 }
@@ -291,7 +315,10 @@ async fn wheeling_during_a_drag_loads_history_and_keeps_the_anchor() {
 async fn warm_up(h: &mut Harness) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while !h.app.scrollback_warm() {
-        assert!(std::time::Instant::now() < deadline, "history was never built");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "history was never built"
+        );
         h.app.on_tick().await;
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
@@ -308,11 +335,17 @@ async fn copy_mode_takes_the_history_built_ahead_and_shows_output_since() {
     h.probe.send_input(MAIN, "AFTER-WARM\r").await.unwrap();
     wait_for(&mut h.probe, MAIN, "AFTER-WARM").await;
     h.prefixed_char('[').await;
-    assert!(!h.app.scrollback_warm(), "copy mode used up the built history");
+    assert!(
+        !h.app.scrollback_warm(),
+        "copy mode used up the built history"
+    );
     assert!(history_of(&h) >= 10, "the history came with it");
     let frame = h.frame().await;
     assert!(frame.contains("COPY -0/"), "{frame}");
-    assert!(frame.contains("AFTER-WARM"), "output since the build is fed: {frame}");
+    assert!(
+        frame.contains("AFTER-WARM"),
+        "output since the build is fed: {frame}"
+    );
 
     h.key(KeyCode::Char('q')).await;
     assert!(h.mode_is_normal());
@@ -371,7 +404,10 @@ async fn output_scrolling_the_pane_in_copy_mode_leaves_the_view_and_selection_al
     assert_eq!(history_of(&h), initial_hist, "{frame}");
     assert!(frame.contains("VISUAL -0/"), "badge: {frame}");
     assert!(!frame.contains("more"), "the view is frozen: {frame}");
-    assert!(frame.contains("READY"), "viewport still shows READY: {frame}");
+    assert!(
+        frame.contains("READY"),
+        "viewport still shows READY: {frame}"
+    );
 
     h.key(KeyCode::Char('y')).await;
     assert_eq!(h.clipboard(), ["READY"], "selection stays on READY");
@@ -399,11 +435,17 @@ async fn output_redrawing_the_live_rows_does_not_change_the_copy_view() {
     drain_stream(&mut h).await;
 
     let frame = h.frame().await;
-    assert!(frame.contains("READY") && !frame.contains("REDRAWN"), "{frame}");
+    assert!(
+        frame.contains("READY") && !frame.contains("REDRAWN"),
+        "{frame}"
+    );
 
     h.key(KeyCode::Char('q')).await;
     let live = h.frame().await;
-    assert!(live.contains("REDRAWN") && !live.contains("READY"), "{live}");
+    assert!(
+        live.contains("REDRAWN") && !live.contains("READY"),
+        "{live}"
+    );
 }
 
 /// Runs `line` as typed at the `:` prompt, as `copy_commands` does.
@@ -440,11 +482,17 @@ async fn a_copy_pane_that_grows_stays_at_the_top_of_its_history() {
         "{frame}\n{}",
         h.facts(MAIN).await
     );
-    assert!(frame.starts_with("line 1 "), "the view is at the top of history\n{frame}");
+    assert!(
+        frame.starts_with("line 1 "),
+        "the view is at the top of history\n{frame}"
+    );
     // Only a unix pty leaves a grow to the replay: ConPTY repaints the screen on a resize and
     // its repaint scrolls the rows back into history. The pull-back is proven in tests/vt.
     #[cfg(unix)]
-    assert!(after < before, "growing pulls history back (before {before}, after {after})");
+    assert!(
+        after < before,
+        "growing pulls history back (before {before}, after {after})"
+    );
 }
 
 #[tokio::test]

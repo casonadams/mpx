@@ -283,5 +283,9 @@ fn the_log_holds_the_lines_the_scrollback_limit_asks_for_beyond_the_byte_floor()
     };
     p.actor.handle(PaneMsg::Logs { query, reply });
     let (text, _) = rx.blocking_recv().expect("log");
-    assert_eq!(text.matches('\n').count(), 30_000, "3 MB of lines, past the 2 MB floor");
+    assert_eq!(
+        text.matches('\n').count(),
+        30_000,
+        "3 MB of lines, past the 2 MB floor"
+    );
 }

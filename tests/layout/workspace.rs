@@ -365,7 +365,8 @@ fn focus_after_join(detach: bool) -> Option<String> {
     ws.new_window("w1".to_string(), "a".to_string());
     ws.new_window("w2".to_string(), "b".to_string());
     assert!(ws.select_window(0));
-    ws.join_pane("b", "a", Direction::Horizontal, detach).unwrap();
+    ws.join_pane("b", "a", Direction::Horizontal, detach)
+        .unwrap();
     assert_eq!(ws.window_of("b"), Some(0));
     ws.active_window().unwrap().focused.clone()
 }
@@ -487,11 +488,17 @@ fn zoom_is_cleared_by_split_removal_layout_and_window_switches() {
 
     ws.set_zoom(Some(true));
     ws.remove("d");
-    assert!(!ws.window_tabs()[0].zoomed, "losing a pane of the window unzooms it");
+    assert!(
+        !ws.window_tabs()[0].zoomed,
+        "losing a pane of the window unzooms it"
+    );
 
     ws.set_zoom(Some(true));
     ws.next_window();
-    assert!(!ws.window_tabs()[0].zoomed, "the window left behind unzooms");
+    assert!(
+        !ws.window_tabs()[0].zoomed,
+        "the window left behind unzooms"
+    );
 }
 
 #[test]
@@ -565,7 +572,13 @@ fn closing_an_unfocused_pane_keeps_focus_and_forgets_it_for_later() {
 fn closing_without_history_focuses_the_pane_before_it_then_the_one_after() {
     let mut win = mpx::layout::Window::new(0, "w".to_string(), "a".to_string());
     for name in ["b", "c"] {
-        win.split_at(Some("a"), name.to_string(), Direction::Horizontal, None, false);
+        win.split_at(
+            Some("a"),
+            name.to_string(),
+            Direction::Horizontal,
+            None,
+            false,
+        );
     }
     assert_eq!(win.leaves(), ["a", "c", "b"]);
     win.focused = Some("c".to_string());

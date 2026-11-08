@@ -3,9 +3,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use super::hooks;
 use super::idempotency::Claim;
 use super::session::{HookMsg, Origin, SessionMsg, reply};
-use super::hooks;
 use super::{DaemonState, KILL_GRACE, shell};
 use crate::node::pane::LogQuery;
 use crate::protocol::{NodeRequest, Request, Response, ScriptRequest, WindowRequest};
@@ -18,10 +18,7 @@ pub(super) async fn dispatch(state: &Arc<DaemonState>, req: Request) -> Response
 }
 
 async fn idempotent(state: &Arc<DaemonState>, key: String, req: Request) -> Response {
-    if matches!(
-        req,
-        Request::Idempotent { .. } | Request::Subscribe { .. }
-    ) {
+    if matches!(req, Request::Idempotent { .. } | Request::Subscribe { .. }) {
         return Response::Error("Idempotent requests cannot nest or stream".to_string());
     }
     match state.idem_begin(&key).await {
@@ -149,9 +146,7 @@ async fn await_exits(exits: Vec<tokio::sync::oneshot::Receiver<()>>) {
 }
 
 /// Waits for the exits of the stopped panes, then reports success.
-async fn exits_then_ok(
-    exits: Result<Vec<tokio::sync::oneshot::Receiver<()>>, String>,
-) -> Response {
+async fn exits_then_ok(exits: Result<Vec<tokio::sync::oneshot::Receiver<()>>, String>) -> Response {
     match exits {
         Ok(exits) => {
             await_exits(exits).await;
@@ -216,10 +211,12 @@ async fn wait(
 /// `RunCommand`: parses `line` with the session's aliases and runs it as a hook's command would.
 async fn run_line(state: &Arc<DaemonState>, line: &str) -> Response {
     let parsed = state
-        .ask(|reply| SessionMsg::Hook(HookMsg::Parse {
-            line: line.to_string(),
-            reply,
-        }))
+        .ask(|reply| {
+            SessionMsg::Hook(HookMsg::Parse {
+                line: line.to_string(),
+                reply,
+            })
+        })
         .await;
     let outcome = match parsed {
         Ok(Ok((command, ctx))) => hooks::run_now(state.session_tx().clone(), ctx, command).await,

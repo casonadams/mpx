@@ -6,8 +6,8 @@ use mpx::tui::overlay::nav::fuzzy_match;
 use mpx::tui::overlay::tree_view::session_from_snapshot;
 use mpx::tui::overlay::widgets::{age_label, printable, short_path};
 use mpx::tui::overlay::{
-    HelpEntry, HelpView, Overlay, OverlayAction, PaletteTab, PaletteView, TreePane,
-    TreeSession, TreeView, TreeWindow,
+    HelpEntry, HelpView, Overlay, OverlayAction, PaletteTab, PaletteView, TreePane, TreeSession,
+    TreeView, TreeWindow,
 };
 
 fn key(c: char) -> KeyEvent {
@@ -149,14 +149,28 @@ fn tree_h_collapses_and_l_expands_sessions_and_windows() {
     let full = tree().labels();
     let cases: [(&str, Vec<&str>); 3] = [
         ("main", vec!["main", "work", "edit", "claude"]),
-        ("shell", vec!["main", "shell", "logs", "tail", "work", "edit", "claude"]),
-        ("work", vec!["main", "shell", "zsh", "vim", "logs", "tail", "work"]),
+        (
+            "shell",
+            vec!["main", "shell", "logs", "tail", "work", "edit", "claude"],
+        ),
+        (
+            "work",
+            vec!["main", "shell", "zsh", "vim", "logs", "tail", "work"],
+        ),
     ];
     for (label, collapsed) in cases {
         let mut view = tree();
-        assert_eq!(act(&mut view, label, key('h')), OverlayAction::None, "h on {label}");
+        assert_eq!(
+            act(&mut view, label, key('h')),
+            OverlayAction::None,
+            "h on {label}"
+        );
         assert_eq!(view.labels(), collapsed, "h on {label}");
-        assert_eq!(act(&mut view, label, key('l')), OverlayAction::None, "l on {label} must not select");
+        assert_eq!(
+            act(&mut view, label, key('l')),
+            OverlayAction::None,
+            "l on {label} must not select"
+        );
         assert_eq!(view.labels(), full, "l on {label} expands it");
     }
 }
@@ -184,7 +198,9 @@ fn tree_enter_acts_on_the_row_it_is_on() {
         ),
         (
             "logs",
-            OverlayAction::Run(vec![Command::Window(WindowCommand::SelectWindow { index: 1 })]),
+            OverlayAction::Run(vec![Command::Window(WindowCommand::SelectWindow {
+                index: 1,
+            })]),
         ),
         (
             "edit",
@@ -205,7 +221,11 @@ fn tree_enter_acts_on_the_row_it_is_on() {
     ];
     for (label, want) in cases {
         let mut view = tree();
-        assert_eq!(act(&mut view, label, code(KeyCode::Enter)), want, "Enter on {label}");
+        assert_eq!(
+            act(&mut view, label, code(KeyCode::Enter)),
+            want,
+            "Enter on {label}"
+        );
     }
 }
 
@@ -229,7 +249,9 @@ fn tree_x_asks_to_kill_the_row_it_is_on() {
                 }),
                 Command::Confirm {
                     prompt: "kill window edit?".to_string(),
-                    then: Box::new(Command::Window(WindowCommand::KillWindow { index: Some(0) })),
+                    then: Box::new(Command::Window(WindowCommand::KillWindow {
+                        index: Some(0),
+                    })),
                 },
             ]),
         ),
@@ -278,9 +300,21 @@ fn overlays_close_on_their_close_keys() {
         ("tree q", Overlay::Tree(tree()), key('q')),
         ("tree esc", Overlay::Tree(tree()), code(KeyCode::Esc)),
         ("help q", Overlay::help(help_entries()), key('q')),
-        ("help esc", Overlay::help(help_entries()), code(KeyCode::Esc)),
-        ("palette esc", Overlay::palette(sample_palette()), code(KeyCode::Esc)),
-        ("palette ctrl-c", Overlay::palette(sample_palette()), ctrl('c')),
+        (
+            "help esc",
+            Overlay::help(help_entries()),
+            code(KeyCode::Esc),
+        ),
+        (
+            "palette esc",
+            Overlay::palette(sample_palette()),
+            code(KeyCode::Esc),
+        ),
+        (
+            "palette ctrl-c",
+            Overlay::palette(sample_palette()),
+            ctrl('c'),
+        ),
     ];
     for (name, mut overlay, k) in cases {
         assert_eq!(overlay.handle_key(k), OverlayAction::Close, "{name}");
@@ -421,7 +455,12 @@ fn text_and_buffer_overlays_draw_their_contents() {
 #[test]
 fn overlays_render_their_title_and_entries() {
     let cases: [(&str, Overlay, Rect, &[&str]); 2] = [
-        ("tree", Overlay::Tree(tree()), Rect::new(0, 0, 60, 20), &["main", "zsh"]),
+        (
+            "tree",
+            Overlay::Tree(tree()),
+            Rect::new(0, 0, 60, 20),
+            &["main", "zsh"],
+        ),
         (
             "help",
             Overlay::help(help_entries()),
@@ -432,7 +471,10 @@ fn overlays_render_their_title_and_entries() {
     for (name, overlay, area, needles) in cases {
         let text = render_text(&overlay, area);
         for needle in needles {
-            assert!(text.contains(*needle), "{name} should show {needle:?}:\n{text}");
+            assert!(
+                text.contains(*needle),
+                "{name} should show {needle:?}:\n{text}"
+            );
         }
     }
 }
@@ -510,10 +552,7 @@ fn busy_tree() -> TreeView {
                     index: 0,
                     name: "dev".to_string(),
                     active: true,
-                    panes: vec![
-                        pane("zsh", 3, true),
-                        build,
-                    ],
+                    panes: vec![pane("zsh", 3, true), build],
                 }],
             },
         ],
@@ -528,7 +567,10 @@ fn row_with<'a>(text: &'a str, needle: &str) -> &'a str {
 }
 
 fn assert_row(text: &str, row: &str, needle: &str) {
-    assert!(row_with(text, row).contains(needle), "{needle:?} not on row {row:?}:\n{text}");
+    assert!(
+        row_with(text, row).contains(needle),
+        "{needle:?} not on row {row:?}:\n{text}"
+    );
 }
 
 #[test]
@@ -633,10 +675,7 @@ fn palette_fuzzy_filters_commands_and_edits_search_text() {
     }
     assert!(view.current_items().len() < initial_count);
     for item in view.current_items() {
-        assert!(
-            fuzzy_match("split", &item.title)
-                || fuzzy_match("split", &item.subtitle)
-        );
+        assert!(fuzzy_match("split", &item.title) || fuzzy_match("split", &item.subtitle));
     }
 
     view.handle_key(code(KeyCode::Backspace));
@@ -696,10 +735,7 @@ fn palette_sessions_tab_selection() {
             index: 0,
             name: "editor".to_string(),
             active: true,
-            panes: vec![
-                pane("nvim", 1, true),
-                pane("term", 2, false),
-            ],
+            panes: vec![pane("nvim", 1, true), pane("term", 2, false)],
         }],
     }];
     view.tab = PaletteTab::Sessions;
@@ -754,14 +790,20 @@ fn text_overlay_scrolls_with_vim_motions_and_closes_on_q_or_escape() {
 
     assert_eq!(view.handle_key(key('G')), OverlayAction::None);
     let bottom = render_text(&view, area);
-    assert!(bottom.contains("line 30") && !bottom.contains("line 01"), "{bottom}");
+    assert!(
+        bottom.contains("line 30") && !bottom.contains("line 01"),
+        "{bottom}"
+    );
 
     view.handle_key(key('g'));
     view.handle_key(key('g'));
     assert!(render_text(&view, area).contains("line 01"));
 
     view.handle_key(ctrl('d'));
-    assert!(render_text(&view, area).contains("line 05"), "half a page down");
+    assert!(
+        render_text(&view, area).contains("line 05"),
+        "half a page down"
+    );
 
     assert_eq!(view.handle_key(key('q')), OverlayAction::Close);
     assert_eq!(view.handle_key(code(KeyCode::Esc)), OverlayAction::Close);
@@ -796,7 +838,16 @@ fn palette_rows_put_shortcuts_and_descriptions_in_columns() {
         .collect();
     let dots = column(" · ");
     assert!(shortcuts.len() > 5, "{drawn}");
-    assert!(shortcuts.windows(2).all(|w| w[0] == w[1]), "shortcuts {shortcuts:?}\n{drawn}");
-    assert!(dots.windows(2).all(|w| w[0] == w[1]), "descriptions {dots:?}\n{drawn}");
-    assert!(drawn.contains("…│"), "a description cut at the border ends in an ellipsis\n{drawn}");
+    assert!(
+        shortcuts.windows(2).all(|w| w[0] == w[1]),
+        "shortcuts {shortcuts:?}\n{drawn}"
+    );
+    assert!(
+        dots.windows(2).all(|w| w[0] == w[1]),
+        "descriptions {dots:?}\n{drawn}"
+    );
+    assert!(
+        drawn.contains("…│"),
+        "a description cut at the border ends in an ellipsis\n{drawn}"
+    );
 }

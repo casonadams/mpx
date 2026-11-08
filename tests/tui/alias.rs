@@ -16,7 +16,11 @@ fn an_alias_stands_for_its_command_line_with_the_typed_arguments() {
     let cmd = parse_in("sh -d", &table).unwrap();
     assert!(matches!(
         cmd,
-        Command::Pane(PaneCommand::SplitWindow { side_by_side: true, detach: true, .. })
+        Command::Pane(PaneCommand::SplitWindow {
+            side_by_side: true,
+            detach: true,
+            ..
+        })
     ));
 }
 
@@ -75,14 +79,26 @@ fn run_shell_takes_flags_then_the_command_words() {
             command: "echo hi there".into(),
         })
     );
-    assert!(parse("run-shell").unwrap_err().contains("need a shell command"));
-    assert!(parse("run-shell -d soon x").unwrap_err().contains("invalid delay"));
+    assert!(
+        parse("run-shell")
+            .unwrap_err()
+            .contains("need a shell command")
+    );
+    assert!(
+        parse("run-shell -d soon x")
+            .unwrap_err()
+            .contains("invalid delay")
+    );
 }
 
 #[test]
 fn if_shell_parses_both_branches_with_aliases() {
     let table = aliases(&[("nxt", "next-window")]);
-    let cmd = parse_in("if-shell -F -t %1 '#{pane_active}' 'nxt' 'prev-window'", &table).unwrap();
+    let cmd = parse_in(
+        "if-shell -F -t %1 '#{pane_active}' 'nxt' 'prev-window'",
+        &table,
+    )
+    .unwrap();
     assert_eq!(
         cmd,
         Command::Script(ScriptCommand::IfShell {
@@ -104,13 +120,21 @@ fn if_shell_parses_both_branches_with_aliases() {
 
 #[test]
 fn if_shell_needs_a_condition_and_one_or_two_commands() {
-    assert!(parse("if-shell true").unwrap_err().contains("need a condition"));
+    assert!(
+        parse("if-shell true")
+            .unwrap_err()
+            .contains("need a condition")
+    );
     assert!(parse("if-shell true a b c").is_err());
 }
 
 #[test]
 fn if_shell_refuses_a_branch_that_does_not_parse() {
-    assert!(parse("if-shell true nosuchcommand").unwrap_err().contains("unknown command"));
+    assert!(
+        parse("if-shell true nosuchcommand")
+            .unwrap_err()
+            .contains("unknown command")
+    );
 }
 
 #[test]
@@ -159,7 +183,10 @@ fn set_hook_parses_add_remove_and_run_forms() {
             name: "alert-bell".into(),
         })
     );
-    assert_eq!(parse("show-hooks").unwrap(), Command::Script(ScriptCommand::ShowHooks));
+    assert_eq!(
+        parse("show-hooks").unwrap(),
+        Command::Script(ScriptCommand::ShowHooks)
+    );
 }
 
 /// Asserts that `line` does not parse, with an error containing `needle`.
@@ -171,7 +198,10 @@ fn refused(line: &str, needle: &str) {
 #[test]
 fn set_hook_refuses_unknown_hooks_window_scope_and_missing_commands() {
     refused("set-hook nope 'run-shell x'", "unknown hook");
-    refused("set-hook -w after-new-window 'run-shell x'", "not supported");
+    refused(
+        "set-hook -w after-new-window 'run-shell x'",
+        "not supported",
+    );
     refused("set-hook -t %1 pane-exited 'run-shell x'", "not supported");
     refused("set-hook pane-exited", "need a command");
     refused("set-hook pane-exited 'nosuch'", "unknown command");

@@ -213,7 +213,8 @@ pub fn status_lists(
         .filter(|p| Some(p.window) == current)
         .map(pane_vars)
         .collect();
-    let mut session_entry = crate::format::session_vars(session.name, session.times, session.attached);
+    let mut session_entry =
+        crate::format::session_vars(session.name, session.times, session.attached);
     session_entry.insert("session_windows", tabs.len().to_string());
     let sessions = vec![session_entry];
     Lists {

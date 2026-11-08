@@ -98,10 +98,10 @@ impl Backlog {
     pub fn holds(&self, now_ms: u64) -> bool {
         !self.closed.load(Ordering::Relaxed)
             && holds(
-            self.queued.load(Ordering::Relaxed),
-            self.progress_ms.load(Ordering::Relaxed),
-            now_ms,
-        )
+                self.queued.load(Ordering::Relaxed),
+                self.progress_ms.load(Ordering::Relaxed),
+                now_ms,
+            )
     }
 }
 

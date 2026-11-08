@@ -3,10 +3,10 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 
 mod buffers;
+mod clients;
 mod environment;
 mod hooks;
 mod panes;
-mod clients;
 pub mod render;
 mod resolve;
 mod sessions;
@@ -17,11 +17,9 @@ pub use resolve::{
     DEFAULT_SESSION, LEGACY_DEFAULT_SESSION, Resolved, nested_attach_refused, next_free_session,
     parse_env_pairs, resolve, resolve_idempotency_key, wait_condition, wait_exit_code,
 };
-pub use sessions::{
-    RestoreOutcome, apply_key, daemon_args, restore_session, run_cli,
-};
+pub use sessions::{RestoreOutcome, apply_key, daemon_args, restore_session, run_cli};
 pub use windows::{
-    PaneCommands, PaneMoveCommands, RespawnCommands, ResizeCommands, WindowCommands,
+    PaneCommands, PaneMoveCommands, ResizeCommands, RespawnCommands, WindowCommands,
     WindowLinkCommands, WindowOrderCommands,
 };
 

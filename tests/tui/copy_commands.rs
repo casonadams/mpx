@@ -351,7 +351,10 @@ fn rectangle_toggle_and_set_change_the_shape_without_moving_the_anchor() {
     assert_eq!(cs.mode, SelectionKind::Rectangle);
     press(&mut cs, &vt, CopyAction::RectangleToggle);
     assert_eq!(cs.mode, SelectionKind::Character);
-    assert_eq!((cs.anchor_x, cs.anchor_abs_y), (0, vt.grid().abs_line(0, 0)));
+    assert_eq!(
+        (cs.anchor_x, cs.anchor_abs_y),
+        (0, vt.grid().abs_line(0, 0))
+    );
 
     press(&mut cs, &vt, CopyAction::SetRectangle(true));
     press(&mut cs, &vt, CopyAction::SetRectangle(true));
@@ -420,8 +423,14 @@ fn next_and_previous_prompt_move_between_osc_133_prompt_marks() {
 fn mark_rectangle_and_prompt_names_parse_to_their_actions() {
     assert_eq!(parse("set-mark", &[]), Ok(CopyAction::SetMark));
     assert_eq!(parse("jump-to-mark", &[]), Ok(CopyAction::JumpToMark));
-    assert_eq!(parse("rectangle-on", &[]), Ok(CopyAction::SetRectangle(true)));
-    assert_eq!(parse("rectangle-off", &[]), Ok(CopyAction::SetRectangle(false)));
+    assert_eq!(
+        parse("rectangle-on", &[]),
+        Ok(CopyAction::SetRectangle(true))
+    );
+    assert_eq!(
+        parse("rectangle-off", &[]),
+        Ok(CopyAction::SetRectangle(false))
+    );
     assert_eq!(
         parse("next-prompt", &[]),
         Ok(CopyAction::JumpToPrompt {

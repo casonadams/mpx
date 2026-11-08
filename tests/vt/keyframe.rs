@@ -6,7 +6,9 @@ const COLS: usize = 40;
 const ROWS: usize = 12;
 
 fn lines(count: usize) -> String {
-    (0..count).map(|i| format!("line {i:02} \x1b[3{}mcolor\x1b[0m\r\n", i % 8)).collect()
+    (0..count)
+        .map(|i| format!("line {i:02} \x1b[3{}mcolor\x1b[0m\r\n", i % 8))
+        .collect()
 }
 
 /// Output of different programs, each leaving the screen in a state a keyframe must carry.
@@ -59,12 +61,28 @@ fn a_keyframe_rebuilds_the_grid_whatever_output_made_it() {
         assert_eq!(b.cursor, a.cursor, "{what}: cursor");
         assert_eq!(b.saved_cursor, a.saved_cursor, "{what}: saved cursor");
         assert_eq!(
-            (b.scroll_top, b.scroll_bottom, b.lr_margins, b.scroll_left, b.scroll_right),
-            (a.scroll_top, a.scroll_bottom, a.lr_margins, a.scroll_left, a.scroll_right),
+            (
+                b.scroll_top,
+                b.scroll_bottom,
+                b.lr_margins,
+                b.scroll_left,
+                b.scroll_right
+            ),
+            (
+                a.scroll_top,
+                a.scroll_bottom,
+                a.lr_margins,
+                a.scroll_left,
+                a.scroll_right
+            ),
             "{what}: margins"
         );
         assert_eq!(b.current_style, a.current_style, "{what}: pen");
-        assert_eq!(b.alternate_screen(), a.alternate_screen(), "{what}: alternate screen");
+        assert_eq!(
+            b.alternate_screen(),
+            a.alternate_screen(),
+            "{what}: alternate screen"
+        );
         for y in 0..ROWS - 1 {
             assert_eq!(b.line_wrapped(y), a.line_wrapped(y), "{what}: row {y} wrap");
         }

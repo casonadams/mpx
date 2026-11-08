@@ -22,11 +22,17 @@ async fn a_terminal_that_falls_behind_paces_a_flood_until_it_detaches() {
     let (tx, _held) = tokio::sync::mpsc::channel(1);
     let terminal = connect(&daemon.endpoint).await;
     let attached = tokio::spawn(async move {
-        let _ = terminal.stream_logs_into((None, None), false, tx, |event| event).await;
+        let _ = terminal
+            .stream_logs_into((None, None), false, tx, |event| event)
+            .await;
     });
     tokio::time::sleep(Duration::from_millis(50)).await;
     client
-        .spawn(pty("flood", "sh", &["-c", "exec yes 0123456789abcdef0123456789abcdef"]))
+        .spawn(pty(
+            "flood",
+            "sh",
+            &["-c", "exec yes 0123456789abcdef0123456789abcdef"],
+        ))
         .await
         .expect("spawn flood");
 
@@ -55,7 +61,11 @@ async fn a_flooding_pane_still_answers_requests_and_dies_on_kill_at_once() {
     let daemon = start().await;
     let mut client = connect(&daemon.endpoint).await;
     client
-        .spawn(pty("flood", "sh", &["-c", "exec yes 0123456789abcdef0123456789abcdef"]))
+        .spawn(pty(
+            "flood",
+            "sh",
+            &["-c", "exec yes 0123456789abcdef0123456789abcdef"],
+        ))
         .await
         .expect("spawn flood");
     tokio::time::sleep(Duration::from_millis(300)).await;
@@ -82,7 +92,9 @@ async fn reading_a_pane_in_full_does_not_overflow_an_attached_terminal() {
     let (tx, mut rx) = tokio::sync::mpsc::channel(64);
     let terminal = connect(&daemon.endpoint).await;
     let attached = tokio::spawn(async move {
-        let _ = terminal.stream_logs_into((None, None), true, tx, |event| event).await;
+        let _ = terminal
+            .stream_logs_into((None, None), true, tx, |event| event)
+            .await;
     });
     tokio::time::sleep(Duration::from_millis(50)).await;
     // A line per write: a flood of small events, thousands for each millisecond a read could

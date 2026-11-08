@@ -91,7 +91,10 @@ fn new_window_and_aliases() {
     );
     for alias in ["new", "tabnew"] {
         assert!(
-            matches!(ok(alias), Command::Window(WindowCommand::NewWindow { name: None, .. })),
+            matches!(
+                ok(alias),
+                Command::Window(WindowCommand::NewWindow { name: None, .. })
+            ),
             "{alias}"
         );
     }
@@ -112,7 +115,10 @@ fn window_navigation_names_and_aliases() {
     assert_eq!(ok("previous-window"), prev);
     assert_eq!(ok("tabprevious"), prev);
     assert_eq!(ok("tabp"), prev);
-    assert_eq!(ok("last-window"), Command::Window(WindowCommand::LastWindow));
+    assert_eq!(
+        ok("last-window"),
+        Command::Window(WindowCommand::LastWindow)
+    );
     assert_eq!(
         ok("select-window -t 3"),
         Command::Window(WindowCommand::SelectWindow { index: 3 })
@@ -125,14 +131,20 @@ fn window_navigation_names_and_aliases() {
 
 #[test]
 fn kill_commands_take_optional_targets() {
-    assert_eq!(ok("kill-pane"), Command::Pane(PaneCommand::KillPane { target: None }));
+    assert_eq!(
+        ok("kill-pane"),
+        Command::Pane(PaneCommand::KillPane { target: None })
+    );
     assert_eq!(
         ok("kill-pane -t api"),
         Command::Pane(PaneCommand::KillPane {
             target: Some("api".into())
         })
     );
-    assert_eq!(ok("kill-window"), Command::Window(WindowCommand::KillWindow { index: None }));
+    assert_eq!(
+        ok("kill-window"),
+        Command::Window(WindowCommand::KillWindow { index: None })
+    );
     assert_eq!(
         ok("kill-window -t 1"),
         Command::Window(WindowCommand::KillWindow { index: Some(1) })
@@ -170,21 +182,40 @@ fn select_pane_by_target_or_direction() {
     );
     assert_eq!(
         ok("select-pane -L"),
-        Command::Pane(PaneCommand::SelectPaneDir { side: Side::Left, keep_zoom: false })
+        Command::Pane(PaneCommand::SelectPaneDir {
+            side: Side::Left,
+            keep_zoom: false
+        })
     );
     assert_eq!(
         ok("select-pane -R"),
-        Command::Pane(PaneCommand::SelectPaneDir { side: Side::Right, keep_zoom: false })
+        Command::Pane(PaneCommand::SelectPaneDir {
+            side: Side::Right,
+            keep_zoom: false
+        })
     );
     assert_eq!(
         ok("select-pane -U"),
-        Command::Pane(PaneCommand::SelectPaneDir { side: Side::Up, keep_zoom: false })
+        Command::Pane(PaneCommand::SelectPaneDir {
+            side: Side::Up,
+            keep_zoom: false
+        })
     );
     assert_eq!(
         ok("select-pane -D"),
-        Command::Pane(PaneCommand::SelectPaneDir { side: Side::Down, keep_zoom: false })
+        Command::Pane(PaneCommand::SelectPaneDir {
+            side: Side::Down,
+            keep_zoom: false
+        })
     );
-    assert_eq!(ok("select-pane -m"), Command::Pane(PaneCommand::MarkPane { target: None }));
+}
+
+#[test]
+fn select_pane_marks_and_toggles_input() {
+    assert_eq!(
+        ok("select-pane -m"),
+        Command::Pane(PaneCommand::MarkPane { target: None })
+    );
     assert_eq!(
         ok("select-pane -t build -m"),
         Command::Pane(PaneCommand::MarkPane {
@@ -194,13 +225,22 @@ fn select_pane_by_target_or_direction() {
     assert_eq!(ok("select-pane -M"), Command::Pane(PaneCommand::ClearMark));
     assert_eq!(
         ok("select-pane -d"),
-        Command::Pane(PaneCommand::InputOff { target: None, off: true })
+        Command::Pane(PaneCommand::InputOff {
+            target: None,
+            off: true
+        })
     );
     assert_eq!(
         ok("select-pane -e -t x"),
-        Command::Pane(PaneCommand::InputOff { target: Some("x".into()), off: false })
+        Command::Pane(PaneCommand::InputOff {
+            target: Some("x".into()),
+            off: false
+        })
     );
-    assert_eq!(ok("mark-pane"), Command::Pane(PaneCommand::MarkPane { target: None }));
+    assert_eq!(
+        ok("mark-pane"),
+        Command::Pane(PaneCommand::MarkPane { target: None })
+    );
     assert!(err("select-pane").contains("need -t"));
 }
 
@@ -227,8 +267,20 @@ fn resize_pane_defaults_to_five_cells_and_supports_zoom() {
 
 #[test]
 fn swap_pane_directions_and_marked() {
-    assert_eq!(ok("swap-pane -U"), Command::Pane(PaneCommand::SwapPane { next: false, keep_zoom: false }));
-    assert_eq!(ok("swap-pane -D"), Command::Pane(PaneCommand::SwapPane { next: true, keep_zoom: false }));
+    assert_eq!(
+        ok("swap-pane -U"),
+        Command::Pane(PaneCommand::SwapPane {
+            next: false,
+            keep_zoom: false
+        })
+    );
+    assert_eq!(
+        ok("swap-pane -D"),
+        Command::Pane(PaneCommand::SwapPane {
+            next: true,
+            keep_zoom: false
+        })
+    );
     assert_eq!(
         ok("swap-pane"),
         Command::Pane(PaneCommand::SwapPaneMarked {
@@ -255,8 +307,14 @@ fn layouts_by_name_or_cycle() {
             preset: Some(LayoutPreset::Tiled)
         })
     );
-    assert_eq!(ok("select-layout"), Command::Pane(PaneCommand::SelectLayout { preset: None }));
-    assert_eq!(ok("next-layout"), Command::Pane(PaneCommand::SelectLayout { preset: None }));
+    assert_eq!(
+        ok("select-layout"),
+        Command::Pane(PaneCommand::SelectLayout { preset: None })
+    );
+    assert_eq!(
+        ok("next-layout"),
+        Command::Pane(PaneCommand::SelectLayout { preset: None })
+    );
     assert!(err("select-layout diagonal").contains("unknown layout 'diagonal'"));
 }
 
@@ -274,8 +332,14 @@ fn sessions_and_aliases() {
             name: "work".into()
         })
     );
-    assert_eq!(ok("next-session"), Command::Session(SessionCommand::NextSession));
-    assert_eq!(ok("prev-session"), Command::Session(SessionCommand::PrevSession));
+    assert_eq!(
+        ok("next-session"),
+        Command::Session(SessionCommand::NextSession)
+    );
+    assert_eq!(
+        ok("prev-session"),
+        Command::Session(SessionCommand::PrevSession)
+    );
     assert!(err("switch-client").contains("need -t <session>"));
 }
 
@@ -386,14 +450,26 @@ fn zoom_flags_keep_the_window_zoomed_on_pane_and_window_commands() {
     assert!(err("resize-pane -Z -t work").contains("-Z does not take -t"));
     assert_eq!(
         ok("select-pane -Z -t x"),
-        Command::Pane(PaneCommand::SelectPane { target: "x".into(), keep_zoom: true })
+        Command::Pane(PaneCommand::SelectPane {
+            target: "x".into(),
+            keep_zoom: true
+        })
     );
     assert_eq!(
         ok("select-pane -Z -L"),
-        Command::Pane(PaneCommand::SelectPaneDir { side: Side::Left, keep_zoom: true })
+        Command::Pane(PaneCommand::SelectPaneDir {
+            side: Side::Left,
+            keep_zoom: true
+        })
     );
-    assert_eq!(ok("last-pane -Z"), Command::Pane(PaneCommand::LastPane { keep_zoom: true }));
-    assert_eq!(ok("last-pane"), Command::Pane(PaneCommand::LastPane { keep_zoom: false }));
+    assert_eq!(
+        ok("last-pane -Z"),
+        Command::Pane(PaneCommand::LastPane { keep_zoom: true })
+    );
+    assert_eq!(
+        ok("last-pane"),
+        Command::Pane(PaneCommand::LastPane { keep_zoom: false })
+    );
     assert_eq!(
         ok("swap-pane -Z -s a -t b"),
         Command::Pane(PaneCommand::SwapPaneMarked {
@@ -404,11 +480,17 @@ fn zoom_flags_keep_the_window_zoomed_on_pane_and_window_commands() {
     );
     assert_eq!(
         ok("rotate-window -Z -D"),
-        Command::Window(WindowCommand::RotateWindow { down: true, keep_zoom: true })
+        Command::Window(WindowCommand::RotateWindow {
+            down: true,
+            keep_zoom: true
+        })
     );
     assert!(matches!(
         ok("split-window -Z"),
-        Command::Pane(PaneCommand::SplitWindow { keep_zoom: true, .. })
+        Command::Pane(PaneCommand::SplitWindow {
+            keep_zoom: true,
+            ..
+        })
     ));
 }
 
@@ -506,7 +588,7 @@ fn link_window_takes_this_sessions_name_and_refuses_others() {
     let refused = parse_scoped("link-window -s other:1", &aliases, "work").unwrap_err();
     assert!(refused.contains("another session"), "{refused}");
 }
- 
+
 #[test]
 fn split_words_honours_quotes_and_escapes() {
     assert_eq!(
@@ -537,7 +619,10 @@ fn unterminated_quote_is_an_error() {
 
 #[test]
 fn select_layout_e_spreads_the_panes() {
-    assert_eq!(ok("select-layout -E"), Command::Pane(PaneCommand::SpreadLayout));
+    assert_eq!(
+        ok("select-layout -E"),
+        Command::Pane(PaneCommand::SpreadLayout)
+    );
 }
 
 #[test]
@@ -552,12 +637,18 @@ fn semicolons_chain_commands_and_escaped_ones_are_literal() {
                     ..
                 })
             ));
-            assert!(matches!(parts[1], Command::Pane(PaneCommand::SelectLayout { .. })));
+            assert!(matches!(
+                parts[1],
+                Command::Pane(PaneCommand::SelectLayout { .. })
+            ));
         }
         other => panic!("{other:?}"),
     }
     assert!(
-        matches!(ok("kill-pane;"), Command::Pane(PaneCommand::KillPane { .. })),
+        matches!(
+            ok("kill-pane;"),
+            Command::Pane(PaneCommand::KillPane { .. })
+        ),
         "a trailing ; adds nothing"
     );
     assert!(err("split-window ; nosuchcommand").contains("unknown command"));
@@ -779,7 +870,10 @@ fn joined(src: Option<&str>, dst: Option<&str>, side_by_side: bool, detach: bool
 
 #[test]
 fn pane_and_window_moves_parse_their_flags() {
-    assert_eq!(ok("join-pane -h -s a -t b"), joined(Some("a"), Some("b"), true, false));
+    assert_eq!(
+        ok("join-pane -h -s a -t b"),
+        joined(Some("a"), Some("b"), true, false)
+    );
     assert_eq!(ok("joinp"), joined(None, None, false, false));
     assert_eq!(ok("movep -d"), joined(None, None, false, true));
     assert!(err("join-pane -b").contains("unknown option -b"));

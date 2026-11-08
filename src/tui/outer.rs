@@ -77,7 +77,9 @@ impl App {
             .filter(|(_, vt)| vt.sync_output())
             .map(|(name, _)| name.clone())
             .collect();
-        self.outer.sync_since.retain(|name, _| syncing.contains(name));
+        self.outer
+            .sync_since
+            .retain(|name, _| syncing.contains(name));
         for name in syncing {
             self.outer.sync_since.entry(name).or_insert(now);
         }
@@ -106,7 +108,8 @@ impl App {
     /// Whether pane `name` is in a synchronized update that has not ended and has not waited out
     /// `SYNC_HOLD`: its drawing waits, so the frame shows its last complete state.
     pub(super) fn sync_held(&self, name: &str) -> bool {
-        self.outer.sync_since
+        self.outer
+            .sync_since
             .get(name)
             .is_some_and(|since| since.elapsed() < SYNC_HOLD)
     }

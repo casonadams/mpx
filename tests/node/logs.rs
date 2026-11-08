@@ -30,7 +30,12 @@ fn query(tail: Option<usize>, plain: bool, since: Option<u64>) -> LogQuery {
 
 #[test]
 fn raw_history_keeps_escapes_and_points_past_the_end() {
-    let (text, next) = render_logs(&ring(), Some(&screen()), &query(None, false, None), SCROLLBACK);
+    let (text, next) = render_logs(
+        &ring(),
+        Some(&screen()),
+        &query(None, false, None),
+        SCROLLBACK,
+    );
     assert_eq!(text.as_bytes(), COLORED);
     assert_eq!(next, COLORED.len() as u64);
 }
@@ -50,7 +55,6 @@ fn until_reads_the_bytes_before_an_offset() {
     assert_eq!(text.as_bytes(), &COLORED[..4]);
     assert_eq!(next, 4);
 }
-
 
 #[test]
 fn plain_history_of_a_terminal_is_the_rendered_scrollback() {
@@ -78,7 +82,12 @@ fn since_returns_only_the_delta_and_its_end_offset() {
 fn plain_delta_of_a_terminal_strips_escapes() {
     let start = "one\r\n".len() as u64;
     let vt = screen();
-    let (text, _) = render_logs(&ring(), Some(&vt), &query(None, true, Some(start)), SCROLLBACK);
+    let (text, _) = render_logs(
+        &ring(),
+        Some(&vt),
+        &query(None, true, Some(start)),
+        SCROLLBACK,
+    );
     assert!(!text.contains('\x1b'), "escapes stripped: {text:?}");
     assert!(text.contains("two") && text.contains("three"), "{text:?}");
 }

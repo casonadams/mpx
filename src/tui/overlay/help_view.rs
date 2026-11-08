@@ -28,7 +28,8 @@ impl HelpView {
 
     /// Entries that pass the current filter, in their original order.
     pub fn visible(&self) -> Vec<&HelpEntry> {
-        self.filter.visible(&self.entries, |e| [e.key.as_str(), e.command.as_str()])
+        self.filter
+            .visible(&self.entries, |e| [e.key.as_str(), e.command.as_str()])
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> OverlayAction {

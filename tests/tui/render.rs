@@ -74,15 +74,27 @@ fn pane_colors_follow_the_terminal_defaults_and_the_templates() {
         ctx.active_fg = Some(VtColor::Rgb(216, 222, 233));
         ctx.active_bg = Some(VtColor::Rgb(46, 52, 64));
     });
-    assert!(active.contains(";38;2;216;222;233"), "active fg missing: {active}");
-    assert!(active.contains(";48;2;46;52;64"), "active bg missing: {active}");
+    assert!(
+        active.contains(";38;2;216;222;233"),
+        "active fg missing: {active}"
+    );
+    assert!(
+        active.contains(";48;2;46;52;64"),
+        "active bg missing: {active}"
+    );
 
     let inactive = draw_with(&grid, true, |ctx| {
         ctx.inactive_fg = Some(VtColor::Rgb(76, 86, 106));
         ctx.inactive_bg = Some(VtColor::Rgb(36, 41, 51));
     });
-    assert!(inactive.contains(";38;2;76;86;106"), "inactive fg missing: {inactive}");
-    assert!(inactive.contains(";48;2;36;41;51"), "inactive bg missing: {inactive}");
+    assert!(
+        inactive.contains(";38;2;76;86;106"),
+        "inactive fg missing: {inactive}"
+    );
+    assert!(
+        inactive.contains(";48;2;36;41;51"),
+        "inactive bg missing: {inactive}"
+    );
 }
 
 /// What drawing one cell of `fg` text sends, in an inactive pane or not.
@@ -470,7 +482,10 @@ fn status_bar_applies_custom_colors() {
         bar.fg = Some(VtColor::Rgb(240, 246, 252));
     });
     assert!(text.contains(";48;2;18;24;32"), "bg color missing: {text}");
-    assert!(text.contains(";38;2;240;246;252"), "fg color missing: {text}");
+    assert!(
+        text.contains(";38;2;240;246;252"),
+        "fg color missing: {text}"
+    );
 }
 
 #[test]

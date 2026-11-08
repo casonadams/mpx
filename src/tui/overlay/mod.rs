@@ -20,11 +20,11 @@ use buffer_view::BufferView;
 use client_view::ClientView;
 use text_view::TextView;
 
+pub use crate::tui::command::PaletteTab;
 pub use buffer_view::buffer_summary;
 pub use help_view::HelpView;
 pub use palette_view::{PaletteItem, PaletteView};
 pub use tree_view::{TreePane, TreeSession, TreeView, TreeWindow};
-pub use crate::tui::command::PaletteTab;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum OverlayAction {

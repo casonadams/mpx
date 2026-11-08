@@ -110,7 +110,11 @@ async fn default_status_bar_is_tmuxs_with_a_copy_badge() {
     let mut h = start(Config::default()).await;
     let bar = bottom(&h.frame().await);
     assert!(bar.starts_with("[test] 0:main*"), "{bar:?}");
-    let right = bar.trim_end().rsplit_once('"').map(|(_, t)| t).unwrap_or_default();
+    let right = bar
+        .trim_end()
+        .rsplit_once('"')
+        .map(|(_, t)| t)
+        .unwrap_or_default();
     let date = right.trim().rsplit(' ').next().unwrap_or_default();
     assert_eq!(date.len(), 9, "%d-%b-%y at the right edge: {bar:?}");
     assert!(!bar.contains("[copy]"), "{bar:?}");

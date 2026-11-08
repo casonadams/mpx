@@ -110,8 +110,7 @@ impl App {
     /// view. Other panes are rebuilt from their log when they come into view, so output nobody
     /// sees costs no parsing.
     pub fn keeps_screen(&self, name: &str) -> bool {
-        self.panes.iter().any(|(pane, ..)| pane == name)
-            || self.parked_copy.contains_key(name)
+        self.panes.iter().any(|(pane, ..)| pane == name) || self.parked_copy.contains_key(name)
     }
 
     /// Panes that just came into view may have missed output while hidden (the daemon sends only
@@ -167,7 +166,11 @@ impl App {
             self.outer.bells.push(name.to_string());
         }
         let pass = vt.take_passthroughs();
-        if self.config.allow_passthrough.allows(name == self.active_pane) {
+        if self
+            .config
+            .allow_passthrough
+            .allows(name == self.active_pane)
+        {
             for sequence in &pass {
                 self.host.colors.follow(&self.host.original, sequence);
             }
@@ -244,7 +247,9 @@ impl App {
     /// Panes with a screen the TUI keeps up to date.
     fn shown_screens(&self) -> Vec<String> {
         let screens = self.expected.keys();
-        screens.filter(|name| self.keeps_screen(name)).cloned().collect()
+        screens
+            .filter(|name| self.keeps_screen(name))
+            .cloned()
+            .collect()
     }
-
 }

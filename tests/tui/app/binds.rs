@@ -11,7 +11,10 @@ fn press(c: char) -> KeyEvent {
 }
 
 fn bound(h: &Harness, c: char) -> Option<Command> {
-    h.app.keymap.lookup(Table::Prefix, &press(c)).map(|b| b.command.clone())
+    h.app
+        .keymap
+        .lookup(Table::Prefix, &press(c))
+        .map(|b| b.command.clone())
 }
 
 #[tokio::test]
@@ -27,19 +30,22 @@ async fn a_binding_set_by_another_client_arrives_as_an_event_and_survives_a_relo
         app.keymap.lookup(Table::Prefix, &press('y')).is_some()
     })
     .await;
-    assert!(matches!(bound(&h, 'y'), Some(Command::Window(WindowCommand::KillWindow { .. }))));
+    assert!(matches!(
+        bound(&h, 'y'),
+        Some(Command::Window(WindowCommand::KillWindow { .. }))
+    ));
 
-    h.probe
-        .set_binding("prefix:x", Some(""))
-        .await
-        .unwrap();
+    h.probe.set_binding("prefix:x", Some("")).await.unwrap();
     h.until("the default x removed", |app| {
         app.keymap.lookup(Table::Prefix, &press('x')).is_none()
     })
     .await;
 
     h.app.apply_bindings().await;
-    assert!(bound(&h, 'y').is_some(), "applying again keeps session bindings");
+    assert!(
+        bound(&h, 'y').is_some(),
+        "applying again keeps session bindings"
+    );
 }
 
 #[tokio::test]
@@ -48,13 +54,25 @@ async fn typing_bind_key_at_the_prompt_binds_it_here_and_records_it_in_the_sessi
     h.command("bind-key w split-window -h").await;
     assert!(matches!(
         bound(&h, 'w'),
-        Some(Command::Pane(PaneCommand::SplitWindow { side_by_side: true, .. }))
+        Some(Command::Pane(PaneCommand::SplitWindow {
+            side_by_side: true,
+            ..
+        }))
     ));
     let recorded = h.probe.get_bindings().await.unwrap();
-    assert_eq!(recorded, [("prefix:w".to_string(), "split-window -h".to_string())]);
+    assert_eq!(
+        recorded,
+        [("prefix:w".to_string(), "split-window -h".to_string())]
+    );
 
     h.command("bind-key q nosuchcommand").await;
-    assert!(h.app.interaction.message.as_ref().is_some_and(|(m, _)| m.contains("unknown command")));
+    assert!(
+        h.app
+            .interaction
+            .message
+            .as_ref()
+            .is_some_and(|(m, _)| m.contains("unknown command"))
+    );
 }
 
 #[tokio::test]

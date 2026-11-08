@@ -49,7 +49,9 @@ fn sgr_sets_style_and_reset_clears_it() {
 fn styles_after(input: &str) -> Vec<CellStyle> {
     let mut vt = VtScreen::new(20, 5);
     feed(&mut vt, input);
-    (0..20).map(|x| vt.grid().get_cell(x, 0).unwrap().style).collect()
+    (0..20)
+        .map(|x| vt.grid().get_cell(x, 0).unwrap().style)
+        .collect()
 }
 
 #[test]
@@ -192,7 +194,10 @@ fn osc_777_notify_without_body_uses_title_only() {
 fn osc_palette_theme_and_clipboard_passthroughs() {
     let mut vt = VtScreen::new(20, 5);
     feed(&mut vt, "\x1b]4;0;rgb:24/2A/36\x1b\\");
-    feed(&mut vt, "\x1b]10;rgb:d8/de/e9\x1b\\\x1b]11;rgb:2e/34/40\x1b\\\x1b]12;;7\x1b\\");
+    feed(
+        &mut vt,
+        "\x1b]10;rgb:d8/de/e9\x1b\\\x1b]11;rgb:2e/34/40\x1b\\\x1b]12;;7\x1b\\",
+    );
     feed(&mut vt, "\x1b]52;c;aGVsbG8=\x07");
     assert_eq!(
         vt.take_passthroughs(),
@@ -222,7 +227,10 @@ fn osc_eleven_records_background_and_answers_query() {
 #[test]
 fn dcs_tmux_and_mpx_passthroughs() {
     let mut vt = VtScreen::new(20, 5);
-    feed(&mut vt, "\x1bPtmux;\x1b\x1b]4;0;rgb:24/2A/36\x1b\x1b\\\x1b\\");
+    feed(
+        &mut vt,
+        "\x1bPtmux;\x1b\x1b]4;0;rgb:24/2A/36\x1b\x1b\\\x1b\\",
+    );
     feed(&mut vt, "\x1bPmpx;hello_world\x1b\\");
     assert_eq!(
         vt.take_passthroughs(),
@@ -397,7 +405,10 @@ fn decsc_decrc_save_and_restore_cursor() {
 #[test]
 fn ris_resets_screen_modes_title_and_style() {
     let mut vt = VtScreen::new(20, 5);
-    feed(&mut vt, "\x1b[?1h\x1b[?2004h\x1b]0;t\x07\x1b]11;rgb:2e/34/40\x1b\\\x1b[31mabc\x1bc");
+    feed(
+        &mut vt,
+        "\x1b[?1h\x1b[?2004h\x1b]0;t\x07\x1b]11;rgb:2e/34/40\x1b\\\x1b[31mabc\x1bc",
+    );
     assert_eq!(vt.modes(), TermModes::default());
     assert_eq!(vt.title(), None);
     assert_eq!(vt.bg_color(), None);
@@ -554,7 +565,10 @@ fn link_body(style: &CellStyle) -> Option<String> {
 #[test]
 fn osc_8_links_the_text_printed_until_the_link_is_closed() {
     let mut vt = VtScreen::new(10, 1);
-    feed(&mut vt, "a\x1b]8;id=1;https://x.test\x1b\\bc\x1b]8;;\x1b\\d");
+    feed(
+        &mut vt,
+        "a\x1b]8;id=1;https://x.test\x1b\\bc\x1b]8;;\x1b\\d",
+    );
     let links: Vec<Option<String>> = (0..4)
         .map(|x| link_body(&vt.grid().get_cell(x, 0).unwrap().style))
         .collect();
@@ -572,10 +586,16 @@ fn osc_8_links_the_text_printed_until_the_link_is_closed() {
 #[test]
 fn osc_8_targets_keep_semicolons_and_equal_targets_share_an_id() {
     let mut vt = VtScreen::new(10, 1);
-    feed(&mut vt, "\x1b]8;;https://x.test/a;b\x1b\\a\x1b]8;;\x1b\\\x1b]8;;https://x.test/a;b\x1b\\b");
+    feed(
+        &mut vt,
+        "\x1b]8;;https://x.test/a;b\x1b\\a\x1b]8;;\x1b\\\x1b]8;;https://x.test/a;b\x1b\\b",
+    );
     let a = vt.grid().get_cell(0, 0).unwrap().style.link;
     let b = vt.grid().get_cell(1, 0).unwrap().style.link;
-    assert_eq!(a.map(|id| id.with_body(str::to_owned)), Some(";https://x.test/a;b".to_owned()));
+    assert_eq!(
+        a.map(|id| id.with_body(str::to_owned)),
+        Some(";https://x.test/a;b".to_owned())
+    );
     assert_eq!(a, b);
     assert_ne!(a, None::<LinkId>);
 }
@@ -611,7 +631,11 @@ fn csi_s_saves_the_cursor_unless_left_right_margin_mode_is_on() {
     feed(&mut vt, "\x1b[2;3H\x1b[s\x1b[H\x1b[u");
     assert_eq!(cursor(&vt), (2, 1), "CSI s / CSI u save and restore");
     feed(&mut vt, "\x1b[?69h\x1b[2;4s\x1b[S");
-    assert_eq!(row(&vt, 0), "ahijef", "with DECLRMM, CSI s set margins 2..4");
+    assert_eq!(
+        row(&vt, 0),
+        "ahijef",
+        "with DECLRMM, CSI s set margins 2..4"
+    );
 }
 
 #[test]
@@ -620,10 +644,18 @@ fn scrolling_inside_left_right_margins_moves_only_those_columns() {
     feed(&mut vt, "\x1b[?69h\x1b[2;3r\x1b[3;5s\x1b[S");
     assert_eq!(
         (row(&vt, 0), row(&vt, 1), row(&vt, 2), row(&vt, 3)),
-        ("abcdef".into(), "ghopql".into(), "mn   r".into(), "stuvwx".into())
+        (
+            "abcdef".into(),
+            "ghopql".into(),
+            "mn   r".into(),
+            "stuvwx".into()
+        )
     );
     feed(&mut vt, "\x1b[T");
-    assert_eq!((row(&vt, 1), row(&vt, 2)), ("gh   l".into(), "mnopqr".into()));
+    assert_eq!(
+        (row(&vt, 1), row(&vt, 2)),
+        ("gh   l".into(), "mnopqr".into())
+    );
     assert_eq!(vt.grid().history_len(), 0, "a partial scroll keeps nothing");
 }
 
@@ -639,7 +671,10 @@ fn leaving_margin_mode_restores_full_width_scrolling() {
 fn delete_and_insert_line_respect_left_right_margins() {
     let mut vt = lettered();
     feed(&mut vt, "\x1b[?69h\x1b[1;2s\x1b[2;1H\x1b[M");
-    assert_eq!((row(&vt, 1), row(&vt, 3)), ("mnijkl".into(), "  uvwx".into()));
+    assert_eq!(
+        (row(&vt, 1), row(&vt, 3)),
+        ("mnijkl".into(), "  uvwx".into())
+    );
     feed(&mut vt, "\x1b[2;1H\x1b[L");
     assert_eq!(row(&vt, 1), "  ijkl");
 }
@@ -647,7 +682,10 @@ fn delete_and_insert_line_respect_left_right_margins() {
 #[test]
 fn osc_133_marks_the_row_of_each_prompt_and_command_output_start() {
     let mut vt = VtScreen::new(10, 3);
-    feed(&mut vt, "\x1b]133;A\x07$ one\r\n\x1b]133;C\x07out\r\n\x1b]133;A\x07$ two");
+    feed(
+        &mut vt,
+        "\x1b]133;A\x07$ one\r\n\x1b]133;C\x07out\r\n\x1b]133;A\x07$ two",
+    );
     let prompts: Vec<usize> = vt.grid().shell_marks(ShellMark::Prompt).collect();
     let outputs: Vec<usize> = vt.grid().shell_marks(ShellMark::Output).collect();
     assert_eq!((prompts, outputs), (vec![0, 2], vec![1]));
@@ -714,7 +752,11 @@ fn a_growing_copy_pane_pulls_its_scrollback_back_onto_the_screen() {
     let log = b"a\r\nb\r\nc\r\nd\r\ne\r\nf\r\ng";
     let grid = VtScreen::resized_grid(log, &[], (10, 2), (10, 4), 100_000);
     assert_eq!(grid_rows(&grid), ["d", "e", "f", "g"]);
-    assert_eq!(grid.history_len(), 3, "the two rows pulled back leave three in history");
+    assert_eq!(
+        grid.history_len(),
+        3,
+        "the two rows pulled back leave three in history"
+    );
 }
 
 /// Bytes one ConPTY pane sent on Windows (`tests/vt/fixtures/conpty_pane_grow.bin`, CI run
@@ -796,5 +838,8 @@ fn growing_after_a_terminal_reset_still_pulls_the_kept_scrollback_back() {
     let grid = VtScreen::resized_grid(log, &[], (10, 2), (10, 5), 100);
     assert_eq!(grid_rows(&grid), ["a", "b", "", "", ""]);
     assert_eq!(grid.history_len(), 0);
-    assert_eq!(grid.cursor.y, 2, "the cursor keeps its place below the pulled rows");
+    assert_eq!(
+        grid.cursor.y, 2,
+        "the cursor keeps its place below the pulled rows"
+    );
 }

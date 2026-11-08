@@ -13,7 +13,13 @@ fn json(event: &StreamEvent) -> String {
 
 #[test]
 fn output_frames_carry_raw_bytes_and_offsets_exactly() {
-    for data in ["", "plain", "\x1b[31mred\x1b[0m\r\n\t", "é€😀 wide 漢字", "\0\x07\x7f"] {
+    for data in [
+        "",
+        "plain",
+        "\x1b[31mred\x1b[0m\r\n\t",
+        "é€😀 wide 漢字",
+        "\0\x07\x7f",
+    ] {
         let event = StreamEvent::Output {
             name: "pane-é".to_string(),
             data: data.to_string(),
@@ -35,8 +41,16 @@ fn an_output_frame_holds_its_data_unescaped() {
     };
     let mut frame = Vec::new();
     encode_event(&event, &mut frame).expect("encode");
-    assert!(frame.len() < data.len() + 32, "framed {} bytes for {}", frame.len(), data.len());
-    assert!(json(&event).len() > data.len() * 2, "JSON escapes every control byte");
+    assert!(
+        frame.len() < data.len() + 32,
+        "framed {} bytes for {}",
+        frame.len(),
+        data.len()
+    );
+    assert!(
+        json(&event).len() > data.len() * 2,
+        "JSON escapes every control byte"
+    );
 }
 
 #[test]
@@ -61,8 +75,14 @@ fn other_events_travel_as_json_frames() {
 fn malformed_frames_are_rejected() {
     assert!(decode_event(&[]).is_err());
     assert!(decode_event(&[9]).is_err(), "unknown kind");
-    assert!(decode_event(&[1, 0, 5, b'a']).is_err(), "name runs past the frame");
-    assert!(decode_event(&[1, 0, 1, b'a', 0, 0]).is_err(), "offsets cut short");
+    assert!(
+        decode_event(&[1, 0, 5, b'a']).is_err(),
+        "name runs past the frame"
+    );
+    assert!(
+        decode_event(&[1, 0, 1, b'a', 0, 0]).is_err(),
+        "offsets cut short"
+    );
     let mut bad_utf8 = vec![1, 0, 1, b'a'];
     bad_utf8.extend([0; 16]);
     bad_utf8.extend([0xff, 0xfe]);

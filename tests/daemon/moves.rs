@@ -184,14 +184,20 @@ async fn join_pane_detach_keeps_the_pane_that_was_active_focused() {
 async fn respawn_window_refuses_while_a_pane_runs_unless_killed() {
     let (_daemon, mut client) = started_with(task("p", "cat", &[])).await;
 
-    let err = client.respawn_window(None, false, None, None).await.unwrap_err();
+    let err = client
+        .respawn_window(None, false, None, None)
+        .await
+        .unwrap_err();
     assert!(err.contains("still active"), "{err}");
 
     let id = node(&mut client, "p").await.id;
     client.respawn_window(None, true, None, None).await.unwrap();
     let respawned = node(&mut client, "p").await;
     assert!(respawned.is_running());
-    assert_ne!(respawned.id, id, "a killed pane's replacement takes a new id");
+    assert_ne!(
+        respawned.id, id,
+        "a killed pane's replacement takes a new id"
+    );
     client.kill("p").await.unwrap();
 }
 
@@ -201,7 +207,10 @@ async fn respawn_window_restarts_an_exited_pane_in_place_and_keeps_its_id() {
     let mut client = connect(&daemon.endpoint).await;
     let id = exited_pane(&mut client).await;
 
-    client.respawn_window(None, false, None, Some(again_command())).await.unwrap();
+    client
+        .respawn_window(None, false, None, Some(again_command()))
+        .await
+        .unwrap();
 
     let respawned = node(&mut client, "p").await;
     assert!(respawned.is_running());

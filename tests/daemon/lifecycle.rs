@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use super::support::{connect, exit_code, pty, start, start_on, start_with, task, logs_until};
+use super::support::{connect, exit_code, logs_until, pty, start, start_on, start_with, task};
 use mpx::config::{Config, SessionOptions};
 use mpx::protocol::{NodeState, SpawnOpts};
 
@@ -142,7 +142,10 @@ async fn reload_config_changes_defaults_for_later_panes_and_rejects_bad_files() 
     client.reload_config(Some(&file)).await.unwrap();
     client.spawn(task("kept", "true", &[])).await.unwrap();
     exit_code(&mut client, "kept").await;
-    assert_eq!(client.status("kept").await.unwrap().state, NodeState::Exited);
+    assert_eq!(
+        client.status("kept").await.unwrap().state,
+        NodeState::Exited
+    );
 
     std::fs::write(&file, "remain_on_exit = [").unwrap();
     assert!(client.reload_config(Some(&file)).await.is_err());
@@ -206,7 +209,12 @@ async fn a_tool_that_ran_in_a_shell_resumes_in_a_shell_that_outlives_it() {
         resume: vec![mpx::config::ResumeRule {
             name: "sleeper".into(),
             detect: vec!["sleep".into()],
-            fallback: vec!["printf".into(), "%s-%s\\n".into(), "back".into(), "again".into()],
+            fallback: vec![
+                "printf".into(),
+                "%s-%s\\n".into(),
+                "back".into(),
+                "again".into(),
+            ],
             ..Default::default()
         }],
         ..Config::default()

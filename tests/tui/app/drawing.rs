@@ -245,7 +245,10 @@ async fn a_scrolled_full_width_pane_sends_only_the_new_line() {
 fn input_redraws_at_once_unless_it_only_went_to_a_pane() {
     let now = Instant::now();
     assert!(needs_redraw(false, false, None, now));
-    assert!(!needs_redraw(false, true, None, now), "the pane's answer brings its own frame");
+    assert!(
+        !needs_redraw(false, true, None, now),
+        "the pane's answer brings its own frame"
+    );
 }
 
 #[test]
@@ -316,7 +319,10 @@ async fn other_panes_output_after_a_keypress_keeps_the_budget() {
     output_from(&mut h, MAIN, "").await;
     spend_budget(&mut h);
     let due = output_from(&mut h, "side", "noise").await;
-    assert!(due > Instant::now(), "a flood elsewhere must not ride on the keypress");
+    assert!(
+        due > Instant::now(),
+        "a flood elsewhere must not ride on the keypress"
+    );
 }
 
 #[tokio::test]
@@ -335,7 +341,11 @@ async fn full_width_pane_scroll_sends_only_the_new_line() {
     let mut h = start().await;
     h.app.canvas.set_lr_margins(true);
     h.frame().await;
-    assert_eq!(h.rect_of(MAIN).x, 0, "panes keep 100% width with zero stolen columns");
+    assert_eq!(
+        h.rect_of(MAIN).x,
+        0,
+        "panes keep 100% width with zero stolen columns"
+    );
     scroll_by_one_line_is_incremental(&mut h).await;
 }
 
@@ -355,7 +365,11 @@ fn a_run_of_queued_drags_is_handled_at_its_last_position() {
     let up = mouse(MouseEventKind::Up(MouseButton::Left), 9);
     let mut queue = vec![drag(5), drag(7), up.clone(), drag(8)].into_iter();
     assert_eq!(latest_drag(drag(3), || queue.next()), (drag(7), Some(up)));
-    assert_eq!(queue.next(), Some(drag(8)), "events after the run stay queued");
+    assert_eq!(
+        queue.next(),
+        Some(drag(8)),
+        "events after the run stay queued"
+    );
     let key = Event::Key(KeyEvent::from(KeyCode::Char('x')));
     let mut untouched = vec![drag(1)].into_iter();
     assert_eq!(latest_drag(key.clone(), || untouched.next()), (key, None));

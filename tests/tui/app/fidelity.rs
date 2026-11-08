@@ -337,16 +337,29 @@ async fn links_underlines_sync_and_overlays_keep_the_terminal_identical() {
 
     // A synchronized update holds the pane's drawing: the frame keeps the last complete state
     // until the program ends the update.
-    h.probe.send_input(MAIN, "\x1b[?2026hHELD-TEXT").await.expect("send");
-    h.until("update begun", |app| app.vt.get(MAIN).is_some_and(|vt| vt.sync_output())).await;
+    h.probe
+        .send_input(MAIN, "\x1b[?2026hHELD-TEXT")
+        .await
+        .expect("send");
+    h.until("update begun", |app| {
+        app.vt.get(MAIN).is_some_and(|vt| vt.sync_output())
+    })
+    .await;
     let held = h.frame().await;
-    assert!(!held.contains("HELD-TEXT"), "a synchronized update is held\n{held}");
+    assert!(
+        !held.contains("HELD-TEXT"),
+        "a synchronized update is held\n{held}"
+    );
     h.emit(MAIN, "\x1b[?2026l SYNC-END", "SYNC-END").await;
     check(&mut h, "synchronized update ended").await;
 
     // A popup covers its box of the panes; the panes outside it still match their screens.
-    h.command("display-popup -E -w 40 -h 10 'printf POPUP-OUT; read x'").await;
-    h.until_popup("popup printed", |popup| screen_text(popup).contains("POPUP-OUT")).await;
+    h.command("display-popup -E -w 40 -h 10 'printf POPUP-OUT; read x'")
+        .await;
+    h.until_popup("popup printed", |popup| {
+        screen_text(popup).contains("POPUP-OUT")
+    })
+    .await;
     let popup = match &h.app.mode {
         Mode::Popup(popup) => popup.rect,
         _ => panic!("popup should be open"),
@@ -357,7 +370,8 @@ async fn links_underlines_sync_and_overlays_keep_the_terminal_identical() {
     check(&mut h, "popup closed").await;
 
     // A menu covers its own box the same way.
-    h.command("display-menu -x 5 -y 5 Zoom z 'resize-pane -Z'").await;
+    h.command("display-menu -x 5 -y 5 Zoom z 'resize-pane -Z'")
+        .await;
     let menu = match &h.app.mode {
         Mode::Menu(menu) => menu.rect,
         _ => panic!("menu should be open"),
@@ -399,21 +413,33 @@ async fn a_pane_that_grows_keeps_the_terminal_identical_to_its_screen() {
 #[cfg(unix)]
 #[tokio::test]
 async fn a_held_synchronized_update_has_a_deadline_that_ends_the_hold() {
-    use std::time::Instant;
     use mpx::tui::outer::SYNC_HOLD;
+    use std::time::Instant;
 
     let mut h = Harness::started(ECHO).await;
     h.frame().await;
     assert!(h.app.sync_deadline().is_none(), "nothing is held");
 
-    h.probe.send_input(MAIN, "\x1b[?2026hHELD-TEXT").await.expect("send");
-    h.until("update begun", |app| app.vt.get(MAIN).is_some_and(|vt| vt.sync_output())).await;
+    h.probe
+        .send_input(MAIN, "\x1b[?2026hHELD-TEXT")
+        .await
+        .expect("send");
+    h.until("update begun", |app| {
+        app.vt.get(MAIN).is_some_and(|vt| vt.sync_output())
+    })
+    .await;
     assert!(!h.frame().await.contains("HELD-TEXT"));
     let due = h.app.sync_deadline().expect("a held pane wakes the loop");
     assert!(due <= Instant::now() + SYNC_HOLD);
 
     let began = Instant::now().checked_sub(SYNC_HOLD * 2).expect("clock");
     h.app.outer.sync_since.insert(MAIN.to_string(), began);
-    assert!(h.app.sync_deadline().is_none(), "an expired hold does not wake the loop again");
-    assert!(h.frame().await.contains("HELD-TEXT"), "the expired hold draws the pane");
+    assert!(
+        h.app.sync_deadline().is_none(),
+        "an expired hold does not wake the loop again"
+    );
+    assert!(
+        h.frame().await.contains("HELD-TEXT"),
+        "the expired hold draws the pane"
+    );
 }

@@ -273,7 +273,10 @@ async fn a_linked_window_is_restored_once_and_shown_at_each_index() {
     let shown = numbered(&mut client).await;
     let indices: Vec<usize> = shown.iter().map(|(index, _)| *index).collect();
     assert_eq!(indices, [0, 1]);
-    assert_eq!(shown[0].1, shown[1].1, "both indices show the one restored window");
+    assert_eq!(
+        shown[0].1, shown[1].1,
+        "both indices show the one restored window"
+    );
     let names: Vec<String> = client
         .list()
         .await

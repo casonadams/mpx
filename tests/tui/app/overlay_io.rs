@@ -53,7 +53,9 @@ async fn start_fleet() -> Fleet {
     let mut b = Client::connect(&sandbox.endpoint("beta"))
         .await
         .expect("connect beta");
-    b.spawn(pane("shell", "sleep 30")).await.expect("spawn shell");
+    b.spawn(pane("shell", "sleep 30"))
+        .await
+        .expect("spawn shell");
 
     Fleet { sandbox, alpha }
 }
@@ -135,7 +137,10 @@ async fn tree_preview_shows_the_selected_sessions_focused_pane_and_toggles_off()
     tree.handle_key(key('G'));
     tree.follow_selection().await;
     let text = draw_tree(&tree, Rect::new(0, 0, 120, 30));
-    assert!(text.contains("beta:%"), "the preview follows the cursor: {text}");
+    assert!(
+        text.contains("beta:%"),
+        "the preview follows the cursor: {text}"
+    );
     tree.handle_key(key('g'));
     tree.handle_key(key('g'));
     tree.follow_selection().await;

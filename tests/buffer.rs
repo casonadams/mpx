@@ -221,9 +221,17 @@ fn a_scrollback_ring_keeps_the_lines_it_was_asked_for_beyond_the_byte_floor() {
     for chunk in numbered_lines(40_000, 99).chunks(4096) {
         ring.write(chunk);
     }
-    assert_eq!(newlines(&ring), 40_000, "no line is dropped before the limit");
+    assert_eq!(
+        newlines(&ring),
+        40_000,
+        "no line is dropped before the limit"
+    );
     ring.write(&numbered_lines(1_000, 99));
-    assert_eq!(newlines(&ring), 40_000, "older lines go once the limit is passed");
+    assert_eq!(
+        newlines(&ring),
+        40_000,
+        "older lines go once the limit is passed"
+    );
     assert!(ring.len() > mpx::buffer::RING_CAPACITY);
 }
 
@@ -233,7 +241,11 @@ fn a_limited_ring_never_drops_below_its_byte_floor_or_beyond_its_cap() {
     for chunk in numbered_lines(2_000, 9).chunks(100) {
         ring.write(chunk);
     }
-    assert_eq!(ring.len(), 1_000, "only the floor stays once the lines are covered");
+    assert_eq!(
+        ring.len(),
+        1_000,
+        "only the floor stays once the lines are covered"
+    );
     assert!(newlines(&ring) >= 5);
 
     let mut many = RingBuffer::with_limits(1_000, 10_000, usize::MAX);

@@ -165,7 +165,9 @@ pub fn margins_reply(reply: &[u8]) -> Option<bool> {
     let text = String::from_utf8_lossy(reply);
     let answered = text.match_indices("\x1b[?").any(|(start, _)| {
         let rest = &text[start + 3..];
-        let end = rest.find(|c: char| !(c.is_ascii_digit() || c == ';')).unwrap_or(rest.len());
+        let end = rest
+            .find(|c: char| !(c.is_ascii_digit() || c == ';'))
+            .unwrap_or(rest.len());
         rest[end..].starts_with('c')
     });
     if !answered {
@@ -180,12 +182,16 @@ pub fn margins_reply(reply: &[u8]) -> Option<bool> {
 /// An `rgb:r/g/b` (one to four hex digits per channel) or `#rrggbb` color, as a terminal reports it.
 pub fn parse_color_spec(spec: &str) -> Option<(u8, u8, u8)> {
     if let Some(hex) = spec.strip_prefix('#') {
-        let value = u32::from_str_radix(hex, 16).ok().filter(|_| hex.len() == 6)?;
+        let value = u32::from_str_radix(hex, 16)
+            .ok()
+            .filter(|_| hex.len() == 6)?;
         return Some(((value >> 16) as u8, (value >> 8) as u8, value as u8));
     }
     let mut channels = spec.strip_prefix("rgb:")?.split('/').map(|digits| {
         let max = 16u32.checked_pow(digits.len() as u32)? - 1;
-        let value = u32::from_str_radix(digits, 16).ok().filter(|_| (1..=4).contains(&digits.len()))?;
+        let value = u32::from_str_radix(digits, 16)
+            .ok()
+            .filter(|_| (1..=4).contains(&digits.len()))?;
         Some(((value * 255 + max / 2) / max) as u8)
     });
     let color = (channels.next()??, channels.next()??, channels.next()??);
@@ -269,8 +275,16 @@ fn send_query(query: &[u8], reply: &mut Vec<u8>) -> bool {
     while sent < query.len() {
         let left = deadline.saturating_duration_since(std::time::Instant::now());
         let mut fds = [
-            libc::pollfd { fd: 0, events: libc::POLLIN, revents: 0 },
-            libc::pollfd { fd: 1, events: libc::POLLOUT, revents: 0 },
+            libc::pollfd {
+                fd: 0,
+                events: libc::POLLIN,
+                revents: 0,
+            },
+            libc::pollfd {
+                fd: 1,
+                events: libc::POLLOUT,
+                revents: 0,
+            },
         ];
         let ms = left.as_millis().min(i32::MAX as u128) as i32;
         // SAFETY: two valid pollfds for stdin and stdout.

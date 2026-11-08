@@ -41,7 +41,10 @@ pub fn resolve(
     env_endpoint: Option<&str>,
     socket_dir: &Path,
 ) -> Resolved {
-    let session = session_flag.or(env_session).unwrap_or(DEFAULT_SESSION).to_string();
+    let session = session_flag
+        .or(env_session)
+        .unwrap_or(DEFAULT_SESSION)
+        .to_string();
     let env_ep = if session_flag.is_none() {
         env_endpoint
     } else {
@@ -97,10 +100,7 @@ pub fn parse_env_pairs(items: &[String]) -> Result<Vec<(String, String)>, String
 }
 
 /// Condition selected by `--idle` or `--match`; none means process exit.
-pub fn wait_condition(
-    idle: Option<u64>,
-    pattern: Option<&str>,
-) -> Result<WaitCondition, String> {
+pub fn wait_condition(idle: Option<u64>, pattern: Option<&str>) -> Result<WaitCondition, String> {
     if idle.is_some() && pattern.is_some() {
         return Err("use only one of --idle, --match".to_string());
     }

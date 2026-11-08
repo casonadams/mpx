@@ -70,7 +70,13 @@ pub async fn run(endpoint: &str, work: Work, rest: Vec<Command>) -> Job {
             let ran = client
                 .run_shell(&condition, target.as_deref(), false, None)
                 .await;
-            let passed = matches!(&ran, Ok(Some(ShellOutput { status: Some(0), .. })));
+            let passed = matches!(
+                &ran,
+                Ok(Some(ShellOutput {
+                    status: Some(0),
+                    ..
+                }))
+            );
             let outcome = ran.map(|_| Vec::new());
             let branch = if passed {
                 Some(*then)

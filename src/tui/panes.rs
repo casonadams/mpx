@@ -224,7 +224,9 @@ pub async fn load_pane(
     (width, height): (u16, u16),
     history: usize,
 ) -> Option<(VtScreen, u64)> {
-    if history == 0 && let Some(loaded) = load_keyframe(client, name, (width, height)).await {
+    if history == 0
+        && let Some(loaded) = load_keyframe(client, name, (width, height)).await
+    {
         return Some(loaded);
     }
     let info = client.status(name).await.ok();
@@ -237,8 +239,7 @@ pub async fn load_pane(
     let next = match resized {
         Some(((from_cols, from_rows), at)) => {
             let from = (from_cols as usize, from_rows as usize);
-            let (grid, next) =
-                rebuild_grid(client, name, from, (cols, rows), history, at).await?;
+            let (grid, next) = rebuild_grid(client, name, from, (cols, rows), history, at).await?;
             *screen.grid_mut() = grid;
             next
         }

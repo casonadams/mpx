@@ -110,14 +110,26 @@ async fn colors_a_theme_switcher_sends_follow_into_dimming_only_when_they_reach_
             next: offset + data.len() as u64,
         }
     };
-    let event = send(&mut h, &active, "\x1b]4;1;rgb:ff/00/00\x1b\\\x1b]11;rgb:10/20/30\x1b\\");
+    let event = send(
+        &mut h,
+        &active,
+        "\x1b]4;1;rgb:ff/00/00\x1b\\\x1b]11;rgb:10/20/30\x1b\\",
+    );
     h.app.apply_event(event).await;
     assert_eq!(h.app.host.colors.palette.get(1), Some((255, 0, 0)));
     assert_eq!(h.app.host.colors.bg, Some(mpx::vt::Color::Rgb(16, 32, 48)));
-    assert_eq!(h.app.host.original.palette.get(1), None, "the attach report is kept");
+    assert_eq!(
+        h.app.host.original.palette.get(1),
+        None,
+        "the attach report is kept"
+    );
 
     h.app.config.allow_passthrough = Passthrough::Off;
     let event = send(&mut h, &active, "\x1b]4;2;rgb:00/ff/00\x1b\\");
     h.app.apply_event(event).await;
-    assert_eq!(h.app.host.colors.palette.get(2), None, "a blocked sequence never reaches the terminal");
+    assert_eq!(
+        h.app.host.colors.palette.get(2),
+        None,
+        "a blocked sequence never reaches the terminal"
+    );
 }

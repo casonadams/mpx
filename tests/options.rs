@@ -42,7 +42,10 @@ fn unknown_and_daemon_options_are_told_apart() {
 
 #[test]
 fn set_then_unset_restores_the_default_for_switches_and_strings() {
-    assert_eq!(options::get(&Config::default(), "wrap-search").unwrap(), "on");
+    assert_eq!(
+        options::get(&Config::default(), "wrap-search").unwrap(),
+        "on"
+    );
     // (option, a value that changes it, how `get` shows that value)
     for (name, value, shown) in [("wrap-search", "off", "off"), ("status-left", "", "\"\"")] {
         let mut c = Config::default();

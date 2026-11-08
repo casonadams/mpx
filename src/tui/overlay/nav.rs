@@ -119,12 +119,11 @@ impl Filter {
     }
 
     /// The `items` whose `fields` pass the filter, in their original order.
-    pub fn visible<'a, T>(
-        &self,
-        items: &'a [T],
-        fields: impl Fn(&T) -> [&str; 2],
-    ) -> Vec<&'a T> {
-        items.iter().filter(|&item| self.matches(&fields(item))).collect()
+    pub fn visible<'a, T>(&self, items: &'a [T], fields: impl Fn(&T) -> [&str; 2]) -> Vec<&'a T> {
+        items
+            .iter()
+            .filter(|&item| self.matches(&fields(item)))
+            .collect()
     }
 
     pub fn prompt(&self) -> Option<String> {

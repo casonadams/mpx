@@ -31,10 +31,7 @@ pub(super) async fn run(tx: &Tx, job: Job) -> Result<Response, String> {
     })
     .await??;
     let mut process = Command::new(program);
-    process
-        .arg("-c")
-        .arg(&job.command)
-        .stdin(Stdio::null());
+    process.arg("-c").arg(&job.command).stdin(Stdio::null());
     if let Some(dir) = cwd {
         process.current_dir(dir);
     }

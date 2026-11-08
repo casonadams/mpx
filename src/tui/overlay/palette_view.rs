@@ -29,17 +29,21 @@ static BUILTIN_ENTRIES: std::sync::LazyLock<Vec<BuiltinEntry>> = std::sync::Lazy
     BUILTIN_COMMANDS
         .iter()
         .filter_map(|&(cmd, title, shortcut, desc)| {
-            crate::tui::command::parse(cmd).ok().map(|command| BuiltinEntry {
-                cmd,
-                title,
-                shortcut,
-                desc,
-                command,
-            })
+            crate::tui::command::parse(cmd)
+                .ok()
+                .map(|command| BuiltinEntry {
+                    cmd,
+                    title,
+                    shortcut,
+                    desc,
+                    command,
+                })
         })
         .collect()
 });
 
+// One row per line: rustfmt would wrap each tuple over six lines.
+#[rustfmt::skip]
 pub const BUILTIN_COMMANDS: &[(&str, &str, &str, &str)] = &[
     ("new-window", "New Window", "c", "Create a new window in the active session"),
     ("split-window", "Split Horizontal", "\" or -", "Split the active pane horizontally"),
@@ -229,7 +233,6 @@ impl PaletteView {
         items
     }
 
-
     fn session_items(&self, query: &str) -> Vec<PaletteItem> {
         let mut items = Vec::new();
         for session in &self.sessions {
@@ -331,7 +334,6 @@ fn collect_pane_row(
 }
 
 impl PaletteView {
-
     fn help_items(&self, query: &str) -> Vec<PaletteItem> {
         let mut items = Vec::new();
         for entry in &self.help_entries {
@@ -439,9 +441,7 @@ impl PaletteView {
                 self.prompt.clear();
                 true
             }
-            KeyCode::Char(c)
-                if !has_ctrl(key) && !key.modifiers.contains(KeyModifiers::ALT) =>
-            {
+            KeyCode::Char(c) if !has_ctrl(key) && !key.modifiers.contains(KeyModifiers::ALT) => {
                 self.prompt.insert(c);
                 true
             }
@@ -476,11 +476,7 @@ impl PaletteView {
 
     fn render_tabs<W: Write>(&self, out: &mut W, body: Rect) -> io::Result<()> {
         let mut tab_spans = Vec::new();
-        for t in [
-            PaletteTab::Commands,
-            PaletteTab::Sessions,
-            PaletteTab::Help,
-        ] {
+        for t in [PaletteTab::Commands, PaletteTab::Sessions, PaletteTab::Help] {
             let count_label = match t {
                 PaletteTab::Sessions if !self.sessions.is_empty() => {
                     format!(" ({})", self.sessions.len())
@@ -539,7 +535,10 @@ impl PaletteView {
 
 /// Widest title (with its badge) and widest `[shortcut]`, each capped, so rows line up in columns.
 fn columns(items: &[PaletteItem]) -> (usize, usize) {
-    let label = items.iter().map(|i| lead_width(i) + i.title.chars().count()).max();
+    let label = items
+        .iter()
+        .map(|i| lead_width(i) + i.title.chars().count())
+        .max();
     let shortcut = items
         .iter()
         .filter_map(|i| i.shortcut.as_ref())
@@ -553,7 +552,9 @@ fn columns(items: &[PaletteItem]) -> (usize, usize) {
 
 /// Width of the badge and the space after it; 0 without a badge.
 fn lead_width(item: &PaletteItem) -> usize {
-    item.badge.as_ref().map_or(0, |b| b.text.chars().count() + 1)
+    item.badge
+        .as_ref()
+        .map_or(0, |b| b.text.chars().count() + 1)
 }
 
 fn item_spans(
@@ -580,7 +581,11 @@ fn item_spans(
     });
 
     if shortcut_w > 0 {
-        let shortcut = item.shortcut.as_ref().map(|sc| format!("[{sc}]")).unwrap_or_default();
+        let shortcut = item
+            .shortcut
+            .as_ref()
+            .map(|sc| format!("[{sc}]"))
+            .unwrap_or_default();
         row_spans.push(Span::plain("  "));
         row_spans.push(Span::dim(fit(&shortcut, shortcut_w)));
     }

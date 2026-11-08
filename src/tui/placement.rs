@@ -67,7 +67,9 @@ impl Offset {
         let room = screen.saturating_sub(extent);
         match self {
             Self::Cells(n) => n.min(room),
-            Self::Percent(p) => (u32::from(screen) * u32::from(p) / 100).min(u32::from(room)) as u16,
+            Self::Percent(p) => {
+                (u32::from(screen) * u32::from(p) / 100).min(u32::from(room)) as u16
+            }
             Self::Centre => room / 2,
             Self::Far => room,
         }

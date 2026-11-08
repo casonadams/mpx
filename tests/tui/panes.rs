@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use mpx::layout::{Divider, Rect};
 use mpx::protocol::{NodeInfo, Side};
 use mpx::tui::panes::{
-    BorderGrab, PaneRect, border_at, border_move, find_directional, neighbor_pane,
-    pending_resizes, resized_elsewhere, wrap_step,
+    BorderGrab, PaneRect, border_at, border_move, find_directional, neighbor_pane, pending_resizes,
+    resized_elsewhere, wrap_step,
 };
 
 fn pane(name: &str, width: u16, height: u16) -> PaneRect {
@@ -171,8 +171,16 @@ fn directional_selection_prefers_the_most_recently_focused_neighbor() {
     let go = |side, names: &[&str]| find_directional(&panes, "a", side, &recent(names));
     assert_eq!(go(Side::Right, &["c", "b"]).as_deref(), Some("c"));
     assert_eq!(go(Side::Right, &["b", "c"]).as_deref(), Some("b"));
-    assert_eq!(go(Side::Right, &[]).as_deref(), Some("b"), "layout order breaks the tie");
-    assert_eq!(go(Side::Right, &["a", "c"]).as_deref(), Some("c"), "unlisted panes rank last");
+    assert_eq!(
+        go(Side::Right, &[]).as_deref(),
+        Some("b"),
+        "layout order breaks the tie"
+    );
+    assert_eq!(
+        go(Side::Right, &["a", "c"]).as_deref(),
+        Some("c"),
+        "unlisted panes rank last"
+    );
 }
 
 #[test]
@@ -182,7 +190,11 @@ fn directional_selection_only_reaches_panes_that_touch_the_edge() {
     assert_eq!(from("b", Side::Left).as_deref(), Some("a"));
     assert_eq!(from("c", Side::Up).as_deref(), Some("b"));
     assert_eq!(from("b", Side::Down).as_deref(), Some("c"));
-    assert_eq!(from("b", Side::Up).as_deref(), Some("c"), "wraps to the bottom of the column");
+    assert_eq!(
+        from("b", Side::Up).as_deref(),
+        Some("c"),
+        "wraps to the bottom of the column"
+    );
 }
 
 #[test]
@@ -191,7 +203,11 @@ fn directional_selection_wraps_to_the_opposite_edge() {
     let from = |name, side, names: &[&str]| find_directional(&panes, name, side, &recent(names));
     assert_eq!(from("a", Side::Left, &["c"]).as_deref(), Some("c"));
     assert_eq!(from("c", Side::Right, &[]).as_deref(), Some("a"));
-    assert_eq!(from("a", Side::Down, &[]), None, "nothing shares a's columns at the top edge");
+    assert_eq!(
+        from("a", Side::Down, &[]),
+        None,
+        "nothing shares a's columns at the top edge"
+    );
 }
 
 #[test]
@@ -200,6 +216,12 @@ fn directional_selection_ignores_the_status_row_offset() {
         .into_iter()
         .map(|(n, r, f)| (n, Rect::new(r.x, r.y + 1, r.width, r.height), f))
         .collect();
-    assert_eq!(find_directional(&shifted, "b", Side::Up, &[]).as_deref(), Some("c"));
-    assert_eq!(find_directional(&shifted, "c", Side::Down, &[]).as_deref(), Some("b"));
+    assert_eq!(
+        find_directional(&shifted, "b", Side::Up, &[]).as_deref(),
+        Some("c")
+    );
+    assert_eq!(
+        find_directional(&shifted, "c", Side::Down, &[]).as_deref(),
+        Some("b")
+    );
 }

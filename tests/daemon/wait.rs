@@ -12,7 +12,10 @@ async fn spawn_and_wait(
 ) -> WaitOutcome {
     let name = spawn.name.clone();
     client.spawn(spawn).await.unwrap();
-    client.wait(&name, condition, Some(timeout_ms)).await.unwrap()
+    client
+        .wait(&name, condition, Some(timeout_ms))
+        .await
+        .unwrap()
 }
 
 fn matching(pattern: &str) -> WaitCondition {

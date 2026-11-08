@@ -110,7 +110,11 @@ pub enum HookSetCommands {
         hook: String,
 
         /// Command line the hook runs
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true, value_name = "COMMAND")]
+        #[arg(
+            trailing_var_arg = true,
+            allow_hyphen_values = true,
+            value_name = "COMMAND"
+        )]
         command: Vec<String>,
     },
 
@@ -232,7 +236,10 @@ async fn if_shell(
     let line = command_line(&words);
     let mut client = ensure_client(r).await?;
     client
-        .call_ok("RunCommand", Request::Script(ScriptRequest::RunCommand { line }))
+        .call_ok(
+            "RunCommand",
+            Request::Script(ScriptRequest::RunCommand { line }),
+        )
         .await
         .map_err(|e| format!("if-shell error: {e}"))?;
     Ok(0)
@@ -274,7 +281,12 @@ async fn set_hook(
         if !command.is_empty() {
             return Err("set-hook: -R takes no command".to_string());
         }
-        ("RunHook", Request::Script(ScriptRequest::RunHook { name: hook.to_string() }))
+        (
+            "RunHook",
+            Request::Script(ScriptRequest::RunHook {
+                name: hook.to_string(),
+            }),
+        )
     } else if unset {
         (
             "SetHook",

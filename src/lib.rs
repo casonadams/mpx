@@ -1,7 +1,7 @@
 pub mod buffer;
-pub mod clients;
 pub mod cli;
 pub mod client;
+pub mod clients;
 pub mod cmdline;
 pub mod config;
 pub mod daemon;

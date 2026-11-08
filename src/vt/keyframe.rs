@@ -37,7 +37,12 @@ pub fn keyframe(grid: &Grid) -> String {
     out.push_str("\x1b[0m");
 
     if grid.scroll_top != 0 || grid.scroll_bottom + 1 != grid.rows {
-        let _ = write!(out, "\x1b[{};{}r", grid.scroll_top + 1, grid.scroll_bottom + 1);
+        let _ = write!(
+            out,
+            "\x1b[{};{}r",
+            grid.scroll_top + 1,
+            grid.scroll_bottom + 1
+        );
     }
     if grid.lr_margins {
         let _ = write!(
@@ -54,7 +59,10 @@ pub fn keyframe(grid: &Grid) -> String {
     let cursor = grid.cursor;
     if cursor.x >= grid.cols {
         // Waiting to wrap: print the last cell again to leave the cursor past it.
-        let last = grid.get_cell(grid.cols - 1, cursor.y).copied().unwrap_or_default();
+        let last = grid
+            .get_cell(grid.cols - 1, cursor.y)
+            .copied()
+            .unwrap_or_default();
         let _ = write!(out, "\x1b[{};{}H", cursor.y + 1, grid.cols);
         push_sgr(&mut out, last.style);
         out.push(last.c);

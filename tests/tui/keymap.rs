@@ -292,11 +292,17 @@ fn tmux_default_prefix_keys_are_bound_to_their_tmux_commands() {
 
     assert!(matches!(
         bound(ctrl('o')),
-        Some(Command::Window(WindowCommand::RotateWindow { down: false, .. }))
+        Some(Command::Window(WindowCommand::RotateWindow {
+            down: false,
+            ..
+        }))
     ));
     assert!(matches!(
         bound(alt('o')),
-        Some(Command::Window(WindowCommand::RotateWindow { down: true, .. }))
+        Some(Command::Window(WindowCommand::RotateWindow {
+            down: true,
+            ..
+        }))
     ));
     assert!(matches!(
         bound(ctrl('z')),
@@ -316,7 +322,10 @@ fn tmux_default_prefix_keys_are_bound_to_their_tmux_commands() {
         ))
     ));
     assert!(matches!(bound(key('=')), Some(Command::ChooseBuffer)));
-    assert!(matches!(bound(key('E')), Some(Command::Pane(PaneCommand::SpreadLayout))));
+    assert!(matches!(
+        bound(key('E')),
+        Some(Command::Pane(PaneCommand::SpreadLayout))
+    ));
     assert!(matches!(
         bound(key('i')),
         Some(Command::DisplayMessage { format: None })
@@ -371,13 +380,19 @@ fn vim_motion_keys_stay_bound_to_pane_navigation_and_resize() {
 
     for c in ['h', 'j', 'k', 'l'] {
         assert!(
-            matches!(bound(key(c)), Some(Command::Pane(PaneCommand::SelectPaneDir { .. }))),
+            matches!(
+                bound(key(c)),
+                Some(Command::Pane(PaneCommand::SelectPaneDir { .. }))
+            ),
             "{c}"
         );
     }
     for c in ['H', 'J', 'K', 'L'] {
         assert!(
-            matches!(bound(key(c)), Some(Command::Pane(PaneCommand::ResizePane { .. }))),
+            matches!(
+                bound(key(c)),
+                Some(Command::Pane(PaneCommand::ResizePane { .. }))
+            ),
             "{c}"
         );
     }

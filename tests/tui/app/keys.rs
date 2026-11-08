@@ -22,8 +22,10 @@ async fn next_pane(h: &mut Harness) {
 /// Waits for `MAIN` to ask for focus reports; the first frame then reports focus-in, as the
 /// pane's modes arrive with its screen.
 async fn first_focus_in(h: &mut Harness) {
-    h.until("focus events requested", |app| app.modes_of(MAIN).focus_events)
-        .await;
+    h.until("focus events requested", |app| {
+        app.modes_of(MAIN).focus_events
+    })
+    .await;
     wait_for(&mut h.probe, MAIN, "\x1b[I").await;
 }
 
@@ -89,7 +91,11 @@ async fn pane_focus_reports_without_focus_events_but_the_terminals_focus_does_no
     }
     next_pane(&mut h).await;
     let logs = wait_for(&mut h.probe, MAIN, "\x1b[I\x1b[O").await;
-    assert_eq!(logs.matches("\x1b[I").count(), 1, "the terminal's focus is not forwarded");
+    assert_eq!(
+        logs.matches("\x1b[I").count(),
+        1,
+        "the terminal's focus is not forwarded"
+    );
 }
 
 #[tokio::test]

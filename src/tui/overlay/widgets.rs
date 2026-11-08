@@ -69,7 +69,6 @@ impl Span {
     }
 }
 
-
 pub fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -167,7 +166,13 @@ pub fn draw_preview<W: Write>(
         return Ok(());
     }
     for (row, line) in lines.iter().enumerate() {
-        put_row(out, body, row as u16 + offset, std::slice::from_ref(line), false)?;
+        put_row(
+            out,
+            body,
+            row as u16 + offset,
+            std::slice::from_ref(line),
+            false,
+        )?;
     }
     Ok(())
 }

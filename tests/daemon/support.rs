@@ -62,10 +62,7 @@ pub async fn serve_session(
     endpoint
 }
 
-async fn accept_clients(
-    #[allow(unused_mut)] mut listener: IpcListener,
-    state: Arc<DaemonState>,
-) {
+async fn accept_clients(#[allow(unused_mut)] mut listener: IpcListener, state: Arc<DaemonState>) {
     while let Ok(stream) = listener.accept().await {
         tokio::spawn(handle_client(Arc::clone(&state), stream));
     }
@@ -103,7 +100,11 @@ pub async fn tabs(client: &mut Client) -> Vec<WindowTab> {
 
 /// Each window tab as `(name, is_active)`, in window order.
 pub async fn tab_states(client: &mut Client) -> Vec<(String, bool)> {
-    tabs(client).await.into_iter().map(|t| (t.name, t.is_active)).collect()
+    tabs(client)
+        .await
+        .into_iter()
+        .map(|t| (t.name, t.is_active))
+        .collect()
 }
 
 /// A window named `label` whose only pane `pane` runs `cat`.

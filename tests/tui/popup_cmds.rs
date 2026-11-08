@@ -52,7 +52,10 @@ fn display_menu_takes_items_as_name_key_and_command_triples() {
             assert_eq!(items[0].name, "Zoom");
             assert_eq!(items[0].key.as_deref(), Some("z"));
             assert_eq!(items[0].line.as_deref(), Some("resize-pane -Z"));
-            assert!(items[1].name.is_empty() && items[1].line.is_none(), "a separator");
+            assert!(
+                items[1].name.is_empty() && items[1].line.is_none(),
+                "a separator"
+            );
             assert!(items[2].disabled && items[2].name == "Off");
         }
         other => panic!("expected a menu, got {other:?}"),

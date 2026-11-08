@@ -1,7 +1,7 @@
 pub mod channels;
+mod clients;
 mod dispatch;
 pub mod hooks;
-mod clients;
 pub mod idempotency;
 pub mod plan;
 mod session;
@@ -20,10 +20,10 @@ use tracing::{error, info, warn};
 
 use crate::config::Config;
 use crate::ipc::{AsyncStream, IpcListener};
-use crate::node::pane::{PaneHandle, ask_actor};
-use crate::node::sink::Sink;
 use crate::node::now_ms;
 use crate::node::pacing::{Backlog, CloseOnDrop, Pacing};
+use crate::node::pane::{PaneHandle, ask_actor};
+use crate::node::sink::Sink;
 use crate::protocol::{DaemonMessage, Request, Response, StreamEvent};
 use crate::wire;
 use idempotency::Claim;
@@ -86,7 +86,9 @@ impl DaemonState {
 
     /// Tells the session that an event happened, so the hooks of that event run.
     fn event(&self, event: &'static str) {
-        let _ = self.tx.send(SessionMsg::Hook(HookMsg::Event { event, pane: None }));
+        let _ = self
+            .tx
+            .send(SessionMsg::Hook(HookMsg::Event { event, pane: None }));
     }
 
     fn session_tx(&self) -> &mpsc::UnboundedSender<SessionMsg> {
@@ -305,7 +307,6 @@ async fn subscribe_node<S: AsyncStream>(
         state.event("client-detached");
     }
 }
-
 
 pub async fn handle_client<S: AsyncStream>(state: Arc<DaemonState>, stream: S) {
     let mut framed = Framed::new(stream, LinesCodec::new());

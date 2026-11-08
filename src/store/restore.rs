@@ -154,7 +154,10 @@ fn plan_pane(pane: &PaneSnapshot, rules: &[ResumeRule]) -> (SpawnOpts, Option<St
     };
 
     if hosted {
-        let line: Vec<String> = argv.iter().map(|word| crate::cmdline::shell_word(word)).collect();
+        let line: Vec<String> = argv
+            .iter()
+            .map(|word| crate::cmdline::shell_word(word))
+            .collect();
         return (original, Some(format!("{}\r", line.join(" "))));
     }
     match argv.split_first() {

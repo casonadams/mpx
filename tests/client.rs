@@ -38,7 +38,9 @@ async fn a_daemon_without_binary_frames_streams_json_lines_to_a_new_client() {
     let client = Client::connect(&endpoint).await.expect("connect");
     let (tx, mut rx) = tokio::sync::mpsc::channel(8);
     tokio::spawn(async move {
-        let _ = client.stream_logs_into((None, None), false, tx, |event| event).await;
+        let _ = client
+            .stream_logs_into((None, None), false, tx, |event| event)
+            .await;
     });
     let event = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
         .await
@@ -91,7 +93,9 @@ async fn an_event_from_a_newer_daemon_is_skipped_and_the_stream_goes_on() {
     let client = Client::connect(&endpoint).await.expect("connect");
     let (tx, mut rx) = tokio::sync::mpsc::channel(8);
     tokio::spawn(async move {
-        let _ = client.stream_logs_into((None, None), true, tx, |event| event).await;
+        let _ = client
+            .stream_logs_into((None, None), true, tx, |event| event)
+            .await;
     });
     let _held_open = newer_daemon.await.expect("daemon");
     let event = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
@@ -118,5 +122,8 @@ async fn a_request_an_older_daemon_does_not_know_says_to_restart_the_session() {
     });
     let mut client = Client::connect(&endpoint).await.expect("connect");
     let error = client.spread_layout().await.expect_err("refused");
-    assert!(error.contains("mpx kill-server, then mpx restore"), "{error}");
+    assert!(
+        error.contains("mpx kill-server, then mpx restore"),
+        "{error}"
+    );
 }
