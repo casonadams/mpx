@@ -266,7 +266,6 @@ impl App {
             let Some((name, x, y)) = self.interaction.press.clone() else {
                 return;
             };
-            self.load_scrollback(&name).await;
             let grid = self.vt.get(&name).map(|vt| vt.grid());
             self.mode = Mode::Copy(CopyState::at_point(x, y, grid));
             self.interaction.drag_started_copy = true;
@@ -325,11 +324,12 @@ impl App {
     }
 
     async fn mouse_scroll_up(&mut self) {
-        if !matches!(self.mode, Mode::Copy(_)) {
-            self.load_scrollback(&self.active_pane.clone()).await;
-        }
+        let name = self.active_pane.clone();
+        let before = self.active_vt().map_or(0, |vt| vt.grid().history_len());
+        self.load_scrollback(&name).await;
         let hist_len = self.active_vt().map_or(0, |vt| vt.grid().history_len());
         if let Mode::Copy(cs) = &mut self.mode {
+            cs.anchor_abs_y += hist_len.saturating_sub(before);
             cs.wheel_up(hist_len);
             return;
         }

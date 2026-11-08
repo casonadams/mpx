@@ -256,6 +256,37 @@ async fn a_live_pane_keeps_no_scrollback_and_copy_mode_brings_it_back() {
     assert!(h.frame().await.contains("line 40"));
 }
 
+#[tokio::test]
+async fn a_drag_selection_does_not_rebuild_scrollback() {
+    let mut h = Harness::started(&long_output()).await;
+    h.frame().await;
+    h.mouse(MouseEventKind::Down(MouseButton::Left), 0, 5).await;
+    h.mouse(MouseEventKind::Drag(MouseButton::Left), 5, 5).await;
+    assert!(matches!(h.app.mode, Mode::Copy(_)));
+    assert_eq!(history_of(&h), 0, "selecting on screen needs no history");
+    h.mouse(MouseEventKind::Up(MouseButton::Left), 5, 5).await;
+    assert_eq!(h.clipboard().len(), 1);
+    assert!(h.mode_is_normal());
+}
+
+#[tokio::test]
+async fn wheeling_during_a_drag_loads_history_and_keeps_the_anchor() {
+    let mut h = Harness::started(&long_output()).await;
+    h.frame().await;
+    h.mouse(MouseEventKind::Down(MouseButton::Left), 0, 5).await;
+    h.mouse(MouseEventKind::Drag(MouseButton::Left), 5, 5).await;
+    h.mouse(MouseEventKind::ScrollUp, 5, 5).await;
+    assert!(history_of(&h) >= 10, "the wheel rebuilds the scrollback");
+    h.mouse(MouseEventKind::Drag(MouseButton::Left), 5, 0).await;
+    let Mode::Copy(cs) = &h.app.mode else {
+        panic!("still in copy mode");
+    };
+    let grid = h.app.active_vt().expect("vt").grid();
+    assert_eq!(cs.anchor_abs_y, grid.abs_line(5, 0), "anchor stays on the pressed row");
+    h.mouse(MouseEventKind::Up(MouseButton::Left), 5, 0).await;
+    assert_eq!(h.clipboard().len(), 1);
+}
+
 /// Applies the stream events that arrive while `quiet` passes without a new one.
 async fn drain_stream(h: &mut Harness) {
     let quiet = std::time::Duration::from_millis(300);
