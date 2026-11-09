@@ -27,7 +27,9 @@ impl Session {
     ) -> Result<NodeInfo, String> {
         self.resolve_command(&mut opts);
         let id = self.next_pane_id;
-        let name = plan::spawn_name(&opts.name, &opts.command, id);
+        let name = plan::spawn_name(&opts.name, &opts.command, id, |n| {
+            self.nodes.contains_key(n)
+        });
         self.check_name(&name)?;
         if let Placement::Split {
             target: Some(t), ..

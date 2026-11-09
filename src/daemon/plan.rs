@@ -12,13 +12,22 @@ pub struct PaneIdentity<'a> {
     pub id: PaneId,
 }
 
-/// Requested name, or `<command basename>-<id>` when none was requested.
-pub fn spawn_name(requested: &str, command: &str, id: PaneId) -> String {
-    if requested.is_empty() {
-        format!("{}-{}", basename(command), id)
-    } else {
-        requested.to_string()
+/// Requested name, or `<command basename>-<n>` when none was requested: the first `n` from `id`
+/// that `taken` does not claim, since a restored pane keeps its saved name while ids start over.
+pub fn spawn_name(
+    requested: &str,
+    command: &str,
+    id: PaneId,
+    taken: impl Fn(&str) -> bool,
+) -> String {
+    if !requested.is_empty() {
+        return requested.to_string();
     }
+    let base = basename(command);
+    (id..)
+        .map(|n| format!("{base}-{n}"))
+        .find(|name| !taken(name))
+        .expect("an unbounded range has a free name")
 }
 
 /// Names must be non-empty and must not look like `%N` pane references.

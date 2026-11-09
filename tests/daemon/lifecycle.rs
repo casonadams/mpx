@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use super::support::{connect, exit_code, logs_until, pty, start, start_on, start_with, task};
 use mpx::config::{Config, SessionOptions};
-use mpx::protocol::{NodeState, SpawnOpts};
+use mpx::protocol::{NewWindowOpts, NodeState, SpawnOpts};
 
 #[tokio::test]
 async fn shutdown_kills_nodes_and_run_daemon_returns() {
@@ -129,6 +129,26 @@ async fn a_cleanly_stopped_session_comes_back_on_the_next_start_unless_restore_i
         names_after_restart(state.path(), Config::default()).await,
         ["keeper"]
     );
+}
+
+#[tokio::test]
+async fn a_window_opened_after_a_restore_does_not_take_a_restored_panes_name() {
+    let state = tempfile::tempdir().unwrap();
+    let first = start_on(state.path(), Config::default()).await;
+    let mut client = connect(&first.endpoint).await;
+    client.spawn(pty("cat-1", "cat", &[])).await.unwrap();
+    client.shutdown().await.unwrap();
+
+    let second = start_on(state.path(), Config::default()).await;
+    let mut client = connect(&second.endpoint).await;
+    let opened = client
+        .new_window(NewWindowOpts {
+            name: None,
+            spawn: pty("", "cat", &[]),
+            focus: true,
+        })
+        .await;
+    assert!(opened.is_ok(), "{opened:?}");
 }
 
 #[tokio::test]

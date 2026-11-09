@@ -35,10 +35,19 @@ fn spawn_env_is_appended_and_wins_on_conflict() {
 }
 
 #[test]
-fn spawn_name_prefers_request_and_derives_otherwise() {
-    assert_eq!(plan::spawn_name("worker", "cat", 5), "worker");
-    assert_eq!(plan::spawn_name("", "/usr/bin/cat", 5), "cat-5");
-    assert_eq!(plan::spawn_name("", "claude", 0), "claude-0");
+fn spawn_name_prefers_request_and_derives_the_first_free_name_otherwise() {
+    let taken = ["cat-1", "cat-2"];
+    let cases = [
+        ("worker", "cat", 5, "worker"),
+        ("", "/usr/bin/cat", 5, "cat-5"),
+        ("", "claude", 0, "claude-0"),
+        ("", "cat", 1, "cat-3"),
+        ("cat-1", "cat", 1, "cat-1"),
+    ];
+    for (requested, command, id, expected) in cases {
+        let name = plan::spawn_name(requested, command, id, |n| taken.contains(&n));
+        assert_eq!(name, expected, "{requested:?} {command} {id}");
+    }
 }
 
 #[test]
