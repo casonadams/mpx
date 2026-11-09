@@ -461,6 +461,15 @@ impl Harness {
         .await
     }
 
+    /// Applies the history a wheel scroll entered copy mode without, once it has been built.
+    pub async fn history_arrives(&mut self) {
+        let loaded = tokio::time::timeout(WAIT, self.app.history_rx.recv())
+            .await
+            .expect("history never arrived")
+            .expect("history channel closed");
+        self.app.finish_history(loaded);
+    }
+
     /// Refreshes layout (as the event loop does on each wake-up), draws one frame onto the terminal
     /// and returns the text the terminal then shows.
     pub async fn frame(&mut self) -> String {

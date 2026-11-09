@@ -15,6 +15,7 @@ use crate::tui::popup::{PopupEvent, next_event};
 use crate::tui::render::HostColors;
 use crate::tui::statusline;
 use crate::tui::terminal::{TerminalGuard, query_terminal};
+use crate::tui::warm::Loaded;
 
 /// Runs the attached TUI until detach, session end or no panes left.
 pub async fn run_tui(
@@ -37,6 +38,8 @@ enum Wake {
     Due,
     /// A command that waited on the daemon finished.
     Job(Job),
+    /// A history built for a pane in copy mode arrived.
+    History(Box<Loaded>),
     /// The command of the open popup produced output or ended.
     Popup(PopupEvent),
 }
@@ -202,6 +205,7 @@ impl Tui {
             _ = self.tick.tick() => Wake::Tick,
             _ = sleep_until_opt(due.map(tokio::time::Instant::from_std)) => Wake::Due,
             Some(job) = self.app.job_rx.recv() => Wake::Job(job),
+            Some(loaded) = self.app.history_rx.recv() => Wake::History(Box::new(loaded)),
         }
     }
 
@@ -219,6 +223,10 @@ impl Tui {
             }
             Wake::Tick => self.app.on_tick().await,
             Wake::Job(job) => self.app.finish_job(job).await,
+            Wake::History(loaded) => {
+                self.app.finish_history(*loaded);
+                Flow::Continue
+            }
             Wake::Due => {
                 self.app.expire_panes(Instant::now());
                 Flow::Continue

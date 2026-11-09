@@ -76,6 +76,11 @@ async fn mouse_wheel_scrolls_into_history() {
     h.frame().await;
 
     h.mouse(MouseEventKind::ScrollUp, 5, 5).await;
+    assert!(
+        h.frame().await.contains("COPY -0/0"),
+        "copy mode opens before its history"
+    );
+    h.history_arrives().await;
     assert!(h.frame().await.contains("COPY -3/"));
     h.mouse(MouseEventKind::ScrollUp, 5, 5).await;
     assert!(h.frame().await.contains("COPY -6/"));
@@ -128,6 +133,7 @@ async fn leaving_copy_mode_shows_output_that_arrived_meanwhile_without_scrollbac
     let mut h = Harness::started(&long_output()).await;
     h.frame().await;
     h.mouse(MouseEventKind::ScrollUp, 5, 5).await;
+    h.history_arrives().await;
     assert!(h.frame().await.contains("COPY -3/"));
 
     h.probe
@@ -153,6 +159,7 @@ async fn leaving_a_pane_in_copy_mode_keeps_its_view_and_returning_resumes_it() {
     h.frame().await;
     h.mouse(MouseEventKind::ScrollUp, 5, 5).await;
     h.mouse(MouseEventKind::ScrollUp, 5, 5).await;
+    h.history_arrives().await;
     assert!(h.frame().await.contains("COPY -6/"));
 
     split(&mut h.probe, MAIN, "plain", Direction::Horizontal).await;
@@ -183,6 +190,7 @@ async fn clicking_a_pane_in_copy_mode_keeps_its_scroll_and_selects_nothing() {
     let mut h = Harness::started(&long_output()).await;
     h.frame().await;
     h.mouse(MouseEventKind::ScrollUp, 5, 5).await;
+    h.history_arrives().await;
     assert!(h.frame().await.contains("COPY -3/"));
 
     h.mouse(MouseEventKind::Down(MouseButton::Left), 2, 2).await;
@@ -359,6 +367,74 @@ async fn the_wheel_takes_the_history_built_ahead() {
     warm_up(&mut h).await;
     h.mouse(MouseEventKind::ScrollUp, 5, 5).await;
     assert!(!h.app.scrollback_warm());
+    assert!(h.frame().await.contains("COPY -3/"));
+}
+
+#[tokio::test]
+async fn wheeling_back_down_before_the_history_arrives_leaves_copy_mode_and_drops_it() {
+    let mut h = Harness::started(&long_output()).await;
+    h.frame().await;
+    h.mouse(MouseEventKind::ScrollUp, 5, 5).await;
+    h.mouse(MouseEventKind::ScrollUp, 5, 5).await;
+    h.mouse(MouseEventKind::ScrollDown, 5, 5).await;
+    assert!(
+        matches!(h.app.mode, Mode::Copy(_)),
+        "one notch is still owed"
+    );
+    h.mouse(MouseEventKind::ScrollDown, 5, 5).await;
+    assert!(h.mode_is_normal());
+
+    h.history_arrives().await;
+    assert!(
+        h.mode_is_normal(),
+        "a history for a closed copy mode is dropped"
+    );
+    assert_eq!(history_of(&h), 0);
+}
+
+#[tokio::test]
+async fn a_selection_started_before_the_history_arrives_keeps_its_anchor() {
+    let mut h = Harness::started(&long_output()).await;
+    h.frame().await;
+    h.mouse(MouseEventKind::ScrollUp, 5, 5).await;
+    h.mouse(MouseEventKind::Down(MouseButton::Left), 0, 5).await;
+    h.mouse(MouseEventKind::Drag(MouseButton::Left), 5, 5).await;
+    h.history_arrives().await;
+
+    let Mode::Copy(cs) = &h.app.mode else {
+        panic!("still in copy mode");
+    };
+    let grid = h.app.active_vt().expect("vt").grid();
+    assert_eq!(
+        cs.anchor_abs_y,
+        grid.abs_line(5, 0),
+        "the anchor stays on the pressed row"
+    );
+}
+
+#[tokio::test]
+async fn a_history_gone_stale_stays_usable_while_a_newer_one_builds() {
+    let script = r"for i in $(seq 1 40); do printf 'line %s\r\n' $i; done;
+        stty raw -echo; printf READY; read go;
+        yes xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx | head -n 9000; echo FLOODED; exec cat";
+    let mut h = Harness::started(script).await;
+    h.frame().await;
+    warm_up(&mut h).await;
+
+    h.probe.send_input(MAIN, "go\n").await.unwrap();
+    h.until("flood applied", |app| {
+        app.active_vt()
+            .is_some_and(|vt| vt.snapshot().contains("FLOODED"))
+    })
+    .await;
+
+    h.app.on_tick().await;
+    assert!(
+        h.app.scrollback_warm(),
+        "the stale history is still there to use"
+    );
+    h.mouse(MouseEventKind::ScrollUp, 5, 5).await;
+    assert!(history_of(&h) >= 10);
     assert!(h.frame().await.contains("COPY -3/"));
 }
 

@@ -223,10 +223,12 @@ impl App {
     /// arrived meanwhile is fed from the log before the next frame, instead of replaying the
     /// whole log.
     pub fn release_scrollback(&mut self, name: &str) {
+        self.cancel_loading(name);
         if let Some(vt) = self.vt.get_mut(name) {
             vt.grid_mut().set_history_limit(0);
             self.released.push(name.to_string());
         }
+        self.warm_scrollback();
     }
 
     /// Brings the screens just released from copy mode up to date.

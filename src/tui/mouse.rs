@@ -6,7 +6,7 @@ use super::app::{App, Flow, Mode};
 use super::command;
 use super::copy::CopyState;
 use super::mouse_menu::MouseMenu;
-use super::panes::{BorderGrab, border_at, border_move};
+use super::panes::{BorderGrab, border_at, border_move, has_scrollback};
 use crate::layout::geometry::Rect;
 
 /// Cell position inside `rect`, clamped to its edges.
@@ -328,6 +328,16 @@ impl App {
 
     async fn mouse_scroll_up(&mut self) {
         let name = self.active_pane.clone();
+        let in_copy = matches!(self.mode, Mode::Copy(_));
+        if in_copy && self.is_loading(&name) {
+            self.queue_wheel_up();
+            return;
+        }
+        let ready = self.vt.get(&name).is_some_and(has_scrollback) || self.scrollback_warm();
+        if !in_copy && !ready {
+            self.enter_copy_loading(&name);
+            return;
+        }
         let before = self.active_vt().map_or(0, |vt| vt.grid().history_len());
         self.load_scrollback(&name).await;
         let hist_len = self.active_vt().map_or(0, |vt| vt.grid().history_len());
@@ -341,8 +351,11 @@ impl App {
     }
 
     /// Scrolls copy mode back toward the live screen, leaving it on arrival when the wheel
-    /// entered it.
+    /// entered it. A notch up still waiting for its history is taken back first.
     fn mouse_scroll_down(&mut self) {
+        if self.unqueue_wheel_up() {
+            return;
+        }
         if let Mode::Copy(cs) = &mut self.mode
             && cs.wheel_down()
             && cs.wheel_exit
