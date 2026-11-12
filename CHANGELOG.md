@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.3.1](https://github.com/casonadams/mpx/compare/v0.3.0...v0.3.1) (2026-11-09)
+
+
+### Features
+
+* **layout:** focus the most recently used pane on close and directional moves, as tmux does ([7817f46](https://github.com/casonadams/mpx/commit/7817f46dc25beecc6d4c630b86f9250520c2ab64))
+* **resume:** find rho sessions by terminal and continue with -c ([88e0bfd](https://github.com/casonadams/mpx/commit/88e0bfdcbf8e9342cf56e546a19b28d624906d26))
+
+
+### Bug Fixes
+
+* **daemon:** keep an unnamed pane from taking a restored pane's name ([cfdeb6b](https://github.com/casonadams/mpx/commit/cfdeb6b5aa1fad6d6d7515848dfe1c8329b8b5da))
+* **scrollback:** keep the lines scrollback_lines asks for, in the daemon log and the TUI copy mode ([5dce2a7](https://github.com/casonadams/mpx/commit/5dce2a7a010105dc5884c825db6d064914374511))
+* **vt:** keep the scrolled-off row count when a terminal reset keeps scrollback ([58845b7](https://github.com/casonadams/mpx/commit/58845b7b14ae24fa4375e1079652591c32e7f259))
+
+
+### Performance Improvements
+
+* **daemon,node:** cache process probes, query panes concurrently, cheaper output fan-out ([c7fbc83](https://github.com/casonadams/mpx/commit/c7fbc83104d6f084500ebaefbdc1da3cc22060e6))
+* **node:** compute history_size from the live screen and count ring newlines on slices ([f765d74](https://github.com/casonadams/mpx/commit/f765d74ac6c4633fbfcc54195d1850b08949d58c))
+* **node:** incremental wait matching, replay and fewer output copies ([d9c4179](https://github.com/casonadams/mpx/commit/d9c4179789186c0fea2e12154bb1def3d161cee4))
+* **tui,node:** keep pane resizes from replaying the whole log ([e485525](https://github.com/casonadams/mpx/commit/e485525bec0775b75614cdf57059fe06b1c80acb))
+* **tui:** build scrollback ahead of copy mode ([c396857](https://github.com/casonadams/mpx/commit/c396857488bf2db969bf38e2f4370a8ff02a38ce))
+* **tui:** open copy mode at once on a wheel scroll and load its history in the background ([ed9d6ac](https://github.com/casonadams/mpx/commit/ed9d6ac4fd0dc820bd0f8c5d1df7db764dd88ab5))
+* **tui:** skip scrollback rebuild when a drag starts copy mode ([c576499](https://github.com/casonadams/mpx/commit/c576499adf01e22c9e176c27d6ca8a0b1f0a689b))
+* **vt,node:** skip idle waiter checks and avoid a copy in line_text ([34394c0](https://github.com/casonadams/mpx/commit/34394c07e85685b3a29e79f02bad5a6b73e6eb89))
+
 ## [0.3.0](https://github.com/casonadams/mpx/compare/v0.2.0...v0.3.0) (2026-11-06)
 
 
