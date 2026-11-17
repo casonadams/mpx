@@ -92,6 +92,10 @@ impl Perform for VtHandler {
     }
 
     fn csi_dispatch(&mut self, params: &Params, intermediates: &[u8], _ignore: bool, action: char) {
+        if intermediates == b" " && action == 'q' {
+            self.csi_cursor_shape(params);
+            return;
+        }
         if self.keyboard_csi(params, intermediates, action)
             || is_private_form(intermediates, action)
         {

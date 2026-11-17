@@ -1,5 +1,5 @@
 use mpx::keys::TermModes;
-use mpx::vt::grid::{CellStyle, Color, ShellMark, Underline};
+use mpx::vt::grid::{CellStyle, Color, CursorShape, ShellMark, Underline};
 use mpx::vt::{Alert, LinkId, VtScreen};
 
 fn feed(vt: &mut VtScreen, bytes: &str) {
@@ -842,4 +842,32 @@ fn growing_after_a_terminal_reset_still_pulls_the_kept_scrollback_back() {
         grid.cursor.y, 2,
         "the cursor keeps its place below the pulled rows"
     );
+}
+
+#[test]
+fn decscusr_sets_the_cursor_shape_and_ignores_unknown_shapes() {
+    for (input, want) in [
+        ("\x1b[6 q", CursorShape::SteadyBar),
+        ("\x1b[5 q", CursorShape::BlinkingBar),
+        ("\x1b[4 q", CursorShape::SteadyUnderline),
+        ("\x1b[2 q", CursorShape::SteadyBlock),
+        ("\x1b[6 q\x1b[ q", CursorShape::Default),
+        ("\x1b[6 q\x1b[0 q", CursorShape::Default),
+        ("\x1b[6 q\x1b[7 q", CursorShape::SteadyBar),
+        ("\x1b[6q", CursorShape::Default),
+    ] {
+        let mut vt = VtScreen::new(20, 5);
+        feed(&mut vt, &format!("{input}x"));
+        assert_eq!(vt.grid().cursor_shape, want, "{input:?}");
+        assert_eq!(row(&vt, 0), "x", "{input:?} prints nothing");
+    }
+}
+
+#[test]
+fn the_cursor_shape_survives_cursor_restore_and_falls_back_on_reset() {
+    let mut vt = VtScreen::new(20, 5);
+    feed(&mut vt, "\x1b7\x1b[6 q\x1b8");
+    assert_eq!(vt.grid().cursor_shape, CursorShape::SteadyBar);
+    feed(&mut vt, "\x1bc");
+    assert_eq!(vt.grid().cursor_shape, CursorShape::Default);
 }

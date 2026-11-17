@@ -38,9 +38,10 @@ pub fn enter_sequence() -> Vec<u8> {
 }
 
 /// What the terminal is sent to hand the screen back to the shell: the synchronized update ended,
-/// autowrap on, focus, paste and mouse reporting off, the main screen and the cursor shown.
+/// autowrap on, focus, paste and mouse reporting off, the main screen and the cursor shown in the
+/// terminal's default shape.
 pub fn leave_sequence() -> Vec<u8> {
-    let mut out = b"\x1b[?2026l\x1b[?7h".to_vec();
+    let mut out = b"\x1b[?2026l\x1b[?7h\x1b[0 q".to_vec();
     let _ = queue!(
         out,
         DisableFocusChange,

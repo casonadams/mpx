@@ -39,6 +39,7 @@ fn corpus() -> Vec<(&'static str, String)> {
             "\x1b[?69h\x1b[5;20s\x1b[3;8Hinside".to_string(),
         ),
         ("bottom row filled", format!("{}x", "\r\n".repeat(ROWS - 1))),
+        ("bar cursor", "\x1b[5 qinsert".to_string()),
     ]
 }
 
@@ -59,6 +60,7 @@ fn a_keyframe_rebuilds_the_grid_whatever_output_made_it() {
 
         assert_eq!(rows(&rebuilt), rows(&source), "{what}: cells");
         assert_eq!(b.cursor, a.cursor, "{what}: cursor");
+        assert_eq!(b.cursor_shape, a.cursor_shape, "{what}: cursor shape");
         assert_eq!(b.saved_cursor, a.saved_cursor, "{what}: saved cursor");
         assert_eq!(
             (

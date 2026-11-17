@@ -7,6 +7,7 @@ use mpx::config::Config;
 use mpx::layout::Direction;
 use mpx::protocol::{NewWindowOpts, SpawnOpts};
 use mpx::tui::app::{FRAME_BUDGET, FRAMES_PER_BUDGET, needs_redraw, next_frame};
+use mpx::vt::CursorShape;
 
 use super::support::{ECHO, Harness, MAIN, exited, pane, split, window};
 
@@ -80,6 +81,29 @@ async fn cursor_is_placed_at_the_active_panes_cursor() {
     let cursor = h.cursor();
     assert_eq!((cursor.x, cursor.y), (5, 0), "cursor at column 6, row 1");
     assert!(cursor.visible, "cursor shown");
+}
+
+#[tokio::test]
+async fn the_cursor_takes_the_focused_panes_shape() {
+    let mut h = start().await;
+    h.frame().await;
+    h.emit(MAIN, "\x1b[6 qBAR-SET", "BAR-SET").await;
+    h.frame().await;
+    let shape = |h: &Harness| h.terminal.grid().cursor_shape;
+    assert_eq!(shape(&h), CursorShape::SteadyBar, "the program's bar");
+
+    h.split_side("side").await;
+    h.command("select-pane -t side").await;
+    h.frame().await;
+    assert_eq!(shape(&h), CursorShape::Default, "a pane that set none");
+
+    h.command("select-pane -t main").await;
+    h.frame().await;
+    assert_eq!(shape(&h), CursorShape::SteadyBar, "back on the bar pane");
+
+    h.prefixed_char(':').await;
+    h.frame().await;
+    assert_eq!(shape(&h), CursorShape::Default, "the command prompt");
 }
 
 #[tokio::test]

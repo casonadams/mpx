@@ -10,6 +10,7 @@ use crate::layout::geometry::Rect;
 use crate::tui::app::{App, Mode};
 use crate::tui::copy::CopyState;
 use crate::tui::render::Compositor;
+use crate::vt::CursorShape;
 
 use bar::{chrome_text, draw_status_extra, draw_status_row};
 use overlay::{covered_by, draw_mode_overlay, overlay_area, shortcut_popup};
@@ -81,7 +82,7 @@ pub fn place_cursor<W: Write>(app: &App, out: &mut W) -> io::Result<()> {
             Rect::new(0, y, width, 1),
             prompt.line.label().chars().count() + prompt.line.cursor(),
             0,
-            true,
+            Some(CursorShape::Default),
         ),
         Mode::Copy(cs) if cs.search_prompt.is_some() => {
             let search = cs.search_prompt.as_ref().unwrap();
@@ -90,17 +91,23 @@ pub fn place_cursor<W: Write>(app: &App, out: &mut W) -> io::Result<()> {
                 Rect::new(0, y, width, 1),
                 1 + search.prompt.cursor(),
                 0,
-                true,
+                Some(CursorShape::Default),
             )
         }
         Mode::Overlay(_) | Mode::Confirm(..) => {
-            Compositor::position_cursor(out, Rect::new(0, 0, 1, 1), 0, 0, false)
+            Compositor::position_cursor(out, Rect::new(0, 0, 1, 1), 0, 0, None)
         }
         Mode::Popup(popup) => match popup.cursor() {
-            Some((x, y)) => Compositor::position_cursor(out, Rect::new(x, y, 1, 1), 0, 0, true),
-            None => Compositor::position_cursor(out, Rect::new(0, 0, 1, 1), 0, 0, false),
+            Some((x, y)) => Compositor::position_cursor(
+                out,
+                Rect::new(x, y, 1, 1),
+                0,
+                0,
+                Some(popup.screen.grid().cursor_shape),
+            ),
+            None => Compositor::position_cursor(out, Rect::new(0, 0, 1, 1), 0, 0, None),
         },
-        Mode::Menu(_) => Compositor::position_cursor(out, Rect::new(0, 0, 1, 1), 0, 0, false),
+        Mode::Menu(_) => Compositor::position_cursor(out, Rect::new(0, 0, 1, 1), 0, 0, None),
         Mode::Copy(cs) => place_pane_cursor(app, out, Some(cs)),
         _ => place_pane_cursor(app, out, app.parked_copy.get(&app.active_pane)),
     }
@@ -110,12 +117,13 @@ fn place_pane_cursor<W: Write>(app: &App, out: &mut W, copy: Option<&CopyState>)
     let (Some(rect), Some(vt)) = (app.active_rect, app.active_vt()) else {
         return Ok(());
     };
-    let (x, y, visible) = match copy {
-        Some(cs) => (cs.cursor_x, cs.cursor_y, true),
+    let (x, y, shape) = match copy {
+        Some(cs) => (cs.cursor_x, cs.cursor_y, Some(CursorShape::Default)),
         None => {
-            let cursor = vt.grid().cursor;
-            (cursor.x, cursor.y, cursor.visible)
+            let grid = vt.grid();
+            let shape = grid.cursor.visible.then_some(grid.cursor_shape);
+            (grid.cursor.x, grid.cursor.y, shape)
         }
     };
-    Compositor::position_cursor(out, rect, x, y, visible)
+    Compositor::position_cursor(out, rect, x, y, shape)
 }

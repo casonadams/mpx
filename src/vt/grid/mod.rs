@@ -28,6 +28,41 @@ impl Default for Cursor {
     }
 }
 
+/// The cursor style a program picks with DECSCUSR (`CSI Ps SP q`); `Default` is the terminal's own.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[repr(u8)]
+pub enum CursorShape {
+    #[default]
+    Default = 0,
+    BlinkingBlock = 1,
+    SteadyBlock = 2,
+    BlinkingUnderline = 3,
+    SteadyUnderline = 4,
+    BlinkingBar = 5,
+    SteadyBar = 6,
+}
+
+impl CursorShape {
+    /// The shape DECSCUSR parameter `ps` selects, if it names one.
+    pub fn from_param(ps: u16) -> Option<Self> {
+        Some(match ps {
+            0 => Self::Default,
+            1 => Self::BlinkingBlock,
+            2 => Self::SteadyBlock,
+            3 => Self::BlinkingUnderline,
+            4 => Self::SteadyUnderline,
+            5 => Self::BlinkingBar,
+            6 => Self::SteadyBar,
+            _ => return None,
+        })
+    }
+
+    /// The DECSCUSR sequence that selects this shape.
+    pub fn sequence(self) -> String {
+        format!("\x1b[{} q", self as u8)
+    }
+}
+
 /// How far the content of rows `top..=bottom` moved since it was last taken: `lines` up when
 /// positive, down when negative. Lets a renderer scroll the terminal instead of repainting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,6 +89,7 @@ pub struct Grid {
     wrapped: Vec<bool>,
     pub cursor: Cursor,
     pub saved_cursor: Option<Cursor>,
+    pub cursor_shape: CursorShape,
     pub scroll_top: usize,
     pub scroll_bottom: usize,
     /// Left/right margins (DECSLRM), honoured while `lr_margins` (DECLRMM, mode 69) is set.
@@ -87,6 +123,7 @@ impl Grid {
             wrapped: vec![false; rows],
             cursor: Cursor::default(),
             saved_cursor: None,
+            cursor_shape: CursorShape::Default,
             scroll_top: 0,
             scroll_bottom: rows.saturating_sub(1),
             lr_margins: false,

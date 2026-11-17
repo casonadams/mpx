@@ -1,9 +1,10 @@
 //! A screen as the escape sequences that rebuild it: fed to a fresh screen of the same size they
-//! give the same cells, cursor, margins and modes the grid has, whatever output produced them.
+//! give the same cells, cursor, cursor shape, margins and modes the grid has, whatever output
+//! produced them.
 use std::fmt::Write;
 
 use super::capture::push_sgr;
-use super::{CellStyle, Grid, LinkId};
+use super::{CellStyle, CursorShape, Grid, LinkId};
 
 /// The sequences that paint `grid` onto a fresh screen of its own size.
 pub fn keyframe(grid: &Grid) -> String {
@@ -71,6 +72,9 @@ pub fn keyframe(grid: &Grid) -> String {
     }
     push_sgr(&mut out, grid.current_style);
     push_visibility(&mut out, cursor.visible);
+    if grid.cursor_shape != CursorShape::Default {
+        out.push_str(&grid.cursor_shape.sequence());
+    }
     out
 }
 

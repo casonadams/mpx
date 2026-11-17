@@ -98,6 +98,7 @@ fn entering_the_tui_switches_screens_and_leaving_hands_the_shell_its_own_back() 
         "\x1b[?2004l",
         "\x1b[?1004l",
         "\x1b[?7h",
+        "\x1b[0 q",
     ] {
         assert!(leave.contains(wanted), "leave lacks {wanted:?}");
     }

@@ -1,6 +1,7 @@
 use vte::Params;
 
 use super::VtHandler;
+use crate::vt::grid::CursorShape;
 
 /// The first parameter at position `i`, when it is present.
 fn param(params: &Params, i: usize) -> Option<usize> {
@@ -165,6 +166,14 @@ impl VtHandler {
             b"\x1b[?62;c"
         };
         self.responses.push(reply.to_vec());
+    }
+
+    /// `CSI Ps SP q` (DECSCUSR) picks the cursor shape; an unknown `Ps` leaves it as it is.
+    pub(super) fn csi_cursor_shape(&mut self, params: &Params) {
+        let ps = params.iter().next().map_or(0, |p| p[0]);
+        if let Some(shape) = CursorShape::from_param(ps) {
+            self.grid.cursor_shape = shape;
+        }
     }
 
     pub(super) fn csi_set_margins(&mut self, params: &Params) {
