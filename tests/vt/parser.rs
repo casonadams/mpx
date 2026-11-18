@@ -704,6 +704,26 @@ fn shell_marks_follow_their_row_into_history_and_drop_when_it_leaves() {
     assert!(marks(&vt).is_empty(), "p1 left the history");
 }
 
+#[test]
+fn erase_saved_lines_clears_history_and_leaves_the_screen() {
+    let mut vt = VtScreen::new(10, 2);
+    feed(&mut vt, "a\r\nb\r\nc\r\nd");
+    assert_eq!(vt.grid().history_len(), 2);
+
+    feed(&mut vt, "\x1b[3J");
+    assert_eq!(vt.grid().history_len(), 0);
+    assert_eq!((row(&vt, 0), row(&vt, 1)), ("c".to_owned(), "d".to_owned()));
+    assert_eq!(cursor(&vt), (1, 1));
+}
+
+#[test]
+fn erase_display_keeps_history() {
+    let mut vt = VtScreen::new(10, 2);
+    feed(&mut vt, "a\r\nb\r\nc\r\nd\x1b[2J");
+    assert_eq!(vt.grid().history_len(), 2);
+    assert_eq!((row(&vt, 0), row(&vt, 1)), (String::new(), String::new()));
+}
+
 /// The text of each row of `grid`, top to bottom.
 fn grid_rows(grid: &mpx::vt::Grid) -> Vec<String> {
     grid.screen_lines()

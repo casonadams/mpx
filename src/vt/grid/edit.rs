@@ -100,11 +100,15 @@ impl Grid {
     }
 
     pub fn clear_screen(&mut self, mode: usize) {
+        if mode == 3 {
+            self.history.clear();
+            return;
+        }
         let blank = self.blank();
         match mode {
             0 => self.wrapped[self.cursor.y + 1..].fill(false),
             1 => self.wrapped[..self.cursor.y].fill(false),
-            2 | 3 => self.wrapped.fill(false),
+            2 => self.wrapped.fill(false),
             _ => {}
         }
         match mode {
@@ -120,7 +124,7 @@ impl Grid {
                 }
                 self.clear_line(1);
             }
-            2 | 3 => {
+            2 => {
                 for line in &mut self.lines {
                     line.fill(blank);
                 }
