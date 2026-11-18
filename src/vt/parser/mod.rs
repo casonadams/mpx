@@ -1,3 +1,4 @@
+mod charset;
 mod csi;
 mod dcs;
 mod modes;
@@ -8,6 +9,7 @@ mod sgr;
 use vte::{Params, Perform};
 
 use super::grid::Grid;
+use charset::Charsets;
 use crate::keys::TermModes;
 
 pub use screen::{Alert, VtScreen};
@@ -26,6 +28,7 @@ pub struct VtHandler {
     alerts: Vec<Alert>,
     last_char: Option<char>,
     dcs_buf: Option<Vec<u8>>,
+    charsets: Charsets,
 }
 
 impl VtHandler {
@@ -42,6 +45,7 @@ impl VtHandler {
             alerts: Vec::new(),
             last_char: None,
             dcs_buf: None,
+            charsets: Charsets::default(),
         }
     }
 
@@ -62,6 +66,7 @@ impl VtHandler {
         self.bg_color = None;
         self.dcs_buf = None;
         self.last_char = None;
+        self.charsets = Charsets::default();
     }
 }
 
@@ -73,6 +78,7 @@ fn is_private_form(intermediates: &[u8], action: char) -> bool {
 
 impl Perform for VtHandler {
     fn print(&mut self, c: char) {
+        let c = self.charsets.translate(c);
         self.last_char = Some(c);
         self.grid.put_char(c);
     }
@@ -83,6 +89,8 @@ impl Perform for VtHandler {
             b'\r' => self.grid.carriage_return(),
             0x07 => self.alerts.push(Alert::Bell),
             0x08 => self.grid.backspace(),
+            0x0E => self.charsets.shift_g1(true),
+            0x0F => self.charsets.shift_g1(false),
             b'\t' => {
                 let next_tab = (self.grid.cursor.x / 8 + 1) * 8;
                 self.grid.cursor.x = next_tab.min(self.grid.cols.saturating_sub(1));
@@ -133,6 +141,9 @@ impl Perform for VtHandler {
     }
 
     fn esc_dispatch(&mut self, intermediates: &[u8], _ignore: bool, byte: u8) {
+        if self.charsets.designate(intermediates, byte) {
+            return;
+        }
         match (intermediates, byte) {
             ([], b'7') => self.grid.save_cursor(),
             ([], b'8') => self.grid.restore_cursor(),
