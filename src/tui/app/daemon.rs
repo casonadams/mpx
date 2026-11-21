@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use tokio::sync::mpsc;
 
-use super::pacing::{FRAMES_PER_BUDGET, TYPING_WINDOW, next_frame};
+use super::pacing::TYPING_WINDOW;
 use super::state::{App, AppOptions, AttachOpts, Flow, Mode, StartView, StreamRx};
 use crate::client::Client;
 use crate::protocol::{NewWindowOpts, SpawnOpts, StreamEvent};
