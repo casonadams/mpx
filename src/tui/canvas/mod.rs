@@ -167,11 +167,26 @@ impl Canvas {
         cells: &[Cell],
     ) -> io::Result<()> {
         write!(out, "\x1b[{};{}H", y + 1, x + 1)?;
+        // Zero-width marks take a cell here but no column on the terminal, which then draws the row
+        // short: its span is erased first, so the columns left over are blank, not the old glyphs.
+        self.end_link(out)?;
+        if self.style != Some(CellStyle::default()) {
+            out.write_all(b"\x1b[0m")?;
+            self.style = Some(CellStyle::default());
+        }
+        write!(out, "\x1b[{}X", cells.len())?;
         let start = self.index(x, y);
+        let mut under_chrome = false;
         for (dx, cell) in cells.iter().enumerate() {
             self.write_cell(out, *cell)?;
             let hidden = self.covers(Rect::new(x + dx as u16, y, 1, 1));
+            under_chrome |= hidden;
             self.front[start + dx] = (!hidden).then_some(*cell);
+        }
+        // Chrome over the pane area is drawn again after the cells; the status row is not unless
+        // it changed, so the row it may share with the pane (status off) is sent again.
+        if under_chrome {
+            self.status.clear();
         }
         self.cursor = None;
         let row_end = self.index(0, y) + self.width as usize;

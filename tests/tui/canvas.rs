@@ -199,16 +199,29 @@ fn a_row_with_wide_glyphs_is_reprinted_whole_and_in_sequence() {
         c.put_row(out, 0, 0, &row("漢字 2")).unwrap()
     });
     assert_eq!(
-        sent, "\x1b[1;1H\x1b[0m漢字 2",
-        "one address, then the row in order"
+        sent, "\x1b[1;1H\x1b[0m\x1b[4X漢字 2",
+        "one address, its span erased, then the row in order"
     );
 
     let to_ascii = frame(&mut canvas, None, |c, out| {
         c.put_row(out, 0, 0, &row("ab   ")).unwrap()
     });
     assert_eq!(
-        to_ascii, "\x1b[1;1H\x1b[0mab   ",
+        to_ascii, "\x1b[1;1H\x1b[0m\x1b[5Xab   ",
         "a row last sent with wide glyphs is reprinted too"
+    );
+}
+
+#[test]
+fn a_row_with_zero_width_marks_erases_what_its_short_rendering_leaves() {
+    let mut canvas = Canvas::default();
+    paint(&mut canvas, &["abcdefghij"]);
+    let sent = frame(&mut canvas, None, |c, out| {
+        c.put_row(out, 0, 0, &row("cafe\u{301} ok!!")).unwrap()
+    });
+    assert_eq!(
+        sent, "\x1b[1;1H\x1b[0m\x1b[10Xcafe\u{301} ok!!",
+        "the terminal draws the mark on the e, so the row ends a column early over blanks"
     );
 }
 
@@ -238,6 +251,27 @@ fn the_status_row_is_sent_only_when_it_changes() {
     assert!(canvas.status_changed(b"[s] 0:work"));
     canvas.invalidate();
     assert!(canvas.status_changed(b"[s] 0:work"));
+}
+
+#[test]
+fn a_row_reprinted_under_the_prompt_sends_the_prompt_again() {
+    let mut canvas = Canvas::default();
+    let prompt = Rect::new(0, 2, 10, 1);
+    canvas.begin(10, 3, [prompt]);
+    assert!(canvas.status_changed(b":cmd"));
+    let mut out = Vec::new();
+    canvas.begin(10, 3, [prompt]);
+    canvas.put_row(&mut out, 0, 2, &row("plain")).unwrap();
+    assert!(
+        !canvas.status_changed(b":cmd"),
+        "an ASCII row skips the covered cells"
+    );
+    canvas.begin(10, 3, [prompt]);
+    canvas.put_row(&mut out, 0, 2, &row("café ❯")).unwrap();
+    assert!(
+        canvas.status_changed(b":cmd"),
+        "a reprinted row wrote over the prompt"
+    );
 }
 
 #[test]
