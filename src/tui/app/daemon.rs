@@ -138,17 +138,7 @@ impl App {
         if typing {
             self.pacing.key_frames -= 1;
         }
-        // The budget window starts at the oldest of the frames drawn in it, once it is full.
-        let frames = &self.pacing.output_frames;
-        let window_start = frames
-            .front()
-            .copied()
-            .filter(|_| frames.len() == FRAMES_PER_BUDGET);
-        self.pacing.frame_due = Some(if typing {
-            now
-        } else {
-            next_frame(window_start, now, self.pacing.frame_due)
-        });
+        self.schedule_output_frame(now, typing);
         Flow::Continue
     }
 

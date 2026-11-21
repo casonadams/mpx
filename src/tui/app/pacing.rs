@@ -47,6 +47,21 @@ pub fn needs_redraw(
 }
 
 impl App {
+    /// Schedules the frame that shows output received at `now`: at once when `immediate` (a
+    /// keypress's echo), else as the frame budget allows.
+    pub fn schedule_output_frame(&mut self, now: Instant, immediate: bool) {
+        // The budget window starts at the oldest of the frames drawn in it, once it is full.
+        let frames = &self.pacing.output_frames;
+        let window_start = frames
+            .front()
+            .copied()
+            .filter(|_| frames.len() == FRAMES_PER_BUDGET);
+        self.pacing.frame_due = Some(if immediate {
+            now
+        } else {
+            next_frame(window_start, now, self.pacing.frame_due)
+        });
+    }
     /// Records a drawn frame: it shows all output received so far. Only a frame that showed new
     /// output counts against the frame budget; a redraw for a keypress must not delay the output
     /// that keypress provokes.

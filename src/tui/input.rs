@@ -329,6 +329,7 @@ impl App {
     }
 
     /// Output of the open popup's command, or its end: without `-E` the popup then waits for a key.
+    /// Either changes what the popup shows, so it schedules a frame.
     pub fn on_popup(&mut self, event: PopupEvent) {
         let closes = match (&mut self.mode, event) {
             (Mode::Popup(popup), PopupEvent::Output(bytes)) => {
@@ -344,6 +345,7 @@ impl App {
         if closes {
             self.mode = Mode::Normal;
         }
+        self.schedule_output_frame(std::time::Instant::now(), false);
     }
 
     /// A key while a menu is open: its item key or the arrows pick, Esc and `q` close.

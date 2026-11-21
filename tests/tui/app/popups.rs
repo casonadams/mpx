@@ -46,6 +46,30 @@ async fn a_popup_without_e_stays_up_after_its_command_and_the_next_key_closes_it
 }
 
 #[tokio::test]
+async fn popup_output_schedules_the_frame_that_shows_it() {
+    use mpx::tui::app::needs_redraw;
+    use std::time::Instant;
+
+    let mut h = ready().await;
+    h.command("display-popup -w 40 -h 10 'printf POPUP-OUT; sleep 5'")
+        .await;
+    h.app.drew(Instant::now());
+    h.until_popup("popup output", |popup| {
+        screen_text(popup).contains("POPUP-OUT")
+    })
+    .await;
+    let due = h
+        .app
+        .pacing
+        .frame_due
+        .expect("popup output schedules a frame");
+    assert!(
+        needs_redraw(true, false, Some(due), due),
+        "the frame is drawn once due, without waiting for a key or a tick"
+    );
+}
+
+#[tokio::test]
 async fn keys_go_to_a_running_popup_and_not_to_the_panes() {
     let script = "stty raw -echo; printf READY; exec cat";
     let mut h = ready().await;
