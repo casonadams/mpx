@@ -7,6 +7,7 @@ mod drawing;
 mod fidelity;
 #[cfg(unix)]
 mod keys;
+mod lag;
 mod mouse_menus;
 mod moves;
 mod options;

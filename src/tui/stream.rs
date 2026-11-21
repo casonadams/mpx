@@ -68,7 +68,7 @@ impl App {
                 true
             }
             StreamEvent::Lagged => {
-                self.resync_all().await;
+                self.catch_up_after_lag().await;
                 true
             }
             StreamEvent::Refresh => {
@@ -130,16 +130,17 @@ impl App {
     }
 
     /// Nothing missed keeps the screen as it is; a gap the log still holds is fetched and fed; a
-    /// larger one rebuilds the pane from its log (with scrollback for a parked copy view).
+    /// larger one, or a log that restarted below the screen's offset (the pane respawned), rebuilds
+    /// the pane from its log (with scrollback for a parked copy view).
     async fn bring_up_to_date(&mut self, name: &str) {
         if let Some(expected) = self.expected.get(name).copied() {
             let Ok((_, end)) = self.client.logs(name, None, false, Some(u64::MAX)).await else {
                 return;
             };
-            if end <= expected {
+            if end == expected {
                 return;
             }
-            if end - expected <= CATCH_UP_MAX {
+            if end > expected && end - expected <= CATCH_UP_MAX {
                 self.catch_up(name).await;
                 return;
             }
@@ -240,12 +241,20 @@ impl App {
         }
     }
 
-    /// After the subscriber lagged: every shown pane is rebuilt from its log. Panes that are not
-    /// shown keep their offset and catch up when they come into view.
-    async fn resync_all(&mut self) {
-        for name in self.shown_screens() {
-            self.resync_pane(&name).await;
+    /// After the subscriber lagged, events were dropped: each shown live pane catches up on the
+    /// output it missed, and the key bindings, whose change may be among them, are reloaded.
+    /// Copy-mode views stay as entered and catch up when left; hidden panes keep their offset and
+    /// catch up when they come into view.
+    async fn catch_up_after_lag(&mut self) {
+        let live: Vec<String> = self
+            .shown_screens()
+            .into_iter()
+            .filter(|name| !self.in_copy_mode(name))
+            .collect();
+        for name in live {
+            self.bring_up_to_date(&name).await;
         }
+        self.apply_bindings().await;
     }
 
     /// Panes with a screen the TUI keeps up to date.
