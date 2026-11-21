@@ -54,13 +54,6 @@ impl Warm {
     }
 }
 
-/// A pane in copy mode whose history is still being built: the wheel notches that came in the
-/// meantime wait here and are applied when it arrives.
-pub struct Loading {
-    name: String,
-    pending: usize,
-}
-
 /// A finished history build for a pane in copy mode.
 pub struct Loaded {
     name: String,
@@ -162,35 +155,32 @@ impl App {
         });
         let mut cs = CopyState::enter(self.vt.get(name).map(|vt| vt.grid()));
         cs.wheel_exit = true;
-        self.mode = Mode::Copy(cs);
-        self.loading = Some(Loading {
-            name: name.to_string(),
-            pending: 1,
-        });
+        self.put_copy(name, cs);
+        self.loading.insert(name.to_string(), 1);
     }
 
     /// Whether the history of `name`, in copy mode, is still being built.
     pub(super) fn is_loading(&self, name: &str) -> bool {
-        self.loading.as_ref().is_some_and(|l| l.name == name)
+        self.loading.contains_key(name)
     }
 
-    /// Holds one more wheel notch up for the history being built.
-    pub(super) fn queue_wheel_up(&mut self) {
-        if let Some(loading) = &mut self.loading {
-            loading.pending += 1;
+    /// Holds one more wheel notch up for the history being built for `name`.
+    pub(super) fn queue_wheel_up(&mut self, name: &str) {
+        if let Some(pending) = self.loading.get_mut(name) {
+            *pending += 1;
         }
     }
 
-    /// Takes back one queued wheel notch for a notch down. False when none is left to take back,
-    /// so the notch scrolls to the live screen as usual.
-    pub(super) fn unqueue_wheel_up(&mut self) -> bool {
-        match &mut self.loading {
-            Some(loading) if loading.pending > 1 => {
-                loading.pending -= 1;
+    /// Takes back one notch queued for `name` for a notch down. False when none is left to take
+    /// back, so the notch scrolls to the live screen as usual.
+    pub(super) fn unqueue_wheel_up(&mut self, name: &str) -> bool {
+        match self.loading.get_mut(name) {
+            Some(pending) if *pending > 1 => {
+                *pending -= 1;
                 true
             }
-            Some(loading) => {
-                loading.pending = 0;
+            Some(pending) => {
+                *pending = 0;
                 false
             }
             None => false,
@@ -199,29 +189,25 @@ impl App {
 
     /// Forgets the history being built for `name`: its copy mode ended before it arrived.
     pub(super) fn cancel_loading(&mut self, name: &str) {
-        if self.is_loading(name) {
-            self.loading = None;
-        }
+        self.loading.remove(name);
     }
 
-    /// Gives the pane in copy mode the history that just arrived: its screen is replaced, the
-    /// selection anchor moves down by the history added, and the queued notches scroll back.
+    /// Gives the pane in copy mode, focused or not, the history that just arrived: its screen is
+    /// replaced, the selection anchor moves down by the history added, and the queued notches
+    /// scroll back.
     pub fn finish_history(&mut self, loaded: Loaded) {
-        let Some(loading) = self.loading.take_if(|l| l.name == loaded.name) else {
+        let Some(pending) = self.loading.remove(&loaded.name) else {
             return;
         };
         let Some((screen, next)) = loaded.built else {
             return;
         };
-        if self.active_pane != loaded.name {
-            return;
-        }
-        let Mode::Copy(cs) = &mut self.mode else {
+        let Some(cs) = self.copy_state_mut(&loaded.name) else {
             return;
         };
         let hist_len = screen.grid().history_len();
         cs.anchor_abs_y += hist_len;
-        for _ in 0..loading.pending {
+        for _ in 0..pending {
             cs.wheel_up(hist_len);
         }
         self.vt.insert(loaded.name.clone(), screen);

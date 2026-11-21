@@ -80,8 +80,8 @@ impl App {
             MouseEventKind::Down(MouseButton::Left) => self.mouse_press(ev.column, ev.row).await,
             MouseEventKind::Drag(MouseButton::Left) => self.mouse_drag(ev.column, ev.row).await,
             MouseEventKind::Up(MouseButton::Left) => self.mouse_release(),
-            MouseEventKind::ScrollUp => self.mouse_scroll_up().await,
-            MouseEventKind::ScrollDown => self.mouse_scroll_down(),
+            MouseEventKind::ScrollUp => self.mouse_scroll_up(ev.column, ev.row).await,
+            MouseEventKind::ScrollDown => self.mouse_scroll_down(ev.column, ev.row),
             MouseEventKind::Down(MouseButton::Right) => self.mouse_menu(ev.column, ev.row).await,
             MouseEventKind::Down(MouseButton::Middle) => self.mouse_paste(ev.column, ev.row).await,
             _ => {}
@@ -326,42 +326,55 @@ impl App {
         }
     }
 
-    async fn mouse_scroll_up(&mut self) {
-        let name = self.active_pane.clone();
-        let in_copy = matches!(self.mode, Mode::Copy(_));
+    /// The pane a wheel notch scrolls: the one under the pointer, focused or not, as tmux's
+    /// `WheelUpPane`; off the panes, the focused one.
+    fn wheel_target(&self, col: u16, row: u16) -> String {
+        self.pane_at(col, row)
+            .map_or_else(|| self.active_pane.clone(), |(name, _)| name)
+    }
+
+    /// Scrolls the pane under the pointer into its history, entering copy mode there without
+    /// moving focus.
+    async fn mouse_scroll_up(&mut self, col: u16, row: u16) {
+        let name = self.wheel_target(col, row);
+        let in_copy = self.in_copy_mode(&name);
         if in_copy && self.is_loading(&name) {
-            self.queue_wheel_up();
+            self.queue_wheel_up(&name);
             return;
         }
-        let ready = self.vt.get(&name).is_some_and(has_scrollback) || self.scrollback_warm();
+        let ready = self.vt.get(&name).is_some_and(has_scrollback)
+            || (name == self.active_pane && self.scrollback_warm());
         if !in_copy && !ready {
             self.enter_copy_loading(&name);
             return;
         }
-        let before = self.active_vt().map_or(0, |vt| vt.grid().history_len());
+        let history_len = |app: &Self| app.vt.get(&name).map_or(0, |vt| vt.grid().history_len());
+        let before = history_len(self);
         self.load_scrollback(&name).await;
-        let hist_len = self.active_vt().map_or(0, |vt| vt.grid().history_len());
-        if let Mode::Copy(cs) = &mut self.mode {
+        let hist_len = history_len(self);
+        if let Some(cs) = self.copy_state_mut(&name) {
             cs.anchor_abs_y += hist_len.saturating_sub(before);
             cs.wheel_up(hist_len);
             return;
         }
-        let grid = self.active_vt().map(|vt| vt.grid());
-        self.mode = Mode::Copy(CopyState::from_wheel(grid, hist_len));
+        let grid = self.vt.get(&name).map(|vt| vt.grid());
+        let cs = CopyState::from_wheel(grid, hist_len);
+        self.put_copy(&name, cs);
     }
 
-    /// Scrolls copy mode back toward the live screen, leaving it on arrival when the wheel
-    /// entered it. A notch up still waiting for its history is taken back first.
-    fn mouse_scroll_down(&mut self) {
-        if self.unqueue_wheel_up() {
+    /// Scrolls the copy mode of the pane under the pointer back toward the live screen, leaving it
+    /// on arrival when the wheel entered it. A notch up still waiting for its history is taken
+    /// back first.
+    fn mouse_scroll_down(&mut self, col: u16, row: u16) {
+        let name = self.wheel_target(col, row);
+        if self.unqueue_wheel_up(&name) {
             return;
         }
-        if let Mode::Copy(cs) = &mut self.mode
+        if let Some(cs) = self.copy_state_mut(&name)
             && cs.wheel_down()
             && cs.wheel_exit
         {
-            self.mode = Mode::Normal;
-            self.release_scrollback(&self.active_pane.clone());
+            self.leave_copy(&name);
         }
     }
 }

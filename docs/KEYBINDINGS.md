@@ -89,7 +89,8 @@ These need `mouse = true` (the default). With `mouse = false` mpx ignores mouse 
 
 - Left click focuses the pane under the pointer. Left drag selects text from the press point, and releasing copies it to the clipboard and leaves copy mode, so the pane streams again.
 - Drag a split border to resize the panes on either side of it.
-- Scroll wheel enters copy mode and scrolls the history.
+- Scroll wheel enters copy mode and scrolls the history of the pane under the pointer, without
+  moving focus.
 - Middle click pastes the top paste buffer into the pane under the pointer (`paste-buffer`), focusing that pane first.
 - Right click opens a menu for what is under the pointer. Its items are the same commands as the keys above, and a menu closes with `q` or Esc, as the popup menus below do:
   - a pane (the pane is focused first): horizontal and vertical split, swap up and down, kill, respawn, mark or unmark, zoom or unzoom, disable or enable input (`select-pane -d`/`-e`), break out;

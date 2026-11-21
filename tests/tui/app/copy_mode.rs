@@ -94,6 +94,66 @@ async fn mouse_wheel_scrolls_into_history() {
     assert!(!h.frame().await.contains("COPY"));
 }
 
+/// The main pane holds history; `plain` beside it is focused, so the main pane is only hovered.
+async fn history_beside_a_focused_pane() -> Harness {
+    let mut h = Harness::started(&long_output()).await;
+    split(&mut h.probe, MAIN, "plain", Direction::Horizontal).await;
+    h.frame().await;
+    h.prefixed_char('o').await;
+    h.frame().await;
+    assert_eq!(h.app.active_pane, "plain");
+    h
+}
+
+#[tokio::test]
+async fn the_wheel_scrolls_the_hovered_pane_and_leaves_focus_where_it_is() {
+    let mut h = history_beside_a_focused_pane().await;
+    let main = h.rect_of(MAIN);
+    let (col, row) = (main.x + 2, main.y + 2);
+
+    h.mouse(MouseEventKind::ScrollUp, col, row).await;
+    h.history_arrives().await;
+    assert!(h.frame().await.contains("COPY -3/"));
+    h.mouse(MouseEventKind::ScrollUp, col, row).await;
+    assert!(h.frame().await.contains("COPY -6/"));
+    assert_eq!(
+        h.app.active_pane, "plain",
+        "focus does not follow the wheel"
+    );
+    assert!(h.mode_is_normal(), "the focused pane is not in copy mode");
+    assert!(h.app.in_copy_mode(MAIN));
+
+    h.mouse(MouseEventKind::ScrollDown, col, row).await;
+    h.mouse(MouseEventKind::ScrollDown, col, row).await;
+    assert!(
+        !h.app.in_copy_mode(MAIN),
+        "back at the live screen, copy mode ends"
+    );
+    assert!(!h.frame().await.contains("COPY"));
+    assert_eq!(h.app.active_pane, "plain");
+}
+
+#[tokio::test]
+async fn panes_scrolled_one_after_the_other_each_get_their_history() {
+    let mut h = history_beside_a_focused_pane().await;
+    let fill = format!("{}END", "x\r\n".repeat(40));
+    h.emit("plain", &fill, "END").await;
+    let (main, plain) = (h.rect_of(MAIN), h.rect_of("plain"));
+
+    h.mouse(MouseEventKind::ScrollUp, main.x + 2, main.y + 2)
+        .await;
+    h.mouse(MouseEventKind::ScrollUp, plain.x + 2, plain.y + 2)
+        .await;
+    h.mouse(MouseEventKind::ScrollUp, main.x + 2, main.y + 2)
+        .await;
+    h.history_arrives().await;
+    h.history_arrives().await;
+    assert!(h.app.in_copy_mode(MAIN) && h.app.in_copy_mode("plain"));
+    let frame = h.frame().await;
+    assert!(frame.contains("COPY -6/"), "two notches on main\n{frame}");
+    assert!(frame.contains("COPY -3/"), "one notch on plain\n{frame}");
+}
+
 #[tokio::test]
 async fn copy_mode_entered_from_the_keyboard_outlasts_the_wheel_and_keys_at_the_bottom() {
     let mut h = Harness::started(&long_output()).await;

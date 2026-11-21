@@ -21,11 +21,7 @@ impl App {
         }
         if o.quit {
             if self.in_copy_mode(&name) {
-                if name == self.active_pane {
-                    self.mode = Mode::Normal;
-                }
-                self.parked_copy.remove(&name);
-                self.release_scrollback(&name);
+                self.leave_copy(&name);
             }
             return Flow::Continue;
         }
@@ -43,11 +39,7 @@ impl App {
         self.load_scrollback(&name).await;
         let mut cs = CopyState::enter(self.vt.get(&name).map(|vt| vt.grid()));
         cs.wheel_exit = o.exit_at_bottom;
-        if name == self.active_pane {
-            self.mode = Mode::Copy(cs);
-        } else {
-            self.parked_copy.insert(name.clone(), cs);
-        }
+        self.put_copy(&name, cs);
         if o.page_up {
             return self.run_copy(&name, &page_up, 1).await;
         }
@@ -58,6 +50,33 @@ impl App {
     pub fn in_copy_mode(&self, name: &str) -> bool {
         (name == self.active_pane && matches!(self.mode, Mode::Copy(_)))
             || self.parked_copy.contains_key(name)
+    }
+
+    /// The copy state of pane `name`: the foreground one when it is focused, else its parked one.
+    pub fn copy_state_mut(&mut self, name: &str) -> Option<&mut CopyState> {
+        match &mut self.mode {
+            Mode::Copy(cs) if name == self.active_pane => Some(cs),
+            _ => self.parked_copy.get_mut(name),
+        }
+    }
+
+    /// Puts pane `name` in copy mode with `cs`: in the foreground when it is focused, else parked,
+    /// so focus does not move.
+    pub fn put_copy(&mut self, name: &str, cs: CopyState) {
+        if name == self.active_pane {
+            self.mode = Mode::Copy(cs);
+        } else {
+            self.parked_copy.insert(name.to_string(), cs);
+        }
+    }
+
+    /// Ends the copy mode of pane `name`, focused or parked, and lets its screen stream again.
+    pub fn leave_copy(&mut self, name: &str) {
+        if name == self.active_pane && matches!(self.mode, Mode::Copy(_)) {
+            self.mode = Mode::Normal;
+        }
+        self.parked_copy.remove(name);
+        self.release_scrollback(name);
     }
 
     /// `send-keys -X`: a copy-mode command in the copy mode of `target`, the active pane when
