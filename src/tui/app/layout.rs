@@ -184,8 +184,15 @@ impl App {
             self.mode = Mode::Copy(cs);
         }
         let live: HashSet<&str> = self.layout.raw.iter().map(|(n, ..)| n.as_str()).collect();
-        self.parked_copy
-            .retain(|name, _| live.contains(name.as_str()));
+        let gone: Vec<String> = self
+            .parked_copy
+            .keys()
+            .filter(|name| !live.contains(name.as_str()))
+            .cloned()
+            .collect();
+        for name in gone {
+            self.leave_copy(&name);
+        }
     }
 
     /// Moves an active copy mode out of the foreground, keyed by the active pane.

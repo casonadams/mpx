@@ -4,7 +4,7 @@ use crossterm::event::{KeyCode, MouseButton, MouseEventKind};
 use mpx::layout::Direction;
 use mpx::tui::app::{App, Mode};
 
-use super::support::{ECHO, Harness, MAIN, long_output, split, two_lines, wait_for};
+use super::support::{ECHO, Harness, MAIN, long_output, split, two_lines, wait_for, window};
 
 /// Whether the main pane shows the end of the fill: `line 35`, and `READY` on the last row. The
 /// `READY` the pane printed at start is on screen too, so `READY` alone does not show the fill.
@@ -418,6 +418,72 @@ async fn copy_mode_takes_the_history_built_ahead_and_shows_output_since() {
     h.key(KeyCode::Char('q')).await;
     assert!(h.mode_is_normal());
     assert_eq!(history_of(&h), 0, "leaving copy mode drops it again");
+}
+
+#[tokio::test]
+async fn copy_mode_after_a_respawn_shows_the_new_process_not_history_built_before() {
+    let mut h = Harness::started(&long_output()).await;
+    h.frame().await;
+    warm_up(&mut h).await;
+    h.command("respawn-pane -k sh -c 'printf AGAIN; exec cat'")
+        .await;
+    h.until("the old screen dropped", |app| {
+        !app.expected.contains_key(MAIN)
+    })
+    .await;
+    h.frame().await;
+    h.until("the respawned output", |app| {
+        app.vt
+            .get(MAIN)
+            .is_some_and(|vt| vt.snapshot().contains("AGAIN"))
+    })
+    .await;
+    h.frame().await;
+    h.prefixed_char('[').await;
+    let text = h.app.vt[MAIN].scrollback_text(None);
+    assert!(text.contains("AGAIN"), "{text}");
+    assert!(
+        !text.contains("line 1"),
+        "the old process's history is gone: {text}"
+    );
+}
+
+#[tokio::test]
+async fn history_built_at_a_size_the_pane_no_longer_has_is_not_installed() {
+    let mut h = Harness::started(&long_output()).await;
+    h.frame().await;
+    h.mouse(MouseEventKind::ScrollUp, 5, 5).await;
+    split(&mut h.probe, MAIN, "below", Direction::Vertical).await;
+    h.frame().await;
+    let rect = h.rect_of(MAIN);
+    h.history_arrives().await;
+    let grid = h.app.vt[MAIN].grid();
+    assert_eq!(
+        (grid.cols, grid.rows),
+        (rect.width as usize, rect.height as usize),
+        "the pane's screen keeps the size it has"
+    );
+}
+
+#[tokio::test]
+async fn copy_mode_left_behind_in_another_window_gives_up_its_scrollback() {
+    let mut h = Harness::started(&long_output()).await;
+    h.frame().await;
+    h.prefixed_char('[').await;
+    assert!(
+        h.app.vt[MAIN].grid().history_limit > 0,
+        "copy mode has scrollback"
+    );
+    window(&mut h.probe, "other", ECHO).await;
+    h.frame().await;
+    assert!(!h.app.in_copy_mode(MAIN));
+    assert!(
+        h.app
+            .vt
+            .get(MAIN)
+            .is_none_or(|vt| vt.grid().history_limit == 0),
+        "the pane's screen is live again"
+    );
 }
 
 #[tokio::test]

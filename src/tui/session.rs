@@ -111,6 +111,7 @@ impl App {
         self.layout.raw.clear();
         self.mode = Mode::Normal;
         self.parked_copy.clear();
+        self.forget_all_history();
         self.nodes.clear();
         self.focus_pane = None;
         self.active_pane.clear();

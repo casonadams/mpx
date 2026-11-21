@@ -52,6 +52,7 @@ impl App {
                 self.vt.remove(&name);
                 self.expected.remove(&name);
                 self.pane_dims.remove(&name);
+                self.forget_history(&name);
                 true
             }
             // Panes created or rearranged from outside (an agent's split, `mpx focus`) show at
@@ -59,6 +60,7 @@ impl App {
             StreamEvent::Spawned { .. } | StreamEvent::Layout => true,
             StreamEvent::Respawned { name } => {
                 self.forget_screen(&name);
+                self.forget_history(&name);
                 true
             }
             StreamEvent::Bindings => {

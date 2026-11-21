@@ -57,7 +57,15 @@ impl Warm {
 /// A finished history build for a pane in copy mode.
 pub struct Loaded {
     name: String,
+    id: u64,
     built: Built,
+}
+
+/// A history being built for a pane in copy mode: which build it waits for, and the wheel notches
+/// up it owes once that arrives.
+pub struct Loading {
+    id: u64,
+    pending: usize,
 }
 
 impl App {
@@ -149,14 +157,21 @@ impl App {
             self.config.session.scrollback_lines,
         );
         let (tx, pane) = (self.history_tx.clone(), name.to_string());
+        self.history_builds += 1;
+        let id = self.history_builds;
         tokio::spawn(async move {
             let built = task.await.ok().flatten();
-            let _ = tx.send(Loaded { name: pane, built });
+            let _ = tx.send(Loaded {
+                name: pane,
+                id,
+                built,
+            });
         });
         let mut cs = CopyState::enter(self.vt.get(name).map(|vt| vt.grid()));
         cs.wheel_exit = true;
         self.put_copy(name, cs);
-        self.loading.insert(name.to_string(), 1);
+        self.loading
+            .insert(name.to_string(), Loading { id, pending: 1 });
     }
 
     /// Whether the history of `name`, in copy mode, is still being built.
@@ -166,8 +181,8 @@ impl App {
 
     /// Holds one more wheel notch up for the history being built for `name`.
     pub(super) fn queue_wheel_up(&mut self, name: &str) {
-        if let Some(pending) = self.loading.get_mut(name) {
-            *pending += 1;
+        if let Some(loading) = self.loading.get_mut(name) {
+            loading.pending += 1;
         }
     }
 
@@ -175,12 +190,12 @@ impl App {
     /// back, so the notch scrolls to the live screen as usual.
     pub(super) fn unqueue_wheel_up(&mut self, name: &str) -> bool {
         match self.loading.get_mut(name) {
-            Some(pending) if *pending > 1 => {
-                *pending -= 1;
+            Some(loading) if loading.pending > 1 => {
+                loading.pending -= 1;
                 true
             }
-            Some(pending) => {
-                *pending = 0;
+            Some(loading) => {
+                loading.pending = 0;
                 false
             }
             None => false,
@@ -192,16 +207,49 @@ impl App {
         self.loading.remove(name);
     }
 
+    /// Forgets every history built or being built for pane `name`: its process or its log is no
+    /// longer the one they were built from (respawned, exited, or another session's pane).
+    pub(super) fn forget_history(&mut self, name: &str) {
+        self.loading.remove(name);
+        self.warm.take_if(|w| w.name == name);
+        self.warm_next.take_if(|w| w.name == name);
+    }
+
+    /// Forgets the histories of every pane, as a switch to another session does.
+    pub(super) fn forget_all_history(&mut self) {
+        self.loading.clear();
+        self.released.clear();
+        self.warm = None;
+        self.warm_next = None;
+    }
+
     /// Gives the pane in copy mode, focused or not, the history that just arrived: its screen is
     /// replaced, the selection anchor moves down by the history added, and the queued notches
-    /// scroll back.
+    /// scroll back. A history from an earlier build, or built at a size the pane no longer has, is
+    /// dropped; the next notch loads one.
     pub fn finish_history(&mut self, loaded: Loaded) {
-        let Some(pending) = self.loading.remove(&loaded.name) else {
+        if self
+            .loading
+            .get(&loaded.name)
+            .is_none_or(|loading| loading.id != loaded.id)
+        {
+            return;
+        }
+        let Some(Loading { pending, .. }) = self.loading.remove(&loaded.name) else {
             return;
         };
         let Some((screen, next)) = loaded.built else {
             return;
         };
+        let size = self
+            .pane_dims
+            .get(&loaded.name)
+            .copied()
+            .unwrap_or(DEFAULT_SIZE);
+        let grid = screen.grid();
+        if (grid.cols, grid.rows) != (size.0 as usize, size.1 as usize) {
+            return;
+        }
         let Some(cs) = self.copy_state_mut(&loaded.name) else {
             return;
         };
