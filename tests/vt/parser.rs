@@ -817,6 +817,72 @@ fn a_resized_grid_replays_at_the_new_width_when_the_width_changes() {
     assert_eq!(grid_rows(&wide)[..2], ["abcdefgh", "x"]);
 }
 
+struct ResizeCase {
+    log: &'static [u8],
+    from: (usize, usize),
+    to: (usize, usize),
+    history: usize,
+    in_place: bool,
+}
+
+#[test]
+fn a_resize_in_place_is_taken_only_where_it_matches_a_replay_of_the_log() {
+    let lines: &[u8] = b"a\r\nb\r\nc\r\nd\r\ne";
+    let alternate: &[u8] = b"\x1b[?1049hx\r\ny\x1b[2;3H";
+    let case = |log, from, to, history, in_place| ResizeCase {
+        log,
+        from,
+        to,
+        history,
+        in_place,
+    };
+    let cases = [
+        case(lines, (10, 5), (10, 2), 0, true),
+        case(lines, (10, 2), (10, 5), 0, false),
+        case(lines, (10, 2), (10, 5), 100, true),
+        case(lines, (10, 5), (8, 5), 0, false),
+        case(alternate, (10, 2), (10, 6), 0, true),
+        case(alternate, (10, 6), (10, 2), 0, true),
+    ];
+    for ResizeCase {
+        log,
+        from,
+        to,
+        history,
+        in_place,
+    } in cases
+    {
+        let mut screen = VtScreen::new(from.0, from.1);
+        screen.grid_mut().set_history_limit(history);
+        screen.feed(log);
+        assert_eq!(
+            screen.resize_in_place(to),
+            in_place,
+            "{from:?} -> {to:?}, history {history}"
+        );
+        if !in_place {
+            assert_eq!(
+                grid_size(screen.grid()),
+                from,
+                "a refused resize leaves the grid"
+            );
+            continue;
+        }
+        let replayed = VtScreen::resized_grid(log, &[], from, to, history);
+        let grid = screen.grid();
+        assert_eq!(grid_rows(grid), grid_rows(&replayed), "{from:?} -> {to:?}");
+        assert_eq!(
+            (grid.cursor.x, grid.cursor.y, grid.history_len()),
+            (replayed.cursor.x, replayed.cursor.y, replayed.history_len()),
+            "{from:?} -> {to:?}"
+        );
+    }
+}
+
+fn grid_size(grid: &mpx::vt::Grid) -> (usize, usize) {
+    (grid.cols, grid.rows)
+}
+
 #[test]
 fn output_after_a_resize_is_fed_at_the_new_size() {
     // Cursor addressing below the old height must reach the new rows, as it did on the live pane:

@@ -487,6 +487,36 @@ async fn copy_mode_left_behind_in_another_window_gives_up_its_scrollback() {
 }
 
 #[tokio::test]
+async fn a_copy_mode_pane_that_loses_rows_keeps_its_history_and_view() {
+    let mut h = Harness::started(&long_output()).await;
+    h.frame().await;
+    h.prefixed_char('[').await;
+    let history = history_of(&h);
+    assert!(history >= 10);
+    h.probe.send_input(MAIN, "DURING-COPY\r").await.unwrap();
+    wait_for(&mut h.probe, MAIN, "DURING-COPY").await;
+    split(&mut h.probe, MAIN, "below", Direction::Vertical).await;
+    h.frame().await;
+    let rect = h.rect_of(MAIN);
+    let grid = h.app.vt[MAIN].grid();
+    assert_eq!(
+        (grid.cols, grid.rows),
+        (rect.width as usize, rect.height as usize)
+    );
+    assert!(
+        history_of(&h) >= history,
+        "the rows it lost went into its history"
+    );
+    assert!(
+        !h.app.vt[MAIN].scrollback_text(None).contains("DURING-COPY"),
+        "the view stays as copy mode was entered"
+    );
+    h.key(KeyCode::Char('q')).await;
+    h.frame().await;
+    assert!(h.app.vt[MAIN].snapshot().contains("DURING-COPY"));
+}
+
+#[tokio::test]
 async fn the_wheel_takes_the_history_built_ahead() {
     let mut h = Harness::started(&long_output()).await;
     h.frame().await;

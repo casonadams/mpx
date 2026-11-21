@@ -304,7 +304,8 @@ pub async fn sync_dims(
 
 /// Brings the screen of pane `name`, which the daemon just resized to `size`, up to date: a pane
 /// without a screen is loaded, a live pane takes the daemon's own screen, and a pane in copy mode
-/// is rebuilt from its log with its scrollback.
+/// is resized in place when its own scrollback holds the rows a grow brings back, so its view
+/// stays as entered, else rebuilt from its log with its scrollback.
 async fn resync_resized(
     client: &mut Client,
     name: String,
@@ -312,7 +313,7 @@ async fn resync_resized(
     vt: &mut HashMap<String, VtScreen>,
     expected: &mut HashMap<String, u64>,
 ) {
-    let Some(screen) = vt.get(&name) else {
+    let Some(screen) = vt.get_mut(&name) else {
         if let Some((screen, next)) = load_pane(client, &name, (width, height), 0).await {
             expected.insert(name.clone(), next);
             vt.insert(name, screen);
@@ -320,6 +321,10 @@ async fn resync_resized(
         return;
     };
     let (from, history) = (grid_size(screen), screen.grid().history_limit);
+    let to = (width as usize, height as usize);
+    if history > 0 && screen.resize_in_place(to) {
+        return;
+    }
     if history == 0
         && let Some((screen, next)) = load_keyframe(client, &name, (width, height)).await
     {
@@ -328,7 +333,6 @@ async fn resync_resized(
         return;
     }
     let at = resize_cut(client, &name, from).await;
-    let to = (width as usize, height as usize);
     if let Some((grid, next)) = rebuild_grid(client, &name, from, to, history, at).await {
         if let Some(screen) = vt.get_mut(&name) {
             *screen.grid_mut() = grid;

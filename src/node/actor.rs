@@ -306,17 +306,17 @@ impl PaneActor {
         let from = (grid.cols, grid.rows);
         let to = (cols as usize, rows as usize);
         if from != to {
-            // Rebuilt from the newest `RING_CAPACITY` bytes of the retained output, as the app's
-            // screens rebuild it, so the rows a grow pulls back from scrollback are the same at
-            // every end. The output after this point is fed to the new grid as it arrives. A
-            // longer log (kept for scrollback) would make every resize replay all of it.
-            let log = self.ring.tail(RING_CAPACITY);
-            let rebuilt = VtScreen::resized_grid(&log, &[], from, to, 0);
-            *self.screen.grid_mut() = rebuilt;
+            if !self.screen.resize_in_place(to) {
+                // Rebuilt from the newest `RING_CAPACITY` bytes of the retained output: the lines
+                // reflow, or a grow pulls rows back from scrollback the live screen does not keep.
+                // A longer log (kept for scrollback) would make every resize replay all of it.
+                let log = self.ring.tail(RING_CAPACITY);
+                *self.screen.grid_mut() = VtScreen::resized_grid(&log, &[], from, to, 0);
+            }
             self.resized_from = Some(from);
             self.resized_at = Some(self.ring.total_written());
+            self.replay = None;
         }
-        self.replay = None;
         if let Some(terminal) = &self.terminal {
             terminal.resize(cols, rows);
         }

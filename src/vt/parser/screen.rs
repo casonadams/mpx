@@ -61,6 +61,20 @@ impl VtScreen {
         handler.grid
     }
 
+    /// Resizes the screen to `to` (cols, rows) where that gives what `resized_grid` would rebuild
+    /// from the log, without replaying it: the width is kept, so no line reflows, and every row a
+    /// grow brings in comes from this grid (its own scrollback, or blank in the alternate screen,
+    /// which keeps none). Returns false, leaving the screen as it is, when only a replay can.
+    pub fn resize_in_place(&mut self, (cols, rows): (usize, usize)) -> bool {
+        let grid = self.grid();
+        let rows_known = rows <= grid.rows || grid.alternate_screen() || grid.history_limit > 0;
+        if cols != grid.cols || !rows_known {
+            return false;
+        }
+        self.grid_mut().resize(cols, rows);
+        true
+    }
+
     pub fn feed(&mut self, bytes: &[u8]) {
         self.parser.advance(&mut self.handler, bytes);
     }

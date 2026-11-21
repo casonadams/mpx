@@ -152,9 +152,44 @@ fn logs_since(p: &mut Pane, since: u64) -> (String, u64) {
 }
 
 fn keyframe_next(p: &mut Pane) -> u64 {
+    keyframe(p).1
+}
+
+fn keyframe(p: &mut Pane) -> (String, u64, (u16, u16)) {
     let (reply, rx) = oneshot::channel();
     p.actor.handle(PaneMsg::Keyframe { reply });
-    rx.blocking_recv().expect("keyframe reply").1
+    rx.blocking_recv().expect("keyframe reply")
+}
+
+fn resize(p: &mut Pane, cols: u16, rows: u16) {
+    let (reply, rx) = oneshot::channel();
+    p.actor.handle(PaneMsg::Resize { cols, rows, reply });
+    rx.blocking_recv().expect("resize reply").expect("resized");
+}
+
+#[test]
+fn resizes_that_keep_the_width_and_pull_nothing_back_do_not_replay_the_log() {
+    let mut p = plain();
+    let lines: String = (0..80_000).map(|i| format!("line {i:06}\r\n")).collect();
+    let fed = std::time::Instant::now();
+    p.actor.handle(output(lines.as_bytes()));
+    let parse = fed.elapsed();
+
+    let resized = std::time::Instant::now();
+    for rows in (14..24).rev() {
+        resize(&mut p, 80, rows);
+    }
+    let resizes = resized.elapsed();
+    assert!(
+        resizes < parse / 2,
+        "ten shrinks took {resizes:?}, parsing the log once {parse:?}"
+    );
+    let (screen, _, size) = keyframe(&mut p);
+    assert_eq!(size, (80, 14));
+    assert!(
+        screen.contains("line 079999"),
+        "the newest line stays on screen"
+    );
 }
 
 #[test]
