@@ -2,7 +2,7 @@
 //! fire here: the layout changed, a window or pane was made, or a client selected one.
 
 use super::answer::{connection_only, reply, unit};
-use super::{Origin, Reply, Session, SessionMsg, configure_workspace};
+use super::{Origin, Reply, Session, SessionMsg, configure_workspace, is_output};
 use crate::config::Config;
 use crate::node::now_ms;
 use crate::node::pane::PaneNotice;
@@ -80,6 +80,9 @@ impl Session {
     }
 
     fn notice(&mut self, notice: PaneNotice) {
+        if is_output(&notice) {
+            self.pacing.relay().sent(now_ms());
+        }
         match notice {
             PaneNotice::Event(event) => self.pane_event(event),
             PaneNotice::Exited { name, id, code } => self.pane_exited(name, id, code),

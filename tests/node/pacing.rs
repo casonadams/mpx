@@ -21,18 +21,47 @@ fn pacing_follows_live_backlogs_and_forgets_dropped_ones() {
     let backlog = pacing.track(1_000);
     assert!(!pacing.congested(1_000));
     for _ in 0..=PACE_HIGH {
-        backlog.queued();
+        backlog.queued(1_000);
     }
     assert!(pacing.congested(1_000));
     backlog.sent(1_010);
     assert!(!pacing.congested(1_010), "back at the mark");
-    backlog.queued();
+    backlog.queued(1_020);
     assert!(pacing.congested(1_020));
     drop(backlog);
     assert!(
         !pacing.congested(1_020),
         "a closed subscription no longer counts"
     );
+}
+
+#[test]
+fn a_backlog_that_fills_after_a_quiet_spell_is_waited_for_from_then() {
+    let pacing = Pacing::default();
+    let backlog = pacing.track(1_000);
+    let burst = 1_000 + 10 * PACE_STUCK_MS;
+    for _ in 0..=PACE_HIGH {
+        backlog.queued(burst);
+    }
+    assert!(pacing.congested(burst + 1), "behind since the burst began");
+    assert!(
+        !pacing.congested(burst + PACE_STUCK_MS),
+        "and given up on once stuck that long"
+    );
+}
+
+#[test]
+fn output_waiting_on_the_session_holds_readers_like_a_terminal_behind() {
+    let pacing = Pacing::default();
+    for _ in 0..=PACE_HIGH {
+        pacing.relay().queued(1_000);
+    }
+    assert!(
+        pacing.congested(1_000),
+        "no terminal is behind, the session is"
+    );
+    pacing.relay().sent(1_010);
+    assert!(!pacing.congested(1_010));
 }
 
 #[test]
@@ -49,7 +78,7 @@ fn a_closed_terminal_never_holds_readers() {
     let pacing = Pacing::default();
     let backlog = pacing.track(1_000);
     for _ in 0..=PACE_HIGH {
-        backlog.queued();
+        backlog.queued(1_000);
     }
     let alive = std::sync::Arc::clone(&backlog);
     drop(mpx::node::pacing::CloseOnDrop(Some(backlog)));

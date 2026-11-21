@@ -45,11 +45,16 @@ use crate::node::pacing::Pacing;
 use crate::node::pane::{self, Notifier, PaneHandle, PaneNotice};
 use crate::node::sink::Sink;
 use crate::node::sleep_until_opt;
-use crate::protocol::{ChannelOp, PaneId, Request, Response, SpawnOpts};
+use crate::protocol::{ChannelOp, PaneId, Request, Response, SpawnOpts, StreamEvent};
 use crate::store::SnapshotStore;
 use crate::tui::command::Command;
 
 pub(super) type Reply<T> = oneshot::Sender<T>;
+
+/// Whether a pane notice relays output, which pacing counts while it waits in the mailbox.
+fn is_output(notice: &PaneNotice) -> bool {
+    matches!(notice, PaneNotice::Event(StreamEvent::Output { .. }))
+}
 
 /// Sends `req` to the session as `origin`, answering with the session's response, or with why none
 /// came.
@@ -253,7 +258,11 @@ pub(super) async fn run(boot: Boot, mut rx: mpsc::UnboundedReceiver<SessionMsg>)
         pacing,
     } = boot;
     let hook_tx = tx.clone();
+    let relayed = Arc::clone(&pacing);
     let notifier: Notifier = Arc::new(move |notice| {
+        if is_output(&notice) {
+            relayed.relay().queued(now_ms());
+        }
         let _ = tx.send(SessionMsg::Notice(notice));
     });
     let mut workspace = Workspace::new(session.clone());

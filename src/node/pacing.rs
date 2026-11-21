@@ -77,9 +77,13 @@ pub struct Backlog {
 }
 
 impl Backlog {
-    /// One more event waits for the terminal.
-    pub fn queued(&self) {
-        self.queued.fetch_add(1, Ordering::Relaxed);
+    /// One more event waits for the terminal, queued at `now_ms`. The first event of an empty
+    /// backlog starts its progress clock, so a terminal idle before a burst is waited for, and is
+    /// given up on only once it has not progressed for `PACE_STUCK_MS` since.
+    pub fn queued(&self, now_ms: u64) {
+        if self.queued.fetch_add(1, Ordering::Relaxed) == 0 {
+            self.progress_ms.store(now_ms, Ordering::Relaxed);
+        }
     }
 
     /// One event reached the terminal's socket at `now_ms`.
@@ -116,10 +120,12 @@ impl Drop for CloseOnDrop {
     }
 }
 
-/// The backlogs of every attached terminal, shared by a session's pane readers.
+/// The backlogs of every attached terminal, shared by a session's pane readers, and the output
+/// relayed to the session on its way to them.
 #[derive(Debug, Default)]
 pub struct Pacing {
     backlogs: Mutex<Vec<Weak<Backlog>>>,
+    relay: Backlog,
 }
 
 impl Pacing {
@@ -134,20 +140,35 @@ impl Pacing {
         backlog
     }
 
-    /// Whether any live terminal is behind and still catching up.
+    /// Output relayed to the session and not yet passed on to its subscribers. The session handles
+    /// one message at a time, so output waits there while it serves a slow request.
+    pub fn relay(&self) -> &Backlog {
+        &self.relay
+    }
+
+    /// Whether any live terminal, or the session relaying output to them, is behind and still
+    /// catching up.
     pub fn congested(&self, now_ms: u64) -> bool {
-        self.backlogs.lock().is_ok_and(|backlogs| {
-            backlogs
-                .iter()
-                .filter_map(Weak::upgrade)
-                .any(|b| b.holds(now_ms))
-        })
+        self.relay.holds(now_ms)
+            || self.backlogs.lock().is_ok_and(|backlogs| {
+                backlogs
+                    .iter()
+                    .filter_map(Weak::upgrade)
+                    .any(|b| b.holds(now_ms))
+            })
     }
 
     /// Blocks the calling reader thread while a terminal is behind.
     pub fn wait_for_room(&self) {
         while self.congested(now_ms()) {
             std::thread::sleep(PACE_POLL);
+        }
+    }
+
+    /// `wait_for_room` for readers running on the async runtime.
+    pub async fn wait_for_room_async(&self) {
+        while self.congested(now_ms()) {
+            tokio::time::sleep(Duration::from_millis(1)).await;
         }
     }
 }

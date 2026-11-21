@@ -84,7 +84,7 @@ impl Sink {
         match self.tx.try_send(event) {
             Ok(()) => {
                 if let Some(backlog) = &self.backlog {
-                    backlog.queued();
+                    backlog.queued(super::now_ms());
                 }
                 true
             }
