@@ -92,6 +92,36 @@ async fn exclusive_attach_detaches_the_other_clients() {
 }
 
 #[tokio::test]
+async fn activity_that_moves_the_window_size_lays_the_window_out_again() {
+    let daemon = start().await;
+    let big = ClientInfo {
+        width: 120,
+        height: 40,
+        ..terminal("big")
+    };
+    let mut events = attach(&daemon.endpoint, big, false, false).await;
+    let _small = attach(&daemon.endpoint, terminal("small"), false, false).await;
+    let mut probe = connect(&daemon.endpoint).await;
+    await_clients(&mut probe, 2).await;
+    let quiet = Duration::from_millis(100);
+    while timeout(quiet, events.recv()).await.is_ok() {}
+
+    probe.client_activity("big").await.expect("activity");
+    assert!(
+        matches!(
+            timeout(WAIT, events.recv()).await,
+            Ok(Some(StreamEvent::Layout))
+        ),
+        "the latest client's size now lays the window out"
+    );
+    probe.client_activity("big").await.expect("activity");
+    assert!(
+        timeout(quiet, events.recv()).await.is_err(),
+        "activity that changes no size lays nothing out"
+    );
+}
+
+#[tokio::test]
 async fn client_commands_reach_only_the_named_client() {
     let daemon = start().await;
     let mut target = attach(&daemon.endpoint, terminal("target"), false, false).await;

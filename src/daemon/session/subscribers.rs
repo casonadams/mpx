@@ -145,7 +145,12 @@ impl Session {
                 let detached = clients::detach(&mut self.filters, &target);
                 self.relayout_if(detached.map(|_| true))
             }
-            ClientRequest::Activity { name } => unit(clients::touch(&mut self.filters, &name)),
+            ClientRequest::Activity { name } => {
+                let before = self.window_size(self.requested);
+                let touched = clients::touch(&mut self.filters, &name);
+                let moved = touched.map(|()| self.window_size(self.requested) != before);
+                self.relayout_if(moved)
+            }
             ClientRequest::Resized {
                 name,
                 width,
