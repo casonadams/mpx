@@ -310,10 +310,13 @@ pub fn spawn(spec: SpawnSpec, pty: bool, ctx: PaneCtx) -> Result<PaneHandle, Nod
         let terminal = node.terminal();
         (Box::new(node), Some(terminal))
     } else {
-        (
-            Box::new(TaskNode::spawn(&spec, tx.clone(), Arc::clone(&inflight))?),
-            None,
-        )
+        let node = TaskNode::spawn(
+            &spec,
+            tx.clone(),
+            Arc::clone(&ctx.pacing),
+            Arc::clone(&inflight),
+        )?;
+        (Box::new(node), None)
     };
     let handle = PaneHandle {
         name: Arc::from(spec.name.as_str()),

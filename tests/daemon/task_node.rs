@@ -4,10 +4,19 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 use mpx::node::SpawnSpec;
+use mpx::node::pacing::{PACE_HIGH, Pacing};
 use mpx::node::pane::{self, PaneCtx, PaneHandle, PaneNotice, TermView};
 use mpx::protocol::{NodeState, WaitCondition};
 
 fn spawn_task(name: &str, command: &str) -> (PaneHandle, mpsc::UnboundedReceiver<PaneNotice>) {
+    spawn_paced(name, command, Arc::default())
+}
+
+fn spawn_paced(
+    name: &str,
+    command: &str,
+    pacing: Arc<Pacing>,
+) -> (PaneHandle, mpsc::UnboundedReceiver<PaneNotice>) {
     let spec = SpawnSpec {
         name: name.to_string(),
         id: 0,
@@ -25,7 +34,7 @@ fn spawn_task(name: &str, command: &str) -> (PaneHandle, mpsc::UnboundedReceiver
             let _ = tx.send(notice);
         }),
         relay: Arc::new(AtomicBool::new(true)),
-        pacing: Arc::default(),
+        pacing,
     };
     let handle = pane::spawn(spec, false, ctx).expect("spawn");
     (handle, rx)
@@ -44,6 +53,38 @@ async fn next_exit(notices: &mut mpsc::UnboundedReceiver<PaneNotice>) -> Option<
     })
     .await
     .expect("exit reported to the session")
+}
+
+#[tokio::test]
+async fn a_task_pane_holds_its_output_while_a_terminal_is_behind() {
+    let pacing = Arc::new(Pacing::default());
+    let terminal = pacing.track(mpx::node::now_ms());
+    for _ in 0..=PACE_HIGH {
+        terminal.queued(mpx::node::now_ms());
+    }
+    let (task, _notices) = spawn_paced("paced", "cat", Arc::clone(&pacing));
+    task.input(Box::new(|_: &TermView| b"ping\n".to_vec()))
+        .await
+        .unwrap();
+    let ping = || WaitCondition::Match {
+        pattern: "ping".into(),
+    };
+    let held = task
+        .wait(ping(), Some(Duration::from_millis(300)))
+        .await
+        .unwrap();
+    assert!(
+        !held.satisfied,
+        "the output waits while the terminal is behind"
+    );
+
+    terminal.sent(mpx::node::now_ms());
+    let seen = task
+        .wait(ping(), Some(Duration::from_secs(1)))
+        .await
+        .unwrap();
+    assert!(seen.satisfied, "and comes once it catches up");
+    task.request_kill().await.expect("killed");
 }
 
 #[tokio::test]

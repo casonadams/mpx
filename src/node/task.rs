@@ -5,7 +5,7 @@ use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
-use super::pacing::Inflight;
+use super::pacing::{Inflight, Pacing};
 use super::pane::PaneMsg;
 use super::{NodeError, Process, SpawnSpec};
 
@@ -16,10 +16,12 @@ pub struct TaskNode {
 }
 
 impl TaskNode {
-    /// Starts the command with piped stdio. Output and its exit are sent to `out`.
+    /// Starts the command with piped stdio. Output and its exit are sent to `out`; its readers wait
+    /// on `pacing` and `inflight` as a terminal pane's does.
     pub fn spawn(
         spec: &SpawnSpec,
         out: mpsc::UnboundedSender<PaneMsg>,
+        pacing: Arc<Pacing>,
         inflight: Arc<Inflight>,
     ) -> Result<Self, NodeError> {
         let mut command = Command::new(&spec.command);
@@ -49,10 +51,11 @@ impl TaskNode {
 
         let mut readers = Vec::new();
         if let Some(stdout) = child.stdout.take() {
-            readers.push(spawn_reader(stdout, out.clone(), Arc::clone(&inflight)));
+            let (pacing, inflight) = (Arc::clone(&pacing), Arc::clone(&inflight));
+            readers.push(spawn_reader(stdout, out.clone(), pacing, inflight));
         }
         if let Some(stderr) = child.stderr.take() {
-            readers.push(spawn_reader(stderr, out.clone(), inflight));
+            readers.push(spawn_reader(stderr, out.clone(), pacing, inflight));
         }
 
         let (kill_tx, kill_rx) = oneshot::channel();
@@ -80,6 +83,7 @@ async fn write_stdin(
 fn spawn_reader<R>(
     mut pipe: R,
     out: mpsc::UnboundedSender<PaneMsg>,
+    pacing: Arc<Pacing>,
     inflight: Arc<Inflight>,
 ) -> JoinHandle<()>
 where
@@ -88,6 +92,7 @@ where
     tokio::spawn(async move {
         let mut chunk = [0u8; 4096];
         loop {
+            pacing.wait_for_room_async().await;
             inflight.wait_for_room_async().await;
             match pipe.read(&mut chunk).await {
                 Ok(0) | Err(_) => break,
