@@ -194,6 +194,7 @@ impl Tui {
             self.app.pacing.frame_due,
             self.app.display_deadline(),
             self.app.sync_deadline(),
+            self.app.message_deadline(),
         ]
         .into_iter()
         .flatten()

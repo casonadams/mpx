@@ -204,8 +204,14 @@ async fn display_time_sets_how_long_a_message_stays() {
     .await;
     h.app.say("hello");
     assert_eq!(h.app.live_message(), Some("hello"));
+    let due = h
+        .app
+        .message_deadline()
+        .expect("the frame that clears it is due");
+    assert!(due <= std::time::Instant::now() + Duration::from_millis(40));
     tokio::time::sleep(Duration::from_millis(120)).await;
     assert_eq!(h.app.live_message(), None);
+    assert_eq!(h.app.message_deadline(), None);
 }
 
 fn copy_cursor(h: &Harness) -> (usize, usize) {

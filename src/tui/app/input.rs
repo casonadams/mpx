@@ -94,8 +94,22 @@ impl App {
         self.interaction
             .message
             .as_ref()
-            .filter(|(_, at)| at.elapsed() < Duration::from_millis(self.config.display_time_ms))
+            .filter(|(_, at)| at.elapsed() < self.message_time())
             .map(|(text, _)| text.as_str())
+    }
+
+    /// When the live message goes away, so the frame that clears it is drawn then; `None` when
+    /// no message is up.
+    pub fn message_deadline(&self) -> Option<Instant> {
+        self.interaction
+            .message
+            .as_ref()
+            .map(|(_, at)| *at + self.message_time())
+            .filter(|due| *due > Instant::now())
+    }
+
+    fn message_time(&self) -> Duration {
+        Duration::from_millis(self.config.display_time_ms)
     }
 
     pub fn remember(&mut self, line: &str) {
