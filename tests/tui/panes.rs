@@ -4,7 +4,7 @@ use mpx::layout::{Divider, Rect};
 use mpx::protocol::{NodeInfo, Side};
 use mpx::tui::panes::{
     BorderGrab, PaneRect, border_at, border_move, find_directional, neighbor_pane, pending_resizes,
-    resized_elsewhere, wrap_step,
+    resized_elsewhere, size_move, wrap_step,
 };
 
 fn pane(name: &str, width: u16, height: u16) -> PaneRect {
@@ -125,6 +125,35 @@ fn dragging_a_border_grows_the_pane_the_pointer_moves_toward() {
         border_move(&row, &panes, (15, 1)),
         Some(("bottom".into(), Side::Up, 3))
     );
+}
+
+#[test]
+fn sizing_a_pane_moves_the_border_after_it_or_else_the_one_before() {
+    let (dividers, panes) = grid_with_borders();
+    let sized = |name, vertical, size| size_move(&dividers, &panes, name, vertical, size);
+    assert_eq!(
+        sized("left", true, 13),
+        Some(("left".into(), Side::Right, 3))
+    );
+    assert_eq!(
+        sized("left", true, 7),
+        Some(("top".into(), Side::Left, 3)),
+        "shrinking grows the pane past the border"
+    );
+    assert_eq!(
+        sized("top", true, 12),
+        Some(("top".into(), Side::Left, 2)),
+        "a pane on the right edge moves its left border"
+    );
+    assert_eq!(sized("top", false, 6), Some(("top".into(), Side::Down, 2)));
+    assert_eq!(
+        sized("bottom", false, 3),
+        Some(("top".into(), Side::Down, 2)),
+        "a pane on the bottom edge gives rows to the one above"
+    );
+    assert_eq!(sized("left", false, 5), None, "no border to move");
+    assert_eq!(sized("left", true, 10), None, "already that size");
+    assert_eq!(sized("gone", true, 5), None);
 }
 
 #[test]

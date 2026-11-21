@@ -163,7 +163,7 @@ Timeout exits with `124`, matching coreutils `timeout`.
 | `mpx unlink-window [-t N] [-k]` | Remove one index of a window (default: the active index). The window stays at its other indices. Its only index needs `-k`, which kills the window and its panes. |
 | `mpx resize-window [-t N] [-x W] [-y H] [-A\|-a] [-L\|-R\|-U\|-D] [cells]` | Give a window a size of its own (default: the active window), which overrides the clients' size for that window until it is resized again. `-x` and `-y` set the width and height in cells; `-A` takes the largest attached client's size and `-a` the smallest. `-L`, `-R`, `-U` or `-D` move that border by `cells` (default 1) from the current size. |
 | `mpx select-layout [preset]` | `even-horizontal`, `even-vertical`, `main-vertical`, `main-vertical-mirrored`, `main-horizontal`, `main-horizontal-mirrored`, `tiled`, `-E`. |
-| `mpx resize-pane [-t pane] -L\|-R\|-U\|-D [cells]` | Move split border (or `-x`/`-y` for absolute size). |
+| `mpx resize-pane [-t pane] -L\|-R\|-U\|-D [cells]` | Move split border. `-x`/`-y` give the pane that width/height by moving the split border beside it, as tmux does; a pane with no border that way (alone in its window) has its terminal set to that size, and an attached client sets it back to the size it shows the pane at. |
 | `mpx resize-pane [-t pane] -Z` | Zoom the pane's window so its focused pane fills it, or unzoom it. Zoom is the daemon's, so every attached terminal shows it. |
 | `mpx layout [--width W --height H]` | Print the computed pane geometry. |
 

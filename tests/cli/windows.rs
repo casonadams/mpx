@@ -183,6 +183,19 @@ fn resize_pane_sets_the_absolute_pty_size_and_needs_a_direction_or_size() {
 }
 
 #[test]
+fn resize_pane_to_a_size_moves_the_borders_beside_a_split_pane() {
+    let f = Fixture::start();
+    base_and_side(&f);
+    let side = place(&f, "side");
+    for width in [30, side.w + 4] {
+        let resize = ["resize-pane", "-t", "side", "-x", &width.to_string()];
+        assert_eq!(run_command(&f, &resize), 0);
+        let now = place(&f, "side");
+        assert!(now.w.abs_diff(width) <= 1, "asked {width}, got {}", now.w);
+    }
+}
+
+#[test]
 fn resize_pane_direction_moves_the_border_by_the_amount() {
     let f = Fixture::start();
     base_and_side(&f);

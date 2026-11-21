@@ -11,6 +11,7 @@ use crate::client::Client;
 use crate::layout::LinkPlace;
 use crate::protocol::{LayoutPreset, NewWindowOpts, Side, WindowFit, WindowResize};
 use crate::tui::command::window_target;
+use crate::tui::panes::size_move;
 
 /// Window and pane-layout commands, flattened into `mpx` next to the pane commands.
 #[derive(Subcommand, Debug)]
@@ -818,14 +819,41 @@ async fn pane_size(client: &mut Client, name: &str) -> Result<(u16, u16), String
         .ok_or_else(|| format!("can't find pane: {name}"))
 }
 
+/// `resize-pane -x/-y`: moves the split borders beside the pane so it gets that size, as tmux
+/// does, which every attached terminal then lays out. A pane with no border to move in a
+/// direction (alone in its window) has its terminal set to that size instead.
+async fn resize_to(
+    client: &mut Client,
+    name: &str,
+    width: Option<u16>,
+    height: Option<u16>,
+) -> Result<(), String> {
+    let viewport = terminal_size();
+    let (panes, dividers, _) = current_layout(client).await?;
+    let mut direct = (None, None);
+    for (vertical, size) in [(true, width), (false, height)] {
+        let Some(size) = size else { continue };
+        match size_move(&dividers, &panes, name, vertical, size) {
+            Some((pane, side, cells)) => client.resize_split(&pane, side, cells, viewport).await?,
+            None if vertical => direct.0 = Some(size),
+            None => direct.1 = Some(size),
+        }
+    }
+    if direct == (None, None) {
+        return Ok(());
+    }
+    let (cur_w, cur_h) = pane_size(client, name).await?;
+    let cols = direct.0.unwrap_or(cur_w);
+    let rows = direct.1.unwrap_or(cur_h);
+    client.resize_pane(name, cols, rows).await
+}
+
 async fn resize(r: &Resolved, req: ResizeRequest) -> Result<i32, String> {
     let mut client = ensure_client(r).await?;
     let name = resolve_name(&mut client, req.target.as_deref()).await?;
     if req.width.is_some() || req.height.is_some() {
-        let (cur_w, cur_h) = pane_size(&mut client, &name).await?;
-        let cols = req.width.unwrap_or(cur_w);
-        let rows = req.height.unwrap_or(cur_h);
-        daemon_result(client.resize_pane(&name, cols, rows).await, "resize-pane")?;
+        let resized = resize_to(&mut client, &name, req.width, req.height).await;
+        daemon_result(resized, "resize-pane")?;
         return Ok(0);
     }
     let side = req

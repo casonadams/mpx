@@ -461,3 +461,34 @@ pub fn border_move(
         (false, false) => Some((grab.after.clone(), Side::Up, cells)),
     }
 }
+
+/// The resize that makes pane `name` `size` cells wide (`vertical`) or tall, as tmux's
+/// `resize-pane -x/-y`: the border after it moves, or the one before it when it has none. `None`
+/// when it has no such border or already has that size.
+pub fn size_move(
+    dividers: &[Divider],
+    panes: &[PaneRect],
+    name: &str,
+    vertical: bool,
+    size: u16,
+) -> Option<(String, Side, u16)> {
+    let (_, rect, _) = panes.iter().find(|(pane, ..)| pane == name)?;
+    let (start, extent) = if vertical {
+        (rect.x, rect.width)
+    } else {
+        (rect.y, rect.height)
+    };
+    let at = |along: u16| {
+        if vertical {
+            (along, rect.y)
+        } else {
+            (rect.x, along)
+        }
+    };
+    let end = start + extent;
+    if let Some(grab) = border_at(dividers, panes, at(end)) {
+        return border_move(&grab, panes, at(start + size));
+    }
+    let before = border_at(dividers, panes, at(start.checked_sub(1)?))?;
+    border_move(&before, panes, at(end.checked_sub(size + 1)?))
+}
