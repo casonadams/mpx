@@ -245,6 +245,9 @@ pub struct Attachment {
     pub times: crate::format::SessionTimes,
     /// The session this client was attached to before the current one (`switch-client -l`).
     pub previous_session: Option<String>,
+    /// When this client last told the daemon it had input; `None` until it does, and again once
+    /// its terminal regains focus.
+    pub reported_activity: Option<Instant>,
 }
 
 /// Where clock mode reads the time: the system clock, or a fixed time (for tests).
@@ -381,6 +384,7 @@ impl App {
                 attached: 0,
                 times: Default::default(),
                 previous_session: None,
+                reported_activity: None,
             },
         }
     }

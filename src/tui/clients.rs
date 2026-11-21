@@ -10,11 +10,28 @@ use super::app::{App, Flow};
 use super::command;
 use super::overlay::Overlay;
 
+/// How long a reported input keeps this client's activity current.
+const ACTIVITY_REPORT: std::time::Duration = std::time::Duration::from_secs(1);
+
 impl App {
-    /// Tells the daemon this client gave input: the `latest` window-size policy follows it.
+    /// Tells the daemon this client gave input, at most once per `ACTIVITY_REPORT` and at once on
+    /// the first input after the terminal regains focus: the `latest` window-size policy and
+    /// `client_activity` need it to the second, and the report would otherwise cost a round trip
+    /// before every key's own.
     pub async fn touch_client(&mut self) {
+        let now = std::time::Instant::now();
+        if self
+            .attachment
+            .reported_activity
+            .is_some_and(|at| now.duration_since(at) < ACTIVITY_REPORT)
+        {
+            return;
+        }
         let name = self.attachment.terminal.name.clone();
         let result = self.client.client_activity(&name).await;
+        if result.is_ok() {
+            self.attachment.reported_activity = Some(now);
+        }
         self.report("client activity", result);
     }
 

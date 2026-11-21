@@ -42,6 +42,9 @@ pub fn latest_of_run(
 
 impl App {
     pub async fn on_event(&mut self, ev: Event) -> Flow {
+        if matches!(ev, Event::FocusGained) {
+            self.attachment.reported_activity = None;
+        }
         if matches!(ev, Event::Key(_) | Event::Mouse(_) | Event::Paste(_)) {
             self.touch_client().await;
         }

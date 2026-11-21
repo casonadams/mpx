@@ -27,6 +27,32 @@ async fn await_clients(probe: &mut Client, count: usize) -> Vec<ClientInfo> {
 }
 
 #[tokio::test]
+async fn input_reports_activity_once_a_second_and_at_once_after_focus_returns() {
+    let mut h = Harness::idle().await;
+    let activity = async |probe: &mut Client| {
+        let clients = await_clients(probe, 1).await;
+        clients.first().expect("this client").activity_ms
+    };
+    h.key(KeyCode::Char('a')).await;
+    let first = activity(&mut h.probe).await;
+    sleep(Duration::from_millis(20)).await;
+    h.key(KeyCode::Char('b')).await;
+    assert_eq!(
+        activity(&mut h.probe).await,
+        first,
+        "a key soon after needs no report"
+    );
+
+    h.event(crossterm::event::Event::FocusGained).await;
+    sleep(Duration::from_millis(20)).await;
+    h.key(KeyCode::Char('c')).await;
+    assert!(
+        activity(&mut h.probe).await > first,
+        "the first key after the terminal regains focus is reported"
+    );
+}
+
+#[tokio::test]
 async fn a_read_only_client_sends_no_keys_to_the_panes() {
     let attach = AttachOpts {
         read_only: true,
