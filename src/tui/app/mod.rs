@@ -7,7 +7,7 @@ mod pacing;
 mod run;
 mod state;
 
-pub use input::latest_drag;
+pub use input::latest_of_run;
 pub use pacing::{
     FRAME_BUDGET, FRAMES_PER_BUDGET, TYPING_FRAMES, TYPING_WINDOW, needs_redraw, next_frame,
 };

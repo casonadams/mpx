@@ -9,21 +9,30 @@ const HISTORY_CAP: usize = 100;
 /// Status-row messages kept for `show-messages`.
 const MESSAGE_LOG_CAP: usize = 100;
 
-/// The last of a run of mouse drags already queued after `first`, and the first queued event that
-/// is not part of the run, to handle next. A fast drag sends many motions; only the latest
-/// position matters.
-pub fn latest_drag(
+/// The last of a run of events already queued after `first` that only the latest of matters, and
+/// the first queued event that is not part of the run, to handle next. A fast mouse drag sends many
+/// motions, and dragging the terminal window's edge many sizes: only the latest position or size
+/// is handled, so a burst costs one layout and one resize of each pane, not one per event.
+pub fn latest_of_run(
     first: Event,
     mut queued: impl FnMut() -> Option<Event>,
 ) -> (Event, Option<Event>) {
-    let is_drag =
-        |ev: &Event| matches!(ev, Event::Mouse(m) if matches!(m.kind, MouseEventKind::Drag(_)));
-    if !is_drag(&first) {
-        return (first, None);
+    #[derive(PartialEq)]
+    enum Run {
+        Drag,
+        Resize,
     }
+    let run = |ev: &Event| match ev {
+        Event::Mouse(m) if matches!(m.kind, MouseEventKind::Drag(_)) => Some(Run::Drag),
+        Event::Resize(..) => Some(Run::Resize),
+        _ => None,
+    };
+    let Some(kind) = run(&first) else {
+        return (first, None);
+    };
     let mut last = first;
     while let Some(next) = queued() {
-        if !is_drag(&next) {
+        if run(&next).as_ref() != Some(&kind) {
             return (last, Some(next));
         }
         last = next;

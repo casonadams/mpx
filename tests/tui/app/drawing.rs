@@ -376,7 +376,7 @@ async fn full_width_pane_scroll_sends_only_the_new_line() {
 #[test]
 fn a_run_of_queued_drags_is_handled_at_its_last_position() {
     use crossterm::event::{Event, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
-    use mpx::tui::app::latest_drag;
+    use mpx::tui::app::latest_of_run;
     let mouse = |kind, column| {
         Event::Mouse(MouseEvent {
             kind,
@@ -388,7 +388,7 @@ fn a_run_of_queued_drags_is_handled_at_its_last_position() {
     let drag = |column| mouse(MouseEventKind::Drag(MouseButton::Left), column);
     let up = mouse(MouseEventKind::Up(MouseButton::Left), 9);
     let mut queue = vec![drag(5), drag(7), up.clone(), drag(8)].into_iter();
-    assert_eq!(latest_drag(drag(3), || queue.next()), (drag(7), Some(up)));
+    assert_eq!(latest_of_run(drag(3), || queue.next()), (drag(7), Some(up)));
     assert_eq!(
         queue.next(),
         Some(drag(8)),
@@ -396,6 +396,30 @@ fn a_run_of_queued_drags_is_handled_at_its_last_position() {
     );
     let key = Event::Key(KeyEvent::from(KeyCode::Char('x')));
     let mut untouched = vec![drag(1)].into_iter();
-    assert_eq!(latest_drag(key.clone(), || untouched.next()), (key, None));
+    assert_eq!(latest_of_run(key.clone(), || untouched.next()), (key, None));
     assert_eq!(untouched.len(), 1, "a key takes nothing from the queue");
+}
+
+#[test]
+fn a_run_of_queued_terminal_resizes_is_handled_at_its_last_size() {
+    use crossterm::event::{Event, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
+    use mpx::tui::app::latest_of_run;
+    let key = Event::Key(KeyEvent::from(KeyCode::Char('x')));
+    let mut queue = vec![Event::Resize(90, 30), Event::Resize(100, 40), key.clone()].into_iter();
+    assert_eq!(
+        latest_of_run(Event::Resize(80, 24), || queue.next()),
+        (Event::Resize(100, 40), Some(key))
+    );
+    let drag = Event::Mouse(MouseEvent {
+        kind: MouseEventKind::Drag(MouseButton::Left),
+        column: 1,
+        row: 1,
+        modifiers: crossterm::event::KeyModifiers::NONE,
+    });
+    let mut mixed = vec![drag.clone()].into_iter();
+    assert_eq!(
+        latest_of_run(Event::Resize(80, 24), || mixed.next()),
+        (Event::Resize(80, 24), Some(drag)),
+        "a drag does not continue a run of resizes"
+    );
 }

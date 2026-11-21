@@ -3,7 +3,7 @@ use std::io::{BufWriter, Write, stdout};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 
-use super::input::latest_drag;
+use super::input::latest_of_run;
 use super::pacing::needs_redraw;
 use super::state::{App, AppOptions, Flow, StartView, StreamRx};
 use crate::config::ExtendedKeys;
@@ -62,7 +62,7 @@ impl Input {
             Some(event) => event,
             None => self.rx.recv().await?,
         };
-        let (event, next) = latest_drag(first, || self.rx.try_recv().ok());
+        let (event, next) = latest_of_run(first, || self.rx.try_recv().ok());
         self.held = next;
         Some(event)
     }
