@@ -23,7 +23,7 @@ async fn a_terminal_that_falls_behind_paces_a_flood_until_it_detaches() {
     let terminal = connect(&daemon.endpoint).await;
     let attached = tokio::spawn(async move {
         let _ = terminal
-            .stream_logs_into((None, None), false, tx, |event| event)
+            .stream_logs_into((None, None), true, tx, |event| event)
             .await;
     });
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -53,6 +53,39 @@ async fn a_terminal_that_falls_behind_paces_a_flood_until_it_detaches() {
         freed - still > 256 * 1024,
         "the pane must run free once the terminal detaches: {still} -> {freed}"
     );
+    client.kill("flood").await.expect("kill flood");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_session_wide_reader_that_is_not_a_terminal_never_paces_the_panes() {
+    let daemon = start().await;
+    let mut client = connect(&daemon.endpoint).await;
+    let (tx, _held) = tokio::sync::mpsc::channel(1);
+    let reader = connect(&daemon.endpoint).await;
+    let reading = tokio::spawn(async move {
+        let _ = reader
+            .stream_logs_into((None, None), false, tx, |event| event)
+            .await;
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    client
+        .spawn(pty(
+            "flood",
+            "sh",
+            &["-c", "exec yes 0123456789abcdef0123456789abcdef"],
+        ))
+        .await
+        .expect("spawn flood");
+
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    let before = produced(&mut client, "flood").await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let after = produced(&mut client, "flood").await;
+    assert!(
+        after - before > 256 * 1024,
+        "a stalled event reader loses events instead of stalling the panes: {before} -> {after}"
+    );
+    reading.abort();
     client.kill("flood").await.expect("kill flood");
 }
 

@@ -274,10 +274,9 @@ async fn subscribe_node<S: AsyncStream>(
     };
     let session_wide = Filter::subscriber(active_window, layout);
     let names_pane = name.is_some() || since.is_some();
-    // A session-wide subscriber is an attached terminal: its backlog paces pane output.
-    let backlog = (!names_pane).then(|| state.pacing.track(now_ms()));
+    let terminal = !names_pane && active_window;
+    let backlog = terminal.then(|| state.pacing.track(now_ms()));
     let (sink, rx) = Sink::channel(backlog.clone());
-    let terminal = name.is_none() && active_window;
     let registered = match (name, since) {
         _ if client.is_some() && names_pane => {
             Err("a client subscribes to the whole session".to_string())
