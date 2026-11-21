@@ -7,6 +7,7 @@ use super::state::{App, AppOptions, AttachOpts, Flow, Mode, StartView, StreamRx}
 use crate::client::Client;
 use crate::protocol::{NewWindowOpts, SpawnOpts, StreamEvent};
 use crate::tui::keymap;
+use crate::tui::panes::resized_elsewhere;
 use crate::tui::status::{local_utc_offset, restored_notice};
 
 /// Stream events the app holds before its subscription stops reading the daemon. Small, so a pane
@@ -145,12 +146,31 @@ impl App {
     pub async fn on_tick(&mut self) -> Flow {
         self.layout.dirty = true;
         self.refresh_nodes().await;
+        self.reclaim_resized_panes();
         self.refresh_attached().await;
         if matches!(self.mode, Mode::Overlay(_)) {
             self.refresh_overlay().await;
         }
         self.warm_scrollback();
         Flow::Continue
+    }
+
+    /// Shown panes whose terminal something else resized (`mpx resize-pane -x` on a lone pane, a
+    /// client acting on an older layout) are sent this client's size for them again: their screen
+    /// here has that size, so the program's output would not fit it. Every client lays a window
+    /// out at the same size (`window-size`), so clients agree and do not take a pane back and forth.
+    fn reclaim_resized_panes(&mut self) {
+        let resized: Vec<String> = resized_elsewhere(&self.pane_dims, &self.nodes)
+            .into_iter()
+            .filter(|name| self.panes.iter().any(|(pane, ..)| pane == name))
+            .collect();
+        if resized.is_empty() {
+            return;
+        }
+        for name in resized {
+            self.pane_dims.remove(&name);
+        }
+        self.schedule_output_frame(Instant::now(), true);
     }
 
     /// Applies the events of the current subscription.

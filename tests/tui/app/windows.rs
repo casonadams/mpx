@@ -395,7 +395,7 @@ async fn dragging_a_border_with_the_mouse_resizes_the_panes_beside_it() {
 }
 
 #[tokio::test]
-async fn focusing_a_pane_resized_elsewhere_gives_it_back_its_size() {
+async fn a_shown_pane_resized_elsewhere_gets_its_size_back_on_the_next_tick() {
     let mut h = start().await;
     split(&mut h.probe, MAIN, "side", Direction::Horizontal).await;
     h.frame().await;
@@ -404,9 +404,13 @@ async fn focusing_a_pane_resized_elsewhere_gives_it_back_its_size() {
         .resize_pane("side", 30, 8)
         .await
         .expect("resize elsewhere");
-    h.prefixed_char('o').await;
+    h.app.on_tick().await;
+    assert!(
+        h.app.pacing.frame_due.is_some(),
+        "a frame is due to send it"
+    );
     h.frame().await;
-    assert_eq!(h.app.active_pane, "side");
+    assert_eq!(h.app.active_pane, MAIN, "without a focus change");
     let size = h.probe.status("side").await.expect("status").size;
     assert_eq!(size, Some((rect.width, rect.height)));
 }

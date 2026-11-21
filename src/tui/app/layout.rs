@@ -4,7 +4,7 @@ use super::state::{App, Mode};
 use crate::config::StatusPosition;
 use crate::keys::TermModes;
 use crate::layout::geometry::Rect;
-use crate::tui::panes::{resized_elsewhere, sync_dims};
+use crate::tui::panes::sync_dims;
 use crate::tui::statusline;
 use crate::vt::VtScreen;
 
@@ -73,9 +73,6 @@ impl App {
             .map(|(_, r, _)| *r);
         self.catch_up_released().await;
         self.refresh_newly_shown(&shown_before).await;
-        if self.focus_pane.as_deref() != Some(self.active_pane.as_str()) {
-            self.recheck_size(&self.active_pane.clone()).await;
-        }
         // While a border is dragged, panes are drawn at their new places as they are: resizing
         // their terminals and rebuilding their screens waits for the release.
         if self.interaction.border_drag.is_none() {
@@ -116,18 +113,6 @@ impl App {
             };
             if let Some(cs) = copy {
                 cs.resized(old_hist, grid, reflowed);
-            }
-        }
-    }
-
-    /// A pane coming into focus gets its size checked: if something else resized its terminal,
-    /// the next sync sends the right size again and the program reflows.
-    /// Only on focus: two clients of different sizes attached to one session would otherwise
-    /// take a pane back and forth.
-    async fn recheck_size(&mut self, name: &str) {
-        if let Ok(info) = self.client.status(name).await {
-            for name in resized_elsewhere(&self.pane_dims, &[info]) {
-                self.pane_dims.remove(&name);
             }
         }
     }
