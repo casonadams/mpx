@@ -241,6 +241,24 @@ fn the_status_row_is_sent_only_when_it_changes() {
 }
 
 #[test]
+fn the_status_row_is_sent_again_once_chrome_over_it_closes() {
+    let mut canvas = Canvas::default();
+    let menu = Rect::new(2, 1, 6, 2);
+    canvas.begin(10, 3, [menu]);
+    assert!(canvas.status_changed(b"[s] 0:main"));
+    canvas.begin(10, 3, [menu]);
+    assert!(
+        !canvas.status_changed(b"[s] 0:main"),
+        "the menu still covers it"
+    );
+    canvas.begin(10, 3, None);
+    assert!(
+        canvas.status_changed(b"[s] 0:main"),
+        "the menu's border is drawn over and must be replaced"
+    );
+}
+
+#[test]
 fn scrolling_moves_the_rows_and_paints_only_the_rows_it_exposes() {
     let up = scrolled(1, &["bbbbbbbbbb", "cccccccccc", "dddddddddd"]);
     assert!(up.starts_with("\x1b[0m\x1b[1;3r\x1b[1S\x1b[r"), "{up:?}");

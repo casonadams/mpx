@@ -33,7 +33,8 @@ impl Canvas {
     /// Starts a frame over a `width` x `height` area; a size change forgets everything on screen.
     /// Cells inside the `occluded` rectangles are covered by chrome drawn later in the frame:
     /// they are not painted, and are forgotten, so whatever is drawn there once the chrome is
-    /// gone is sent again, even what nothing drew while it was up.
+    /// gone is sent again, even what nothing drew while it was up. Chrome that opens, moves or
+    /// closes may have covered the status row too, so that is sent again as well.
     pub fn begin(&mut self, width: u16, height: u16, occluded: impl IntoIterator<Item = Rect>) {
         if (width, height) != (self.width, self.height) {
             self.width = width;
@@ -41,7 +42,11 @@ impl Canvas {
             self.front = vec![None; width as usize * height as usize];
             self.status.clear();
         }
-        self.occluded = occluded.into_iter().collect();
+        let occluded: Vec<Rect> = occluded.into_iter().collect();
+        if occluded != self.occluded {
+            self.status.clear();
+        }
+        self.occluded = occluded;
         for r in &self.occluded {
             let cols = r.x.min(width) as usize..(r.x + r.width).min(width) as usize;
             for y in r.y..(r.y + r.height).min(height) {
