@@ -88,8 +88,6 @@ pub struct PaneActor {
     scrollback: usize,
     screen: VtScreen,
     utf8: Utf8Stream,
-    /// Absolute offset up to which output has been decoded and emitted.
-    emitted: u64,
     last_output_ms: u64,
     /// Size the retained output was last replayed from before a resize that changed the grid size.
     resized_from: Option<(usize, usize)>,
@@ -138,7 +136,6 @@ impl PaneActor {
             scrollback: spec.scrollback,
             screen: VtScreen::live(80, 24),
             utf8: Utf8Stream::default(),
-            emitted: 0,
             last_output_ms: started_ms,
             replay: None,
             resized_from: None,
@@ -225,7 +222,6 @@ impl PaneActor {
             self.write_raw(&reply);
         }
         let _ = self.screen.take_passthroughs();
-        self.ring.write(bytes);
         self.last_output_ms = now_ms();
         self.emit_text(bytes);
         for waiter in &mut self.waiters {
@@ -234,12 +230,14 @@ impl PaneActor {
         self.check_waiters();
     }
 
-    /// Decodes the chunk and emits the text it completes, covering the byte range it advanced over.
+    /// Decodes the chunk, logs the bytes of the characters it completes and emits their text. A
+    /// character split across chunks is logged with the chunk that completes it, so every offset
+    /// the log reports (reads, keyframes, resizes) falls between characters, as events' do.
     fn emit_text(&mut self, bytes: &[u8]) {
-        let (data, held) = self.utf8.feed(bytes);
-        let offset = self.emitted;
-        let next = self.ring.total_written() - held as u64;
-        self.emitted = next;
+        let (data, complete) = self.utf8.decode(bytes);
+        let offset = self.ring.total_written();
+        self.ring.write(&complete);
+        let next = self.ring.total_written();
         if !data.is_empty() && self.has_consumers() {
             let name = self.name.clone();
             self.emit(StreamEvent::Output {

@@ -54,6 +54,18 @@ fn utf8_stream_decodes_a_four_byte_char_fed_one_byte_at_a_time() {
 }
 
 #[test]
+fn utf8_stream_decode_returns_the_bytes_of_the_characters_it_completes() {
+    let mut stream = Utf8Stream::default();
+    let (text, bytes) = stream.decode(b"ok\xE2\x82");
+    assert_eq!((text.as_str(), bytes.as_slice()), ("ok", &b"ok"[..]));
+    let (text, bytes) = stream.decode(b"\xAC\xFF");
+    assert_eq!(
+        (text.as_str(), bytes.as_slice()),
+        ("\u{20AC}\u{FFFD}", &b"\xE2\x82\xAC\xFF"[..])
+    );
+}
+
+#[test]
 fn utf8_stream_holds_at_most_a_sequence_prefix() {
     let mut stream = Utf8Stream::default();
     let (text, held) = stream.feed(b"ok\xe2\x82");

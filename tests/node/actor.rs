@@ -138,6 +138,45 @@ fn subscriber_receives_contiguous_offsets_across_split_utf8() {
     );
 }
 
+/// What a reader of pane `p`'s log since `since` gets: the text and the offset to resume from.
+fn logs_since(p: &mut Pane, since: u64) -> (String, u64) {
+    let (reply, rx) = oneshot::channel();
+    let query = LogQuery {
+        tail: None,
+        plain: false,
+        since: Some(since),
+        until: None,
+    };
+    p.actor.handle(PaneMsg::Logs { query, reply });
+    rx.blocking_recv().expect("logs reply")
+}
+
+fn keyframe_next(p: &mut Pane) -> u64 {
+    let (reply, rx) = oneshot::channel();
+    p.actor.handle(PaneMsg::Keyframe { reply });
+    rx.blocking_recv().expect("keyframe reply").1
+}
+
+#[test]
+fn a_read_while_a_character_is_split_stops_before_it_and_the_rest_continues_from_there() {
+    let mut p = plain();
+    let mut rx = subscribe(&mut p, None);
+    p.actor.handle(output(b"ab\xE2\x82"));
+    assert_eq!(logs_since(&mut p, 0), ("ab".to_string(), 2));
+    assert_eq!(
+        keyframe_next(&mut p),
+        2,
+        "a keyframe is current to the same offset"
+    );
+    p.actor.handle(output(b"\xACc"));
+    assert_eq!(logs_since(&mut p, 2), ("\u{20AC}c".to_string(), 6));
+    assert_eq!(
+        outputs(&mut rx),
+        vec![("ab".to_string(), 0, 2), ("\u{20AC}c".to_string(), 2, 6)],
+        "events and reads split the log at the same offsets"
+    );
+}
+
 #[test]
 fn subscriber_since_replays_from_offset_then_continues_live() {
     let mut p = plain();

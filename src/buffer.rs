@@ -366,6 +366,13 @@ pub struct Utf8Stream {
 impl Utf8Stream {
     /// Decodes `bytes` after any held prefix. Returns the text and the number of trailing bytes held.
     pub fn feed(&mut self, bytes: &[u8]) -> (String, usize) {
+        let (text, _) = self.decode(bytes);
+        (text, self.held.len())
+    }
+
+    /// Decodes `bytes` after any held prefix. Returns the text and the raw bytes it covers: the held
+    /// prefix and `bytes`, less a trailing incomplete sequence, which is held for the next chunk.
+    pub fn decode(&mut self, bytes: &[u8]) -> (String, Vec<u8>) {
         let mut buf = std::mem::take(&mut self.held);
         buf.extend_from_slice(bytes);
         let mut out = String::new();
@@ -386,12 +393,13 @@ impl Utf8Stream {
                         }
                         None => {
                             self.held = after.to_vec();
-                            return (out, after.len());
+                            break;
                         }
                     }
                 }
             }
         }
-        (out, 0)
+        buf.truncate(buf.len() - self.held.len());
+        (out, buf)
     }
 }
