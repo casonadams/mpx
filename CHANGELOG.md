@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.3.2](https://github.com/casonadams/mpx/compare/v0.3.1...v0.3.2) (2026-11-22)
+
+
+### Bug Fixes
+
+* **cli:** give a split pane its resize-pane -x/-y size by moving its borders ([b45643f](https://github.com/casonadams/mpx/commit/b45643fb691fc9bcd5970643f0d980eb9d2d6906))
+* **daemon:** lay the window out again when activity changes its size ([832b54d](https://github.com/casonadams/mpx/commit/832b54dcf01b807ffbc20c645a43ab681a3183bd))
+* **daemon:** let only attached terminals pace pane output ([23bb173](https://github.com/casonadams/mpx/commit/23bb173abb601f454ad1637c0dbcaf6d6f2c844e))
+* **node:** log a split UTF-8 character only once it completes ([c4e7f85](https://github.com/casonadams/mpx/commit/c4e7f85d00ebe86f07bb620210751080d78fb3da))
+* **node:** pace task pane output like terminal pane output ([316f810](https://github.com/casonadams/mpx/commit/316f81097db83f95d505d925ee1df18a8753435b))
+* **tui:** clear a message when its display time ends ([6febac5](https://github.com/casonadams/mpx/commit/6febac54f0249c1fc786e012dbe84df535e5b2ab))
+* **tui:** draw popup output without waiting for a key or tick ([84b456d](https://github.com/casonadams/mpx/commit/84b456da4bbd38c2aaaff6c412fec4eaa7662989))
+* **tui:** drop pane history built for another process, size or session ([66e057f](https://github.com/casonadams/mpx/commit/66e057f70d6cb5819bf854f767b3bfe78e06b262))
+* **tui:** give a shown pane resized elsewhere its size back on the next tick ([5c98608](https://github.com/casonadams/mpx/commit/5c98608b63a9d2a43158d9be515e7a5cddb1dab1))
+* **tui:** keep reprinted rows from leaving stale cells or covering the prompt ([f3c2809](https://github.com/casonadams/mpx/commit/f3c28093830ce0eb190ddaddd5b4702858a2a81d))
+* **tui:** pass the focused pane's cursor shape to the terminal ([068139b](https://github.com/casonadams/mpx/commit/068139bdaa514622316cb6e608cc3e42019a263e))
+* **tui:** redraw the status row once chrome over it closes ([715699a](https://github.com/casonadams/mpx/commit/715699a8300dc6ac8e471631db6fa74b51782b26))
+* **tui:** scroll the pane under the pointer with the wheel ([a59f650](https://github.com/casonadams/mpx/commit/a59f650a120a9ac45826ecc56e1cc99face879c0))
+* **tui:** size a zoomed pane to the window so clients stop resizing it in turn ([9b9e4af](https://github.com/casonadams/mpx/commit/9b9e4af3794361d6a2340996c862d3e05430acd0))
+* **vt:** make ED 3 clear scrollback instead of the screen ([68ebd1c](https://github.com/casonadams/mpx/commit/68ebd1cbef3f3613c6c660e632cac095da9170b9))
+* **vt:** render DEC special graphics line drawing ([ff3a6a5](https://github.com/casonadams/mpx/commit/ff3a6a5f993f1fb4c327ad94361fcbe99f32282b))
+
+
+### Performance Improvements
+
+* **daemon:** pace pane output that waits on a busy session ([953f23f](https://github.com/casonadams/mpx/commit/953f23f6634f2016582762465b6382944fdaba87))
+* **node,tui:** resize screens in place when a log replay would match ([662373d](https://github.com/casonadams/mpx/commit/662373d57632f2ca4ea8c69cec3923538b830c0d))
+* **tui:** catch up on missed output after a lag instead of rebuilding panes ([6802d84](https://github.com/casonadams/mpx/commit/6802d840f0dbe871372482cce9c109683aa5fa04))
+* **tui:** handle a burst of terminal resizes at its last size ([d645a11](https://github.com/casonadams/mpx/commit/d645a115e55b73c4e3c635c85034d3e75f2e48f4))
+* **tui:** report client activity once a second instead of before every key ([d075464](https://github.com/casonadams/mpx/commit/d075464422c9aa49bd78cb378e620e9406e3f7f5))
+
 ## [0.3.1](https://github.com/casonadams/mpx/compare/v0.3.0...v0.3.1) (2026-11-09)
 
 
