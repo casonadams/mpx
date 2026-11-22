@@ -3,7 +3,6 @@ use std::collections::{HashMap, HashSet};
 use super::state::{App, Mode};
 use crate::config::StatusPosition;
 use crate::keys::TermModes;
-use crate::layout::geometry::Rect;
 use crate::tui::panes::{sync_dims, zoomed_panes};
 use crate::tui::statusline;
 use crate::vt::VtScreen;
