@@ -3,7 +3,10 @@ use mpx::vt::VtScreen;
 fn rows_after(bytes: &str) -> Vec<String> {
     let mut vt = VtScreen::new(12, 3);
     vt.feed(bytes.as_bytes());
-    vt.snapshot().lines().map(|l| l.trim_end().to_owned()).collect()
+    vt.snapshot()
+        .lines()
+        .map(|l| l.trim_end().to_owned())
+        .collect()
 }
 
 #[test]

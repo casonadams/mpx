@@ -9,8 +9,8 @@ mod sgr;
 use vte::{Params, Perform};
 
 use super::grid::Grid;
-use charset::Charsets;
 use crate::keys::TermModes;
+use charset::Charsets;
 
 pub use screen::{Alert, VtScreen};
 

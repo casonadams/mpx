@@ -18,8 +18,16 @@ pub fn zoomed_panes(panes: &[PaneRect]) -> Vec<PaneRect> {
     ) else {
         return Vec::new();
     };
-    let right = panes.iter().map(|(_, r, _)| r.x + r.width).max().unwrap_or(left);
-    let bottom = panes.iter().map(|(_, r, _)| r.y + r.height).max().unwrap_or(top);
+    let right = panes
+        .iter()
+        .map(|(_, r, _)| r.x + r.width)
+        .max()
+        .unwrap_or(left);
+    let bottom = panes
+        .iter()
+        .map(|(_, r, _)| r.y + r.height)
+        .max()
+        .unwrap_or(top);
     let area = Rect::new(left, top, right - left, bottom - top);
     panes
         .iter()
