@@ -4,7 +4,7 @@ use mpx::layout::{Divider, Rect};
 use mpx::protocol::{NodeInfo, Side};
 use mpx::tui::panes::{
     BorderGrab, PaneRect, border_at, border_move, find_directional, neighbor_pane, pending_resizes,
-    resized_elsewhere, size_move, wrap_step,
+    resized_elsewhere, size_move, wrap_step, zoomed_panes,
 };
 
 fn pane(name: &str, width: u16, height: u16) -> PaneRect {
@@ -178,6 +178,20 @@ fn panes_resized_by_something_else_are_found_by_their_reported_size() {
     .map(|(name, size)| (name.to_string(), size))
     .collect();
     assert_eq!(resized_elsewhere(&sent, &nodes), ["changed"]);
+}
+
+#[test]
+fn a_zoomed_window_shows_its_focused_pane_over_the_area_its_panes_tile() {
+    let panes = vec![
+        ("left".to_string(), Rect::new(20, 1, 40, 19), false),
+        ("top".to_string(), Rect::new(61, 1, 39, 9), true),
+        ("bottom".to_string(), Rect::new(61, 11, 39, 9), false),
+    ];
+    assert_eq!(
+        zoomed_panes(&panes),
+        [("top".to_string(), Rect::new(20, 1, 80, 19), true)]
+    );
+    assert!(zoomed_panes(&[]).is_empty());
 }
 
 /// `a` fills the left column; `b` over `c` share the right one (a one-cell border between them).

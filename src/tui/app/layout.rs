@@ -4,7 +4,7 @@ use super::state::{App, Mode};
 use crate::config::StatusPosition;
 use crate::keys::TermModes;
 use crate::layout::geometry::Rect;
-use crate::tui::panes::sync_dims;
+use crate::tui::panes::{sync_dims, zoomed_panes};
 use crate::tui::statusline;
 use crate::vt::VtScreen;
 
@@ -49,19 +49,7 @@ impl App {
         self.refresh_outer((w, h));
         let shown_before: Vec<String> = self.panes.iter().map(|(name, ..)| name.clone()).collect();
         self.panes = if self.zoomed() {
-            // Zoomed: the focused pane alone fills the pane area.
-            self.layout
-                .raw
-                .iter()
-                .filter(|(.., focused)| *focused)
-                .map(|(name, ..)| {
-                    (
-                        name.clone(),
-                        Rect::new(0, rows.pane_top, w, rows.pane_h),
-                        true,
-                    )
-                })
-                .collect()
+            zoomed_panes(&self.layout.raw)
         } else {
             self.layout.raw.clone()
         };

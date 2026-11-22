@@ -10,7 +10,7 @@ use mpx::config::Config;
 use mpx::protocol::{ClientInfo, StreamEvent};
 use mpx::tui::app::AttachOpts;
 
-use super::support::{ECHO, Harness, MAIN, SESSION, open_app, run_line, wait_for};
+use super::support::{ECHO, Harness, MAIN, SESSION, SIZE, open_app, run_line, wait_for};
 
 const WAIT: Duration = Duration::from_secs(2);
 
@@ -94,6 +94,7 @@ async fn choose_client_lists_every_client_and_detaches_the_highlighted_one() {
         Config::default(),
         AttachOpts::default(),
         Some("other-client".into()),
+        SIZE,
     )
     .await;
     await_clients(&mut h.probe, 2).await;

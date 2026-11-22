@@ -3,12 +3,12 @@
 use crossterm::event::KeyCode;
 
 use mpx::config::Config;
-use mpx::tui::app::{Flow, Mode};
+use mpx::tui::app::{AttachOpts, Flow, Mode};
 
 use mpx::layout::Direction;
 
 use super::support::{
-    ECHO, Harness, MAIN, SESSION, SIZE, active_window, connect, split, wait_for, window,
+    ECHO, Harness, MAIN, SESSION, SIZE, active_window, connect, open_app, split, wait_for, window,
 };
 
 /// Default bindings that would spawn the user's shell, rebound to run `ECHO`.
@@ -194,6 +194,36 @@ async fn zoom_set_on_the_daemon_by_another_client_is_drawn() {
     h.frame().await;
     assert!(!h.app.zoomed());
     assert_eq!(h.app.panes.len(), 2);
+}
+
+#[tokio::test]
+async fn clients_of_different_sizes_give_a_zoomed_pane_one_size() {
+    let mut h = Harness::start_split(Config::default(), ECHO).await;
+    let (mut small, _events) = open_app(
+        &h.sandbox,
+        SESSION,
+        Config::default(),
+        AttachOpts::default(),
+        Some("small".into()),
+        (60, 20),
+    )
+    .await;
+    h.probe.zoom(None, Some(true)).await.expect("zoom");
+
+    let mut sizes = Vec::new();
+    for _ in 0..3 {
+        small.on_tick().await;
+        small.layout.dirty = true;
+        assert!(small.prepare_frame().await, "small client has panes");
+        sizes.push(h.probe.status(MAIN).await.expect("status").size);
+        h.app.on_tick().await;
+        h.frame().await;
+        sizes.push(h.probe.status(MAIN).await.expect("status").size);
+    }
+    assert!(
+        sizes.windows(2).all(|pair| pair[0] == pair[1]),
+        "the zoomed pane is resized back and forth: {sizes:?}"
+    );
 }
 
 #[tokio::test]

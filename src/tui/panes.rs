@@ -9,6 +9,25 @@ use crate::vt::{Grid, VtScreen};
 /// A visible pane: name, cell rectangle, focused.
 pub type PaneRect = (String, Rect, bool);
 
+/// The panes a zoomed window shows: its focused pane over the whole area its panes tile. That area
+/// is the window's size, which every client shares, so clients agree on the pane's terminal size.
+pub fn zoomed_panes(panes: &[PaneRect]) -> Vec<PaneRect> {
+    let (Some(left), Some(top)) = (
+        panes.iter().map(|(_, r, _)| r.x).min(),
+        panes.iter().map(|(_, r, _)| r.y).min(),
+    ) else {
+        return Vec::new();
+    };
+    let right = panes.iter().map(|(_, r, _)| r.x + r.width).max().unwrap_or(left);
+    let bottom = panes.iter().map(|(_, r, _)| r.y + r.height).max().unwrap_or(top);
+    let area = Rect::new(left, top, right - left, bottom - top);
+    panes
+        .iter()
+        .filter(|(.., focused)| *focused)
+        .map(|(name, ..)| (name.clone(), area, true))
+        .collect()
+}
+
 pub struct LayoutCache {
     pub dirty: bool,
     /// Columns left of the pane area; every rectangle and divider is shifted right by it.

@@ -292,6 +292,7 @@ async fn a_window_laid_out_smaller_than_this_client_blanks_the_rest() {
         small_config,
         AttachOpts::default(),
         Some("small".into()),
+        SIZE,
     )
     .await;
     small.report_size(60, 20).await;

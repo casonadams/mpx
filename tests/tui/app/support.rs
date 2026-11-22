@@ -85,20 +85,22 @@ impl Sandbox {
     }
 }
 
-/// Attaches an `App` to `session` of the sandbox's daemons, listed as `client_name` (the terminal's
-/// device path when `None`). The returned stream must stay alive while the app is used.
+/// Attaches an `App` with a terminal of `size` to `session` of the sandbox's daemons, listed as
+/// `client_name` (the terminal's device path when `None`). The returned stream must stay alive
+/// while the app is used.
 pub async fn open_app(
     sandbox: &Sandbox,
     session: &str,
     config: Config,
     attach: AttachOpts,
     client_name: Option<String>,
+    size: (u16, u16),
 ) -> (App, StreamRx) {
     let opts = AppOptions {
         config,
         config_path: None,
         socket_dir: sandbox.socket_dir.clone(),
-        size: Some(SIZE),
+        size: Some(size),
         attach,
         client_name,
     };
@@ -301,7 +303,7 @@ impl Harness {
         client_name: Option<String>,
     ) -> Self {
         let endpoint = sandbox.endpoint(session);
-        let (app, rx) = open_app(&sandbox, session, config, attach, client_name).await;
+        let (app, rx) = open_app(&sandbox, session, config, attach, client_name, SIZE).await;
         let probe = connect(&endpoint).await;
         let mut terminal = VtScreen::new(SIZE.0 as usize, SIZE.1 as usize);
         terminal.feed(b"\x1b[?7l");
