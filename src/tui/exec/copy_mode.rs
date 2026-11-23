@@ -36,14 +36,29 @@ impl App {
                 Flow::Continue
             };
         }
-        self.load_scrollback(&name).await;
-        let mut cs = CopyState::enter(self.vt.get(&name).map(|vt| vt.grid()));
-        cs.wheel_exit = o.exit_at_bottom;
-        self.put_copy(&name, cs);
+        self.enter_copy(&name, o.exit_at_bottom).await;
         if o.page_up {
             return self.run_copy(&name, &page_up, 1).await;
         }
         Flow::Continue
+    }
+
+    /// Gives pane `name` its scrollback and puts it in copy mode at its cursor, as `copy-mode`
+    /// does; `exit_at_bottom` (`-e`, the wheel) leaves it once scrolled back to the live screen. A
+    /// pane already in copy mode keeps its state, its selection anchor moved down by the history
+    /// loaded (a drag enters copy mode without any).
+    pub(crate) async fn enter_copy(&mut self, name: &str, exit_at_bottom: bool) {
+        let history_len = |app: &Self| app.vt.get(name).map_or(0, |vt| vt.grid().history_len());
+        let before = history_len(self);
+        self.load_scrollback(name).await;
+        let added = history_len(self).saturating_sub(before);
+        if let Some(cs) = self.copy_state_mut(name) {
+            cs.anchor_abs_y += added;
+            return;
+        }
+        let mut cs = CopyState::enter(self.vt.get(name).map(|vt| vt.grid()));
+        cs.wheel_exit = exit_at_bottom;
+        self.put_copy(name, cs);
     }
 
     /// Whether pane `name` is in copy mode in this terminal: focused in it, or parked.

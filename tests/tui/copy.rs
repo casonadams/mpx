@@ -188,22 +188,6 @@ fn wheel_down_scrolls_back_and_says_when_the_live_screen_shows() {
 }
 
 #[test]
-fn entering_by_wheel_scrolls_only_when_there_is_history() {
-    let mut grid = Grid::new(10, 5);
-    grid.newline();
-    grid.newline();
-    let no_history = CopyState::from_wheel(Some(&grid), 0);
-    assert_eq!(no_history.scroll_offset, 0);
-    assert_eq!(
-        no_history.cursor_y, 0,
-        "cursor row 2 moves up by a wheel step, saturating"
-    );
-    let with_history = CopyState::from_wheel(Some(&grid), 5);
-    assert_eq!(with_history.scroll_offset, WHEEL_STEP);
-    assert_eq!(with_history.cursor_y, 2);
-    assert_eq!(with_history.mode, SelectionKind::None);
-}
-#[test]
 fn find_next_match_finds_forward_and_backward_across_lines() {
     let mut grid = Grid::new(20, 3);
     for c in "foo first".chars() {

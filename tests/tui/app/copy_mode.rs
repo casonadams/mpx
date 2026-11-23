@@ -77,11 +77,9 @@ async fn mouse_wheel_scrolls_into_history() {
 
     h.mouse(MouseEventKind::ScrollUp, 5, 5).await;
     assert!(
-        h.frame().await.contains("COPY -0/0"),
-        "copy mode opens before its history"
+        h.frame().await.contains("COPY -3/"),
+        "the first notch already scrolls into history, as prefix [ has it"
     );
-    h.history_arrives().await;
-    assert!(h.frame().await.contains("COPY -3/"));
     h.mouse(MouseEventKind::ScrollUp, 5, 5).await;
     assert!(h.frame().await.contains("COPY -6/"));
     h.mouse(MouseEventKind::ScrollDown, 5, 5).await;
@@ -112,7 +110,6 @@ async fn the_wheel_scrolls_the_hovered_pane_and_leaves_focus_where_it_is() {
     let (col, row) = (main.x + 2, main.y + 2);
 
     h.mouse(MouseEventKind::ScrollUp, col, row).await;
-    h.history_arrives().await;
     assert!(h.frame().await.contains("COPY -3/"));
     h.mouse(MouseEventKind::ScrollUp, col, row).await;
     assert!(h.frame().await.contains("COPY -6/"));
@@ -146,8 +143,6 @@ async fn panes_scrolled_one_after_the_other_each_get_their_history() {
         .await;
     h.mouse(MouseEventKind::ScrollUp, main.x + 2, main.y + 2)
         .await;
-    h.history_arrives().await;
-    h.history_arrives().await;
     assert!(h.app.in_copy_mode(MAIN) && h.app.in_copy_mode("plain"));
     let frame = h.frame().await;
     assert!(frame.contains("COPY -6/"), "two notches on main\n{frame}");
@@ -193,7 +188,6 @@ async fn leaving_copy_mode_shows_output_that_arrived_meanwhile_without_scrollbac
     let mut h = Harness::started(&long_output()).await;
     h.frame().await;
     h.mouse(MouseEventKind::ScrollUp, 5, 5).await;
-    h.history_arrives().await;
     assert!(h.frame().await.contains("COPY -3/"));
 
     h.probe
@@ -219,7 +213,6 @@ async fn leaving_a_pane_in_copy_mode_keeps_its_view_and_returning_resumes_it() {
     h.frame().await;
     h.mouse(MouseEventKind::ScrollUp, 5, 5).await;
     h.mouse(MouseEventKind::ScrollUp, 5, 5).await;
-    h.history_arrives().await;
     assert!(h.frame().await.contains("COPY -6/"));
 
     split(&mut h.probe, MAIN, "plain", Direction::Horizontal).await;
@@ -250,7 +243,6 @@ async fn clicking_a_pane_in_copy_mode_keeps_its_scroll_and_selects_nothing() {
     let mut h = Harness::started(&long_output()).await;
     h.frame().await;
     h.mouse(MouseEventKind::ScrollUp, 5, 5).await;
-    h.history_arrives().await;
     assert!(h.frame().await.contains("COPY -3/"));
 
     h.mouse(MouseEventKind::Down(MouseButton::Left), 2, 2).await;
@@ -449,23 +441,6 @@ async fn copy_mode_after_a_respawn_shows_the_new_process_not_history_built_befor
 }
 
 #[tokio::test]
-async fn history_built_at_a_size_the_pane_no_longer_has_is_not_installed() {
-    let mut h = Harness::started(&long_output()).await;
-    h.frame().await;
-    h.mouse(MouseEventKind::ScrollUp, 5, 5).await;
-    split(&mut h.probe, MAIN, "below", Direction::Vertical).await;
-    h.frame().await;
-    let rect = h.rect_of(MAIN);
-    h.history_arrives().await;
-    let grid = h.app.vt[MAIN].grid();
-    assert_eq!(
-        (grid.cols, grid.rows),
-        (rect.width as usize, rect.height as usize),
-        "the pane's screen keeps the size it has"
-    );
-}
-
-#[tokio::test]
 async fn copy_mode_left_behind_in_another_window_gives_up_its_scrollback() {
     let mut h = Harness::started(&long_output()).await;
     h.frame().await;
@@ -524,48 +499,6 @@ async fn the_wheel_takes_the_history_built_ahead() {
     h.mouse(MouseEventKind::ScrollUp, 5, 5).await;
     assert!(!h.app.scrollback_warm());
     assert!(h.frame().await.contains("COPY -3/"));
-}
-
-#[tokio::test]
-async fn wheeling_back_down_before_the_history_arrives_leaves_copy_mode_and_drops_it() {
-    let mut h = Harness::started(&long_output()).await;
-    h.frame().await;
-    h.mouse(MouseEventKind::ScrollUp, 5, 5).await;
-    h.mouse(MouseEventKind::ScrollUp, 5, 5).await;
-    h.mouse(MouseEventKind::ScrollDown, 5, 5).await;
-    assert!(
-        matches!(h.app.mode, Mode::Copy(_)),
-        "one notch is still owed"
-    );
-    h.mouse(MouseEventKind::ScrollDown, 5, 5).await;
-    assert!(h.mode_is_normal());
-
-    h.history_arrives().await;
-    assert!(
-        h.mode_is_normal(),
-        "a history for a closed copy mode is dropped"
-    );
-    assert_eq!(history_of(&h), 0);
-}
-
-#[tokio::test]
-async fn a_selection_started_before_the_history_arrives_keeps_its_anchor() {
-    let mut h = Harness::started(&long_output()).await;
-    h.frame().await;
-    h.mouse(MouseEventKind::ScrollUp, 5, 5).await;
-    h.mouse(MouseEventKind::Down(MouseButton::Left), 0, 5).await;
-    h.mouse(MouseEventKind::Drag(MouseButton::Left), 5, 5).await;
-    h.history_arrives().await;
-
-    let Mode::Copy(cs) = &h.app.mode else {
-        panic!("still in copy mode");
-    };
-    let grid = h.app.active_vt().expect("vt").grid();
-    assert_eq!(
-        cs.anchor_abs_y,
-        grid.abs_line(5, 0),
-        "the anchor stays on the pressed row"
-    );
 }
 
 #[tokio::test]

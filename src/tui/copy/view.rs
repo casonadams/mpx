@@ -51,25 +51,6 @@ impl CopyState {
         self.cursor_y = local_y;
     }
 
-    /// Copy mode entered by the wheel from the pane's cursor. With scrollback the view scrolls
-    /// into history; without it the cursor moves up.
-    pub fn from_wheel(grid: Option<&Grid>, hist_len: usize) -> Self {
-        let (x, y, abs_y) = grid.map_or((0, 0, 0), |g| {
-            (g.cursor.x, g.cursor.y, g.abs_line(g.cursor.y, 0))
-        });
-        let cursor_y = if hist_len == 0 {
-            y.saturating_sub(WHEEL_STEP)
-        } else {
-            y
-        };
-        Self {
-            cursor_y,
-            scroll_offset: WHEEL_STEP.min(hist_len),
-            wheel_exit: true,
-            ..Self::fresh(x, y, abs_y)
-        }
-    }
-
     /// One wheel notch up: scroll into history while there is more of it, then move the cursor.
     pub fn wheel_up(&mut self, hist_len: usize) {
         if hist_len > 0 && self.scroll_offset < hist_len {

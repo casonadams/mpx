@@ -6,7 +6,7 @@ use super::app::{App, Flow, Mode};
 use super::command;
 use super::copy::CopyState;
 use super::mouse_menu::MouseMenu;
-use super::panes::{BorderGrab, border_at, border_move, has_scrollback};
+use super::panes::{BorderGrab, border_at, border_move};
 use crate::layout::geometry::Rect;
 
 /// Cell position inside `rect`, clamped to its edges.
@@ -333,43 +333,21 @@ impl App {
             .map_or_else(|| self.active_pane.clone(), |(name, _)| name)
     }
 
-    /// Scrolls the pane under the pointer into its history, entering copy mode there without
-    /// moving focus.
+    /// Scrolls the pane under the pointer into its history, entering copy mode there as
+    /// `copy-mode -e` does, without moving focus.
     async fn mouse_scroll_up(&mut self, col: u16, row: u16) {
         let name = self.wheel_target(col, row);
-        let in_copy = self.in_copy_mode(&name);
-        if in_copy && self.is_loading(&name) {
-            self.queue_wheel_up(&name);
-            return;
-        }
-        let ready = self.vt.get(&name).is_some_and(has_scrollback)
-            || (name == self.active_pane && self.scrollback_warm());
-        if !in_copy && !ready {
-            self.enter_copy_loading(&name);
-            return;
-        }
-        let history_len = |app: &Self| app.vt.get(&name).map_or(0, |vt| vt.grid().history_len());
-        let before = history_len(self);
-        self.load_scrollback(&name).await;
-        let hist_len = history_len(self);
+        self.enter_copy(&name, true).await;
+        let hist_len = self.vt.get(&name).map_or(0, |vt| vt.grid().history_len());
         if let Some(cs) = self.copy_state_mut(&name) {
-            cs.anchor_abs_y += hist_len.saturating_sub(before);
             cs.wheel_up(hist_len);
-            return;
         }
-        let grid = self.vt.get(&name).map(|vt| vt.grid());
-        let cs = CopyState::from_wheel(grid, hist_len);
-        self.put_copy(&name, cs);
     }
 
     /// Scrolls the copy mode of the pane under the pointer back toward the live screen, leaving it
-    /// on arrival when the wheel entered it. A notch up still waiting for its history is taken
-    /// back first.
+    /// on arrival when the wheel entered it.
     fn mouse_scroll_down(&mut self, col: u16, row: u16) {
         let name = self.wheel_target(col, row);
-        if self.unqueue_wheel_up(&name) {
-            return;
-        }
         if let Some(cs) = self.copy_state_mut(&name)
             && cs.wheel_down()
             && cs.wheel_exit

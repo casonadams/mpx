@@ -1,12 +1,10 @@
 //! Scrollback built off the event loop. A pane's history is its log replayed through the parser,
 //! which takes long enough on a large log to stall the first scroll or `copy-mode`. The focused
 //! pane's history is replayed on a blocking thread while it is idle, and copy mode takes it and
-//! feeds only the output since. A wheel scroll that finds none ready enters copy mode at once on
-//! the screen it has and builds the history the same way, applying the queued scroll on arrival.
+//! feeds only the output since.
 use tokio::task::JoinHandle;
 
 use super::app::{App, Mode};
-use super::copy::CopyState;
 use super::panes::{has_scrollback, load_pane};
 use super::stream::{CATCH_UP_MAX, DEFAULT_SIZE};
 use crate::client::Client;
@@ -52,20 +50,6 @@ impl Warm {
     fn is_for(&self, name: &str, size: (u16, u16)) -> bool {
         self.name == name && self.size == size
     }
-}
-
-/// A finished history build for a pane in copy mode.
-pub struct Loaded {
-    name: String,
-    id: u64,
-    built: Built,
-}
-
-/// A history being built for a pane in copy mode: which build it waits for, and the wheel notches
-/// up it owes once that arrives.
-pub struct Loading {
-    id: u64,
-    pending: usize,
 }
 
 impl App {
@@ -146,119 +130,17 @@ impl App {
         true
     }
 
-    /// Enters copy mode for a wheel scroll on the screen the pane has now, and builds its history
-    /// in the background. The notch waits in `loading` and is applied by `finish_history`.
-    pub(super) fn enter_copy_loading(&mut self, name: &str) {
-        let size = self.pane_dims.get(name).copied().unwrap_or(DEFAULT_SIZE);
-        let task = build(
-            &self.endpoint,
-            name,
-            size,
-            self.config.session.scrollback_lines,
-        );
-        let (tx, pane) = (self.history_tx.clone(), name.to_string());
-        self.history_builds += 1;
-        let id = self.history_builds;
-        tokio::spawn(async move {
-            let built = task.await.ok().flatten();
-            let _ = tx.send(Loaded {
-                name: pane,
-                id,
-                built,
-            });
-        });
-        let mut cs = CopyState::enter(self.vt.get(name).map(|vt| vt.grid()));
-        cs.wheel_exit = true;
-        self.put_copy(name, cs);
-        self.loading
-            .insert(name.to_string(), Loading { id, pending: 1 });
-    }
-
-    /// Whether the history of `name`, in copy mode, is still being built.
-    pub(super) fn is_loading(&self, name: &str) -> bool {
-        self.loading.contains_key(name)
-    }
-
-    /// Holds one more wheel notch up for the history being built for `name`.
-    pub(super) fn queue_wheel_up(&mut self, name: &str) {
-        if let Some(loading) = self.loading.get_mut(name) {
-            loading.pending += 1;
-        }
-    }
-
-    /// Takes back one notch queued for `name` for a notch down. False when none is left to take
-    /// back, so the notch scrolls to the live screen as usual.
-    pub(super) fn unqueue_wheel_up(&mut self, name: &str) -> bool {
-        match self.loading.get_mut(name) {
-            Some(loading) if loading.pending > 1 => {
-                loading.pending -= 1;
-                true
-            }
-            Some(loading) => {
-                loading.pending = 0;
-                false
-            }
-            None => false,
-        }
-    }
-
-    /// Forgets the history being built for `name`: its copy mode ended before it arrived.
-    pub(super) fn cancel_loading(&mut self, name: &str) {
-        self.loading.remove(name);
-    }
-
     /// Forgets every history built or being built for pane `name`: its process or its log is no
     /// longer the one they were built from (respawned, exited, or another session's pane).
     pub(super) fn forget_history(&mut self, name: &str) {
-        self.loading.remove(name);
         self.warm.take_if(|w| w.name == name);
         self.warm_next.take_if(|w| w.name == name);
     }
 
     /// Forgets the histories of every pane, as a switch to another session does.
     pub(super) fn forget_all_history(&mut self) {
-        self.loading.clear();
         self.released.clear();
         self.warm = None;
         self.warm_next = None;
-    }
-
-    /// Gives the pane in copy mode, focused or not, the history that just arrived: its screen is
-    /// replaced, the selection anchor moves down by the history added, and the queued notches
-    /// scroll back. A history from an earlier build, or built at a size the pane no longer has, is
-    /// dropped; the next notch loads one.
-    pub fn finish_history(&mut self, loaded: Loaded) {
-        if self
-            .loading
-            .get(&loaded.name)
-            .is_none_or(|loading| loading.id != loaded.id)
-        {
-            return;
-        }
-        let Some(Loading { pending, .. }) = self.loading.remove(&loaded.name) else {
-            return;
-        };
-        let Some((screen, next)) = loaded.built else {
-            return;
-        };
-        let size = self
-            .pane_dims
-            .get(&loaded.name)
-            .copied()
-            .unwrap_or(DEFAULT_SIZE);
-        let grid = screen.grid();
-        if (grid.cols, grid.rows) != (size.0 as usize, size.1 as usize) {
-            return;
-        }
-        let Some(cs) = self.copy_state_mut(&loaded.name) else {
-            return;
-        };
-        let hist_len = screen.grid().history_len();
-        cs.anchor_abs_y += hist_len;
-        for _ in 0..pending {
-            cs.wheel_up(hist_len);
-        }
-        self.vt.insert(loaded.name.clone(), screen);
-        self.expected.insert(loaded.name, next);
     }
 }

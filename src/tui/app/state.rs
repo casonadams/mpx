@@ -23,7 +23,7 @@ use crate::tui::prompt::PromptRun;
 use crate::tui::render::{HostColors, copy_to_clipboard};
 use crate::tui::status::{local_utc_offset, time_of_day};
 use crate::tui::statusline::{self, Rows, Target};
-use crate::tui::warm::{Loaded, Loading, Warm};
+use crate::tui::warm::Warm;
 use crate::vt::VtScreen;
 
 /// Initial screen when attaching.
@@ -92,13 +92,6 @@ pub struct App {
     pub warm: Option<Warm>,
     /// A newer history building beside `warm` while that one is still in use.
     pub warm_next: Option<Warm>,
-    /// Panes in copy mode whose history is being built (see `warm`).
-    pub loading: HashMap<String, Loading>,
-    /// History builds started for `loading`, so each build is told from earlier ones.
-    pub history_builds: u64,
-    /// Histories built for panes in copy mode arrive here (see `warm`).
-    pub history_tx: mpsc::UnboundedSender<Loaded>,
-    pub history_rx: UnboundedReceiver<Loaded>,
     pub layout: LayoutCache,
     /// Terminal width and height available to panes (status row excluded).
     pub viewport: (u16, u16),
@@ -325,7 +318,6 @@ impl App {
         opts: AppOptions,
     ) -> Self {
         let (jobs, job_rx) = unbounded_channel();
-        let (history_tx, history_rx) = unbounded_channel();
         App {
             endpoint: endpoint.to_string(),
             session: session.to_string(),
@@ -341,10 +333,6 @@ impl App {
             expected: HashMap::new(),
             warm: None,
             warm_next: None,
-            loading: HashMap::new(),
-            history_builds: 0,
-            history_tx,
-            history_rx,
             layout: LayoutCache::new(),
             viewport: (80, 23),
             rows: statusline::rows(24, 1, false),
