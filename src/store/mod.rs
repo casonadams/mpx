@@ -1,5 +1,6 @@
-//! State that outlives the daemon: session snapshots (restore after a crash or reboot) and
-//! durable pipes. Lives under the state directory, not the runtime directory, which is wiped on reboot.
+//! State that outlives the daemon: session snapshots and pane scrollback (restore after a crash or
+//! reboot) and durable pipes. Lives under the state directory, not the runtime directory, which is
+//! wiped on reboot.
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -8,11 +9,13 @@ use crate::protocol::{EnvEntry, SpawnOpts};
 
 mod files;
 mod restore;
+mod scrollback;
 mod session_id;
 mod snapshot;
 
 pub use files::{adopt_legacy_dir, component, state_dir_with};
 pub use restore::plan_restore;
+pub use scrollback::{PaneScrollback, ScrollbackStore};
 pub use session_id::{
     claude_session_id, lookup as lookup_session_id, omp_session_id, rho_session_id,
 };

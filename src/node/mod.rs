@@ -43,6 +43,8 @@ pub struct SpawnSpec {
     pub term: String,
     /// Scrollback lines a pane keeps for captures (tmux `history-limit`).
     pub scrollback: usize,
+    /// Output the pane shows before its process writes: scrollback restored from a snapshot.
+    pub restored: Vec<u8>,
 }
 
 /// Resolves at `at`, or never without a deadline: a `select!` arm for an optional timer.

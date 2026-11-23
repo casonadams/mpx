@@ -303,3 +303,23 @@ fn tail_returns_the_newest_bytes_across_a_wrapped_ring() {
     assert_eq!(rb.tail(100), b"cdefghij", "fewer bytes held than asked for");
     assert!(rb.tail(0).is_empty());
 }
+
+#[test]
+fn a_line_tail_starts_on_a_line_unless_it_holds_all_output() {
+    let cases: [(&str, &[&[u8]], usize, &[u8]); 4] = [
+        ("whole output", &[b"\x1b[1mab\ncd"], 100, b"\x1b[1mab\ncd"),
+        ("cut inside a line", &[b"ab\ncd\nef"], 4, b"ef"),
+        ("cut at a line start", &[b"ab\ncd\nef"], 5, b"cd\nef"),
+        ("no newline to start at", &[b"abcdef"], 3, b"def"),
+    ];
+    for (case, writes, n, expected) in cases {
+        let ring = ring_with(64, writes);
+        assert_eq!(ring.line_tail(n), expected, "{case}");
+    }
+    let ring = ring_with(4, &[b"ab\ncdef"]);
+    assert_eq!(
+        ring.line_tail(100),
+        b"cdef",
+        "the ring dropped older output, so its oldest byte is not the first written"
+    );
+}

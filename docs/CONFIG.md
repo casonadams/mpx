@@ -19,7 +19,7 @@ remain_on_exit = false  # panes stay on screen after exit: false, true, or "fail
 history_limit = 64      # exited, removed panes whose logs stay readable
 scrollback_lines = 100000  # lines of scrollback per pane for captures (tmux history-limit)
 allow_passthrough = true # passthrough from active pane: true, false, or "all" (every pane shown)
-restore = true          # when a session starts, recreate its last layout and resume processes
+restore = true          # when a session starts, recreate its last layout, pane output and processes
 which_key_delay_ms = 300  # wait after the prefix key before showing the shortcut popup (0 = at once)
 display_panes_time_ms = 1000  # how long display-panes numbers stay up (0 = until a key)
 automatic_rename = true  # name windows after their foreground process
@@ -88,7 +88,7 @@ fallback = ["nvim", "-c", "silent! source Session.vim"]
 | `remain_on_exit` | `true`, `false`, or `"failed"` | `false` | Daemon | Keep a pane on screen after its process exits until it is closed. `"failed"` keeps only panes that exited with a non-zero status (or by a signal). |
 | `history_limit` | integer | `64` | Daemon | Number of exited and removed panes whose output buffers remain readable via CLI. |
 | `allow_passthrough` | `true`, `false`, or `"all"` | `true` | TUI | `true` lets terminal passthrough sequences (DCS tmux passthrough, OSC 4/10/11/12/52) from the active pane reach the host terminal. `"all"` lets them from every pane the terminal shows; `false` blocks them. |
-| `restore` | bool | `true` | Daemon | On startup, automatically restore the last saved session layout and resume registered processes, however the previous run ended. `mpx --no-restore` skips it for one start. |
+| `restore` | bool | `true` | Daemon | On startup, automatically restore the last saved session layout, show each terminal pane's saved output, and resume registered processes, however the previous run ended. While on, each running terminal pane's newest output (up to 2 MB) is saved to the state directory with every snapshot and at most every 5 seconds; `false` stops that and deletes the saved output. `mpx --no-restore` skips the restore for one start. |
 | `which_key_delay_ms` | integer | `300` | TUI | Milliseconds to wait after pressing the prefix before displaying the which-key HUD popup (`0` displays immediately). |
 | `display_panes_time_ms` | integer | `1000` | TUI | Milliseconds the `display-panes` numbers stay on screen before they go away (`0` keeps them until a key is pressed). |
 | `scrollback_lines` | integer | `100000` | Daemon | Lines of scrollback each pane keeps for captures (`capture-pane`, `logs --plain`) and in the terminal's copy mode, for panes started after the setting. The pane's output log grows beyond its 2 MB minimum to hold that many lines, up to 64 MB. Unlike `history_limit`, which counts exited panes. |

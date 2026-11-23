@@ -1,5 +1,6 @@
-//! Restoring a saved snapshot: the panes are spawned again, their windows rebuilt from the part of
-//! each layout that survived, and linked windows shown at their restored indices.
+//! Restoring a saved snapshot: the panes are spawned again with their saved scrollback, their
+//! windows rebuilt from the part of each layout that survived, and linked windows shown at their
+//! restored indices.
 
 use tracing::warn;
 
@@ -127,7 +128,8 @@ impl Session {
     fn spawn_restored(&mut self, opts: &SpawnOpts) -> Result<(), String> {
         self.check_name(&opts.name)?;
         let id = self.next_pane_id;
-        let handle = self.spawn_pane(&opts.name, id, opts, opts.cwd.clone())?;
+        let restored = self.restored_scrollback(&opts.name);
+        let handle = self.spawn_pane(&opts.name, id, opts, opts.cwd.clone(), restored)?;
         self.next_pane_id += 1;
         self.register(opts.name.clone(), handle, opts.clone());
         Ok(())

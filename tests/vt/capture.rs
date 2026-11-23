@@ -1,5 +1,6 @@
+use mpx::keys::TermModes;
 use mpx::vt::VtScreen;
-use mpx::vt::capture::{CaptureLine, CaptureSpec, capture_text};
+use mpx::vt::capture::{CaptureLine, CaptureSpec, capture_text, restored_scrollback};
 
 fn screen(cols: usize, rows: usize, bytes: &str) -> VtScreen {
     let mut vt = VtScreen::new(cols, rows);
@@ -110,4 +111,45 @@ fn escapes_keep_the_underline_style_and_colour() {
         ..CaptureSpec::default()
     };
     assert_eq!(text(&vt, escaped), "\x1b[0;4:3;58;2;1;2;3mW\x1b[0m\n");
+}
+
+fn restored(log: &str, cols: usize, rows: usize) -> String {
+    String::from_utf8(restored_scrollback(log.as_bytes(), (cols, rows), 1_000)).unwrap()
+}
+
+#[test]
+fn restored_scrollback_is_the_history_and_screen_as_colored_lines_without_trailing_blanks() {
+    let log = "one\r\n\x1b[31mred\x1b[0m\r\nthree";
+    assert_eq!(
+        restored(log, 10, 2),
+        "one\r\n\x1b[0;31mred\x1b[0m\r\nthree\r\n"
+    );
+    assert_eq!(restored("top\r\n", 10, 5), "top\r\n");
+    assert_eq!(restored("", 10, 5), "");
+}
+
+#[test]
+fn restored_scrollback_leaves_the_writers_modes_queries_and_alternate_screen_behind() {
+    let log = "kept\r\nmore\r\nlast\r\n\x1b[?1000h\x1b[?2004h\x1b[6n\x1b[?1049hvim screen";
+    let seed = restored(log, 10, 2);
+    assert_eq!(
+        seed, "kept\r\nmore\r\n",
+        "the alternate screen is not history"
+    );
+
+    let mut fresh = VtScreen::new(10, 4);
+    fresh.feed(seed.as_bytes());
+    assert!(fresh.take_responses().is_empty(), "no query is answered");
+    assert_eq!(fresh.modes(), TermModes::default());
+    assert!(!fresh.grid().alternate_screen());
+    assert_eq!(restored("\x1b[?1049hvim", 10, 2), "", "no history to keep");
+}
+
+#[test]
+fn restored_scrollback_joins_wrapped_lines_so_they_reflow_at_a_new_width() {
+    let seed = restored("abcdefgh\r\nnext", 4, 4);
+    assert_eq!(seed, "abcdefgh\r\nnext\r\n");
+    let mut wider = VtScreen::new(10, 3);
+    wider.feed(seed.as_bytes());
+    assert_eq!(wider.scrollback_text(None), "abcdefgh\nnext");
 }

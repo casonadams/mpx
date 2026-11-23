@@ -217,11 +217,13 @@ In the TUI, a foreground `run-shell`, `if-shell` or `wait-for` does not block th
 
 The daemon saves an atomic snapshot of the session's layout whenever it changes: windows, splits, focus, window names, the session environment, and each pane's command, working directory, and environment.
 
+While `restore` is on, it also saves each running terminal pane's newest output (up to 2 MB) under `scrollback/` in the session's state directory: with every snapshot and at most every 5 seconds while panes write. A restored pane shows that output, as text and colors, above its new process's output, so scrollback, copy mode and `capture-pane` reach it. Output written after the last save is lost on a reboot or power loss. The files hold whatever the panes printed; `restore = false` stops saving them and deletes them at the next save.
+
 Earlier versions named the default session `main`. The first plain `mpx` moves a saved `main` state to `0`, unless a `main` daemon is still running; stop it with `mpx kill-server -s main` first.
 
 - **Whenever a session's daemon starts** (`mpx`, or any command that auto-starts it), it restores the last saved layout, whether the previous run ended in a crash, a reboot, or `kill-server`. Disable with `restore = false`.
 - **For a brand new state**, start with `mpx --no-restore`. The old snapshot is replaced as soon as the new session saves.
-- `mpx restore` replays the snapshot on demand, for example when `restore = false`.
+- `mpx restore` replays the snapshot on demand, for example when `restore = false` (without saved output, which `restore = false` does not keep).
 
 ### Process Resumption
 Panes restore in their recorded working directory (`cwd`):

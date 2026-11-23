@@ -168,6 +168,19 @@ impl RingBuffer {
         out
     }
 
+    /// The newest `n` retained bytes (at most), from the start of a line: unless they are all the
+    /// output ever written, they start past a newline, not inside a line or a sequence.
+    pub fn line_tail(&self, n: usize) -> Vec<u8> {
+        let tail = self.tail(n.saturating_add(1));
+        if tail.len() <= n && tail.len() as u64 == self.written {
+            return tail;
+        }
+        match tail.iter().position(|&b| b == b'\n') {
+            Some(at) => tail[at + 1..].to_vec(),
+            None => tail[tail.len().saturating_sub(n)..].to_vec(),
+        }
+    }
+
     pub fn snapshot_str(&self) -> String {
         lossy(self.snapshot())
     }

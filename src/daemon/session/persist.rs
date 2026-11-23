@@ -24,7 +24,8 @@ impl Session {
         }
     }
 
-    /// Writes the snapshot. An unclean save is dropped once shutdown has begun.
+    /// Writes the snapshot, then the scrollback its panes have to restore. An unclean save is
+    /// dropped once shutdown has begun.
     pub(super) async fn save(&mut self, clean: bool) {
         if self.shutting_down && !clean {
             return;
@@ -33,6 +34,13 @@ impl Session {
         if let Err(e) = self.snapshots.save(&snapshot) {
             warn!("could not save session snapshot: {}", e);
         }
+        self.flush_scrollback().await;
+        let panes = snapshot
+            .windows
+            .iter()
+            .flat_map(|window| window.panes.iter().map(|pane| pane.name.clone()))
+            .collect();
+        self.retain_scrollback(panes);
     }
 
     async fn snapshot(&self, clean: bool) -> SessionSnapshot {

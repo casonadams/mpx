@@ -93,6 +93,7 @@ The window is laid out for the clients the `window_size` option names: `latest` 
 The daemon continuously and atomically snapshots your workspace. Every time a session starts (a plain `mpx` after a crash, a reboot or `mpx kill-server`), it brings back:
 - All windows, split layouts, and pane proportions.
 - Each pane's active working directory (`cwd`).
+- Each terminal pane's recent output (its newest ~2 MB), so scrollback and copy mode show what was there. It is written to the state directory every few seconds, so a reboot or power loss can lose the last seconds of output. `restore = false` turns this off and deletes the saved output.
 - Config-driven process resumption for tools running in your panes:
   - Claude Code: resumes with `claude --resume {id}` or `claude --continue`.
   - oh-my-pi: resumes with `omp --restore {id}` or `omp --continue`.

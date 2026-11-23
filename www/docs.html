@@ -114,7 +114,7 @@ remain_on_exit = false  # Keep panes open after child process terminates (or "fa
 history_limit = 64      # Number of dead panes kept in log history
 scrollback_lines = 100000  # Scrollback lines per pane (tmux history-limit)
 allow_passthrough = true # Forward DCS tmux and OSC 52 clipboard sequences (or "all")
-restore = true          # Recreate layout and resume processes across restarts
+restore = true          # Recreate layout, pane output and processes across restarts
 which_key_delay_ms = 300  # HUD popup delay (0 = instant)
 display_panes_time_ms = 1000  # display-panes numbers stay up this long (0 = until a key)
 
@@ -170,7 +170,7 @@ fallback = ["nvim", "-c", "silent! source Session.vim"]</code></pre>
             <tr><td><code>default_terminal</code></td><td>string</td><td><code>"xterm-256color"</code></td><td>Daemon</td><td><code>TERM</code> for panes started afterwards.</td></tr>
             <tr><td><code>default_shell</code></td><td>string</td><td>unset (<code>$SHELL</code>)</td><td>Daemon</td><td>Program run by a pane started without a command; an absolute path.</td></tr>
             <tr><td><code>default_command</code></td><td>string</td><td>unset</td><td>Daemon</td><td>Command run through the default shell by a pane started without a command.</td></tr>
-            <tr><td><code>restore</code></td><td>bool</td><td><code>true</code></td><td>Daemon</td><td>Automatically restore saved session layout and resume registered processes on startup.</td></tr>
+            <tr><td><code>restore</code></td><td>bool</td><td><code>true</code></td><td>Daemon</td><td>Automatically restore saved session layout, show each terminal pane's saved output, and resume registered processes on startup. While on, each pane's newest output (up to 2 MB) is saved to the state directory every few seconds; <code>false</code> stops that and deletes it.</td></tr>
             <tr><td><code>which_key_delay_ms</code></td><td>integer</td><td><code>300</code></td><td>TUI</td><td>Milliseconds to wait after prefix before showing shortcut HUD popup (0 = instant).</td></tr>
             <tr><td><code>display_panes_time_ms</code></td><td>integer</td><td><code>1000</code></td><td>TUI</td><td>Milliseconds the display-panes numbers stay up (0 = until a key is pressed).</td></tr>
             <tr><td><code>base_index</code></td><td>integer</td><td><code>0</code></td><td>TUI</td><td>Number of the first window (tmux <code>base-index</code>): tabs, Prefix digits and <code>#{window_index}</code>.</td></tr>
@@ -207,7 +207,7 @@ fallback = ["nvim", "-c", "silent! source Session.vim"]</code></pre>
 
     <section id="restore">
       <h2>Session Restore</h2>
-      <p>The daemon snapshots each session's layout as it changes. Every time a session starts, it brings back the windows, splits, and working directories, and tools resume their sessions through configured <code>[[resume]]</code> rules, whether the last run ended in a crash, a reboot, or <code>mpx kill-server</code>. Start with <code>mpx --no-restore</code> for a brand new state.</p>
+      <p>The daemon snapshots each session's layout as it changes. Every time a session starts, it brings back the windows, splits, working directories and each terminal pane's recent output, and tools resume their sessions through configured <code>[[resume]]</code> rules, whether the last run ended in a crash, a reboot, or <code>mpx kill-server</code>. Start with <code>mpx --no-restore</code> for a brand new state.</p>
     </section>
 
     <hr>

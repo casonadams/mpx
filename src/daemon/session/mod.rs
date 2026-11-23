@@ -16,6 +16,7 @@ mod registry;
 mod restore;
 mod route;
 mod script;
+mod scrollback;
 mod spawn;
 mod subscribers;
 mod windows;
@@ -46,7 +47,7 @@ use crate::node::pane::{self, Notifier, PaneHandle, PaneNotice};
 use crate::node::sink::Sink;
 use crate::node::sleep_until_opt;
 use crate::protocol::{ChannelOp, PaneId, Request, Response, SpawnOpts, StreamEvent};
-use crate::store::SnapshotStore;
+use crate::store::{ScrollbackStore, SnapshotStore};
 use crate::tui::command::Command;
 
 pub(super) type Reply<T> = oneshot::Sender<T>;
@@ -73,6 +74,9 @@ pub(super) async fn ask_req(
 
 /// How often the session drops clients whose connection ended, so the others see the new size.
 const CLIENT_CHECK: Duration = Duration::from_secs(1);
+
+/// How often the output panes wrote since the last save is written to disk, at most.
+const SCROLLBACK_FLUSH: Duration = Duration::from_secs(5);
 
 /// Where a request came from. A hook's own requests fire no hooks, so a hook cannot loop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -204,6 +208,7 @@ enum Placement {
 enum Next {
     Msg(SessionMsg),
     Save,
+    FlushScrollback,
     Silence,
     Clients,
     Closed,
@@ -236,6 +241,7 @@ struct Session {
     pending: Vec<(String, Option<u64>, Sink)>,
     idem: IdemCache<Response>,
     snapshots: SnapshotStore,
+    scrollback: scrollback::ScrollbackWriter,
     stores: Stores,
     save_due: Option<Instant>,
     shutting_down: bool,
@@ -288,6 +294,7 @@ pub(super) async fn run(boot: Boot, mut rx: mpsc::UnboundedReceiver<SessionMsg>)
         pending: Vec::new(),
         idem: IdemCache::default(),
         snapshots: SnapshotStore::in_dir(&state_dir),
+        scrollback: scrollback::ScrollbackWriter::spawn(ScrollbackStore::in_dir(&state_dir)),
         stores: Stores::default(),
         save_due: None,
         shutting_down: false,
@@ -296,14 +303,18 @@ pub(super) async fn run(boot: Boot, mut rx: mpsc::UnboundedReceiver<SessionMsg>)
     let _ = ready.send(());
 
     let mut client_check = tokio::time::interval(CLIENT_CHECK);
+    let mut scrollback_flush =
+        tokio::time::interval_at(Instant::now() + SCROLLBACK_FLUSH, SCROLLBACK_FLUSH);
+    scrollback_flush.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
-        let next = next_event(&session, &mut rx, &mut client_check).await;
+        let next = next_event(&session, &mut rx, &mut client_check, &mut scrollback_flush).await;
         match next {
             Next::Msg(msg) => session.handle(msg).await,
             Next::Save => {
                 session.save_due = None;
                 session.save(false).await;
             }
+            Next::FlushScrollback => session.flush_scrollback().await,
             Next::Silence => session.expire_silence(),
             Next::Clients => session.check_clients(),
             Next::Closed => break,
@@ -311,17 +322,20 @@ pub(super) async fn run(boot: Boot, mut rx: mpsc::UnboundedReceiver<SessionMsg>)
     }
 }
 
-/// Waits for the next message, the save deadline, the silence deadline or the client check.
+/// Waits for the next message, the save deadline, the silence deadline, the client check or the
+/// scrollback flush.
 async fn next_event(
     session: &Session,
     rx: &mut mpsc::UnboundedReceiver<SessionMsg>,
     client_check: &mut tokio::time::Interval,
+    scrollback_flush: &mut tokio::time::Interval,
 ) -> Next {
     tokio::select! {
         msg = rx.recv() => msg.map_or(Next::Closed, Next::Msg),
         () = sleep_until_opt(session.save_due) => Next::Save,
         () = sleep_until_opt(session.silence_due()) => Next::Silence,
         _ = client_check.tick() => Next::Clients,
+        _ = scrollback_flush.tick() => Next::FlushScrollback,
     }
 }
 

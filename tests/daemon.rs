@@ -22,6 +22,7 @@ mod daemon {
     mod prompt;
     mod renumber;
     mod rotate;
+    mod scrollback;
     mod snapshot;
     mod state;
     mod stream;

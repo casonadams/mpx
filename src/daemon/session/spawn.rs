@@ -44,7 +44,7 @@ impl Session {
             Some(cwd) => Some(cwd),
             None => self.anchor_cwd(anchor).await.or_else(current_dir),
         };
-        let handle = self.spawn_pane(&name, id, &opts, cwd)?;
+        let handle = self.spawn_pane(&name, id, &opts, cwd, Vec::new())?;
         if let Err(e) = self.place(&name, place) {
             drop(handle.request_kill());
             return Err(e);
@@ -131,12 +131,14 @@ impl Session {
         opts.args = args;
     }
 
+    /// Starts pane `name`; it shows `restored` before its process writes.
     pub(super) fn spawn_pane(
         &self,
         name: &str,
         id: PaneId,
         opts: &SpawnOpts,
         cwd: Option<String>,
+        restored: Vec<u8>,
     ) -> Result<PaneHandle, String> {
         let identity = PaneIdentity {
             endpoint: &self.endpoint,
@@ -156,6 +158,7 @@ impl Session {
             env_remove,
             term: self.config.session.default_terminal.clone(),
             scrollback: self.config.session.scrollback_lines,
+            restored,
         };
         let ctx = PaneCtx {
             notify: Arc::clone(&self.notifier),
@@ -197,7 +200,7 @@ impl Session {
         }
         let id = if exited { old_id } else { self.next_pane_id };
         let spawn_cwd = opts.cwd.clone().or_else(current_dir);
-        let handle = match self.spawn_pane(&name, id, &opts, spawn_cwd) {
+        let handle = match self.spawn_pane(&name, id, &opts, spawn_cwd, Vec::new()) {
             Ok(handle) => handle,
             Err(e) => return Response::Error(e),
         };

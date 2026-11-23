@@ -96,6 +96,8 @@ pub struct PaneActor {
     resized_at: Option<u64>,
     /// The retained output replayed with scrollback; `None` until first needed and after a resize.
     replay: Option<Replay>,
+    /// Output offset up to which the retained output was last handed out to be saved.
+    saved_at: u64,
     probed: Option<Probed>,
     /// `None` while running, `Some(code)` once exited.
     exit: Option<Option<i32>>,
@@ -121,6 +123,10 @@ impl PaneActor {
             format!("{} {}", spec.command, spec.args.join(" "))
         };
         let started_ms = now_ms();
+        let mut ring = RingBuffer::for_scrollback(spec.scrollback);
+        let mut screen = VtScreen::live(80, 24);
+        ring.write(&spec.restored);
+        screen.feed(&spec.restored);
         Self {
             inflight: Arc::default(),
             name: spec.name.clone(),
@@ -132,12 +138,13 @@ impl PaneActor {
             started_ms,
             process: Some(process),
             terminal,
-            ring: RingBuffer::for_scrollback(spec.scrollback),
+            ring,
             scrollback: spec.scrollback,
-            screen: VtScreen::live(80, 24),
+            screen,
             utf8: Utf8Stream::default(),
             last_output_ms: started_ms,
             replay: None,
+            saved_at: 0,
             resized_from: None,
             resized_at: None,
             probed: None,
@@ -193,6 +200,9 @@ impl PaneActor {
             }
             PaneMsg::Capture { spec, reply } => {
                 let _ = reply.send(self.capture(&spec));
+            }
+            PaneMsg::UnsavedScrollback { reply } => {
+                let _ = reply.send(self.unsaved_scrollback());
             }
             PaneMsg::Cwd { reply } => {
                 let _ = reply.send(self.cwd());
@@ -352,6 +362,19 @@ impl PaneActor {
     /// The history and screen `capture-pane` reads from.
     fn capture(&mut self, spec: &CaptureSpec) -> String {
         capture_text(self.replay().grid(), spec)
+    }
+
+    /// The newest `RING_CAPACITY` bytes of output, from a line start, with the screen size, when
+    /// output arrived since they were last handed out.
+    fn unsaved_scrollback(&mut self) -> Option<(Vec<u8>, (u16, u16))> {
+        let written = self.ring.total_written();
+        if written == self.saved_at {
+            return None;
+        }
+        self.saved_at = written;
+        let grid = self.screen.grid();
+        let size = (grid.cols as u16, grid.rows as u16);
+        Some((self.ring.line_tail(RING_CAPACITY), size))
     }
 
     fn info(&mut self, full: bool) -> NodeInfo {

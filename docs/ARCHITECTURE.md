@@ -77,6 +77,7 @@ State that outlives the daemon lives in the state directory (`$XDG_STATE_HOME/mp
   - If the daemon starts and finds a snapshot (after a crash, a reboot or `kill-server`), it restores the layout before accepting clients, unless `restore = false` or the daemon was started with `--no-restore`.
   - PTY panes re-run their command in their last directory. Panes matching `[[resume]]` rules expand their resume command or fallback (e.g. `claude --resume {id}`, `omp --restore {id}`, `nvim -c 'silent! source Session.vim'`).
   - `mpx restore` restores on demand.
+- **Pane scrollback** (`scrollback/<pane>`, while `restore` is on): each running PTY pane's newest output (`RING_CAPACITY`, from a line start) with its screen size. The session hands it to a writer thread with every snapshot save and every 5 seconds, for panes that wrote since; files are written atomically, and a save deletes the files of panes not in the snapshot (all of them while `restore` is off). On restore the saved output is replayed into a screen at its saved size and captured as text with colors and joined wrapped lines, which the new pane's log and screen start with, so the old program's modes, queries and alternate screen do not reach the new one.
 - **Idempotency**: `Idempotent { key, request }` runs a request at most once per key. Concurrent repeats wait for the first result and later repeats get it from a bounded cache (1024 keys, 10 minutes).
 
 ---

@@ -105,9 +105,11 @@ impl Session {
         Ok(panes.iter().filter_map(|p| self.kill_entry(p)).collect())
     }
 
-    /// Saves a clean snapshot, then starts killing every running pane. Later saves are disabled.
+    /// Saves a clean snapshot and waits for its scrollback to be written, then starts killing every
+    /// running pane. Later saves are disabled.
     pub(super) async fn shutdown(&mut self) -> Vec<oneshot::Receiver<()>> {
         self.save(true).await;
+        self.scrollback.sync().await;
         self.shutting_down = true;
         self.save_due = None;
         self.nodes

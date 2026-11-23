@@ -42,6 +42,10 @@ struct Pane {
 }
 
 fn pane_with(pid: Option<u32>) -> Pane {
+    pane_restoring(pid, Vec::new())
+}
+
+fn pane_restoring(pid: Option<u32>, restored: Vec<u8>) -> Pane {
     let process = FakeProcess {
         pid,
         ..FakeProcess::default()
@@ -65,6 +69,7 @@ fn pane_with(pid: Option<u32>) -> Pane {
         env_remove: Vec::new(),
         term: "xterm-256color".to_string(),
         scrollback: 100_000,
+        restored,
     };
     Pane {
         actor: PaneActor::new(&spec, Box::new(process), None, ctx),
@@ -312,6 +317,29 @@ fn terminal_query_is_answered_on_the_process_input() {
         p.input.lock().unwrap().starts_with(b"\x1b[?"),
         "device attributes answered"
     );
+}
+
+fn unsaved(p: &mut Pane) -> Option<(Vec<u8>, (u16, u16))> {
+    let (reply, rx) = oneshot::channel();
+    p.actor.handle(PaneMsg::UnsavedScrollback { reply });
+    rx.blocking_recv().expect("scrollback reply")
+}
+
+#[test]
+fn restored_scrollback_comes_before_the_output_and_is_handed_out_to_save_until_saved() {
+    let mut p = pane_restoring(None, b"before\r\n".to_vec());
+    p.actor.handle(output(b"after"));
+    let (screen, next, size) = keyframe(&mut p);
+    assert!(
+        screen.contains("before") && screen.contains("after"),
+        "{screen}"
+    );
+    assert_eq!(next, 13, "restored bytes take the first offsets");
+
+    assert_eq!(unsaved(&mut p), Some((b"before\r\nafter".to_vec(), size)));
+    assert_eq!(unsaved(&mut p), None, "nothing new since");
+    p.actor.handle(output(b"!"));
+    assert_eq!(unsaved(&mut p), Some((b"before\r\nafter!".to_vec(), size)));
 }
 
 #[test]

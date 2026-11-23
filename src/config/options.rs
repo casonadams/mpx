@@ -61,7 +61,8 @@ pub struct SessionOptions {
     /// Whether a terminal whose session ends is detached (tmux `detach-on-destroy on`); `false`
     /// switches it to another running session instead.
     pub detach_on_destroy: bool,
-    /// After a crash or reboot, recreate the last session layout and resume its processes on start.
+    /// After a crash or reboot, recreate the last session layout, show each terminal pane's saved
+    /// output and resume its processes on start. While on, pane output is saved to disk.
     pub restore: bool,
 }
 

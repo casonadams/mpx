@@ -4,6 +4,7 @@ use std::fmt::Write as _;
 use serde::{Deserialize, Serialize};
 
 use super::grid::{Cell, CellStyle, Color, Grid, Underline};
+use super::parser::VtScreen;
 
 /// A line named by `capture-pane -S` or `-E`, in tmux's numbering: 0 is the first visible line,
 /// negative numbers count lines back into history.
@@ -64,6 +65,34 @@ pub fn capture_text(grid: &Grid, spec: &CaptureSpec) -> String {
         }
     }
     out
+}
+
+/// What a restored pane shows before its new process writes: `log`, output a pane retained at
+/// `size` (cols, rows), replayed with up to `scrollback` lines of history and turned into its text
+/// and colors only. Lines end in CRLF and wrapped lines are joined, so they reflow at any width;
+/// the modes, queries and alternate screen of the program that wrote `log` are left behind.
+pub fn restored_scrollback(log: &[u8], size: (usize, usize), scrollback: usize) -> Vec<u8> {
+    let mut screen = VtScreen::new(size.0, size.1);
+    screen.grid_mut().set_history_limit(scrollback);
+    screen.feed(log);
+    let grid = screen.grid();
+    let end = match (grid.alternate_screen(), grid.history_len()) {
+        (false, _) => CaptureLine::Last,
+        (true, 0) => return Vec::new(),
+        (true, _) => CaptureLine::Line(-1),
+    };
+    let spec = CaptureSpec {
+        start: Some(CaptureLine::First),
+        end: Some(end),
+        escapes: true,
+        join: true,
+    };
+    let text = capture_text(grid, &spec);
+    let text = text.trim_end_matches('\n');
+    if text.is_empty() {
+        return Vec::new();
+    }
+    format!("{}\r\n", text.replace('\n', "\r\n")).into_bytes()
 }
 
 fn push_line(out: &mut String, cells: &[Cell], escapes: bool) {
