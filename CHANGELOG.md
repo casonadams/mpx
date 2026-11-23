@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.0](https://github.com/casonadams/mpx/compare/v0.3.2...v0.4.0) (2026-11-23)
+
+
+### Features
+
+* **daemon:** restore pane scrollback after a crash or reboot ([ddb23b3](https://github.com/casonadams/mpx/commit/ddb23b344aa2d5be5b986280ca4be2f96eee5c99))
+
+
+### Bug Fixes
+
+* **tui:** enter copy mode from the wheel as copy-mode -e does ([db3c288](https://github.com/casonadams/mpx/commit/db3c28882cb6802a9a75127a80c3146de2f618b0))
+
 ## [0.3.2](https://github.com/casonadams/mpx/compare/v0.3.1...v0.3.2) (2026-11-22)
 
 
