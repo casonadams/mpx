@@ -25,7 +25,7 @@ fn output_frames_carry_raw_bytes_and_offsets_exactly() {
     ] {
         let event = StreamEvent::Output {
             name: "pane-é".to_string(),
-            data: data.to_string(),
+            data: data.into(),
             offset: u64::MAX - 7,
             next: u64::MAX,
         };
@@ -38,7 +38,7 @@ fn an_output_frame_holds_its_data_unescaped() {
     let data = "\x1b[2J\x1b[H".repeat(100);
     let event = StreamEvent::Output {
         name: "p".to_string(),
-        data: data.clone(),
+        data: data.as_str().into(),
         offset: 0,
         next: data.len() as u64,
     };

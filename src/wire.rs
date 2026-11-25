@@ -73,7 +73,7 @@ fn decode_output(rest: &[u8]) -> Result<StreamEvent, String> {
     };
     Ok(StreamEvent::Output {
         name: text(name, "name")?,
-        data: text(data, "data")?,
+        data: text(data, "data")?.into(),
         offset: u64::from_be_bytes(*offset),
         next: u64::from_be_bytes(*next),
     })

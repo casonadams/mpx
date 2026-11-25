@@ -277,7 +277,7 @@ impl PaneActor {
             let name = self.name.clone();
             self.emit(StreamEvent::Output {
                 name,
-                data,
+                data: data.into(),
                 offset,
                 next,
             });
@@ -364,7 +364,7 @@ impl PaneActor {
             if !bytes.is_empty() {
                 sink.push(StreamEvent::Output {
                     name: self.name.clone(),
-                    data: lossy(bytes),
+                    data: lossy(bytes).into(),
                     offset: since,
                     next,
                 });

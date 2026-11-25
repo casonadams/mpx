@@ -24,7 +24,7 @@ async fn a_daemon_without_binary_frames_streams_json_lines_to_a_new_client() {
             .expect("ok");
         let event = StreamEvent::Output {
             name: "p".to_string(),
-            data: "\x1b[1mold\x1b[0m é".to_string(),
+            data: "\x1b[1mold\x1b[0m é".into(),
             offset: 0,
             next: 16,
         };
@@ -50,7 +50,7 @@ async fn a_daemon_without_binary_frames_streams_json_lines_to_a_new_client() {
     assert!(request.contains("\"binary\":true"), "{request}");
     match event {
         StreamEvent::Output { data, next, .. } => {
-            assert_eq!(data, "\x1b[1mold\x1b[0m é");
+            assert_eq!(&*data, "\x1b[1mold\x1b[0m é");
             assert_eq!(next, 16);
         }
         other => panic!("unexpected {other:?}"),
@@ -75,7 +75,7 @@ async fn an_event_from_a_newer_daemon_is_skipped_and_the_stream_goes_on() {
         let mut stream = lines.into_inner();
         let output = StreamEvent::Output {
             name: "p".to_string(),
-            data: "after".to_string(),
+            data: "after".into(),
             offset: 0,
             next: 5,
         };
@@ -102,7 +102,7 @@ async fn an_event_from_a_newer_daemon_is_skipped_and_the_stream_goes_on() {
         .await
         .expect("an event in time")
         .expect("the stream stayed open");
-    assert!(matches!(event, StreamEvent::Output { data, .. } if data == "after"));
+    assert!(matches!(event, StreamEvent::Output { data, .. } if &*data == "after"));
 }
 
 #[tokio::test]

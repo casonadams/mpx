@@ -22,7 +22,7 @@ async fn collect_chunks(
                 data, offset, next, ..
             } = &event
             {
-                events.push((*offset, *next, data.clone()));
+                events.push((*offset, *next, data.to_string()));
             }
             !done(&events, &event)
         }),

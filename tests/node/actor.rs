@@ -117,7 +117,7 @@ fn outputs(rx: &mut tokio::sync::mpsc::Receiver<StreamEvent>) -> Vec<(String, u6
         .filter_map(|event| match event {
             StreamEvent::Output {
                 data, offset, next, ..
-            } => Some((data, offset, next)),
+            } => Some((data.to_string(), offset, next)),
             _ => None,
         })
         .collect()
@@ -315,7 +315,7 @@ fn every_subscriber_and_the_session_receive_each_output() {
     assert_eq!(outputs(&mut second), expected);
     assert!(matches!(
         p.notices.lock().unwrap().as_slice(),
-        [PaneNotice::Event(StreamEvent::Output { data, .. })] if data == "abc"
+        [PaneNotice::Event(StreamEvent::Output { data, .. })] if &**data == "abc"
     ));
 }
 

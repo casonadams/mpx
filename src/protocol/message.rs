@@ -1,5 +1,6 @@
 use crate::layout::{Divider, Rect, WindowTab};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 use super::buffer::{Buffer, BufferRequest, EnvEntry};
 use super::node::{NodeInfo, NodeRequest, WaitOutcome};
@@ -107,7 +108,7 @@ pub enum StreamEvent {
     /// `offset` differs from the previous chunk's `next` means bytes were missed (fetch them with Logs `since`).
     Output {
         name: String,
-        data: String,
+        data: Arc<str>,
         offset: u64,
         next: u64,
     },

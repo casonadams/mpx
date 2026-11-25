@@ -4,7 +4,7 @@ use mpx::protocol::StreamEvent;
 fn output(offset: u64) -> StreamEvent {
     StreamEvent::Output {
         name: "p".to_string(),
-        data: "x".to_string(),
+        data: "x".into(),
         offset,
         next: offset + 1,
     }

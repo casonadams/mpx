@@ -17,7 +17,7 @@ async fn active_pane_passthrough_is_forwarded_to_app() {
 
     let event = StreamEvent::Output {
         name: active.clone(),
-        data,
+        data: data.as_str().into(),
         offset,
         next,
     };
@@ -36,7 +36,7 @@ async fn inactive_pane_passthrough_is_discarded() {
 
     let event = StreamEvent::Output {
         name: "some-other-pane".to_string(),
-        data: "\x1b]4;0;rgb:24/2A/36\x1b\\".to_string(),
+        data: "\x1b]4;0;rgb:24/2A/36\x1b\\".into(),
         offset: 0,
         next: 20,
     };
@@ -61,7 +61,7 @@ async fn allow_passthrough_false_blocks_forwarding() {
 
     let event = StreamEvent::Output {
         name: active,
-        data,
+        data: data.as_str().into(),
         offset,
         next,
     };
@@ -87,7 +87,7 @@ async fn passthrough_all_forwards_from_every_pane_the_terminal_shows() {
 
     let event = StreamEvent::Output {
         name: "shown".to_string(),
-        data: data.clone(),
+        data: data.as_str().into(),
         offset,
         next,
     };
@@ -105,7 +105,7 @@ async fn colors_a_theme_switcher_sends_follow_into_dimming_only_when_they_reach_
         let offset = h.app.expected.get(name).copied().unwrap_or(0);
         StreamEvent::Output {
             name: name.to_string(),
-            data: data.to_string(),
+            data: data.into(),
             offset,
             next: offset + data.len() as u64,
         }
