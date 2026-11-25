@@ -35,6 +35,7 @@ impl Channels {
     /// `wait-for channel`: answers `reply` at once if a signal is pending, else when one comes.
     pub fn wait(&mut self, channel: &str, reply: Reply) {
         let entry = self.entry(channel);
+        entry.waiters.retain(|w| !w.is_closed());
         if entry.signalled {
             entry.signalled = false;
             answer(reply);
@@ -47,6 +48,7 @@ impl Channels {
     /// `wait-for -S channel`: answers every waiter, or keeps one signal for the next wait.
     pub fn signal(&mut self, channel: &str) {
         let entry = self.entry(channel);
+        entry.waiters.retain(|w| !w.is_closed());
         if entry.waiters.is_empty() {
             entry.signalled = true;
         } else {
@@ -95,7 +97,11 @@ impl Channels {
     }
 
     fn tidy(&mut self, channel: &str) {
-        if self.channels.get(channel).is_some_and(Channel::idle) {
+        let Some(entry) = self.channels.get_mut(channel) else {
+            return;
+        };
+        entry.waiters.retain(|w| !w.is_closed());
+        if entry.idle() {
             self.channels.remove(channel);
         }
     }

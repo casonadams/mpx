@@ -1,6 +1,7 @@
 mod daemon {
     mod basics;
     mod capture;
+    mod channels;
     mod clients;
     mod config_policy;
     mod cursor;
