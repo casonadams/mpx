@@ -1,5 +1,7 @@
 //! Window requests: navigation, naming, moving, linking, resizing, and the layout a client draws.
 
+use futures_util::future::join_all;
+
 use super::Placement;
 use super::Session;
 use super::answer::{check, connection_only, node_reply, reply, unit};
@@ -95,14 +97,20 @@ impl Session {
             .linked()
             .map(|(link, w)| (link.number, w.focused.clone()))
             .collect();
-        for (number, focused) in windows {
+        let labels = join_all(windows.into_iter().map(|(number, focused)| {
             let handle = focused
                 .and_then(|f| self.nodes.get(&f))
                 .map(|e| e.handle.clone());
-            let label = match handle {
-                Some(handle) => handle.label().await.ok().flatten(),
-                None => None,
-            };
+            async move {
+                let label = match handle {
+                    Some(handle) => handle.label().await.ok().flatten(),
+                    None => None,
+                };
+                (number, label)
+            }
+        }))
+        .await;
+        for (number, label) in labels {
             self.workspace.set_auto_name(number, label);
         }
     }
