@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use mpx::node::actor::PaneActor;
+use mpx::node::actor::{PaneActor, scrollback_save_due};
 use mpx::node::pane::{LogQuery, PaneCtx, PaneMsg, PaneNotice};
 use mpx::node::sink::Sink;
 use mpx::node::waits::Cond;
@@ -329,10 +329,38 @@ fn terminal_query_is_answered_on_the_process_input() {
     );
 }
 
-fn unsaved(p: &mut Pane) -> Option<(Vec<u8>, (u16, u16))> {
+fn unsaved_with(p: &mut Pane, force: bool) -> Option<(Vec<u8>, (u16, u16))> {
     let (reply, rx) = oneshot::channel();
-    p.actor.handle(PaneMsg::UnsavedScrollback { reply });
+    p.actor.handle(PaneMsg::UnsavedScrollback { force, reply });
     rx.blocking_recv().expect("scrollback reply")
+}
+
+fn unsaved(p: &mut Pane) -> Option<(Vec<u8>, (u16, u16))> {
+    unsaved_with(p, true)
+}
+
+#[test]
+fn a_little_new_output_waits_to_be_saved_unless_forced() {
+    let mut p = plain();
+    p.actor.handle(output(&vec![b'x'; 80 * 1024]));
+    assert!(unsaved_with(&mut p, false).is_some(), "all of it is new");
+    p.actor.handle(output(b"a little"));
+    assert_eq!(unsaved_with(&mut p, false), None);
+    assert!(unsaved_with(&mut p, true).is_some(), "forced at shutdown");
+    p.actor.handle(output(&vec![b'y'; 20 * 1024]));
+    assert!(unsaved_with(&mut p, false).is_some(), "enough has arrived");
+    assert_eq!(unsaved_with(&mut p, true), None, "nothing new since");
+}
+
+#[test]
+fn scrollback_is_due_after_enough_output_or_enough_time() {
+    assert!(!scrollback_save_due(1, 80_000, 1_000));
+    assert!(scrollback_save_due(10_000, 80_000, 0));
+    assert!(scrollback_save_due(1, 80_000, 30_000));
+    assert!(
+        scrollback_save_due(5, 5, 0),
+        "a short log is always cheap to save"
+    );
 }
 
 #[test]

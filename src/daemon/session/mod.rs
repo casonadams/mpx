@@ -323,7 +323,7 @@ pub(super) async fn run(boot: Boot, mut rx: mpsc::UnboundedReceiver<SessionMsg>)
                 session.save_due = None;
                 session.save(false).await;
             }
-            Next::FlushScrollback => session.flush_scrollback().await,
+            Next::FlushScrollback => session.flush_scrollback(false).await,
             Next::Silence => session.expire_silence(),
             Next::Clients => session.check_clients(),
             Next::Closed => break,

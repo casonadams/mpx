@@ -87,8 +87,9 @@ fn run(snapshots: &SnapshotStore, store: &ScrollbackStore, job: Job) {
 }
 
 impl Session {
-    /// Hands the output each running terminal pane wrote since its last save to the writer.
-    pub(super) async fn flush_scrollback(&self) {
+    /// Hands the output each running terminal pane wrote since its last save to the writer, once
+    /// enough of it is due or `force` says to.
+    pub(super) async fn flush_scrollback(&self, force: bool) {
         if !self.config.session.restore || self.shutting_down {
             return;
         }
@@ -98,7 +99,12 @@ impl Session {
             .filter(|entry| !entry.exited && entry.handle.pty())
             .map(|entry| entry.handle.clone())
             .collect();
-        let unsaved = join_all(handles.iter().map(PaneHandle::unsaved_scrollback)).await;
+        let unsaved = join_all(
+            handles
+                .iter()
+                .map(|handle| handle.unsaved_scrollback(force)),
+        )
+        .await;
         let saves: Vec<(String, PaneScrollback)> = handles
             .iter()
             .zip(unsaved)

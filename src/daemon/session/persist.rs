@@ -36,7 +36,7 @@ impl Session {
             .flat_map(|window| window.panes.iter().map(|pane| pane.name.clone()))
             .collect();
         self.scrollback.save_snapshot(snapshot);
-        self.flush_scrollback().await;
+        self.flush_scrollback(clean).await;
         self.retain_scrollback(panes);
     }
 

@@ -131,7 +131,9 @@ pub enum PaneMsg {
         spec: CaptureSpec,
         reply: Reply<String>,
     },
+    /// `force` hands the output over even when too little arrived since the last save to be due.
     UnsavedScrollback {
+        force: bool,
         reply: Reply<Option<(Vec<u8>, (u16, u16))>>,
     },
     Cwd {
@@ -259,8 +261,12 @@ impl PaneHandle {
 
     /// The newest output, from a line start, and the screen size (cols, rows), when the pane wrote
     /// output since the last call; `None` when it wrote none.
-    pub async fn unsaved_scrollback(&self) -> Result<Option<(Vec<u8>, (u16, u16))>, String> {
-        self.ask(|reply| PaneMsg::UnsavedScrollback { reply }).await
+    pub async fn unsaved_scrollback(
+        &self,
+        force: bool,
+    ) -> Result<Option<(Vec<u8>, (u16, u16))>, String> {
+        self.ask(|reply| PaneMsg::UnsavedScrollback { force, reply })
+            .await
     }
 
     pub async fn cwd(&self) -> Result<Option<String>, String> {

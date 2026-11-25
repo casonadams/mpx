@@ -23,6 +23,18 @@ use crate::vt::VtScreen;
 use crate::vt::capture::{CaptureSpec, capture_text};
 use crate::vt::keyframe::keyframe;
 
+/// Saving rewrites the whole saved tail, so output must grow it by this fraction (1 in N) before a
+/// save is due: a pane that prints steadily is not rewritten in full on every flush.
+const SAVE_AFTER_GROWTH: u64 = 8;
+/// How long output of any size may wait to be saved.
+const SAVE_AFTER_MS: u64 = 30_000;
+
+/// Whether `new_bytes` of output written `age_ms` ago since the last save are due to be saved,
+/// when `saved_tail` bytes are what a save writes.
+pub fn scrollback_save_due(new_bytes: u64, saved_tail: u64, age_ms: u64) -> bool {
+    new_bytes >= saved_tail / SAVE_AFTER_GROWTH || age_ms >= SAVE_AFTER_MS
+}
+
 const PROBE_EVERY: Duration = Duration::from_millis(250);
 const EXITED: &str = "Node has exited";
 /// Most recent bytes of text a `Match` waiter searches: bounds its memory and the cost of each scan.
@@ -107,6 +119,8 @@ pub struct PaneActor {
     replay: Option<Replay>,
     /// Output offset up to which the retained output was last handed out to be saved.
     saved_at: u64,
+    /// When that happened.
+    saved_ms: u64,
     probed: Option<Probed>,
     /// `None` while running, `Some(code)` once exited.
     exit: Option<Option<i32>>,
@@ -154,6 +168,7 @@ impl PaneActor {
             last_output_ms: started_ms,
             replay: None,
             saved_at: 0,
+            saved_ms: started_ms,
             resized_from: None,
             resized_at: None,
             probed: None,
@@ -210,8 +225,8 @@ impl PaneActor {
             PaneMsg::Capture { spec, reply } => {
                 let _ = reply.send(self.capture(&spec));
             }
-            PaneMsg::UnsavedScrollback { reply } => {
-                let _ = reply.send(self.unsaved_scrollback());
+            PaneMsg::UnsavedScrollback { force, reply } => {
+                let _ = reply.send(self.unsaved_scrollback(force));
             }
             PaneMsg::Cwd { reply } => {
                 let _ = reply.send(self.cwd());
@@ -376,12 +391,18 @@ impl PaneActor {
 
     /// The newest `RING_CAPACITY` bytes of output, from a line start, with the screen size, when
     /// output arrived since they were last handed out.
-    fn unsaved_scrollback(&mut self) -> Option<(Vec<u8>, (u16, u16))> {
+    fn unsaved_scrollback(&mut self, force: bool) -> Option<(Vec<u8>, (u16, u16))> {
         let written = self.ring.total_written();
-        if written == self.saved_at {
+        let (new_bytes, age_ms) = (
+            written - self.saved_at,
+            now_ms().saturating_sub(self.saved_ms),
+        );
+        let saved_tail = self.ring.len().min(RING_CAPACITY) as u64;
+        if new_bytes == 0 || !(force || scrollback_save_due(new_bytes, saved_tail, age_ms)) {
             return None;
         }
         self.saved_at = written;
+        self.saved_ms = now_ms();
         let grid = self.screen.grid();
         let size = (grid.cols as u16, grid.rows as u16);
         Some((self.ring.line_tail(RING_CAPACITY), size))
