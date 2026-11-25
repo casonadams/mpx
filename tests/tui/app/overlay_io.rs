@@ -151,3 +151,20 @@ async fn tree_preview_shows_the_selected_sessions_focused_pane_and_toggles_off()
     assert!(!text.contains("Preview"), "{text}");
     assert!(!text.contains("ready-marker"), "{text}");
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn tree_refresh_skips_a_session_that_never_answers_without_waiting_on_it_for_long() {
+    let fleet = start_fleet().await;
+    let hung = std::os::unix::net::UnixListener::bind(fleet.sandbox.socket_dir.join("hung.sock"))
+        .expect("hung daemon socket");
+
+    let started = std::time::Instant::now();
+    let tree = refreshed_tree(&fleet).await;
+    let labels = tree.labels();
+    assert!(started.elapsed() < Duration::from_millis(1_500));
+    assert!(labels.contains(&"alpha".to_string()), "{labels:?}");
+    assert!(labels.contains(&"beta".to_string()), "{labels:?}");
+    assert!(!labels.contains(&"hung".to_string()), "{labels:?}");
+    drop(hung);
+}

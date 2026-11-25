@@ -506,10 +506,13 @@ impl PaletteView {
 
     fn render_items<W: Write>(&self, out: &mut W, body: Rect) -> io::Result<()> {
         let visible_h = body.height.saturating_sub(3) as usize;
-        let items = if self.cached_items.is_empty() && self.prompt.text().is_empty() {
-            self.compute_items()
+        let computed;
+        let items: &[PaletteItem] = if self.cached_items.is_empty() && self.prompt.text().is_empty()
+        {
+            computed = self.compute_items();
+            &computed
         } else {
-            self.cached_items.clone()
+            &self.cached_items
         };
         let range = self.list.window(self.list.cursor, items.len(), visible_h);
 
@@ -523,7 +526,7 @@ impl PaletteView {
             );
         }
 
-        let (label_w, shortcut_w) = columns(&items);
+        let (label_w, shortcut_w) = columns(items);
         for (i, item) in items[range.clone()].iter().enumerate() {
             let selected = (range.start + i) == self.list.cursor;
             let row_spans = item_spans(item, selected, (label_w, shortcut_w), body.width as usize);

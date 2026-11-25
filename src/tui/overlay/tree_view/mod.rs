@@ -3,8 +3,11 @@ mod render;
 
 use std::collections::BTreeSet;
 use std::path::Path;
+use std::time::Duration;
 
 use crossterm::event::{KeyCode, KeyEvent};
+use futures_util::future::join_all;
+use tokio::time::timeout;
 
 use crate::client::Client;
 use crate::config::home_dir;
@@ -126,15 +129,22 @@ pub fn session_from_snapshot(
     }
 }
 
-/// Every reachable session, in socket order; sessions that fail to answer are skipped.
+/// Longest a session may take to answer before it is skipped, so one hung daemon cannot stall
+/// the overlay.
+pub(crate) const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// Every reachable session, in socket order, asked at the same time; sessions that fail to answer
+/// in time are skipped.
 pub(crate) async fn load_sessions(socket_dir: &Path) -> Vec<TreeSession> {
-    let mut sessions = Vec::new();
-    for endpoint in list_sessions(socket_dir) {
-        if let Some(session) = load_session(&endpoint.endpoint).await {
-            sessions.push(session);
-        }
-    }
-    sessions
+    let loads = list_sessions(socket_dir)
+        .into_iter()
+        .map(|endpoint| async move {
+            timeout(PROBE_TIMEOUT, load_session(&endpoint.endpoint))
+                .await
+                .ok()
+                .flatten()
+        });
+    join_all(loads).await.into_iter().flatten().collect()
 }
 
 pub(crate) async fn load_session(endpoint: &str) -> Option<TreeSession> {
@@ -150,8 +160,11 @@ pub(crate) async fn load_session(endpoint: &str) -> Option<TreeSession> {
 }
 
 async fn fetch_screen(endpoint: &str, name: &str) -> Option<String> {
-    let mut client = Client::connect(endpoint).await.ok()?;
-    client.screen(name).await.ok()
+    let fetch = async {
+        let mut client = Client::connect(endpoint).await.ok()?;
+        client.screen(name).await.ok()
+    };
+    timeout(PROBE_TIMEOUT, fetch).await.ok().flatten()
 }
 
 impl TreeView {
