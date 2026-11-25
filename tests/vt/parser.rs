@@ -660,6 +660,21 @@ fn csi_s_saves_the_cursor_unless_left_right_margin_mode_is_on() {
 }
 
 #[test]
+fn scrolling_down_inside_left_right_margins_moves_only_those_columns() {
+    let mut vt = lettered();
+    feed(&mut vt, "\x1b[?69h\x1b[2;4s\x1b[2T");
+    assert_eq!(
+        (row(&vt, 0), row(&vt, 1), row(&vt, 2), row(&vt, 3)),
+        (
+            "a   ef".into(),
+            "g   kl".into(),
+            "mbcdqr".into(),
+            "shijwx".into()
+        )
+    );
+}
+
+#[test]
 fn scrolling_inside_left_right_margins_moves_only_those_columns() {
     let mut vt = lettered();
     feed(&mut vt, "\x1b[?69h\x1b[2;3r\x1b[3;5s\x1b[S");

@@ -39,24 +39,29 @@ impl Grid {
         self.scroll_mixed = true;
         self.wrapped[top..=bottom].fill(false);
         let blank = self.blank();
-        let rows: Vec<usize> = if lines > 0 {
-            (top..=bottom).collect()
-        } else {
-            (top..=bottom).rev().collect()
-        };
-        for &y in &rows {
-            let from = if lines > 0 {
+        let up = lines > 0;
+        let mut shift = |y: usize| {
+            let from = if up {
                 y.checked_add(n).filter(|&f| f <= bottom)
             } else {
                 y.checked_sub(n).filter(|&f| f >= top)
             };
             match from {
+                Some(f) if f < y => {
+                    let (head, tail) = self.lines.split_at_mut(y);
+                    tail[0][left..=right].copy_from_slice(&head[f][left..=right]);
+                }
                 Some(f) => {
-                    let moved = self.lines[f][left..=right].to_vec();
-                    self.lines[y][left..=right].copy_from_slice(&moved);
+                    let (head, tail) = self.lines.split_at_mut(f);
+                    head[y][left..=right].copy_from_slice(&tail[0][left..=right]);
                 }
                 None => self.lines[y][left..=right].fill(blank),
             }
+        };
+        if up {
+            (top..=bottom).for_each(&mut shift);
+        } else {
+            (top..=bottom).rev().for_each(&mut shift);
         }
     }
 
