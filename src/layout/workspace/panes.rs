@@ -150,7 +150,7 @@ impl Workspace {
 
     /// Number of panes across all windows.
     pub fn pane_count(&self) -> usize {
-        self.windows.iter().map(|w| w.leaves().len()).sum()
+        self.windows.iter().map(Window::pane_count).sum()
     }
 
     /// Toggles the marked flag on `pane`: if already marked, clears the mark;

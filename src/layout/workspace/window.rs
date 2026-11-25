@@ -38,6 +38,10 @@ impl Window {
             .unwrap_or_default()
     }
 
+    pub fn pane_count(&self) -> usize {
+        self.root.as_ref().map_or(0, LayoutNode::leaf_count)
+    }
+
     pub fn contains(&self, name: &str) -> bool {
         self.root.as_ref().is_some_and(|r| r.has_leaf(name))
     }
@@ -80,7 +84,10 @@ impl Window {
         if self.contains(node_name) {
             self.zoomed = false;
         }
-        let position = self.leaves().iter().position(|n| n == node_name);
+        let position = self
+            .root
+            .as_ref()
+            .and_then(|root| root.leaf_position(node_name));
         if let Some(root) = self.root.take() {
             self.root = root.remove_leaf(node_name);
         }

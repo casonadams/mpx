@@ -158,3 +158,17 @@ fn spreading_evens_out_panes_and_keeps_their_arrangement() {
     );
     assert!(height_of(&rects, "c").abs_diff(height_of(&rects, "d")) <= 1);
 }
+
+#[test]
+fn leaf_count_and_position_follow_layout_order() {
+    let mut node = LayoutNode::leaf("a".to_string());
+    assert!(node.split_leaf("a", "b".to_string(), Direction::Vertical));
+    assert!(node.split_leaf("b", "c".to_string(), Direction::Horizontal));
+    assert!(node.split_leaf("a", "d".to_string(), Direction::Horizontal));
+    let order = node.all_leaves();
+    assert_eq!(node.leaf_count(), order.len());
+    for (at, name) in order.iter().enumerate() {
+        assert_eq!(node.leaf_position(name), Some(at));
+    }
+    assert_eq!(node.leaf_position("zzz"), None);
+}

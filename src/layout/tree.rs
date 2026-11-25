@@ -117,6 +117,23 @@ impl LayoutNode {
         }
     }
 
+    pub fn leaf_count(&self) -> usize {
+        match self {
+            Self::Leaf { .. } => 1,
+            Self::Split { left, right, .. } => left.leaf_count() + right.leaf_count(),
+        }
+    }
+
+    /// Where the leaf `target` stands in layout order, as in `all_leaves`.
+    pub fn leaf_position(&self, target: &str) -> Option<usize> {
+        match self {
+            Self::Leaf { name } => (name == target).then_some(0),
+            Self::Split { left, right, .. } => left
+                .leaf_position(target)
+                .or_else(|| right.leaf_position(target).map(|at| left.leaf_count() + at)),
+        }
+    }
+
     pub fn all_leaves(&self) -> Vec<String> {
         let mut out = Vec::new();
         self.collect_leaves(&mut out);
