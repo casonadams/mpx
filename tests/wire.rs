@@ -1,5 +1,8 @@
+use futures_util::StreamExt;
 use mpx::protocol::StreamEvent;
-use mpx::wire::{decode_event, encode_event};
+use mpx::wire::{MAX_FRAME, decode_event, encode_event, line_codec};
+use tokio::io::AsyncWriteExt;
+use tokio_util::codec::Framed;
 
 fn round_trip(event: &StreamEvent) -> StreamEvent {
     let mut frame = Vec::new();
@@ -88,4 +91,29 @@ fn malformed_frames_are_rejected() {
     bad_utf8.extend([0xff, 0xfe]);
     assert!(decode_event(&bad_utf8).is_err());
     assert!(decode_event(&[0, b'{']).is_err(), "broken JSON");
+}
+
+#[tokio::test]
+async fn a_line_without_a_newline_is_refused_past_the_frame_limit() {
+    let (mut peer, ours) = tokio::io::duplex(1 << 20);
+    let flood = tokio::spawn(async move {
+        let chunk = vec![b'x'; 1 << 20];
+        for _ in 0..=MAX_FRAME >> 20 {
+            if peer.write_all(&chunk).await.is_err() {
+                break;
+            }
+        }
+    });
+    let mut framed = Framed::new(ours, line_codec());
+    assert!(matches!(framed.next().await, Some(Err(_))));
+    drop(framed);
+    flood.await.expect("flood task");
+
+    let (mut peer, ours) = tokio::io::duplex(64);
+    peer.write_all(b"{\"ok\":true}\n").await.expect("write");
+    let mut framed = Framed::new(ours, line_codec());
+    assert_eq!(
+        framed.next().await.expect("line").expect("ok"),
+        "{\"ok\":true}"
+    );
 }

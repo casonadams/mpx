@@ -308,7 +308,7 @@ async fn subscribe_node<S: AsyncStream>(
 }
 
 pub async fn handle_client<S: AsyncStream>(state: Arc<DaemonState>, stream: S) {
-    let mut framed = Framed::new(stream, LinesCodec::new());
+    let mut framed = Framed::new(stream, wire::line_codec());
     // Terminals that reported pane modes over this connection: their marks go when it closes.
 
     while let Some(line_res) = framed.next().await {

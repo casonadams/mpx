@@ -1,6 +1,8 @@
 use futures_util::{SinkExt, StreamExt};
 use tokio_util::codec::{Framed, LinesCodec};
 
+use crate::wire;
+
 use crate::ipc::{IpcStream, connect_stream};
 use crate::layout::{Divider, Rect, WindowTab};
 use crate::protocol::{DaemonMessage, Request, Response};
@@ -53,7 +55,7 @@ impl Client {
             .await
             .map_err(|e| format!("Failed to connect to daemon at '{}': {}", endpoint, e))?;
         Ok(Self {
-            framed: Framed::new(stream, LinesCodec::new()),
+            framed: Framed::new(stream, wire::line_codec()),
             pending_key: None,
         })
     }

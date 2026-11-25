@@ -7,6 +7,8 @@
 //! A frame's payload (its length prefix comes from the codec) starts with a kind byte:
 //! - `OUTPUT`: name length (u16, big-endian), name, `offset` (u64), `next` (u64), then the data;
 //! - `JSON`: the event as JSON.
+use tokio_util::codec::LinesCodec;
+
 use crate::protocol::StreamEvent;
 
 const JSON: u8 = 0;
@@ -16,6 +18,12 @@ const OUTPUT_HEADER: usize = 1 + 2 + 8 + 8;
 
 /// Longest frame either side accepts.
 pub const MAX_FRAME: usize = 64 * 1024 * 1024;
+
+/// The codec for the newline-delimited JSON of the protocol. A line longer than `MAX_FRAME` is an
+/// error, so a peer that never sends a newline cannot make the reader buffer without bound.
+pub fn line_codec() -> LinesCodec {
+    LinesCodec::new_with_max_length(MAX_FRAME)
+}
 
 /// Appends the payload of `event`'s frame to `out`.
 pub fn encode_event(event: &StreamEvent, out: &mut Vec<u8>) -> Result<(), String> {
