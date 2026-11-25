@@ -31,12 +31,14 @@ impl HistoryRow {
         } else {
             RowText::Wide(cells.iter().map(|c| c.c).collect())
         };
-        let mut runs: Vec<(u16, CellStyle)> = Vec::new();
-        for (x, cell) in cells.iter().enumerate() {
-            if runs.last().is_none_or(|(_, style)| *style != cell.style) {
-                runs.push((x as u16, cell.style));
-            }
-        }
+        let starts_run = |i: usize| i == 0 || cells[i - 1].style != cells[i].style;
+        let mut runs: Vec<(u16, CellStyle)> =
+            Vec::with_capacity((0..cells.len()).filter(|&i| starts_run(i)).count());
+        runs.extend(
+            (0..cells.len())
+                .filter(|&i| starts_run(i))
+                .map(|i| (i as u16, cells[i].style)),
+        );
         Self {
             text,
             runs: runs.into_boxed_slice(),
