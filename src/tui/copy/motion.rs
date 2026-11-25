@@ -88,10 +88,7 @@ struct Cells<'a> {
 
 impl Cells<'_> {
     fn at(&self, (x, y): Pos) -> char {
-        self.grid
-            .line_cells(y)
-            .and_then(|cells| cells.get(x).map(|c| c.c))
-            .unwrap_or(' ')
+        self.grid.line_cell(y, x).map_or(' ', |cell| cell.c)
     }
 
     fn class(&self, p: Pos, big: bool) -> CharClass {

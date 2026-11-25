@@ -126,6 +126,15 @@ impl Grid {
         }
     }
 
+    /// The cell at column `x` of line `abs_line` (history or live screen), without building the
+    /// line: `None` past what the line stores, where the cell is a default blank.
+    pub fn line_cell(&self, abs_line: usize, x: usize) -> Option<Cell> {
+        match abs_line.checked_sub(self.history.len()) {
+            Some(y) => self.lines.get(y)?.get(x).copied(),
+            None => self.history.get(abs_line)?.cell(x),
+        }
+    }
+
     /// Cells of line `abs_line` (history or live screen), at least `cols` wide.
     pub fn line_cells(&self, abs_line: usize) -> Option<Cow<'_, [Cell]>> {
         let total_hist = self.history.len();

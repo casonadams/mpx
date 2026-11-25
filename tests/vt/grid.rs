@@ -469,3 +469,19 @@ fn scrolled_views_and_line_cells_read_history_as_full_width_rows() {
     assert_eq!(row.len(), 6);
     assert_eq!(text(&row), "ab");
 }
+
+#[test]
+fn line_cell_reads_history_and_screen_cells_like_line_cells() {
+    let grid = with_two_in_history();
+    for abs_line in 0..grid.history_len() + 3 {
+        let cells = grid.line_cells(abs_line).expect("line");
+        for x in 0..4 {
+            assert_eq!(
+                grid.line_cell(abs_line, x).unwrap_or(Cell::default()),
+                cells[x]
+            );
+        }
+    }
+    assert_eq!(grid.line_cell(99, 0), None);
+    assert_eq!(grid.line_cell(0, 99), None);
+}
