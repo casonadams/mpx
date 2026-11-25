@@ -64,7 +64,7 @@ Pre-built standalone archives (`.tar.gz` and `.zip`) and native packages (`.deb`
 
 ## Building Locally from Git
 
-Requirements: Rust 1.80+ (`cargo` and `rustc`).
+Requirements: Rust 1.95+ (`cargo` and `rustc`).
 
 ```bash
 git clone https://github.com/casonadams/mpx.git

@@ -2,5 +2,6 @@
 /.rho/
 .ripwire*
 **/*.rs.bk
-Cargo.lock
+__pycache__/
+*.pyc
 .DS_Store

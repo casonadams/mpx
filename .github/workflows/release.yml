@@ -6,19 +6,21 @@ on:
       - main
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
   release-please:
     name: "Release Please"
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     outputs:
       pr: ${{ steps.release.outputs.pr }}
       releases_created: ${{ steps.release.outputs.releases_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
-      - uses: googleapis/release-please-action@v5
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5
         id: release
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -28,20 +30,22 @@ jobs:
     name: "Update Cargo.lock on Release PR"
     needs: release-please
     if: ${{ needs.release-please.outputs.pr }}
+    permissions:
+      contents: write
     steps:
       - name: Checkout release PR branch
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ fromJSON(needs.release-please.outputs.pr).headBranchName }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install Rust Toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v2
+        uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2
         with:
           cache: false
           rustflags: ""
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
 
       - name: Sync Cargo.lock
         run: |
@@ -65,34 +69,37 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ needs.release-please.outputs.tag_name }}
+          persist-credentials: false
 
-      - uses: actions-rust-lang/setup-rust-toolchain@v2
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2
         with:
           cache: false
           rustflags: ""
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
 
       - name: Exchange OIDC token for a short-lived publish token
         id: auth
         if: env.CARGO_REGISTRY_TOKEN == ''
         continue-on-error: true
-        uses: rust-lang/crates-io-auth-action@v1
+        uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
 
       - name: Publish
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN || steps.auth.outputs.token }}
         run: |
-          cargo publish --allow-dirty
+          cargo publish
 
   build-release:
     name: "Build ${{ matrix.target }}"
     needs: release-please
     if: ${{ needs.release-please.outputs.releases_created == 'true' }}
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -110,22 +117,23 @@ jobs:
     env:
       TAG: ${{ needs.release-please.outputs.tag_name }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ needs.release-please.outputs.tag_name }}
+          persist-credentials: false
 
-      - uses: actions-rust-lang/setup-rust-toolchain@v2
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2
         with:
           target: ${{ matrix.target }}
           cache: false
           rustflags: ""
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           key: ${{ matrix.target }}
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Package and upload
         if: runner.os != 'Windows'
@@ -219,6 +227,8 @@ jobs:
     name: "Generate SHA256SUMS"
     needs: [release-please, build-release]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     env:
       TAG: ${{ needs.release-please.outputs.tag_name }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -238,17 +248,21 @@ jobs:
     needs: [release-please, build-release]
     if: ${{ needs.release-please.outputs.releases_created == 'true' }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions-rust-lang/setup-rust-toolchain@v2
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2
         with:
           cache: false
           rustflags: ""
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
 
       - name: Sync Cargo.lock on main
+        env:
+          TAG: ${{ needs.release-please.outputs.tag_name }}
         run: |
           cargo check
           if git diff --quiet -- Cargo.lock; then
@@ -257,7 +271,7 @@ jobs:
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git add Cargo.lock
-            git commit -m "chore: sync Cargo.lock after ${{ needs.release-please.outputs.tag_name }}"
+            git commit -m "chore: sync Cargo.lock after $TAG"
             git push
           fi
 
@@ -273,7 +287,7 @@ jobs:
           TAG: ${{ needs.release-please.outputs.tag_name }}
         run: |
           if [ -n "$TAP_TOKEN" ]; then
-            curl -L \
+            curl --fail -L \
               -X POST \
               -H "Accept: application/vnd.github+json" \
               -H "Authorization: Bearer $TAP_TOKEN" \
@@ -282,5 +296,5 @@ jobs:
               -d '{"event_type":"mpx-release","client_payload":{"tag":"'"$TAG"'"}}'
             echo "Successfully dispatched mpx-release event to casonadams/homebrew-tap"
           else
-            echo "HOMEBREW_TAP_TOKEN not configured; relying on manual formula update"
+            echo "::warning::HOMEBREW_TAP_TOKEN not configured; formula update was not dispatched"
           fi
