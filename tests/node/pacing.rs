@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use mpx::node::pacing::{
-    Inflight, PACE_HIGH, PACE_STUCK_MS, PANE_INFLIGHT, Pacing, holds, pane_full,
+    Inflight, PACE_HIGH, PACE_STUCK_MS, PANE_INFLIGHT, Pacing, holds, pane_full, poll_delay,
 };
 
 #[test]
@@ -103,4 +103,13 @@ fn a_pane_reader_waits_once_its_actor_is_a_bound_behind() {
     let start = Instant::now();
     inflight.wait_for_room();
     assert!(start.elapsed() < Duration::from_millis(50));
+}
+
+#[test]
+fn a_blocked_reader_backs_off_to_a_ceiling() {
+    assert_eq!(poll_delay(0), Duration::from_micros(250));
+    assert_eq!(poll_delay(1), Duration::from_micros(500));
+    assert!(poll_delay(3) > poll_delay(2));
+    assert_eq!(poll_delay(10), Duration::from_millis(4));
+    assert_eq!(poll_delay(u32::MAX), Duration::from_millis(4));
 }

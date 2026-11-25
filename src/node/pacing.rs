@@ -13,6 +13,15 @@ pub const PACE_HIGH: usize = 64;
 /// must never freeze the panes.
 pub const PACE_STUCK_MS: u64 = 1_000;
 const PACE_POLL: Duration = Duration::from_micros(250);
+const PACE_POLL_MAX: Duration = Duration::from_millis(4);
+
+/// How long a blocked reader sleeps before its `attempt`th re-check: it starts at `PACE_POLL` and
+/// doubles up to `PACE_POLL_MAX`, so a long stall costs few wakeups and a short one little latency.
+pub fn poll_delay(attempt: u32) -> Duration {
+    PACE_POLL
+        .saturating_mul(1u32.checked_shl(attempt).unwrap_or(u32::MAX))
+        .min(PACE_POLL_MAX)
+}
 
 /// Output chunks a pane may have read but not yet parsed. Its reader waits beyond this, so a flood
 /// runs at the speed the daemon parses it and requests to the pane (input, Ctrl-C, kill) never
@@ -47,8 +56,11 @@ impl Inflight {
 
     /// Blocks the calling reader thread while the actor is behind.
     pub fn wait_for_room(&self) {
-        while self.full() {
-            std::thread::sleep(PACE_POLL);
+        for attempt in 0.. {
+            if !self.full() {
+                return;
+            }
+            std::thread::sleep(poll_delay(attempt));
         }
     }
 
@@ -160,8 +172,11 @@ impl Pacing {
 
     /// Blocks the calling reader thread while a terminal is behind.
     pub fn wait_for_room(&self) {
-        while self.congested(now_ms()) {
-            std::thread::sleep(PACE_POLL);
+        for attempt in 0.. {
+            if !self.congested(now_ms()) {
+                return;
+            }
+            std::thread::sleep(poll_delay(attempt));
         }
     }
 
