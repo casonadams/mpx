@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use futures_util::future::join_all;
 use tokio::time::Instant;
+use tracing::warn;
 
 use super::Session;
 use crate::config::ResumeRule;
@@ -17,6 +18,29 @@ use crate::store::SessionSnapshot;
 const SAVE_DEBOUNCE: Duration = Duration::from_millis(400);
 
 impl Session {
+    /// The resume rule and session id of each pane, from its program name and facts. Reading the
+    /// program's own files blocks, so it runs on the blocking pool; a lookup that fails leaves its
+    /// pane without a resume rule.
+    async fn resolve_resumes(
+        &self,
+        lookups: Vec<(String, Option<NodeInfo>)>,
+    ) -> Vec<(Option<String>, Option<String>)> {
+        let count = lookups.len();
+        let rules = self.config.resume.clone();
+        let home = crate::config::home_dir();
+        let resolved = tokio::task::spawn_blocking(move || {
+            lookups
+                .iter()
+                .map(|(name, info)| resolve_resume(name, &rules, info.as_ref(), home.as_deref()))
+                .collect::<Vec<_>>()
+        })
+        .await;
+        resolved.unwrap_or_else(|e| {
+            warn!("could not look up resume rules: {e}");
+            vec![(None, None); count]
+        })
+    }
+
     pub(super) fn schedule_save(&mut self) {
         if !self.shutting_down && self.save_due.is_none() {
             self.save_due = Some(Instant::now() + SAVE_DEBOUNCE);
@@ -48,31 +72,38 @@ impl Session {
             .flat_map(|window| window.leaves())
             .filter_map(|leaf| self.nodes.get(&leaf).map(|entry| (leaf, entry)))
             .collect();
-        let infos = join_all(panes.iter().map(|(_, entry)| entry.handle.info(true))).await;
-        let home = crate::config::home_dir();
+        let infos: Vec<Option<NodeInfo>> =
+            join_all(panes.iter().map(|(_, entry)| entry.handle.info(true)))
+                .await
+                .into_iter()
+                .map(Result::ok)
+                .collect();
+        let lookups: Vec<(String, Option<NodeInfo>)> = panes
+            .iter()
+            .zip(&infos)
+            .map(|((_, entry), info)| {
+                let foreground = info.as_ref().and_then(|i| i.foreground.clone());
+                (
+                    foreground.unwrap_or_else(|| entry.opts.command.clone()),
+                    info.clone(),
+                )
+            })
+            .collect();
+        let resumes = self.resolve_resumes(lookups).await;
         let records: Vec<PaneRecord> = panes
             .into_iter()
             .zip(infos)
-            .map(|((leaf, entry), info)| {
-                let info = info.ok();
-                let cwd = info.as_ref().and_then(|i| i.cwd.clone());
-                let fg = info.as_ref().and_then(|i| i.foreground.clone());
-                let lookup_name = fg.as_deref().unwrap_or(&entry.opts.command);
-                let (resume_rule, session_id) = resolve_resume(
-                    lookup_name,
-                    &self.config.resume,
-                    info.as_ref(),
-                    home.as_deref(),
-                );
-                PaneRecord {
+            .zip(resumes)
+            .map(
+                |(((leaf, entry), info), (resume_rule, session_id))| PaneRecord {
                     name: leaf,
                     opts: entry.opts.clone(),
                     running: !entry.exited,
-                    cwd,
+                    cwd: info.and_then(|i| i.cwd),
                     resume_rule,
                     session_id,
-                }
-            })
+                },
+            )
             .collect();
         let mut snapshot =
             build_snapshot(&self.session, now_ms(), clean, &self.workspace, &records);
