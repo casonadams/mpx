@@ -64,7 +64,7 @@ impl VtHandler {
 
     fn push_notify(&mut self, text: String) {
         if !text.is_empty() {
-            self.alerts.push(Alert::Notify(text));
+            self.raise(Alert::Notify(text));
         }
     }
 }

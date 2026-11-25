@@ -232,6 +232,7 @@ impl PaneActor {
             self.write_raw(&reply);
         }
         let _ = self.screen.take_passthroughs();
+        let _ = self.screen.take_alerts();
         self.last_output_ms = now_ms();
         self.emit_text(bytes);
         for waiter in &mut self.waiters {

@@ -14,6 +14,9 @@ use charset::Charsets;
 
 pub use screen::{Alert, VtScreen};
 
+/// Alerts kept between drains; later ones are dropped, as a flood adds nothing a consumer can show.
+const MAX_PENDING_ALERTS: usize = 64;
+
 pub struct VtHandler {
     pub grid: Grid,
     pub responses: Vec<Vec<u8>>,
@@ -32,6 +35,12 @@ pub struct VtHandler {
 }
 
 impl VtHandler {
+    fn raise(&mut self, alert: Alert) {
+        if self.alerts.len() < MAX_PENDING_ALERTS {
+            self.alerts.push(alert);
+        }
+    }
+
     pub fn new(cols: usize, rows: usize) -> Self {
         Self {
             grid: Grid::new(cols, rows),
@@ -87,7 +96,7 @@ impl Perform for VtHandler {
         match byte {
             b'\n' | 0x0B | 0x0C => self.grid.newline(),
             b'\r' => self.grid.carriage_return(),
-            0x07 => self.alerts.push(Alert::Bell),
+            0x07 => self.raise(Alert::Bell),
             0x08 => self.grid.backspace(),
             0x0E => self.charsets.shift_g1(true),
             0x0F => self.charsets.shift_g1(false),

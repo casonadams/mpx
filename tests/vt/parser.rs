@@ -153,6 +153,15 @@ fn bell_is_reported_once_and_drained() {
 }
 
 #[test]
+fn a_flood_of_alerts_keeps_a_bounded_backlog() {
+    let mut vt = VtScreen::new(20, 5);
+    feed(&mut vt, &"\x07\x1b]9;hi\x07".repeat(10_000));
+    let alerts = vt.take_alerts();
+    assert!(!alerts.is_empty() && alerts.len() <= 64);
+    assert_eq!(alerts[0], Alert::Bell);
+}
+
+#[test]
 fn osc_nine_is_a_notification() {
     let mut vt = VtScreen::new(20, 5);
     feed(&mut vt, "\x1b]9;build done\x07");
