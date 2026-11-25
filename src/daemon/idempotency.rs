@@ -1,6 +1,6 @@
 //! Idempotency keys: the first request with a key runs, concurrent repeats wait for its response,
 //! later repeats get the cached response. Pure state; the caller supplies the clock.
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use tokio::sync::oneshot;
 
@@ -23,23 +23,20 @@ enum Slot<V> {
     InFlight {
         waiters: Vec<oneshot::Sender<Option<V>>>,
     },
-    Done {
-        value: V,
-        at_ms: u64,
-        seq: u64,
-    },
+    Done(V),
 }
 
 pub struct IdemCache<V> {
     slots: HashMap<String, Slot<V>>,
-    seq: u64,
+    /// Finished keys, oldest first, with when each finished: the one `Done` slot of each.
+    finished: VecDeque<(String, u64)>,
 }
 
 impl<V> Default for IdemCache<V> {
     fn default() -> Self {
         Self {
             slots: HashMap::new(),
-            seq: 0,
+            finished: VecDeque::new(),
         }
     }
 }
@@ -48,7 +45,7 @@ impl<V: Clone> IdemCache<V> {
     pub fn begin(&mut self, key: &str, now_ms: u64) -> Claim<V> {
         self.expire(now_ms);
         match self.slots.get(key) {
-            Some(Slot::Done { value, .. }) => Claim::Cached(value.clone()),
+            Some(Slot::Done(value)) => Claim::Cached(value.clone()),
             Some(Slot::InFlight { .. }) => {
                 let (tx, rx) = oneshot::channel();
                 if let Some(Slot::InFlight { waiters }) = self.slots.get_mut(key) {
@@ -75,15 +72,8 @@ impl<V: Clone> IdemCache<V> {
                 let _ = waiter.send(Some(value.clone()));
             }
         }
-        self.seq += 1;
-        self.slots.insert(
-            key.to_string(),
-            Slot::Done {
-                value,
-                at_ms: now_ms,
-                seq: self.seq,
-            },
-        );
+        self.slots.insert(key.to_string(), Slot::Done(value));
+        self.finished.push_back((key.to_string(), now_ms));
         self.evict();
     }
 
@@ -105,29 +95,22 @@ impl<V: Clone> IdemCache<V> {
     }
 
     fn expire(&mut self, now_ms: u64) {
-        self.slots.retain(|_, slot| match slot {
-            Slot::Done { at_ms, .. } => now_ms.saturating_sub(*at_ms) < TTL_MS,
-            Slot::InFlight { .. } => true,
-        });
+        while let Some((key, at_ms)) = self.finished.front() {
+            if now_ms.saturating_sub(*at_ms) < TTL_MS {
+                break;
+            }
+            self.slots.remove(key);
+            self.finished.pop_front();
+        }
     }
 
     /// Drops the oldest finished keys while over the bound. Running keys are never dropped.
     fn evict(&mut self) {
         while self.slots.len() > MAX_KEYS {
-            let oldest = self
-                .slots
-                .iter()
-                .filter_map(|(key, slot)| match slot {
-                    Slot::Done { seq, .. } => Some((*seq, key.clone())),
-                    Slot::InFlight { .. } => None,
-                })
-                .min();
-            match oldest {
-                Some((_, key)) => {
-                    self.slots.remove(&key);
-                }
-                None => break,
-            }
+            let Some((key, _)) = self.finished.pop_front() else {
+                break;
+            };
+            self.slots.remove(&key);
         }
     }
 }
