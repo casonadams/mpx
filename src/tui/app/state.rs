@@ -92,6 +92,8 @@ pub struct App {
     pub warm: Option<Warm>,
     /// A newer history building beside `warm` while that one is still in use.
     pub warm_next: Option<Warm>,
+    /// Rebuilds of `warm` in a row that copy mode did not take.
+    pub warm_unused: u32,
     pub layout: LayoutCache,
     /// Terminal width and height available to panes (status row excluded).
     pub viewport: (u16, u16),
@@ -333,6 +335,7 @@ impl App {
             expected: HashMap::new(),
             warm: None,
             warm_next: None,
+            warm_unused: 0,
             layout: LayoutCache::new(),
             viewport: (80, 23),
             rows: statusline::rows(24, 1, false),

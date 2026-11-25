@@ -1,5 +1,6 @@
 use mpx::protocol::StreamEvent;
 use mpx::tui::stream::{OutputPlan, drop_superseded_lagged, plan_output};
+use mpx::tui::warm::rebuild_threshold;
 
 #[test]
 fn a_chunk_starting_at_the_expected_offset_is_fed() {
@@ -49,4 +50,12 @@ fn only_the_last_lag_of_a_subscription_is_kept() {
         .map(|(g, e)| (*g, matches!(e, StreamEvent::Lagged)))
         .collect();
     assert_eq!(shape, [(1, false), (1, true), (2, true), (2, false)]);
+}
+
+#[test]
+fn unused_history_rebuilds_grow_rarer_up_to_a_ceiling() {
+    assert_eq!(rebuild_threshold(0), 256 * 1024);
+    assert_eq!(rebuild_threshold(1), 512 * 1024);
+    assert_eq!(rebuild_threshold(4), 4 * 1024 * 1024);
+    assert_eq!(rebuild_threshold(100), rebuild_threshold(4));
 }
