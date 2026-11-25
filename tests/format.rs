@@ -632,3 +632,28 @@ fn session_loop_entry_carries_the_session_variables() {
         "work $1709647629000 1709647700 1709647629 2 2",
     );
 }
+
+#[test]
+fn glob_matching_stays_fast_with_many_stars_and_keeps_its_semantics() {
+    let long = "a".repeat(5_000);
+    let many_stars = "*a".repeat(30);
+    assert_expands(
+        &vars(&[("text", &long), ("pat", &format!("{many_stars}*b"))]),
+        &[("#{m:#{pat},#{text}}", "0")],
+    );
+    assert_expands(
+        &vars(&[("name", "abcabc")]),
+        &[
+            ("#{m:*c,#{name}}", "1"),
+            ("#{m:a*c,#{name}}", "1"),
+            ("#{m:a*b,#{name}}", "0"),
+            ("#{m:*bc*,#{name}}", "1"),
+            ("#{m:**,#{name}}", "1"),
+            ("#{m:?????,#{name}}", "0"),
+            ("#{m:??????,#{name}}", "1"),
+            ("#{m:[a-c]*,#{name}}", "1"),
+            ("#{m:[!a]*,#{name}}", "0"),
+            ("#{m:ab[c,#{name}}", "0"),
+        ],
+    );
+}

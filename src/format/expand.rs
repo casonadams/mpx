@@ -308,20 +308,71 @@ fn matching(op: &str, args: &[&str], sc: Scope) -> String {
     flag(on)
 }
 
-/// Glob match of `p` against `t`: `*`, `?` and `[...]` (a leading `!` or `^` negates the class).
-fn glob_at(p: &[char], t: &[char]) -> bool {
-    match p.split_first() {
-        None => t.is_empty(),
-        Some(('*', rest)) => (0..=t.len()).any(|i| glob_at(rest, &t[i..])),
-        Some(('?', rest)) => !t.is_empty() && glob_at(rest, &t[1..]),
-        Some(('[', rest)) => match rest.iter().position(|&c| c == ']') {
-            Some(end) => {
-                t.first().is_some_and(|&c| class_matches(&rest[..end], c))
-                    && glob_at(&rest[end + 1..], &t[1..])
-            }
-            None => t.first() == Some(&'[') && glob_at(rest, &t[1..]),
+/// One element of a glob pattern.
+enum Piece<'a> {
+    Star,
+    Any,
+    Class(&'a [char]),
+    Literal(char),
+}
+
+/// The first element of the non-empty pattern `p` and how many characters it spans.
+fn piece(p: &[char]) -> (Piece<'_>, usize) {
+    match p[0] {
+        '*' => (Piece::Star, 1),
+        '?' => (Piece::Any, 1),
+        '[' => match p[1..].iter().position(|&c| c == ']') {
+            Some(end) => (Piece::Class(&p[1..=end]), end + 2),
+            None => (Piece::Literal('['), 1),
         },
-        Some((c, rest)) => t.first() == Some(c) && glob_at(rest, &t[1..]),
+        c => (Piece::Literal(c), 1),
+    }
+}
+
+/// Glob match of `p` against `t`: `*`, `?` and `[...]` (a leading `!` or `^` negates the class).
+/// A mismatch backs up to the latest `*` only, so the work stays proportional to the product of
+/// the two lengths however many stars the pattern has.
+fn glob_at(p: &[char], t: &[char]) -> bool {
+    let (mut pi, mut ti) = (0, 0);
+    let mut star: Option<(usize, usize)> = None;
+    loop {
+        if pi < p.len() {
+            let (piece, len) = piece(&p[pi..]);
+            let here = t.get(ti).copied();
+            match piece {
+                Piece::Star => {
+                    pi += len;
+                    star = Some((pi, ti));
+                    continue;
+                }
+                Piece::Any if here.is_some() => {
+                    pi += len;
+                    ti += 1;
+                    continue;
+                }
+                Piece::Class(class) if here.is_some_and(|c| class_matches(class, c)) => {
+                    pi += len;
+                    ti += 1;
+                    continue;
+                }
+                Piece::Literal(c) if here == Some(c) => {
+                    pi += len;
+                    ti += 1;
+                    continue;
+                }
+                _ => {}
+            }
+        } else if ti == t.len() {
+            return true;
+        }
+        match star {
+            Some((after, from)) if from < t.len() => {
+                star = Some((after, from + 1));
+                pi = after;
+                ti = from + 1;
+            }
+            _ => return false,
+        }
     }
 }
 
