@@ -8,7 +8,7 @@ use super::panes::{
 use super::resolve::Resolved;
 use super::sessions::ensure_client;
 use crate::client::Client;
-use crate::layout::LinkPlace;
+use crate::layout::{LinkPlace, Rect};
 use crate::protocol::{LayoutPreset, NewWindowOpts, Side, WindowFit, WindowResize};
 use crate::tui::command::window_target;
 use crate::tui::panes::size_move;
@@ -810,8 +810,7 @@ async fn select_layout(r: &Resolved, preset: Option<&str>, spread: bool) -> Resu
     daemon_call(r, "select-layout", async |c| c.select_layout(preset).await).await
 }
 
-async fn pane_size(client: &mut Client, name: &str) -> Result<(u16, u16), String> {
-    let (rects, _, _) = current_layout(client).await?;
+fn size_in(rects: &[(String, Rect, bool)], name: &str) -> Result<(u16, u16), String> {
     rects
         .iter()
         .find(|(n, _, _)| n == name)
@@ -831,10 +830,14 @@ async fn resize_to(
     let viewport = terminal_size();
     let (panes, dividers, _) = current_layout(client).await?;
     let mut direct = (None, None);
+    let mut moved = false;
     for (vertical, size) in [(true, width), (false, height)] {
         let Some(size) = size else { continue };
         match size_move(&dividers, &panes, name, vertical, size) {
-            Some((pane, side, cells)) => client.resize_split(&pane, side, cells, viewport).await?,
+            Some((pane, side, cells)) => {
+                client.resize_split(&pane, side, cells, viewport).await?;
+                moved = true;
+            }
             None if vertical => direct.0 = Some(size),
             None => direct.1 = Some(size),
         }
@@ -842,7 +845,11 @@ async fn resize_to(
     if direct == (None, None) {
         return Ok(());
     }
-    let (cur_w, cur_h) = pane_size(client, name).await?;
+    let (cur_w, cur_h) = if moved {
+        size_in(&current_layout(client).await?.0, name)?
+    } else {
+        size_in(&panes, name)?
+    };
     let cols = direct.0.unwrap_or(cur_w);
     let rows = direct.1.unwrap_or(cur_h);
     client.resize_pane(name, cols, rows).await
