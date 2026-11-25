@@ -9,7 +9,7 @@ mod shell;
 pub mod snapshot;
 mod stores;
 
-use futures_util::{SinkExt, StreamExt};
+use futures_util::StreamExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -152,10 +152,23 @@ async fn send_message<S: AsyncStream>(
     framed: &mut Framed<S, LinesCodec>,
     msg: &DaemonMessage,
 ) -> bool {
-    match serde_json::to_string(msg) {
-        Ok(json) => framed.send(json).await.is_ok(),
-        Err(_) => false,
+    let mut line = Vec::new();
+    if push_json_line(&mut line, msg).is_err() {
+        return false;
     }
+    framed.get_mut().write_all(&line).await.is_ok()
+}
+
+/// Appends `msg` as one line of the JSON protocol.
+fn push_json_line(buf: &mut Vec<u8>, msg: &DaemonMessage) -> serde_json::Result<()> {
+    let start = buf.len();
+    let written = serde_json::to_writer(&mut *buf, msg);
+    if written.is_err() {
+        buf.truncate(start);
+        return written;
+    }
+    buf.push(b'\n');
+    Ok(())
 }
 
 /// Acknowledges a subscription and forwards its events until the subscriber or the stream ends.
@@ -181,14 +194,37 @@ async fn stream_events<S: AsyncStream>(
     }
     if binary {
         stream_frames(framed.get_mut(), &mut rx, backlog.as_deref()).await;
-        return;
+    } else {
+        stream_lines(framed.get_mut(), &mut rx, backlog.as_deref()).await;
     }
-    while let Some(event) = rx.recv().await {
-        if !send_message(framed, &DaemonMessage::Event(event)).await {
-            break;
+}
+
+/// Writes events as lines of JSON, every event already queued in one write.
+async fn stream_lines<S: AsyncStream>(
+    io: &mut S,
+    rx: &mut mpsc::Receiver<StreamEvent>,
+    backlog: Option<&Backlog>,
+) {
+    let mut buf = Vec::with_capacity(64 * 1024);
+    while let Some(first) = rx.recv().await {
+        buf.clear();
+        let mut count = 0;
+        let mut next = Some(first);
+        while let Some(event) = next.take() {
+            count += 1;
+            if let Err(e) = push_json_line(&mut buf, &DaemonMessage::Event(event)) {
+                warn!("dropped an event that cannot be serialized: {}", e);
+            }
+            if buf.len() < FRAME_BATCH {
+                next = rx.try_recv().ok();
+            }
         }
-        if let Some(backlog) = &backlog {
-            backlog.sent(now_ms());
+        if io.write_all(&buf).await.is_err() {
+            return;
+        }
+        if let Some(backlog) = backlog {
+            let now = now_ms();
+            (0..count).for_each(|_| backlog.sent(now));
         }
     }
 }
