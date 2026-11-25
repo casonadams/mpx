@@ -1,8 +1,10 @@
 use std::time::{Duration, Instant};
 
 use mpx::node::pacing::{
-    Inflight, PACE_HIGH, PACE_STUCK_MS, PANE_INFLIGHT, Pacing, holds, pane_full, poll_delay,
+    Inflight, PACE_HIGH, PACE_STUCK_MS, PANE_INFLIGHT, Pacing, RELAY_QUEUE, holds, pane_full,
+    poll_delay,
 };
+use mpx::node::sink::Step;
 
 #[test]
 fn a_terminal_holds_readers_only_while_behind_and_progressing() {
@@ -112,4 +114,21 @@ fn a_blocked_reader_backs_off_to_a_ceiling() {
     assert!(poll_delay(3) > poll_delay(2));
     assert_eq!(poll_delay(10), Duration::from_millis(4));
     assert_eq!(poll_delay(u32::MAX), Duration::from_millis(4));
+}
+
+#[test]
+fn a_stalled_session_relay_drops_output_and_reports_lag_once() {
+    let pacing = Pacing::default();
+    let delivered = (0..RELAY_QUEUE * 2)
+        .map(|_| pacing.offer_relay(1_000))
+        .collect::<Vec<_>>();
+    assert!(delivered.iter().filter(|s| **s == Step::Deliver).count() < RELAY_QUEUE);
+    assert_eq!(delivered.iter().filter(|s| **s == Step::Lagged).count(), 1);
+    assert_eq!(delivered.last(), Some(&Step::Drop));
+    assert!(pacing.relay().len() < RELAY_QUEUE);
+
+    while !pacing.relay().is_empty() {
+        pacing.relay().sent(1_001);
+    }
+    assert_eq!(pacing.offer_relay(1_002), Step::Deliver);
 }

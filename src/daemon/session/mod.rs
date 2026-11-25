@@ -44,7 +44,7 @@ use crate::layout::{Direction, Workspace};
 use crate::node::now_ms;
 use crate::node::pacing::Pacing;
 use crate::node::pane::{self, Notifier, PaneHandle, PaneNotice};
-use crate::node::sink::Sink;
+use crate::node::sink::{Sink, Step};
 use crate::node::sleep_until_opt;
 use crate::protocol::{ChannelOp, PaneId, Request, Response, SpawnOpts, StreamEvent};
 use crate::store::{ScrollbackStore, SnapshotStore};
@@ -266,9 +266,15 @@ pub(super) async fn run(boot: Boot, mut rx: mpsc::UnboundedReceiver<SessionMsg>)
     let hook_tx = tx.clone();
     let relayed = Arc::clone(&pacing);
     let notifier: Notifier = Arc::new(move |notice| {
-        if is_output(&notice) {
-            relayed.relay().queued(now_ms());
-        }
+        let notice = if is_output(&notice) {
+            match relayed.offer_relay(now_ms()) {
+                Step::Deliver => notice,
+                Step::Lagged => PaneNotice::Event(StreamEvent::Lagged),
+                Step::Drop => return,
+            }
+        } else {
+            notice
+        };
         let _ = tx.send(SessionMsg::Notice(notice));
     });
     let mut workspace = Workspace::new(session.clone());

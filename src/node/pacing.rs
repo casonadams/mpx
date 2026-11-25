@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use super::now_ms;
+use super::sink::{Feed, Step};
 
 /// Events queued to one terminal beyond which pane readers wait.
 pub const PACE_HIGH: usize = 64;
@@ -22,6 +23,11 @@ pub fn poll_delay(attempt: u32) -> Duration {
         .saturating_mul(1u32.checked_shl(attempt).unwrap_or(u32::MAX))
         .min(PACE_POLL_MAX)
 }
+
+/// Output events the session may have waiting in its mailbox from its panes. Beyond this, panes
+/// that outrun a stalled session drop output and report `Lagged` once, which makes subscribers
+/// re-read the retained output instead of the daemon queueing it without bound.
+pub const RELAY_QUEUE: usize = 4096;
 
 /// Output chunks a pane may have read but not yet parsed. Its reader waits beyond this, so a flood
 /// runs at the speed the daemon parses it and requests to the pane (input, Ctrl-C, kill) never
@@ -111,6 +117,15 @@ impl Backlog {
         self.closed.store(true, Ordering::Relaxed);
     }
 
+    /// Events queued and not yet sent.
+    pub fn len(&self) -> usize {
+        self.queued.load(Ordering::Relaxed)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     pub fn holds(&self, now_ms: u64) -> bool {
         !self.closed.load(Ordering::Relaxed)
             && holds(
@@ -138,6 +153,7 @@ impl Drop for CloseOnDrop {
 pub struct Pacing {
     backlogs: Mutex<Vec<Weak<Backlog>>>,
     relay: Backlog,
+    relay_feed: Mutex<Feed>,
 }
 
 impl Pacing {
@@ -156,6 +172,20 @@ impl Pacing {
     /// one message at a time, so output waits there while it serves a slow request.
     pub fn relay(&self) -> &Backlog {
         &self.relay
+    }
+
+    /// What to do with an output event a pane is about to relay to the session: deliver it (counted
+    /// in `relay`), drop it, or deliver `Lagged` in its place.
+    pub fn offer_relay(&self, now_ms: u64) -> Step {
+        let free = RELAY_QUEUE.saturating_sub(self.relay.len());
+        let step = self
+            .relay_feed
+            .lock()
+            .map_or(Step::Deliver, |mut feed| feed.step(free, RELAY_QUEUE));
+        if step == Step::Deliver {
+            self.relay.queued(now_ms);
+        }
+        step
     }
 
     /// Whether any live terminal, or the session relaying output to them, is behind and still
