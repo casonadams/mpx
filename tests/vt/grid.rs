@@ -170,6 +170,16 @@ fn growing_without_scrollback_only_pads() {
 }
 
 #[test]
+fn scrolling_the_alternate_screen_adds_no_history() {
+    let mut grid = with_two_in_history();
+    grid.set_alternate_screen(true);
+    for _ in 0..20 {
+        grid.scroll_up(1);
+    }
+    assert_eq!(grid.history_len(), 2);
+}
+
+#[test]
 fn growing_the_alternate_screen_never_pulls_history() {
     let mut grid = with_two_in_history();
     grid.set_alternate_screen(true);

@@ -94,7 +94,7 @@ impl Grid {
             top..=top + n - 1
         };
         for y in entering {
-            if up && top == 0 {
+            if up && top == 0 && !self.alternate_screen {
                 self.keep_in_history(y);
             }
             self.lines[y].fill(blank);
