@@ -1,5 +1,6 @@
 //! `choose-client`: the attached clients of every session. Enter detaches the highlighted one.
 use std::io::{self, Write};
+use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyCode, KeyEvent};
 
@@ -13,16 +14,25 @@ use crate::tui::overlay::{OverlayAction, OverlayCtx};
 
 const HINTS: &str = "j/k move  Enter detach  / filter  q close";
 
+/// How long the client list is kept before a tick probes every session for it again.
+const RELOAD_AFTER: Duration = Duration::from_secs(3);
+
 #[derive(Default)]
 pub struct ClientView {
     clients: Vec<ClientRow>,
     filter: Filter,
     list: ListState,
+    loaded_at: Option<Instant>,
 }
 
 impl ClientView {
-    /// Reloads the clients; a failed lookup keeps the list shown before.
+    /// Reloads the clients when none were loaded yet or the list is `RELOAD_AFTER` old: each reload
+    /// probes every session's socket.
     pub async fn refresh(&mut self, ctx: &mut OverlayCtx<'_>) {
+        if self.loaded_at.is_some_and(|at| at.elapsed() < RELOAD_AFTER) {
+            return;
+        }
+        self.loaded_at = Some(Instant::now());
         self.clients = clients::attached_clients(ctx.socket_dir).await;
         let len = self.visible().len();
         self.list.clamp(len);
