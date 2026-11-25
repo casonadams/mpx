@@ -25,13 +25,15 @@ use crate::vt::keyframe::keyframe;
 
 const PROBE_EVERY: Duration = Duration::from_millis(250);
 const EXITED: &str = "Node has exited";
+/// Most recent bytes of text a `Match` waiter searches: bounds its memory and the cost of each scan.
+const MAX_MATCH_TEXT: usize = 256 * 1024;
 
 struct Waiter {
     cond: Cond,
     /// Text a `Match` searches: the screen at the request plus the plain output since.
     text: String,
-    /// Length of `text` the last search covered.
-    scanned: usize,
+    /// Whether `text` changed since the last search.
+    unsearched: bool,
     plain: PlainStream,
     deadline: Option<Instant>,
     reply: Option<Reply<WaitOutcome>>,
@@ -41,15 +43,22 @@ impl Waiter {
     fn feed(&mut self, bytes: &[u8]) {
         if matches!(self.cond, Cond::Match(_)) {
             self.plain.feed(bytes, &mut self.text);
+            self.unsearched = true;
+            if let Some(excess) = self.text.len().checked_sub(MAX_MATCH_TEXT) {
+                let cut = (excess..=self.text.len())
+                    .find(|&i| self.text.is_char_boundary(i))
+                    .unwrap_or(self.text.len());
+                self.text.drain(..cut);
+            }
         }
     }
 
     fn outcome(&mut self, obs: &Observed) -> Option<WaitOutcome> {
         if matches!(self.cond, Cond::Match(_)) {
-            if self.text.len() == self.scanned {
+            if !self.unsearched {
                 return None;
             }
-            self.scanned = self.text.len();
+            self.unsearched = false;
         }
         waits::satisfied(&self.cond, obs, &self.text)
     }
@@ -478,7 +487,7 @@ impl PaneActor {
         let mut waiter = Waiter {
             cond,
             text,
-            scanned: 0,
+            unsearched: true,
             plain: PlainStream::default(),
             deadline,
             reply: Some(reply),

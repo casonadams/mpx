@@ -271,6 +271,16 @@ fn match_wait_resolves_only_on_the_output_that_matches() {
 }
 
 #[test]
+fn match_wait_searches_only_the_recent_output() {
+    let filler = vec![b'x'; 300 * 1024];
+    assert_eq!(
+        match_after(&[b"start", &filler, b"end"], "(?s)start.*end"),
+        None
+    );
+    assert!(match_after(&[b"start", &filler[..1000], b"end"], "(?s)start.*end").is_some());
+}
+
+#[test]
 fn match_wait_sees_through_escapes_and_characters_split_across_chunks() {
     let chunks: [&[u8]; 6] = [b"re", b"\x1b[3", b"1mad", b"y \xC3", b"\xA9\x1b", b"[0m!"];
     assert_eq!(
