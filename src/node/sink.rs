@@ -69,12 +69,17 @@ impl Sink {
 
     /// Offers an event. Returns false once the subscriber is gone.
     pub fn push(&mut self, event: StreamEvent) -> bool {
+        self.push_with(|| event)
+    }
+
+    /// `push` for an event that costs something to make: `event` runs only if it is delivered.
+    pub fn push_with(&mut self, event: impl FnOnce() -> StreamEvent) -> bool {
         if self.tx.is_closed() {
             return false;
         }
         let free = self.tx.capacity();
         match self.feed.step(free, self.tx.max_capacity()) {
-            Step::Deliver => self.send(event),
+            Step::Deliver => self.send(event()),
             Step::Lagged => self.send(StreamEvent::Lagged),
             Step::Drop => true,
         }

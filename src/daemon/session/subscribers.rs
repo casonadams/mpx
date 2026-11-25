@@ -227,19 +227,16 @@ impl Session {
         self.filters.retain_mut(|sub| {
             let at = index;
             index += 1;
-            let owned = match &pending {
-                Some(event) if sub.filter.accepts(event, |_| in_active_window) => {
-                    if Some(at) == last {
-                        pending.take()
-                    } else {
-                        Some(event.clone())
-                    }
-                }
-                _ => None,
+            let Some(event) = pending
+                .as_ref()
+                .filter(|event| sub.filter.accepts(event, |_| in_active_window))
+            else {
+                return !sub.sink.is_closed();
             };
-            match owned {
-                Some(event) => sub.sink.push(event),
-                None => !sub.sink.is_closed(),
+            if Some(at) == last {
+                pending.take().is_none_or(|event| sub.sink.push(event))
+            } else {
+                sub.sink.push_with(|| event.clone())
             }
         });
         self.sync_relay();

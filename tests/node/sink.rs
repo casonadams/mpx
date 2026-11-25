@@ -64,3 +64,16 @@ fn overflowing_sink_yields_one_lagged_and_keeps_accepting() {
         Ok(StreamEvent::Output { offset: 9_999, .. })
     ));
 }
+
+#[test]
+fn an_event_is_built_only_when_it_is_delivered() {
+    let (mut sink, _rx) = Sink::channel(None);
+    let mut built = 0;
+    for offset in 0..(SUB_QUEUE as u64 + 10) {
+        assert!(sink.push_with(|| {
+            built += 1;
+            output(offset)
+        }));
+    }
+    assert_eq!(built, SUB_QUEUE);
+}
