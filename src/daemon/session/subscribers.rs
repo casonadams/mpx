@@ -118,6 +118,7 @@ impl Session {
             }
             Err(_) if name.starts_with('%') => Err(not_found(&name)),
             Err(_) => {
+                self.pending.retain(|(_, _, waiting)| !waiting.is_closed());
                 self.pending.push((name, since, sink));
                 Ok(())
             }
