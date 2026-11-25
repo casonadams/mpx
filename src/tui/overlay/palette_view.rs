@@ -169,10 +169,16 @@ impl PaletteView {
         self.cached_items = self.compute_items();
     }
 
+    /// Reloads the sessions: once when the palette opens, then only while the sessions tab, the one
+    /// that lists them, is shown.
     pub async fn refresh(&mut self, ctx: &mut OverlayCtx<'_>) {
+        if self.initial_loaded && self.tab != PaletteTab::Sessions {
+            return;
+        }
         let mut sessions = load_sessions(ctx.socket_dir).await;
         sessions.sort_by_key(|s| s.name != self.current_session);
         self.sessions = sessions;
+        self.initial_loaded = true;
         self.rebuild_items();
     }
 

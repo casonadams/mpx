@@ -6,8 +6,8 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use mpx::client::Client;
 use mpx::config::Config;
 use mpx::layout::Rect;
-use mpx::tui::overlay::OverlayCtx;
 use mpx::tui::overlay::tree_view::TreeView;
+use mpx::tui::overlay::{OverlayCtx, PaletteTab, PaletteView};
 
 use super::support::{Sandbox, pane};
 use crate::tui::overlay::draw_tree;
@@ -167,4 +167,34 @@ async fn tree_refresh_skips_a_session_that_never_answers_without_waiting_on_it_f
     assert!(labels.contains(&"beta".to_string()), "{labels:?}");
     assert!(!labels.contains(&"hung".to_string()), "{labels:?}");
     drop(hung);
+}
+
+#[tokio::test]
+async fn palette_reloads_sessions_only_while_its_sessions_tab_is_shown() {
+    let fleet = start_fleet().await;
+    let config = Config::default();
+    let mut client = Client::connect(&fleet.alpha).await.expect("connect");
+    let mut ctx = OverlayCtx {
+        client: &mut client,
+        session: "alpha",
+        config: &config,
+        cwd: None,
+        socket_dir: fleet.sandbox.socket_dir.as_path(),
+    };
+    let mut palette = PaletteView::new(PaletteTab::Commands, Vec::new(), "alpha");
+    palette.refresh(&mut ctx).await;
+    assert_eq!(palette.sessions.len(), 2);
+
+    fleet.sandbox.serve("gamma", &config).await;
+    palette.refresh(&mut ctx).await;
+    assert_eq!(
+        palette.sessions.len(),
+        2,
+        "not reloaded off the sessions tab"
+    );
+
+    palette.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    assert_eq!(palette.tab, PaletteTab::Sessions);
+    palette.refresh(&mut ctx).await;
+    assert_eq!(palette.sessions.len(), 3);
 }
