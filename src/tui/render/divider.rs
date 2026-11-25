@@ -149,22 +149,26 @@ fn junction_char(up: bool, down: bool, left: bool, right: bool, style: BorderSty
 }
 
 fn get_divider_char(div: &Divider, x: u16, y: u16, all: &[Divider], style: BorderStyle) -> char {
-    let has_v = all
-        .iter()
-        .any(|d| d.is_vertical && d.x == x && (y + 1 >= d.y && y <= d.y + d.length));
-    let has_h = all
-        .iter()
-        .any(|d| !d.is_vertical && d.y == y && (x + 1 >= d.x && x <= d.x + d.length));
+    let (mut has_v, mut has_h) = (false, false);
+    for d in all {
+        if d.is_vertical {
+            has_v |= d.x == x && y + 1 >= d.y && y <= d.y + d.length;
+        } else {
+            has_h |= d.y == y && x + 1 >= d.x && x <= d.x + d.length;
+        }
+    }
 
     if has_v && has_h {
-        let up = all.iter().any(|d| d.is_vertical && d.x == x && d.y < y);
-        let down = all
-            .iter()
-            .any(|d| d.is_vertical && d.x == x && (d.y == y + 1 || d.y + d.length > y));
-        let left = all.iter().any(|d| !d.is_vertical && d.y == y && d.x < x);
-        let right = all
-            .iter()
-            .any(|d| !d.is_vertical && d.y == y && (d.x == x + 1 || d.x + d.length > x));
+        let (mut up, mut down, mut left, mut right) = (false, false, false, false);
+        for d in all {
+            if d.is_vertical && d.x == x {
+                up |= d.y < y;
+                down |= d.y == y + 1 || d.y + d.length > y;
+            } else if !d.is_vertical && d.y == y {
+                left |= d.x < x;
+                right |= d.x == x + 1 || d.x + d.length > x;
+            }
+        }
         junction_char(up, down, left, right, style)
     } else if div.is_vertical {
         vertical_char(style)
