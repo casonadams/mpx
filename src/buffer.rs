@@ -298,8 +298,13 @@ fn strip_into(bytes: &[u8], out: &mut Vec<u8>) -> usize {
     i
 }
 
+/// Longest escape sequence `PlainStream` waits for the end of; past this it is given up on, so a
+/// sequence that never ends is not rescanned in full by every chunk.
+const MAX_PENDING_ESCAPE: usize = 64 * 1024;
+
 /// Incremental `strip_ansi` over a stream: escape sequences and multi-byte characters split
-/// across chunks come out as if the whole stream had been stripped at once.
+/// across chunks come out as if the whole stream had been stripped at once, except that a
+/// sequence longer than `MAX_PENDING_ESCAPE` is dropped where it stands.
 #[derive(Debug, Clone, Default)]
 pub struct PlainStream {
     pending: Vec<u8>,
@@ -314,6 +319,9 @@ impl PlainStream {
         let mut plain = Vec::with_capacity(buf.len());
         let consumed = strip_into(&buf, &mut plain);
         self.pending = buf.split_off(consumed);
+        if self.pending.len() > MAX_PENDING_ESCAPE {
+            self.pending.clear();
+        }
         out.push_str(&self.utf8.feed(&plain).0);
     }
 }

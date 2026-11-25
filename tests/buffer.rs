@@ -323,3 +323,16 @@ fn a_line_tail_starts_on_a_line_unless_it_holds_all_output() {
         "the ring dropped older output, so its oldest byte is not the first written"
     );
 }
+
+#[test]
+fn an_escape_sequence_that_never_ends_is_given_up_on() {
+    let mut plain = PlainStream::default();
+    let mut out = String::new();
+    plain.feed(b"\x1b]0;", &mut out);
+    for _ in 0..40 {
+        plain.feed(&[b'x'; 4096], &mut out);
+    }
+    plain.feed(b"after\n", &mut out);
+    assert!(out.ends_with("after\n"), "text after it is shown again");
+    assert!(out.len() < 40 * 4096, "the long sequence itself is dropped");
+}
