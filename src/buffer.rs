@@ -158,27 +158,34 @@ impl RingBuffer {
         out
     }
 
-    /// The newest `n` retained bytes (all of them when fewer are held).
-    pub fn tail(&self, n: usize) -> Vec<u8> {
+    /// The retained bytes from index `skip` on, counted from the oldest retained byte.
+    fn from_index(&self, skip: usize) -> Vec<u8> {
         let (first, second) = self.buffer.as_slices();
-        let skip = (first.len() + second.len()).saturating_sub(n);
-        let mut out = Vec::with_capacity(first.len() + second.len() - skip);
+        let mut out = Vec::with_capacity((first.len() + second.len()).saturating_sub(skip));
         out.extend_from_slice(&first[skip.min(first.len())..]);
         out.extend_from_slice(&second[skip.saturating_sub(first.len())..]);
         out
     }
 
+    /// The newest `n` retained bytes (all of them when fewer are held).
+    pub fn tail(&self, n: usize) -> Vec<u8> {
+        self.from_index(self.buffer.len().saturating_sub(n))
+    }
+
     /// The newest `n` retained bytes (at most), from the start of a line: unless they are all the
     /// output ever written, they start past a newline, not inside a line or a sequence.
     pub fn line_tail(&self, n: usize) -> Vec<u8> {
-        let tail = self.tail(n.saturating_add(1));
-        if tail.len() <= n && tail.len() as u64 == self.written {
-            return tail;
+        let len = self.buffer.len();
+        let skip = len.saturating_sub(n.saturating_add(1));
+        let held = len - skip;
+        if held <= n && held as u64 == self.written {
+            return self.from_index(skip);
         }
-        match tail.iter().position(|&b| b == b'\n') {
-            Some(at) => tail[at + 1..].to_vec(),
-            None => tail[tail.len().saturating_sub(n)..].to_vec(),
-        }
+        let start = match self.buffer.range(skip..).position(|&b| b == b'\n') {
+            Some(at) => skip + at + 1,
+            None => skip + held.saturating_sub(n),
+        };
+        self.from_index(start)
     }
 
     pub fn snapshot_str(&self) -> String {
