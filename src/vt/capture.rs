@@ -114,7 +114,7 @@ fn push_line(out: &mut String, cells: &[Cell], escapes: bool) {
 }
 
 pub(super) fn push_sgr(out: &mut String, style: CellStyle) {
-    let mut params = vec!["0".to_string()];
+    out.push_str("\x1b[0");
     for (on, code) in [
         (style.bold, "1"),
         (style.faint, "2"),
@@ -122,22 +122,22 @@ pub(super) fn push_sgr(out: &mut String, style: CellStyle) {
         (style.reverse, "7"),
     ] {
         if on {
-            params.push(code.to_string());
+            let _ = write!(out, ";{code}");
         }
     }
     if let Some(code) = underline_code(style.underline) {
-        params.push(code.to_string());
+        let _ = write!(out, ";{code}");
     }
     if let Some(fg) = style.fg {
-        params.push(color_param(fg, 30));
+        push_color(out, fg, 30);
     }
     if let Some(bg) = style.bg {
-        params.push(color_param(bg, 40));
+        push_color(out, bg, 40);
     }
     if let Some(color) = style.underline_color {
-        params.push(underline_color_param(color));
+        push_underline_color(out, color);
     }
-    let _ = write!(out, "\x1b[{}m", params.join(";"));
+    out.push('m');
 }
 
 /// The SGR parameter for an underline style: `4` for a single line, `4:n` for the others.
@@ -152,19 +152,19 @@ fn underline_code(underline: Underline) -> Option<&'static str> {
     }
 }
 
-/// The SGR 58 parameters that set an underline colour: `58;5;n` for palette entries and
+/// Appends the SGR 58 parameters that set an underline colour: `58;5;n` for palette entries and
 /// `58;2;r;g;b` for truecolour.
-fn underline_color_param(color: Color) -> String {
+fn push_underline_color(out: &mut String, color: Color) {
     match color {
-        Color::Indexed(_) | Color::Rgb(..) => extended_param(color, 58),
-        named => extended_param(Color::Indexed(slot_of(named)), 58),
+        Color::Indexed(_) | Color::Rgb(..) => push_extended(out, color, 58),
+        named => push_extended(out, Color::Indexed(slot_of(named)), 58),
     }
 }
 
-/// SGR parameters for a color: `base` 30 for foreground, 40 for background.
-fn color_param(color: Color, base: u8) -> String {
+/// Appends the SGR parameter for a color: `base` 30 for foreground, 40 for background.
+fn push_color(out: &mut String, color: Color, base: u8) {
     match color {
-        Color::Indexed(_) | Color::Rgb(..) => extended_param(color, base + 8),
+        Color::Indexed(_) | Color::Rgb(..) => push_extended(out, color, base + 8),
         named => {
             let slot = slot_of(named);
             let code = if slot < 8 {
@@ -172,18 +172,18 @@ fn color_param(color: Color, base: u8) -> String {
             } else {
                 base + 60 + slot - 8
             };
-            code.to_string()
+            let _ = write!(out, ";{code}");
         }
     }
 }
 
-/// `38`, `48` or `58` followed by a palette index (`5;n`) or truecolour (`2;r;g;b`).
-fn extended_param(color: Color, code: u8) -> String {
-    match color {
-        Color::Indexed(n) => format!("{code};5;{n}"),
-        Color::Rgb(r, g, b) => format!("{code};2;{r};{g};{b}"),
+/// Appends `38`, `48` or `58` followed by a palette index (`5;n`) or truecolour (`2;r;g;b`).
+fn push_extended(out: &mut String, color: Color, code: u8) {
+    let _ = match color {
+        Color::Indexed(n) => write!(out, ";{code};5;{n}"),
+        Color::Rgb(r, g, b) => write!(out, ";{code};2;{r};{g};{b}"),
         named => unreachable!("{named:?} has no extended form"),
-    }
+    };
 }
 
 /// The slot of a colour known to be named: callers route only named colours here.
