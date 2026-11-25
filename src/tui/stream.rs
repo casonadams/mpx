@@ -35,6 +35,26 @@ pub fn plan_output(expected: Option<u64>, offset: u64, next: u64) -> OutputPlan 
     }
 }
 
+/// Drops each `Lagged` that a later one of the same subscription supersedes: catching up once,
+/// after the last, covers everything the earlier ones would have.
+pub fn drop_superseded_lagged(batch: &mut Vec<(u64, StreamEvent)>) {
+    let mut later = Vec::new();
+    let keep: Vec<bool> = batch
+        .iter()
+        .rev()
+        .map(|(generation, event)| {
+            if !matches!(event, StreamEvent::Lagged) {
+                return true;
+            }
+            let first_from_end = !later.contains(generation);
+            later.push(*generation);
+            first_from_end
+        })
+        .collect();
+    let mut keep = keep.into_iter().rev();
+    batch.retain(|_| keep.next().unwrap_or(true));
+}
+
 impl App {
     /// Applies one event from the current subscription. Returns true when the layout must be refetched.
     pub async fn apply_event(&mut self, event: StreamEvent) -> bool {

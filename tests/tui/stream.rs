@@ -1,4 +1,5 @@
-use mpx::tui::stream::{OutputPlan, plan_output};
+use mpx::protocol::StreamEvent;
+use mpx::tui::stream::{OutputPlan, drop_superseded_lagged, plan_output};
 
 #[test]
 fn a_chunk_starting_at_the_expected_offset_is_fed() {
@@ -35,4 +36,17 @@ fn an_in_order_burst_is_fed_chunk_by_chunk() {
         expected = Some(next);
     }
     assert_eq!(expected, Some(12));
+}
+
+#[test]
+fn only_the_last_lag_of_a_subscription_is_kept() {
+    let out = |generation| (generation, StreamEvent::Layout);
+    let lag = |generation| (generation, StreamEvent::Lagged);
+    let mut batch = vec![lag(1), out(1), lag(2), lag(1), lag(2), out(2)];
+    drop_superseded_lagged(&mut batch);
+    let shape: Vec<(u64, bool)> = batch
+        .iter()
+        .map(|(g, e)| (*g, matches!(e, StreamEvent::Lagged)))
+        .collect();
+    assert_eq!(shape, [(1, false), (1, true), (2, true), (2, false)]);
 }

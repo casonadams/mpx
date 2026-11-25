@@ -9,6 +9,7 @@ use crate::protocol::{NewWindowOpts, SpawnOpts, StreamEvent};
 use crate::tui::keymap;
 use crate::tui::panes::resized_elsewhere;
 use crate::tui::status::{local_utc_offset, restored_notice};
+use crate::tui::stream::drop_superseded_lagged;
 
 /// Stream events the app holds before its subscription stops reading the daemon. Small, so a pane
 /// flooding faster than the app draws is paced by the daemon rather than queued here, ahead of a
@@ -174,7 +175,8 @@ impl App {
     }
 
     /// Applies the events of the current subscription.
-    async fn apply_batch(&mut self, batch: Vec<(u64, StreamEvent)>) {
+    async fn apply_batch(&mut self, mut batch: Vec<(u64, StreamEvent)>) {
+        drop_superseded_lagged(&mut batch);
         for (generation, event) in batch {
             if generation != self.sub.generation {
                 continue;
