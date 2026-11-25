@@ -23,6 +23,5 @@ mod tui {
     mod status_bytes;
     mod statusline;
     mod stream;
-    mod style;
     mod terminal;
 }

@@ -2,7 +2,7 @@
 use clap::Subcommand;
 
 use super::resolve::Resolved;
-use super::sessions::{ensure_client, target_resolved};
+use super::sessions::{ensure_client, strip_session, target_resolved};
 use crate::protocol::EnvChange;
 
 #[derive(Subcommand, Debug)]
@@ -92,7 +92,7 @@ pub async fn run(cmd: EnvCommands, r: &Resolved) -> Result<i32, String> {
 
 fn session_target(r: &Resolved, target: Option<&str>) -> Resolved {
     match target {
-        Some(target) => target_resolved(r, target.rsplit(':').next().unwrap_or(target)),
+        Some(target) => target_resolved(r, strip_session(target)),
         None => r.clone(),
     }
 }

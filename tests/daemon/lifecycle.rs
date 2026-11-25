@@ -262,3 +262,46 @@ async fn a_tool_that_ran_in_a_shell_resumes_in_a_shell_that_outlives_it() {
     );
     client.kill("work").await.unwrap();
 }
+
+#[tokio::test]
+async fn a_client_beyond_the_connection_cap_waits_for_a_slot() {
+    const CAP: usize = 4;
+    let dir = tempfile::tempdir().unwrap();
+    let endpoint = mpx::ipc::endpoint_in(dir.path(), "cap");
+    let state_dir = dir.path().join("state");
+    let server = tokio::spawn({
+        let endpoint = endpoint.clone();
+        async move {
+            mpx::daemon::run_daemon_with_limit(&endpoint, "cap", &state_dir, Config::default(), CAP)
+                .await
+        }
+    });
+
+    let mut idle = Vec::new();
+    for _ in 0..CAP {
+        let client = loop {
+            if let Ok(c) = mpx::client::Client::connect(&endpoint).await {
+                break c;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        };
+        idle.push(client);
+    }
+
+    let mut extra = mpx::client::Client::connect(&endpoint)
+        .await
+        .expect("connect beyond the cap");
+    let waiting = tokio::spawn(async move { extra.handshake().await });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!waiting.is_finished(), "served beyond the cap");
+
+    idle.pop();
+    let handshake = tokio::time::timeout(Duration::from_secs(2), waiting)
+        .await
+        .expect("served once a slot frees")
+        .unwrap();
+    assert_eq!(handshake, mpx::client::Handshake::Compatible);
+
+    drop(idle);
+    server.abort();
+}

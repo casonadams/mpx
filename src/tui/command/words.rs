@@ -2,7 +2,7 @@
 use std::collections::BTreeMap;
 
 /// Splits a command line into words: whitespace separates, `'..'` is literal, `".."` honours
-/// `\"` and `\\`, and a bare backslash escapes the next character.
+/// `\"`, `\\` and `\$`, and a bare backslash escapes the next character.
 pub fn split_words(line: &str) -> Result<Vec<String>, String> {
     let mut words = Vec::new();
     let mut cur = String::new();
@@ -12,7 +12,7 @@ pub fn split_words(line: &str) -> Result<Vec<String>, String> {
     while let Some(c) = chars.next() {
         match quote {
             Some(q) if c == q => quote = None,
-            Some('"') if c == '\\' && matches!(chars.peek(), Some(&('"' | '\\'))) => {
+            Some('"') if c == '\\' && matches!(chars.peek(), Some(&('"' | '\\' | '$'))) => {
                 cur.push(chars.next().unwrap_or(c));
             }
             Some(_) => cur.push(c),

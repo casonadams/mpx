@@ -7,7 +7,7 @@ mpx reads TOML from the first of:
 3. `%APPDATA%\mpx\config.toml` (Windows)
 4. `~/.config/mpx/config.toml`
 
-A missing file means defaults. Unknown keys are rejected, so typos surface as errors. The daemon reads the file at start-up (restart a session with `mpx kill-server` to apply daemon settings); the TUI reads it when attaching.
+A missing file means defaults. Unknown keys are rejected, so typos surface as errors. An empty `MPX_CONFIG` or `XDG_CONFIG_HOME` counts as unset. A malformed file at the default location is reported on stderr and the defaults are used; a malformed `-f` file is an error. The daemon reads the file at start-up (restart a session with `mpx kill-server` to apply daemon settings); the TUI reads it when attaching.
 
 `-f FILE` / `--config FILE` (before the command) replaces this list for that invocation; a missing file there means defaults, like the default path.
 

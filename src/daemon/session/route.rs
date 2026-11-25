@@ -1,6 +1,8 @@
 //! Routes actor messages to their handlers. A request is answered here, and the hooks it caused
 //! fire here: the layout changed, a window or pane was made, or a client selected one.
 
+use std::time::Instant;
+
 use super::answer::{connection_only, reply, unit};
 use super::{Origin, Reply, Session, SessionMsg, configure_workspace, is_output};
 use crate::config::Config;
@@ -69,10 +71,12 @@ impl Session {
                 let _ = reply.send(self.subscribe_node(name, since, sink));
             }
             SessionMsg::IdemBegin { key, reply } => {
-                let claim = self.idem.begin(&key, now_ms());
+                let claim = self.idem.begin(&key, Instant::now());
                 let _ = reply.send(claim);
             }
-            SessionMsg::IdemFinish { key, value } => self.idem.finish(&key, *value, now_ms()),
+            SessionMsg::IdemFinish { key, value } => {
+                self.idem.finish(&key, *value, Instant::now());
+            }
             SessionMsg::IdemAbandon { key } => self.idem.abandon(&key),
             SessionMsg::Notice(notice) => self.notice(notice),
             SessionMsg::Hook(msg) => self.hook(msg).await,

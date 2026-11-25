@@ -1,13 +1,16 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use mpx::config::ModeKeys;
 use mpx::tui::copy::{
-    CopyOutcome, CopyState, SearchDirection, SelectionKind, WHEEL_STEP, apply_key as apply_key_in,
-    char_selection_text, find_next_match, line_matches,
+    CopyOutcome, CopyState, SearchDirection, SelectionKind, SelectionRow, WHEEL_STEP,
+    apply_key as apply_key_in, char_selection_text, find_next_match, line_matches,
 };
 use mpx::vt::grid::Grid;
 
-fn row(text: &str) -> Option<Vec<char>> {
-    Some(text.chars().collect())
+fn row(text: &str) -> Option<SelectionRow> {
+    Some(SelectionRow {
+        cells: text.chars().collect(),
+        wrapped: false,
+    })
 }
 
 fn key(c: char) -> KeyEvent {
@@ -379,4 +382,68 @@ fn empty_search_reuses_last_search_pattern() {
     apply_key(&mut cs, &key('/'), Some(&grid), (20, 3));
     apply_key(&mut cs, &code(KeyCode::Enter), Some(&grid), (20, 3));
     assert_eq!(cs.cursor_x, 8, "reused 'one' and jumped to next match");
+}
+
+/// A 4-column screen holding `abcdefgh`: row 0 `abcd` soft-wraps into row 1 `efgh`.
+fn soft_wrapped_grid() -> Grid {
+    let mut grid = Grid::new(4, 3);
+    for c in "abcdefgh".chars() {
+        grid.put_char(c);
+    }
+    grid
+}
+
+#[test]
+fn line_yank_joins_soft_wrapped_rows_and_keeps_hard_breaks() {
+    let grid = soft_wrapped_grid();
+    let mut cs = fresh_at_origin();
+    cs.mode = SelectionKind::Line;
+    cs.cursor_y = 1;
+    assert_eq!(cs.yank_text(&grid), "abcdefgh");
+
+    let mut hard = Grid::new(4, 3);
+    for c in "ab".chars() {
+        hard.put_char(c);
+    }
+    hard.carriage_return();
+    hard.newline();
+    for c in "cd".chars() {
+        hard.put_char(c);
+    }
+    assert_eq!(cs.yank_text(&hard), "ab\ncd");
+}
+
+#[test]
+fn character_yank_joins_soft_wrapped_rows() {
+    let grid = soft_wrapped_grid();
+    let mut cs = fresh_at_origin();
+    cs.mode = SelectionKind::Character;
+    cs.anchor_x = 2;
+    cs.cursor_x = 1;
+    cs.cursor_y = 1;
+    assert_eq!(cs.yank_text(&grid), "cdef");
+}
+
+#[test]
+fn search_matches_text_that_spans_a_soft_wrap() {
+    let grid = soft_wrapped_grid();
+    assert_eq!(
+        find_next_match(&grid, "defg", (0, 0), SearchDirection::Down, false),
+        Some((3, 0))
+    );
+    assert_eq!(
+        find_next_match(&grid, "cdef", (3, 1), SearchDirection::Up, false),
+        Some((2, 0))
+    );
+}
+
+#[test]
+fn a_width_change_that_reflows_the_lines_cancels_the_selection() {
+    let grid = grid_with("hello");
+    let mut cs = fresh_at_origin();
+    cs.mode = SelectionKind::Character;
+    cs.resized(0, &grid, false);
+    assert_eq!(cs.mode, SelectionKind::Character);
+    cs.resized(0, &grid, true);
+    assert_eq!(cs.mode, SelectionKind::None);
 }

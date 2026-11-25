@@ -31,6 +31,18 @@ impl Grid {
             .map(move |&row| row - first)
     }
 
+    /// Removes the number of the row at the top of the screen: marks on it go, later ones close up.
+    pub(super) fn drop_row_number(&mut self) {
+        let top = self.scrolled_off;
+        for marks in [&mut self.prompts, &mut self.outputs] {
+            marks.retain(|&row| row != top);
+            marks
+                .iter_mut()
+                .filter(|row| **row > top)
+                .for_each(|row| *row -= 1);
+        }
+    }
+
     fn first_kept_row(&self) -> usize {
         self.scrolled_off - self.history.len()
     }

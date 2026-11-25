@@ -71,8 +71,7 @@ impl Workspace {
             .iter()
             .enumerate()
             .filter(|(i, l)| *i != self.active_idx && !l.has_silence)
-            .filter_map(|(_, l)| l.last_output)
-            .map(|t| t + quiet)
+            .filter_map(|(_, l)| l.last_output?.checked_add(quiet))
             .min()
     }
 }

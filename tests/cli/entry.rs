@@ -79,3 +79,58 @@ fn auto_spawned_daemon_serves_the_same_session_endpoint_config_and_state() {
         ["--no-restore", "daemon"].map(std::ffi::OsString::from)
     );
 }
+
+#[test]
+fn malformed_default_config_is_reported_on_stderr_and_defaults_apply() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let bad = dir.path().join("bad.toml");
+    std::fs::write(&bad, "this is = = not toml").expect("bad config");
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_mpx"))
+        .env("MPX_CONFIG", &bad)
+        .env("XDG_RUNTIME_DIR", dir.path())
+        .env("MPX_STATE_DIR", dir.path().join("state"))
+        .env_remove("MPX_ENDPOINT")
+        .env_remove("MPX_SESSION")
+        .arg("has-session")
+        .output()
+        .expect("spawn");
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("mpx: ignoring invalid config, using defaults: "),
+        "{stderr}"
+    );
+    assert!(stderr.contains("bad.toml: "), "{stderr}");
+    assert!(out.stdout.is_empty());
+}
+
+#[test]
+fn a_session_name_too_long_for_a_socket_path_is_refused_before_any_daemon_starts() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_mpx"))
+        .env("XDG_RUNTIME_DIR", dir.path())
+        .env("MPX_STATE_DIR", dir.path().join("state"))
+        .env_remove("MPX_ENDPOINT")
+        .args(["-s", &"s".repeat(200), "daemon"])
+        .output()
+        .expect("spawn");
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("shorter session name"), "{stderr}");
+}
+
+#[test]
+fn log_output_never_reaches_stdout() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_mpx"))
+        .env("RUST_LOG", "trace")
+        .env("XDG_RUNTIME_DIR", dir.path())
+        .env("MPX_STATE_DIR", dir.path().join("state"))
+        .env_remove("MPX_ENDPOINT")
+        .env_remove("MPX_SESSION")
+        .args(["list-sessions", "--json"])
+        .output()
+        .expect("spawn");
+    assert!(out.status.success());
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "[]");
+}

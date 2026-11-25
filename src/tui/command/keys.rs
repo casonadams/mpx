@@ -38,6 +38,9 @@ pub(super) fn bind_key(name: &str, args: &[String]) -> Result<Command, String> {
 /// `unbind-key [-n] [-a] [-T table] key`: a bind with an empty command line.
 pub(super) fn unbind_key(name: &str, args: &[String]) -> Result<Command, String> {
     with_opts(name, args, UNBIND, Operands::Allow, |o| {
+        if o.has("-a") {
+            return Err(format!("{name}: -a is not supported"));
+        }
         let table = key_table(name, &o)?;
         let key = o
             .rest

@@ -3,11 +3,11 @@ use std::io::{self, Write};
 use super::expand::{active_vars, format_status, loop_lists};
 use crate::config::Justify;
 use crate::format::{Lists, Vars, expand_with};
+use crate::style::{self, Style, over_colours};
 use crate::tui::app::{App, Mode};
 use crate::tui::render::{Compositor, draw_status_segments, parse_color};
 use crate::tui::status::pane_items;
 use crate::tui::statusline::{Item, Line, Seg, Target, compose, parse_styled, truncate};
-use crate::tui::style::{self, Style, over_colours};
 
 /// Bottom row: the command line while typing or confirming, else a live message, else the status bar.
 /// Sent only when it differs from the row already on screen.

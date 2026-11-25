@@ -1,7 +1,6 @@
 use super::Window;
 use crate::layout::geometry::Rect;
-use crate::layout::tree::{Direction, Divider, LayoutNode, preset_tree};
-use crate::protocol::{LayoutPreset, Side};
+use crate::layout::tree::{Direction, Divider, LayoutNode, LayoutPreset, Side, preset_tree};
 
 impl Window {
     pub fn new(id: usize, name: String, root_node: String) -> Self {

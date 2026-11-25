@@ -38,6 +38,14 @@ pub fn validate_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// The shell a pane or popup runs: the configured `default-shell`, else `$SHELL`, else
+/// [`fallback_shell`].
+pub fn default_shell(configured: Option<&str>, env_shell: Option<&str>) -> String {
+    configured
+        .or(env_shell)
+        .map_or_else(|| fallback_shell().to_string(), str::to_string)
+}
+
 /// The shell a pane or popup runs when none is configured and `$SHELL` is unset: `powershell.exe`
 /// on Windows, `/bin/sh` elsewhere.
 pub fn fallback_shell() -> &'static str {

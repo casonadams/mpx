@@ -5,7 +5,8 @@ use futures_util::future::join_all;
 use super::Placement;
 use super::Session;
 use super::answer::{check, connection_only, node_reply, reply, unit};
-use crate::clients::{WindowSize, effective_size};
+use crate::clients::effective_size;
+use crate::config::{MAX_WINDOW_SIZE, WindowSize};
 use crate::daemon::clients;
 use crate::layout::window_not_found;
 use crate::node::process::basename;
@@ -13,9 +14,6 @@ use crate::protocol::{
     LinkOpts, NewWindowOpts, ResizeOpts, Response, Side, UnlinkOpts, WindowFit, WindowRequest,
     WindowResize,
 };
-
-/// The largest size `resize-window` gives a window (tmux `WINDOW_MAXIMUM`).
-const MAX_WINDOW_SIZE: u16 = 10_000;
 
 /// `v` less `by` cells, or `v` itself when it is smaller than that (tmux `resize-window -L`).
 fn shrink(v: u16, by: u16) -> u16 {
@@ -77,7 +75,9 @@ impl Session {
 
     /// The window layout a client asks for at `width` by `height`, with the window tabs.
     pub(super) async fn layout(&mut self, width: u16, height: u16) -> Response {
-        self.refresh_window_names().await;
+        if self.refresh_window_names().await {
+            self.schedule_save();
+        }
         self.requested = (width, height);
         let (width, height) = match self.workspace.manual_size_at(None) {
             Some(size) => size,
@@ -88,9 +88,10 @@ impl Session {
     }
 
     /// Sets each window's automatic name from its focused pane's label, when `automatic-rename` is on.
-    async fn refresh_window_names(&mut self) {
+    /// Returns whether a name changed.
+    async fn refresh_window_names(&mut self) -> bool {
         if !self.config.window.automatic_rename {
-            return;
+            return false;
         }
         let windows: Vec<(usize, Option<String>)> = self
             .workspace
@@ -110,9 +111,11 @@ impl Session {
             }
         }))
         .await;
+        let mut changed = false;
         for (number, label) in labels {
-            self.workspace.set_auto_name(number, label);
+            changed |= self.workspace.set_auto_name(number, label);
         }
+        changed
     }
 
     fn rename_window(&mut self, index: Option<usize>, name: String) -> Response {

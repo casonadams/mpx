@@ -20,9 +20,11 @@ impl VtHandler {
         let Some(buf) = &mut self.dcs_buf else {
             return;
         };
-        if buf.len() < MAX_DCS_LEN {
-            buf.push(byte);
+        if buf.len() >= MAX_DCS_LEN {
+            self.dcs_buf = None;
+            return;
         }
+        buf.push(byte);
         if buf.len() <= PASSTHROUGH_PREFIXES[0].len() && !may_pass_through(buf) {
             self.dcs_buf = None;
         }

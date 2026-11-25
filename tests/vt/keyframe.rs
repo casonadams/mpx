@@ -39,6 +39,14 @@ fn corpus() -> Vec<(&'static str, String)> {
             "\x1b[?69h\x1b[5;20s\x1b[3;8Hinside".to_string(),
         ),
         ("bottom row filled", format!("{}x", "\r\n".repeat(ROWS - 1))),
+        (
+            "alternate screen over a primary screen",
+            "main\r\nrows\x1b[2;2H\x1b[?1049h\x1b[Halt".to_string(),
+        ),
+        (
+            "autowrap off, insert mode and origin mode",
+            "\x1b[3;8r\x1b[?7l\x1b[?6h\x1b[4h\x1b[2;3Hx".to_string(),
+        ),
         ("bar cursor", "\x1b[5 qinsert".to_string()),
     ]
 }
@@ -59,6 +67,11 @@ fn a_keyframe_rebuilds_the_grid_whatever_output_made_it() {
         let (a, b) = (source.grid(), rebuilt.grid());
 
         assert_eq!(rows(&rebuilt), rows(&source), "{what}: cells");
+        let (mut shown, mut built) = (a.clone(), b.clone());
+        shown.set_alternate_screen(!a.alternate_screen());
+        built.set_alternate_screen(!b.alternate_screen());
+        let other = |g: &mpx::vt::Grid| g.screen_lines().map(<[Cell]>::to_vec).collect::<Vec<_>>();
+        assert_eq!(other(&built), other(&shown), "{what}: the screen not shown");
         assert_eq!(b.cursor, a.cursor, "{what}: cursor");
         assert_eq!(b.cursor_shape, a.cursor_shape, "{what}: cursor shape");
         assert_eq!(b.saved_cursor, a.saved_cursor, "{what}: saved cursor");
@@ -78,6 +91,11 @@ fn a_keyframe_rebuilds_the_grid_whatever_output_made_it() {
                 a.scroll_right
             ),
             "{what}: margins"
+        );
+        assert_eq!(
+            (b.autowrap, b.origin_mode, b.insert_mode),
+            (a.autowrap, a.origin_mode, a.insert_mode),
+            "{what}: modes"
         );
         assert_eq!(b.current_style, a.current_style, "{what}: pen");
         assert_eq!(

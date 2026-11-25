@@ -4,7 +4,7 @@
 
 One exception carries the bulk of the traffic: a subscriber that asks for it (`Subscribe { binary: true }`, which the TUI does) and a daemon that answers `BinaryStream` switch that connection to length-prefixed binary frames (`src/wire.rs`), where pane output is raw bytes instead of escaped JSON; other events stay JSON inside their frame.
 
-Inside the daemon, state is owned by **actors**: tokio tasks that each own their data outright and are reached only through messages. Nothing on the request or output path is shared behind a lock. Every mpx process runs its tasks on a single thread to eliminate cross-thread wakeups and maximize throughput.
+Inside the daemon, state is owned by **actors**: tokio tasks that each own their data outright and are reached only through messages. The output path shares only atomic counters and the output pacing state, which short locks guard. Every mpx process runs its tasks on a single thread to eliminate cross-thread wakeups and maximize throughput.
 
 ```mermaid
 graph LR

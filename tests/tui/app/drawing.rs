@@ -135,7 +135,7 @@ async fn confirmation_question_replaces_the_status_row() {
 #[tokio::test]
 async fn prefix_shows_the_shortcut_menu_after_the_delay_and_help_hides_the_cursor() {
     let mut h = start().await;
-    h.app.config.which_key_delay_ms = 50;
+    h.app.config.which_key_delay_ms = 60_000;
     h.frame().await;
     h.ctrl('b').await;
     let early = h.frame().await;
@@ -143,7 +143,7 @@ async fn prefix_shows_the_shortcut_menu_after_the_delay_and_help_hides_the_curso
         !early.contains("new window"),
         "the menu waits for the delay"
     );
-    tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+    h.app.config.which_key_delay_ms = 0;
     assert!(h.frame().await.contains("new window"));
 
     h.key(KeyCode::Char('?')).await;

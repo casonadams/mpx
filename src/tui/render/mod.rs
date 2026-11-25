@@ -7,7 +7,7 @@ mod pane;
 mod selection;
 mod status_bar;
 
-pub use super::color::{
+pub use crate::style::color::{
     Palette, color_to_rgb, dim_color, from_terminal_palette, inactive_color, parse_color,
 };
 pub use clipboard::{copy_to_clipboard, read_clipboard};

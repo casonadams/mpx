@@ -3,7 +3,9 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
-use super::files::{component, write_atomic};
+use crate::config::MAX_WINDOW_SIZE;
+
+use super::files::{case_safe_component, write_atomic};
 
 const SCROLLBACK_DIR: &str = "scrollback";
 const MAGIC: &str = "mpx-scrollback 1";
@@ -29,7 +31,7 @@ impl ScrollbackStore {
     }
 
     fn path(&self, pane: &str) -> PathBuf {
-        self.dir.join(component(pane))
+        self.dir.join(case_safe_component(pane))
     }
 
     pub fn save(&self, pane: &str, scrollback: &PaneScrollback) -> Result<(), String> {
@@ -53,7 +55,7 @@ impl ScrollbackStore {
 
     /// Deletes every file but the scrollback of `panes`.
     pub fn retain(&self, panes: &[String]) -> Result<(), String> {
-        let keep: HashSet<String> = panes.iter().map(|pane| component(pane)).collect();
+        let keep: HashSet<String> = panes.iter().map(|pane| case_safe_component(pane)).collect();
         let entries = match fs::read_dir(&self.dir) {
             Ok(entries) => entries,
             Err(e) if e.kind() == ErrorKind::NotFound => return Ok(()),
@@ -80,7 +82,10 @@ fn decode(bytes: &[u8]) -> Option<PaneScrollback> {
     let mut size = header.strip_prefix(MAGIC)?.split_whitespace();
     let cols = size.next()?.parse().ok()?;
     let rows = size.next()?.parse().ok()?;
-    if size.next().is_some() {
+    if size.next().is_some()
+        || !(1..=MAX_WINDOW_SIZE).contains(&cols)
+        || !(1..=MAX_WINDOW_SIZE).contains(&rows)
+    {
         return None;
     }
     Some(PaneScrollback {

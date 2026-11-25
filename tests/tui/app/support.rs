@@ -15,7 +15,7 @@ use mpx::ipc::{self, IpcListener};
 use mpx::layout::Direction;
 use mpx::layout::geometry::Rect;
 use mpx::protocol::{NewWindowOpts, SpawnOpts, SplitOpts, WaitCondition, WaitOutcome};
-use mpx::tui::app::{App, AppOptions, AttachOpts, Clipboard, Flow, Mode, StartView, StreamRx};
+use mpx::tui::app::{App, AppOptions, AttachOpts, Clipboard, Flow, Mode, StreamRx};
 use mpx::tui::frame;
 use mpx::tui::popup::{self, PopupState};
 use mpx::vt::{Cursor, VtScreen};
@@ -104,7 +104,7 @@ pub async fn open_app(
         attach,
         client_name,
     };
-    let (mut app, rx) = App::open(&sandbox.endpoint(session), session, StartView::Panes, opts)
+    let (mut app, rx) = App::open(&sandbox.endpoint(session), session, opts)
         .await
         .expect("attach app");
     app.yank.clipboard = Clipboard::Captured(Vec::new());

@@ -40,3 +40,14 @@ async fn reload_applies_the_file_and_keeps_the_old_config_when_it_is_invalid() {
     assert!(h.app.keymap.is_prefix(&ctrl_a()));
     assert_eq!(h.app.config.prefix, "C-a");
 }
+
+#[tokio::test]
+async fn a_file_that_sources_itself_stops_at_the_nesting_limit() {
+    let mut h = Harness::start(Config::default(), ECHO).await;
+    h.frame().await;
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("loop.conf");
+    std::fs::write(&file, format!("source-file {}\n", file.display())).unwrap();
+    h.command(&format!("source-file {}", file.display())).await;
+    assert_eq!(said(&h), "source-file: nested more than 16 deep");
+}

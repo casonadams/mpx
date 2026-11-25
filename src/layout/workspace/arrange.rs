@@ -1,7 +1,6 @@
 use super::{Window, Workspace};
 use crate::layout::geometry::Rect;
-use crate::layout::tree::Divider;
-use crate::protocol::{LayoutPreset, Side};
+use crate::layout::tree::{Divider, LayoutPreset, Side};
 
 impl Workspace {
     /// Applies a preset to the active window; `None` cycles.

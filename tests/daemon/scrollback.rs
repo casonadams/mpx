@@ -68,7 +68,7 @@ async fn output_comes_back_on_restore_after_the_daemon_stopped_without_shutting_
 }
 
 #[tokio::test]
-async fn with_restore_off_no_scrollback_stays_on_disk() {
+async fn with_restore_off_stale_scrollback_is_deleted() {
     let state = tempfile::tempdir().unwrap();
     let stale = PaneScrollback {
         size: (80, 24),
@@ -104,4 +104,42 @@ async fn a_killed_panes_scrollback_is_deleted() {
         saved_log(state.path(), "shell").is_none().then_some(())
     })
     .await;
+}
+
+#[tokio::test]
+async fn an_unreadable_snapshot_is_moved_aside_and_its_scrollback_kept() {
+    let state = tempfile::tempdir().unwrap();
+    std::fs::write(state.path().join("snapshot.json"), "{ not json").unwrap();
+    ScrollbackStore::in_dir(state.path())
+        .save(
+            "kept",
+            &PaneScrollback {
+                size: (80, 24),
+                log: b"old output".to_vec(),
+            },
+        )
+        .unwrap();
+    let daemon = super::support::start_on(state.path(), restore(true)).await;
+    let mut client = super::support::connect(&daemon.endpoint).await;
+    client
+        .new_window(super::support::window("w", "pw"))
+        .await
+        .unwrap();
+
+    eventually("a fresh snapshot", || {
+        SnapshotStore::in_dir(state.path()).load().ok()?.map(|_| ())
+    })
+    .await;
+    let moved = std::fs::read_dir(state.path()).unwrap().any(|entry| {
+        entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with("snapshot.json.corrupt-")
+    });
+    assert!(moved, "the unreadable snapshot is kept aside");
+    assert!(
+        saved_log(state.path(), "kept").is_some(),
+        "its scrollback is not pruned"
+    );
 }

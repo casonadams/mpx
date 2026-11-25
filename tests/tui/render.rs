@@ -1,12 +1,12 @@
 use mpx::config::BorderStyle;
 use mpx::layout::{Divider, Rect, WindowTab};
+use mpx::style::Style;
 use mpx::tui::canvas::Canvas;
 use mpx::tui::render::{
     Compositor, DividerStyle, HostColors, Palette, PaneColors, RenderPaneContext, SelectionRange,
     StatusBar, color_to_rgb, dim_color, format_tab, from_terminal_palette, hud_rect,
     inactive_color, parse_color, status_left, status_right, vt_to_crossterm,
 };
-use mpx::tui::style::Style;
 use mpx::vt::grid::Grid;
 use mpx::vt::{CellStyle, Color as VtColor};
 

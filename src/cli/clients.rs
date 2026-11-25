@@ -2,8 +2,9 @@
 //! finds the attached clients across the running sessions and asks the daemon of the session the
 //! client is attached to.
 use crate::client::Client;
-use crate::clients::{self, ClientRow, Size};
+use crate::clients::{self, ClientRow};
 use crate::cmdline::join_words;
+use crate::config::Size;
 use crate::ipc;
 use crate::protocol::ClientTarget;
 

@@ -150,9 +150,11 @@ fn find_match(
         forward,
     } = search;
     let hit = |abs_y: usize, bound: Option<usize>| {
-        let cells = grid.line_cells(abs_y)?;
-        let col = find_cell_match(&cells, query, smart_case, bound, forward)?;
-        Some((col, abs_y))
+        let (start, end) = logical_span(grid, abs_y, total_lines);
+        let cells = logical_cells(grid, start, end)?;
+        let bound = bound.map(|x| (abs_y - start) * grid.cols + x);
+        let idx = find_cell_match(&cells, query, smart_case, bound, forward)?;
+        Some((idx % grid.cols, start + idx / grid.cols))
     };
     let scan = |lines: std::ops::Range<usize>| {
         if forward {
@@ -161,10 +163,11 @@ fn find_match(
             lines.rev().find_map(|y| hit(y, None))
         }
     };
+    let (start, end) = logical_span(grid, from_abs_y, total_lines);
     let (ahead, behind) = if forward {
-        (from_abs_y + 1..total_lines, 0..from_abs_y)
+        (end + 1..total_lines, 0..start)
     } else {
-        (0..from_abs_y, from_abs_y + 1..total_lines)
+        (0..start, end + 1..total_lines)
     };
     let first = hit(from_abs_y, Some(from_x)).or_else(|| scan(ahead));
     if first.is_some() || !wrap {
@@ -173,9 +176,31 @@ fn find_match(
     scan(behind).or_else(|| hit(from_abs_y, None))
 }
 
-/// The column of the first (`forward`) or last match of `query` in one row, looking only at the
-/// row's text before its trailing blanks. `bound` is the column a forward search starts past or
-/// a backward search stops before; `None` searches the whole row.
+/// The first and last row of the logical line holding `abs_y`: a row that soft-wraps continues
+/// onto the next one.
+fn logical_span(grid: &Grid, abs_y: usize, total_lines: usize) -> (usize, usize) {
+    let mut start = abs_y;
+    while start > 0 && grid.line_wrapped(start - 1) {
+        start -= 1;
+    }
+    let mut end = abs_y;
+    while end + 1 < total_lines && grid.line_wrapped(end) {
+        end += 1;
+    }
+    (start, end)
+}
+
+fn logical_cells(grid: &Grid, start: usize, end: usize) -> Option<Vec<Cell>> {
+    let mut cells = Vec::new();
+    for y in start..=end {
+        cells.extend_from_slice(&grid.line_cells(y)?);
+    }
+    Some(cells)
+}
+
+/// The index into `cells` of the first (`forward`) or last match of `query`, looking only at the
+/// text before its trailing blanks. `bound` is the index a forward search starts past or a
+/// backward search stops before; `None` searches all of `cells`.
 fn find_cell_match(
     cells: &[Cell],
     query: &[char],

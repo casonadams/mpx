@@ -12,7 +12,7 @@ use crossterm::{
 };
 use std::io::{self, Write, stdout};
 
-use super::color::Palette;
+use crate::style::color::Palette;
 
 /// Focus reporting on (DEC 1004) and off: sent only when `focus-events` asks for it.
 const FOCUS_ON: &[u8] = b"\x1b[?1004h";

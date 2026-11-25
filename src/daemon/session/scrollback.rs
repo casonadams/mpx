@@ -119,8 +119,11 @@ impl Session {
     }
 
     /// Keeps the saved scrollback of the snapshot's `panes` only, or of none while `restore` is
-    /// off.
+    /// off. Nothing is removed once the snapshot could not be loaded.
     pub(super) fn retain_scrollback(&self, mut panes: Vec<String>) {
+        if self.keep_scrollback {
+            return;
+        }
         if !self.config.session.restore {
             panes.clear();
         }

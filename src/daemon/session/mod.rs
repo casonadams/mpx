@@ -38,8 +38,8 @@ use super::channels::Channels;
 use super::hooks::{Context, HookTable, State, Tx};
 use super::idempotency::{Claim, IdemCache};
 use super::stores::Stores;
-use crate::clients::Size;
 use crate::config::Config;
+use crate::config::Size;
 use crate::layout::{Direction, Workspace};
 use crate::node::now_ms;
 use crate::node::pacing::Pacing;
@@ -245,6 +245,8 @@ struct Session {
     stores: Stores,
     save_due: Option<Instant>,
     shutting_down: bool,
+    /// Set once the snapshot could not be loaded: the scrollback it named is then never pruned.
+    keep_scrollback: bool,
 }
 
 fn configure_workspace(workspace: &mut Workspace, config: &Config) {
@@ -307,6 +309,7 @@ pub(super) async fn run(boot: Boot, mut rx: mpsc::UnboundedReceiver<SessionMsg>)
         stores: Stores::default(),
         save_due: None,
         shutting_down: false,
+        keep_scrollback: false,
     };
     session.start().await;
     let _ = ready.send(());

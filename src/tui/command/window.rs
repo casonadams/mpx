@@ -122,15 +122,19 @@ pub(super) fn rename_window(args: &[String]) -> Result<Command, String> {
     Ok(Command::Window(WindowCommand::RenameWindow { name }))
 }
 
-pub(super) fn select_window(name: &str, args: &[String]) -> Result<Command, String> {
+pub(super) fn select_window(name: &str, args: &[String], scope: Scope) -> Result<Command, String> {
     with_opts(name, args, TARGET, Operands::Refuse, |o| {
         let raw = o
             .value("-t")
             .ok_or_else(|| format!("{name}: need -t <index>"))?;
-        Ok(match parse_index(raw) {
+        let (session, window) = raw.rsplit_once(':').unwrap_or(("", raw));
+        if !session.is_empty() && scope.session != Some(session) {
+            return Err(other_session(raw));
+        }
+        Ok(match parse_index(window) {
             Ok(index) => Command::Window(WindowCommand::SelectWindow { index }),
             Err(_) => Command::Window(WindowCommand::SelectWindowNamed {
-                name: raw.rsplit(':').next().unwrap_or(raw).to_string(),
+                name: window.to_string(),
             }),
         })
     })
@@ -206,9 +210,7 @@ fn cells_arg(name: &str, raw: &str) -> Result<u16, String> {
 pub fn window_target(raw: &str, session: Option<&str>) -> Result<usize, String> {
     let index = match raw.rsplit_once(':') {
         Some((name, _)) if !name.is_empty() && session != Some(name) => {
-            return Err(format!(
-                "window {raw} is in another session: each session runs in its own daemon, so its windows cannot be shared with this one (see docs/ARCHITECTURE.md)"
-            ));
+            return Err(other_session(raw));
         }
         Some((_, index)) => index,
         None => raw,
@@ -216,6 +218,12 @@ pub fn window_target(raw: &str, session: Option<&str>) -> Result<usize, String> 
     index
         .parse::<usize>()
         .map_err(|_| format!("invalid window index '{raw}'"))
+}
+
+fn other_session(raw: &str) -> String {
+    format!(
+        "window {raw} is in another session: each session runs in its own daemon, so its windows cannot be shared with this one (see docs/ARCHITECTURE.md)"
+    )
 }
 
 /// A window index for a command flag: `N` or `:N`.

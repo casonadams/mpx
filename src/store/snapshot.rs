@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use super::files::write_atomic;
+use super::files::{check_private_file, write_atomic};
 use super::{SNAPSHOT_VERSION, SessionSnapshot, SnapshotStore};
 
 const SNAPSHOT_FILE: &str = "snapshot.json";
@@ -23,11 +23,17 @@ impl SnapshotStore {
         &self.path
     }
 
-    /// `Ok(None)` when no snapshot exists; an unreadable or newer-version file is an error.
+    /// `Ok(None)` when no snapshot exists; an unreadable, foreign-owned, group- or world-writable, or
+    /// newer-version file is an error.
     pub fn load(&self) -> Result<Option<SessionSnapshot>, String> {
+        let meta = match fs::metadata(&self.path) {
+            Ok(meta) => meta,
+            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(format!("read {}: {e}", self.path.display())),
+        };
+        check_private_file(&self.path, &meta)?;
         match fs::read_to_string(&self.path) {
             Ok(text) => decode_snapshot(&text).map(Some),
-            Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
             Err(e) => Err(format!("read {}: {e}", self.path.display())),
         }
     }
@@ -35,6 +41,19 @@ impl SnapshotStore {
     pub fn save(&self, snapshot: &SessionSnapshot) -> Result<(), String> {
         let text = encode_snapshot(snapshot)?;
         write_atomic(&self.path, text.as_bytes())
+    }
+
+    /// Moves the snapshot aside to `snapshot.json.corrupt-<stamp>`, so a later save cannot overwrite
+    /// it. Returns where it went, or None when there is no snapshot.
+    pub fn quarantine(&self, stamp: u64) -> Result<Option<PathBuf>, String> {
+        let mut aside = self.path.clone().into_os_string();
+        aside.push(format!(".corrupt-{stamp}"));
+        let aside = PathBuf::from(aside);
+        match fs::rename(&self.path, &aside) {
+            Ok(()) => Ok(Some(aside)),
+            Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(format!("move {} aside: {e}", self.path.display())),
+        }
     }
 }
 

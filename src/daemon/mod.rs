@@ -14,9 +14,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{Semaphore, mpsc, oneshot, watch};
 use tokio_util::codec::{Framed, LinesCodec};
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 use crate::config::Config;
 use crate::ipc::{AsyncStream, IpcListener};
@@ -24,7 +24,7 @@ use crate::node::now_ms;
 use crate::node::pacing::{Backlog, CloseOnDrop, Pacing};
 use crate::node::pane::{PaneHandle, ask_actor};
 use crate::node::sink::Sink;
-use crate::protocol::{DaemonMessage, Request, Response, StreamEvent};
+use crate::protocol::{DaemonMessage, Request, Response, ScriptRequest, StreamEvent};
 use crate::wire;
 use idempotency::Claim;
 use session::{Filter, HookMsg, Origin, SessionMsg, Subscription};
@@ -193,50 +193,25 @@ async fn stream_events<S: AsyncStream>(
         return;
     }
     if binary {
-        stream_frames(framed.get_mut(), &mut rx, backlog.as_deref()).await;
+        stream_batches(framed.get_mut(), &mut rx, backlog.as_deref(), push_frame).await;
     } else {
-        stream_lines(framed.get_mut(), &mut rx, backlog.as_deref()).await;
+        stream_batches(
+            framed.get_mut(),
+            &mut rx,
+            backlog.as_deref(),
+            push_json_event,
+        )
+        .await;
     }
 }
 
-/// Writes events as lines of JSON, every event already queued in one write.
-async fn stream_lines<S: AsyncStream>(
+/// Writes events until the subscriber leaves, every event already queued in one write. `encode`
+/// appends one event to the batch.
+async fn stream_batches<S: AsyncStream>(
     io: &mut S,
     rx: &mut mpsc::Receiver<StreamEvent>,
     backlog: Option<&Backlog>,
-) {
-    let mut buf = Vec::with_capacity(64 * 1024);
-    while let Some(first) = rx.recv().await {
-        buf.clear();
-        let mut count = 0;
-        let mut next = Some(first);
-        while let Some(event) = next.take() {
-            count += 1;
-            if let Err(e) = push_json_line(&mut buf, &DaemonMessage::Event(event)) {
-                warn!("dropped an event that cannot be serialized: {}", e);
-            }
-            if buf.len() < FRAME_BATCH {
-                next = rx.try_recv().ok();
-            }
-        }
-        if io.write_all(&buf).await.is_err() {
-            return;
-        }
-        if let Some(backlog) = backlog {
-            let now = now_ms();
-            (0..count).for_each(|_| backlog.sent(now));
-        }
-    }
-}
-
-/// Bytes of frames gathered into one write while more events are already queued.
-const FRAME_BATCH: usize = 256 * 1024;
-
-/// Writes events as length-prefixed binary frames, every event already queued in one write.
-async fn stream_frames<S: AsyncStream>(
-    io: &mut S,
-    rx: &mut mpsc::Receiver<StreamEvent>,
-    backlog: Option<&Backlog>,
+    encode: fn(&mut Vec<u8>, StreamEvent),
 ) {
     let mut buf = Vec::with_capacity(64 * 1024);
     let mut probe = [0u8; 64];
@@ -257,7 +232,7 @@ async fn stream_frames<S: AsyncStream>(
         let mut count = 0;
         let mut next = Some(first);
         while let Some(event) = next.take() {
-            push_frame(&mut buf, &event);
+            encode(&mut buf, event);
             count += 1;
             if buf.len() < FRAME_BATCH {
                 next = rx.try_recv().ok();
@@ -273,17 +248,27 @@ async fn stream_frames<S: AsyncStream>(
     }
 }
 
+/// Bytes of frames gathered into one write while more events are already queued.
+const FRAME_BATCH: usize = 256 * 1024;
+
+/// Appends `event` as one line of JSON.
+fn push_json_event(buf: &mut Vec<u8>, event: StreamEvent) {
+    if let Err(e) = push_json_line(buf, &DaemonMessage::Event(event)) {
+        error!("dropped an event that cannot be serialized: {}", e);
+    }
+}
+
 /// Appends `event` as one frame: a big-endian u32 length, then its payload.
-fn push_frame(buf: &mut Vec<u8>, event: &StreamEvent) {
+fn push_frame(buf: &mut Vec<u8>, event: StreamEvent) {
     let start = buf.len();
     buf.extend_from_slice(&[0; 4]);
-    match wire::encode_event(event, buf) {
+    match wire::encode_event(&event, buf) {
         Ok(()) => {
             let len = (buf.len() - start - 4) as u32;
             buf[start..start + 4].copy_from_slice(&len.to_be_bytes());
         }
         Err(e) => {
-            warn!("dropped an event that cannot be framed: {}", e);
+            error!("dropped an event that cannot be framed: {}", e);
             buf.truncate(start);
         }
     }
@@ -343,9 +328,21 @@ async fn subscribe_node<S: AsyncStream>(
     }
 }
 
+/// Runs a channel wait while the client stays connected. A client that closes its connection, or
+/// sends anything more while it waits, gives the wait up, so no lock is handed to a client that is gone.
+async fn wait_while_connected<S: AsyncStream>(
+    state: &Arc<DaemonState>,
+    framed: &mut Framed<S, LinesCodec>,
+    req: Request,
+) -> Option<Response> {
+    tokio::select! {
+        resp = dispatch::dispatch(state, req) => Some(resp),
+        _ = framed.next() => None,
+    }
+}
+
 pub async fn handle_client<S: AsyncStream>(state: Arc<DaemonState>, stream: S) {
     let mut framed = Framed::new(stream, wire::line_codec());
-    // Terminals that reported pane modes over this connection: their marks go when it closes.
 
     while let Some(line_res) = framed.next().await {
         let line = match line_res {
@@ -381,7 +378,15 @@ pub async fn handle_client<S: AsyncStream>(state: Arc<DaemonState>, stream: S) {
             }
             req => {
                 let shutdown = matches!(req, Request::Shutdown);
-                let resp = dispatch::dispatch(&state, req).await;
+                let waits = matches!(req, Request::Script(ScriptRequest::WaitFor { .. }));
+                let resp = if waits {
+                    match wait_while_connected(&state, &mut framed, req).await {
+                        Some(resp) => resp,
+                        None => break,
+                    }
+                } else {
+                    dispatch::dispatch(&state, req).await
+                };
                 if !send_message(&mut framed, &DaemonMessage::Response(resp)).await {
                     break;
                 }
@@ -394,6 +399,9 @@ pub async fn handle_client<S: AsyncStream>(state: Arc<DaemonState>, stream: S) {
     }
 }
 
+/// Most clients one daemon serves at once; further connections wait in the socket backlog.
+pub const MAX_CLIENTS: usize = 256;
+
 /// Serves `endpoint` for `session` with `config`, keeping durable state under `state_dir`
 /// (normally `store::session_dir(session)`).
 pub async fn run_daemon(
@@ -401,6 +409,17 @@ pub async fn run_daemon(
     session: &str,
     state_dir: &Path,
     config: Config,
+) -> std::io::Result<()> {
+    run_daemon_with_limit(endpoint, session, state_dir, config, MAX_CLIENTS).await
+}
+
+/// `run_daemon` serving at most `max_clients` connections at once.
+pub async fn run_daemon_with_limit(
+    endpoint: &str,
+    session: &str,
+    state_dir: &Path,
+    config: Config,
+    max_clients: usize,
 ) -> std::io::Result<()> {
     #[cfg(unix)]
     let listener = IpcListener::bind(endpoint)?;
@@ -417,13 +436,19 @@ pub async fn run_daemon(
     .await;
     let mut shutdown = state.shutdown_signal();
 
+    let slots = Arc::new(Semaphore::new(max_clients));
     loop {
+        let permit = tokio::select! {
+            permit = Arc::clone(&slots).acquire_owned() => permit.expect("client slots are never closed"),
+            _ = shutdown.wait_for(|stop| *stop) => break,
+        };
         tokio::select! {
             accepted = listener.accept() => match accepted {
                 Ok(stream) => {
                     let state_clone = Arc::clone(&state);
                     tokio::spawn(async move {
                         handle_client(state_clone, stream).await;
+                        drop(permit);
                     });
                 }
                 Err(e) => error!("Accept error: {}", e),

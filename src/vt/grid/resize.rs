@@ -16,7 +16,12 @@ impl Grid {
         } else if new_rows < self.rows {
             self.shrink_rows(new_rows);
         }
-        for line in &mut self.lines {
+        for line in self.lines.iter_mut().chain(&mut self.hidden_lines) {
+            line.resize(new_cols, Cell::default());
+        }
+        self.hidden_lines.resize(new_rows, Vec::new());
+        self.hidden_wrapped.resize(new_rows, false);
+        for line in self.hidden_lines.iter_mut().filter(|line| line.is_empty()) {
             line.resize(new_cols, Cell::default());
         }
         self.cols = new_cols;
@@ -69,6 +74,7 @@ impl Grid {
         wrapped.resize(new_rows, false);
         self.wrapped = wrapped;
 
+        self.pad_rows += pad_top;
         self.cursor.y += pad_top + pulled;
         self.scrolled_off -= pulled;
         if pad_top > 0 {

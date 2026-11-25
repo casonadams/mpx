@@ -99,8 +99,10 @@ impl Workspace {
             if let Some(idx) = self.window_of(target) {
                 self.set_active(idx);
             }
-        } else if let Some(previous) = previous.filter(|p| self.window_of(p).is_some()) {
-            self.focus_with(&previous, true);
+        } else if let Some(previous) = previous {
+            if let Some(win) = self.active_window_mut() {
+                win.set_focus(&previous);
+            }
         }
         Ok(())
     }

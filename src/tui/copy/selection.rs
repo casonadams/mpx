@@ -102,9 +102,14 @@ pub(super) fn line_text(grid: &Grid, abs_y: usize, from: usize) -> String {
 }
 
 fn yank_lines(grid: &Grid, anchor_abs_y: usize, cursor_abs_y: usize) -> String {
-    yank_rows(grid, anchor_abs_y, cursor_abs_y, |cells| {
-        cells.iter().collect()
-    })
+    let (top, bot) = (
+        anchor_abs_y.min(cursor_abs_y),
+        anchor_abs_y.max(cursor_abs_y),
+    );
+    join_rows((top..=bot).filter_map(|y| {
+        let text: String = row_chars(grid, y)?.into_iter().collect();
+        Some((text, grid.line_wrapped(y) && y < bot))
+    }))
 }
 
 /// The rows between two absolute lines, each cut by `cut` and stripped of trailing blanks.
@@ -130,8 +135,40 @@ fn yank_chars(grid: &Grid, cs: &CopyState, cursor_abs_y: usize) -> String {
     let cursor = (cs.cursor_x, cursor_abs_y);
     let top = anchor.1.min(cursor.1);
     let bot = anchor.1.max(cursor.1);
-    let lines: Vec<Option<Vec<char>>> = (top..=bot).map(|y| row_chars(grid, y)).collect();
+    let lines: Vec<Option<SelectionRow>> = (top..=bot)
+        .map(|y| {
+            Some(SelectionRow {
+                cells: row_chars(grid, y)?,
+                wrapped: grid.line_wrapped(y),
+            })
+        })
+        .collect();
     char_selection_text(&lines, anchor, cursor)
+}
+
+/// Joins the text of consecutive rows with newlines. A row that soft-wraps into the next one
+/// (`continues`) is joined to it as is, keeping its blanks, since the wrap split one line.
+fn join_rows(rows: impl Iterator<Item = (String, bool)>) -> String {
+    let mut out = String::new();
+    let mut joined = false;
+    for (i, (text, continues)) in rows.enumerate() {
+        if i > 0 && !joined {
+            out.push('\n');
+        }
+        out.push_str(if continues {
+            text.as_str()
+        } else {
+            text.trim_end()
+        });
+        joined = continues;
+    }
+    out
+}
+
+/// One screen or history row of a selection: its cells and whether it soft-wraps into the next.
+pub struct SelectionRow {
+    pub cells: Vec<char>,
+    pub wrapped: bool,
 }
 
 /// Text of the rectangle between two corners (`rectangle-toggle`): the columns between the
@@ -151,7 +188,7 @@ fn yank_rect(
 
 /// Text covered by a character selection between `anchor` and `cursor` (order-independent).
 pub fn char_selection_text(
-    lines: &[Option<Vec<char>>],
+    lines: &[Option<SelectionRow>],
     anchor: (usize, usize),
     cursor: (usize, usize),
 ) -> String {
@@ -159,23 +196,26 @@ pub fn char_selection_text(
     let (from_col, from_row) = first;
     let (to_col, to_row) = last;
     let row_count = to_row.saturating_sub(from_row) + 1;
-    let mut parts: Vec<String> = Vec::new();
-    for (i, row) in lines.iter().take(row_count).enumerate() {
-        let Some(cells) = row else { continue };
-        let text = if row_count == 1 {
-            row_text(cells, from_col, to_col)
-        } else if i == 0 {
-            row_text(cells, from_col, cells.len().saturating_sub(1))
-        } else if i + 1 == row_count {
-            row_text(cells, 0, to_col)
-        } else {
-            row_text(cells, 0, cells.len().saturating_sub(1))
-        };
-        if let Some(t) = text {
-            parts.push(t.trim_end().to_string());
-        }
-    }
-    parts.join("\n")
+    join_rows(
+        lines
+            .iter()
+            .take(row_count)
+            .enumerate()
+            .filter_map(|(i, row)| {
+                let row = row.as_ref()?;
+                let cells = &row.cells;
+                let text = if row_count == 1 {
+                    row_text(cells, from_col, to_col)
+                } else if i == 0 {
+                    row_text(cells, from_col, cells.len().saturating_sub(1))
+                } else if i + 1 == row_count {
+                    row_text(cells, 0, to_col)
+                } else {
+                    row_text(cells, 0, cells.len().saturating_sub(1))
+                };
+                Some((text?, row.wrapped && i + 1 < row_count))
+            }),
+    )
 }
 
 fn ordered_span(a: (usize, usize), b: (usize, usize)) -> ((usize, usize), (usize, usize)) {

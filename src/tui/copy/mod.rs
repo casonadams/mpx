@@ -10,7 +10,7 @@ pub use action::{CopyAction, CopyWhat, parse_copy_command};
 pub use apply::{apply_action, apply_bound_key, apply_key};
 pub use motion::Motion;
 pub use search::{find_next_match, line_matches};
-pub use selection::char_selection_text;
+pub use selection::{SelectionRow, char_selection_text};
 
 use super::prompt::PromptState;
 

@@ -190,18 +190,23 @@ pub enum ResizeCommands {
     /// Resize a pane: -L/-R/-U/-D move its border by AMOUNT cells; -x/-y set the size
     #[command(name = "resize-pane")]
     ResizePane {
+        /// Pane to resize (defaults to the active pane)
         #[arg(short = 't', long = "target")]
         target: Option<String>,
 
+        /// Move the left border by AMOUNT cells (tmux -L)
         #[arg(short = 'L')]
         left: bool,
 
+        /// Move the right border by AMOUNT cells (tmux -R)
         #[arg(short = 'R')]
         right: bool,
 
+        /// Move the top border by AMOUNT cells (tmux -U)
         #[arg(short = 'U')]
         up: bool,
 
+        /// Move the bottom border by AMOUNT cells (tmux -D)
         #[arg(short = 'D')]
         down: bool,
 
@@ -420,19 +425,6 @@ pub struct ResizeRequest {
     pub amount: Option<u16>,
 }
 
-/// Direction of the first set `-L/-R/-U/-D` flag.
-pub fn side_from_flags(left: bool, right: bool, up: bool, down: bool) -> Option<Side> {
-    [
-        (left, Side::Left),
-        (right, Side::Right),
-        (up, Side::Up),
-        (down, Side::Down),
-    ]
-    .into_iter()
-    .find(|(set, _)| *set)
-    .map(|(_, side)| side)
-}
-
 /// Runs a window or pane-layout command of `cli::Commands`, routed to its group.
 pub async fn run(cmd: Commands, r: &Resolved) -> Result<i32, String> {
     match cmd {
@@ -552,7 +544,7 @@ async fn run_resize(cmd: ResizeCommands, r: &Resolved) -> Result<i32, String> {
             }
             let req = ResizeRequest {
                 target,
-                side: side_from_flags(left, right, up, down),
+                side: side_flag("resize-pane", left, right, up, down)?,
                 width,
                 height,
                 amount,
@@ -656,7 +648,7 @@ async fn run_window_link(cmd: WindowLinkCommands, r: &Resolved) -> Result<i32, S
             let resize = WindowResize {
                 width,
                 height,
-                side: side_flag(left, right, up, down)?,
+                side: side_flag("resize-window", left, right, up, down)?,
                 cells: adjustment,
                 fit: window_fit(largest, smallest),
             };
@@ -669,14 +661,20 @@ async fn run_window_link(cmd: WindowLinkCommands, r: &Resolved) -> Result<i32, S
 }
 
 /// The border a resize moves: the one of the single direction flag given.
-fn side_flag(left: bool, right: bool, up: bool, down: bool) -> Result<Option<Side>, String> {
+fn side_flag(
+    command: &str,
+    left: bool,
+    right: bool,
+    up: bool,
+    down: bool,
+) -> Result<Option<Side>, String> {
     Ok(match (left, right, up, down) {
         (false, false, false, false) => None,
         (true, false, false, false) => Some(Side::Left),
         (false, true, false, false) => Some(Side::Right),
         (false, false, true, false) => Some(Side::Up),
         (false, false, false, true) => Some(Side::Down),
-        _ => return Err("resize-window: give one of -L, -R, -U or -D".to_string()),
+        _ => return Err(format!("{command}: give one of -L, -R, -U or -D")),
     })
 }
 

@@ -1,6 +1,6 @@
 use crossterm::style::Color;
 
-use crate::tui::color::{Palette, inactive_color, parse_color};
+use crate::style::color::{Palette, inactive_color, parse_color};
 use crate::vt::Color as VtColor;
 
 /// Colors that style the panes of one frame: the config's templates and the host terminal's own

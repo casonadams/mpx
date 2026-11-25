@@ -25,7 +25,10 @@ impl Session {
                 Response::Ok
             }
             Ok(None) => Response::Error("No snapshot to restore".to_string()),
-            Err(e) => Response::Error(e),
+            Err(e) => {
+                self.keep_unloadable_snapshot(&e);
+                Response::Error(e)
+            }
         }
     }
 
@@ -37,7 +40,19 @@ impl Session {
         match self.snapshots.load() {
             Ok(Some(snapshot)) => self.restore_snapshot(&snapshot).await,
             Ok(None) => {}
-            Err(e) => warn!("could not load session snapshot: {}", e),
+            Err(e) => self.keep_unloadable_snapshot(&e),
+        }
+    }
+
+    /// Moves a snapshot that cannot be loaded aside, so the next save does not overwrite it, and
+    /// keeps the saved scrollback, which the lost snapshot named.
+    fn keep_unloadable_snapshot(&mut self, error: &str) {
+        warn!("could not load session snapshot: {error}");
+        self.keep_scrollback = true;
+        match self.snapshots.quarantine(now_ms()) {
+            Ok(Some(path)) => warn!("moved the unreadable snapshot to {}", path.display()),
+            Ok(None) => {}
+            Err(e) => warn!("{e}"),
         }
     }
 

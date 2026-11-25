@@ -1,5 +1,6 @@
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use std::io::{Read, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -14,6 +15,8 @@ static OPEN_PTY: Mutex<()> = Mutex::new(());
 
 const COLS: u16 = 80;
 const ROWS: u16 = 24;
+/// How long a killed pane may take to exit after its SIGHUP before its process group gets SIGKILL.
+const KILL_GRACE: Duration = Duration::from_secs(1);
 
 type Master = Arc<Mutex<Option<Box<dyn MasterPty + Send>>>>;
 
@@ -22,6 +25,8 @@ pub struct PtyNode {
     master: Master,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     pid: Option<u32>,
+    /// Set once the child has been reaped.
+    exited: Arc<AtomicBool>,
 }
 
 /// Terminal-side control of a PTY (window size, foreground process), held by its pane actor.
@@ -97,6 +102,15 @@ impl PtyNode {
         }
         .map_err(|e| NodeError::Internal(format!("Failed to open PTY: {}", e)))?;
 
+        let reader = pair
+            .master
+            .try_clone_reader()
+            .map_err(|e| NodeError::Internal(format!("Failed to clone PTY reader: {}", e)))?;
+        let writer = pair
+            .master
+            .take_writer()
+            .map_err(|e| NodeError::Internal(format!("Failed to take PTY writer: {}", e)))?;
+
         let mut cmd = CommandBuilder::new(&spec.command);
         cmd.args(&spec.args);
         if let Some(dir) = &spec.cwd {
@@ -123,18 +137,10 @@ impl PtyNode {
         // reader has not consumed yet. The waiter releases it once the child has exited.
         let slave = pair.slave;
 
-        let reader = pair
-            .master
-            .try_clone_reader()
-            .map_err(|e| NodeError::Internal(format!("Failed to clone PTY reader: {}", e)))?;
-        let writer = pair
-            .master
-            .take_writer()
-            .map_err(|e| NodeError::Internal(format!("Failed to take PTY writer: {}", e)))?;
-
         let (stdin_tx, stdin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
         spawn_writer(writer, stdin_rx);
 
+        let exited = Arc::new(AtomicBool::new(false));
         let (eof_tx, eof_rx) = std::sync::mpsc::channel::<()>();
         {
             let out = out.clone();
@@ -143,19 +149,24 @@ impl PtyNode {
                 let _ = eof_tx.send(());
             });
         }
-        std::thread::spawn(move || {
-            let code = child.wait().ok().map(|s| s.exit_code() as i32);
-            drop(slave);
-            // EOF follows the release of the slave once the reader has drained every byte.
-            let _ = eof_rx.recv_timeout(Duration::from_millis(500));
-            let _ = out.send(PaneMsg::Exited(code));
-        });
+        {
+            let exited = Arc::clone(&exited);
+            std::thread::spawn(move || {
+                let code = child.wait().ok().map(|s| s.exit_code() as i32);
+                exited.store(true, Ordering::SeqCst);
+                drop(slave);
+                // EOF follows the release of the slave once the reader has drained every byte.
+                let _ = eof_rx.recv_timeout(Duration::from_millis(500));
+                let _ = out.send(PaneMsg::Exited(code));
+            });
+        }
 
         Ok(Self {
             stdin_tx,
             master: Arc::new(Mutex::new(Some(pair.master))),
             killer: Mutex::new(killer),
             pid,
+            exited,
         })
     }
 
@@ -224,6 +235,26 @@ impl Process for PtyNode {
 
     fn kill(&self) -> Result<(), NodeError> {
         let mut killer = self.killer.lock().unwrap_or_else(|e| e.into_inner());
-        killer.kill().map_err(NodeError::Io)
+        killer.kill().map_err(NodeError::Io)?;
+        #[cfg(unix)]
+        if let Some(pid) = self.pid {
+            escalate_kill(pid, Arc::clone(&self.exited));
+        }
+        Ok(())
     }
+}
+
+/// SIGKILLs the process group of the pane's child `pid` after `KILL_GRACE`, unless the child has
+/// been reaped by then. The child leads its group: it was started in a new session.
+#[cfg(unix)]
+fn escalate_kill(pid: u32, exited: Arc<AtomicBool>) {
+    std::thread::spawn(move || {
+        std::thread::sleep(KILL_GRACE);
+        if let Ok(pid) = libc::pid_t::try_from(pid)
+            && !exited.load(Ordering::SeqCst)
+        {
+            // SAFETY: kill(2) only sends a signal; the child is unreaped, so its group still exists.
+            unsafe { libc::kill(-pid, libc::SIGKILL) };
+        }
+    });
 }

@@ -1,10 +1,10 @@
 use clap::Subcommand;
 
-use super::Commands;
 use super::render::{FollowStep, follow_step};
 use super::resolve::{Resolved, parse_env_pairs, wait_condition, wait_exit_code};
-use super::sessions::{apply_key, ensure_client};
+use super::sessions::{apply_key, ensure_client, strip_session};
 use super::windows;
+use super::{Commands, SplitDirection};
 use crate::client::{Client, LayoutTuple};
 use crate::layout::Direction;
 use crate::node::process::file_name;
@@ -86,6 +86,7 @@ pub enum NodeInputCommands {
     /// Send keys to a pane (tmux send-keys); key names such as Enter, C-c, or literal text with -l
     #[command(name = "send-keys")]
     SendKeys {
+        /// Pane to send the keys to (defaults to the active pane)
         #[arg(short = 't', long = "target")]
         target: Option<String>,
 
@@ -174,7 +175,7 @@ fn current_dir() -> Option<String> {
 
 /// Target key for a tmux-style target: strips `session:` and `window.` prefixes, keeping `%id` or a node name.
 fn pane_key(target: &str) -> &str {
-    let last = target.rsplit(':').next().unwrap_or(target);
+    let last = strip_session(target);
     match last.rsplit_once('.') {
         Some((_, pane)) if pane.starts_with('%') => pane,
         _ => last,
@@ -409,7 +410,7 @@ pub async fn run(cmd: Commands, r: &Resolved) -> Result<i32, String> {
             let req = SplitRequest {
                 target,
                 name,
-                vertical: vertical || direction.to_lowercase().starts_with('v'),
+                vertical: vertical || direction == SplitDirection::V,
                 percent,
                 env,
                 pty,
@@ -497,6 +498,7 @@ async fn follow_logs(r: &Resolved, name: &str, mut cursor: u64) -> Result<(), St
     loop {
         let mut client = Client::connect(&r.endpoint).await?;
         let mut resync = false;
+        let mut exited = false;
         client
             .stream_logs(Some(name.to_string()), Some(cursor), |event| match event {
                 StreamEvent::Output {
@@ -518,6 +520,7 @@ async fn follow_logs(r: &Resolved, name: &str, mut cursor: u64) -> Result<(), St
                     false
                 }
                 StreamEvent::Exit { code, .. } => {
+                    exited = true;
                     match code {
                         Some(c) => eprintln!("\n[process exited with code {c}]"),
                         None => eprintln!("\n[process exited]"),
@@ -528,7 +531,11 @@ async fn follow_logs(r: &Resolved, name: &str, mut cursor: u64) -> Result<(), St
             })
             .await?;
         if !resync {
-            return Ok(());
+            return if exited {
+                Ok(())
+            } else {
+                Err("the daemon ended the log stream before the process exited".to_string())
+            };
         }
         let mut reader = Client::connect(&r.endpoint).await?;
         let (data, next) =

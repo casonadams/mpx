@@ -170,9 +170,12 @@ impl Filter {
                 }
                 FilterEvent::Edited
             }
-            KeyCode::Char(c) if !has_ctrl(key) => {
+            KeyCode::Char(c) if !has_ctrl(key) && !key.modifiers.contains(KeyModifiers::ALT) => {
                 self.text.push(c);
                 FilterEvent::Edited
+            }
+            KeyCode::Up | KeyCode::Down | KeyCode::PageUp | KeyCode::PageDown => {
+                FilterEvent::Ignored
             }
             _ => FilterEvent::Consumed,
         }

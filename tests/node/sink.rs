@@ -77,3 +77,25 @@ fn an_event_is_built_only_when_it_is_delivered() {
     }
     assert_eq!(built, SUB_QUEUE);
 }
+
+#[test]
+fn control_event_is_refused_when_the_queue_is_full_and_queued_otherwise() {
+    let (mut sink, mut rx) = Sink::channel(None);
+    while sink.push(output(0)) && rx.len() < SUB_QUEUE + 1 {}
+    assert!(
+        !sink.push_control(StreamEvent::Detached),
+        "a full queue refuses it"
+    );
+    for _ in 0..SUB_QUEUE + 1 {
+        rx.try_recv().unwrap();
+    }
+    assert!(sink.push_control(StreamEvent::Detached));
+    assert!(matches!(rx.try_recv(), Ok(StreamEvent::Detached)));
+}
+
+#[test]
+fn control_event_is_refused_once_the_subscriber_is_gone() {
+    let (mut sink, rx) = Sink::channel(None);
+    drop(rx);
+    assert!(!sink.push_control(StreamEvent::Refresh));
+}

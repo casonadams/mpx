@@ -110,8 +110,9 @@ fn named_key(name: &str) -> Option<KeyCode> {
     if let Some(&(_, code)) = NAMED_KEYS.iter().find(|(n, _)| *n == name) {
         return Some(code);
     }
-    let n: u8 = name.strip_prefix('F')?.parse().ok()?;
-    (1..=12).contains(&n).then_some(KeyCode::F(n))
+    let digits = name.strip_prefix('F')?;
+    let n: u8 = digits.parse().ok()?;
+    (digits == n.to_string() && (1..=12).contains(&n)).then_some(KeyCode::F(n))
 }
 
 /// Canonical event form: SHIFT folded into printable chars, BackTab without SHIFT, ctrl letters lowercased.

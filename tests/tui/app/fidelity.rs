@@ -4,7 +4,7 @@
 //! sequences that broke rendering before (scroll regions, insert/delete line, alternate screen).
 use crossterm::event::KeyCode;
 
-use mpx::clients::WindowSize;
+use mpx::config::WindowSize;
 use mpx::config::{Config, WindowOptions};
 use mpx::layout::Direction;
 use mpx::layout::Rect;
@@ -443,4 +443,55 @@ async fn a_held_synchronized_update_has_a_deadline_that_ends_the_hold() {
         h.frame().await.contains("HELD-TEXT"),
         "the expired hold draws the pane"
     );
+}
+
+#[tokio::test]
+async fn screen_switches_and_terminal_modes_keep_the_terminal_identical() {
+    let mut h = Harness::start(Config::default(), ECHO).await;
+    check(&mut h, "attach").await;
+
+    let fill = format!("{}FILL-DONE", numbered_lines("main", 30));
+    h.emit(MAIN, &fill, "FILL-DONE").await;
+    check(&mut h, "primary filled").await;
+
+    h.emit(MAIN, "\x1b[?1049h\x1b[Halt-one ALT-ON", "ALT-ON")
+        .await;
+    check(&mut h, "alternate screen entered over content").await;
+
+    h.emit(MAIN, "\x1b[?1049lPRIMARY-BACK", "PRIMARY-BACK")
+        .await;
+    check(&mut h, "primary screen restored").await;
+
+    h.emit(MAIN, "\x1b[?47h\x1b[Hkept\x1b[?47lP47", "P47").await;
+    h.emit(MAIN, "\x1b[?47hS47", "S47").await;
+    check(&mut h, "alternate screen kept across 47").await;
+    h.emit(MAIN, "\x1b[?47lP47-OFF", "P47-OFF").await;
+    check(&mut h, "back from 47").await;
+
+    h.emit(MAIN, "\x1b[2J\x1b[?7l\x1b[3;1Hno wrap ....................................................................... END\x1b[?7h", "END").await;
+    check(&mut h, "autowrap off").await;
+
+    h.emit(
+        MAIN,
+        "\x1b[2J\x1b[3;8r\x1b[?6h\x1b[2;1Horigin\x1b[?6l\x1b[r\x1b[12;1HORIGIN-DONE",
+        "ORIGIN-DONE",
+    )
+    .await;
+    check(&mut h, "origin mode inside margins").await;
+
+    h.emit(
+        MAIN,
+        "\x1b[2J\x1b[H\x1b[4h12345\x1b[1;1Hab\x1b[4lINS-DONE",
+        "INS-DONE",
+    )
+    .await;
+    check(&mut h, "insert mode").await;
+
+    h.emit(
+        MAIN,
+        "\x1b[2J\x1b[H\x1b[5mblink\x1b[8mhid\x1b[0m \x1b[9mstrike\x1b[29m\x1b[25m SGR-DONE",
+        "SGR-DONE",
+    )
+    .await;
+    check(&mut h, "blink, conceal and strikethrough").await;
 }

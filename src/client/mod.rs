@@ -103,6 +103,9 @@ impl Client {
         take: fn(Response) -> Option<T>,
     ) -> Result<T, String> {
         let response = self.call(req).await?;
+        if let Response::Error(_) = response {
+            return Err(unexpected(op, response));
+        }
         take(response).ok_or_else(|| format!("unexpected response to {op}"))
     }
 }

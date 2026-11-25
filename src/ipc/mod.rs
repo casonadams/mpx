@@ -34,9 +34,29 @@ pub fn endpoint_in(dir: &Path, session: &str) -> String {
             format!(r"\\.\pipe\mpx-{}", session)
         } else {
             let hash = fnv1a_64(dir.to_string_lossy().as_bytes());
-            format!(r"\\.\pipe\mpx-{hash:08x}-{}", session)
+            format!(r"\\.\pipe\mpxd-{hash:08x}-{}", session)
         }
     }
+}
+
+/// Fails when `endpoint` is too long for a unix socket address (`sun_path`, 104 bytes on macOS and
+/// 108 elsewhere, NUL included).
+#[cfg(unix)]
+pub fn check_endpoint(endpoint: &str) -> Result<(), String> {
+    const SUN_PATH_LEN: usize = if cfg!(target_os = "macos") { 104 } else { 108 };
+    if endpoint.len() < SUN_PATH_LEN {
+        return Ok(());
+    }
+    Err(format!(
+        "socket path {endpoint} is {} bytes; the limit is {} (use a shorter session name)",
+        endpoint.len(),
+        SUN_PATH_LEN - 1
+    ))
+}
+
+#[cfg(windows)]
+pub fn check_endpoint(_endpoint: &str) -> Result<(), String> {
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,21 +97,13 @@ fn session_name<'a>(_dir: &Path, entry: &'a str) -> Option<&'a str> {
 
 #[cfg(windows)]
 fn session_name<'a>(dir: &Path, entry: &'a str) -> Option<&'a str> {
-    if dir == socket_dir() {
-        let name = entry.strip_prefix("mpx-")?;
-        if name.len() > 9
-            && name.as_bytes()[8] == b'-'
-            && name[..8].chars().all(|c| c.is_ascii_hexdigit())
-        {
-            return None;
-        }
-        if name.is_empty() { None } else { Some(name) }
+    let name = if dir == socket_dir() {
+        entry.strip_prefix("mpx-")?
     } else {
         let hash = fnv1a_64(dir.to_string_lossy().as_bytes());
-        let prefix = format!("mpx-{hash:08x}-");
-        let rest = entry.strip_prefix(&prefix)?;
-        if rest.is_empty() { None } else { Some(rest) }
-    }
+        entry.strip_prefix(&format!("mpxd-{hash:08x}-"))?
+    };
+    if name.is_empty() { None } else { Some(name) }
 }
 
 fn entry_names(dir: &Path) -> Vec<String> {
@@ -116,7 +128,14 @@ fn secure_dir(dir: &Path) -> std::io::Result<()> {
         .recursive(true)
         .mode(0o700)
         .create(dir)?;
-    if std::fs::metadata(dir)?.uid() == unsafe { libc::getuid() } {
+    let meta = std::fs::symlink_metadata(dir)?;
+    if !meta.file_type().is_dir() || meta.uid() != unsafe { libc::getuid() } {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!("{} is not a directory owned by this user", dir.display()),
+        ));
+    }
+    if meta.mode() & 0o777 != 0o700 {
         std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
     }
     Ok(())
@@ -126,20 +145,38 @@ fn secure_dir(dir: &Path) -> std::io::Result<()> {
 pub struct IpcListener {
     listener: tokio::net::UnixListener,
     path: PathBuf,
+    /// Device and inode of the socket file this listener created.
+    id: (u64, u64),
 }
 
 #[cfg(unix)]
 impl IpcListener {
     pub fn bind(endpoint: &str) -> std::io::Result<Self> {
+        use std::os::unix::fs::MetadataExt;
         let path = PathBuf::from(endpoint);
         if let Some(parent) = path.parent() {
             secure_dir(parent)?;
         }
-        if path.exists() {
-            let _ = std::fs::remove_file(&path);
+        match std::os::unix::net::UnixStream::connect(&path) {
+            Ok(_) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::AddrInUse,
+                    format!("a daemon is already listening on {endpoint}"),
+                ));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => {
+                std::fs::remove_file(&path)?;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
         }
         let listener = tokio::net::UnixListener::bind(&path)?;
-        Ok(Self { listener, path })
+        let meta = std::fs::symlink_metadata(&path)?;
+        Ok(Self {
+            listener,
+            path,
+            id: (meta.dev(), meta.ino()),
+        })
     }
 
     pub async fn accept(&self) -> std::io::Result<tokio::net::UnixStream> {
@@ -155,7 +192,12 @@ impl IpcListener {
 #[cfg(unix)]
 impl Drop for IpcListener {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
+        use std::os::unix::fs::MetadataExt;
+        let still_ours =
+            std::fs::symlink_metadata(&self.path).is_ok_and(|m| (m.dev(), m.ino()) == self.id);
+        if still_ours {
+            let _ = std::fs::remove_file(&self.path);
+        }
     }
 }
 

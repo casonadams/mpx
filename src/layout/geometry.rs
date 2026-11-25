@@ -27,24 +27,28 @@ impl Rect {
     }
 
     pub fn split_horizontal(&self, ratio: f32) -> (Rect, Rect) {
-        let avail_w = self.width.saturating_sub(1);
-        let ratio = ratio.clamp(0.1, 0.9);
-        let left_w = ((avail_w as f32) * ratio).round() as u16;
-        let right_w = avail_w.saturating_sub(left_w);
-
+        let (left_w, right_w) = divide(self.width, ratio);
         let left = Rect::new(self.x, self.y, left_w, self.height);
-        let right = Rect::new(self.x + left_w + 1, self.y, right_w, self.height);
+        let right_x = self.x + (left_w + 1).min(self.width.saturating_sub(1));
+        let right = Rect::new(right_x, self.y, right_w, self.height);
         (left, right)
     }
 
     pub fn split_vertical(&self, ratio: f32) -> (Rect, Rect) {
-        let avail_h = self.height.saturating_sub(1);
-        let ratio = ratio.clamp(0.1, 0.9);
-        let top_h = ((avail_h as f32) * ratio).round() as u16;
-        let bottom_h = avail_h.saturating_sub(top_h);
-
+        let (top_h, bottom_h) = divide(self.height, ratio);
         let top = Rect::new(self.x, self.y, self.width, top_h);
-        let bottom = Rect::new(self.x, self.y + top_h + 1, self.width, bottom_h);
+        let bottom_y = self.y + (top_h + 1).min(self.height.saturating_sub(1));
+        let bottom = Rect::new(self.x, bottom_y, self.width, bottom_h);
         (top, bottom)
     }
+}
+
+/// Sizes of the two sides of a split of `total` cells around a one-cell divider. The first side
+/// takes `ratio` of the cells left; each side keeps a cell when there are two to share.
+fn divide(total: u16, ratio: f32) -> (u16, u16) {
+    let avail = total.saturating_sub(1);
+    let floor = u16::from(avail >= 2);
+    let first = ((avail as f32) * ratio.clamp(0.1, 0.9)).round() as u16;
+    let first = first.clamp(floor, avail.saturating_sub(floor).max(floor));
+    (first, avail - first)
 }

@@ -9,7 +9,7 @@ mpx [OPTIONS] [COMMAND]
 ### Global Options
 
 - `-s, --session <NAME>`: Target session. Default: `$MPX_SESSION`, then `0`, as tmux names its first session.
-- `--endpoint <PATH>`: Daemon socket or Named Pipe. Default: `$MPX_ENDPOINT` when `-s` is not given, else the session socket.
+- `--endpoint <PATH>`: Daemon socket or Named Pipe. Default: `$MPX_ENDPOINT` when `-s` is not given, else the session socket. A socket path of 104 bytes or more on macOS (108 elsewhere) is refused with an error, so a very long session name must be shortened.
 - `-f, --config <FILE>`: Load this config file instead of the default location (see [CONFIG.md](CONFIG.md)). Like tmux `-f`, it goes before the command.
 - `--state-dir <DIR>`: Durable state directory of the session's daemon (snapshots). Default: the session's directory under the state directory.
 - `--no-restore`: Start the session empty instead of restoring its saved layout. Only applies when the session's daemon is not running yet; `mpx attach` refuses it for a running session (stop that with `mpx kill-server` first).
@@ -53,7 +53,9 @@ mpx import-tmux ~/.tmux.conf > /tmp/mpx-fragment.toml
 
 - Converted: `prefix` (`set -g prefix`), `history-limit` (to `scrollback_lines`), `remain-on-exit`, `allow-passthrough`, `automatic-rename`, `monitor-activity`, `monitor-bell`, `monitor-silence`, `default-terminal`, `default-shell`, `default-command`, `display-panes-time`, the style options (`status-style`, `message-style`, `message-command-style`, `pane-border-style`, `pane-active-border-style`, `window-status-style`, `window-status-current-style`, `window-status-activity-style`, `window-status-bell-style`, `window-status-last-style`, each a tmux style string with its colours and attributes), `pane-border-lines` (single, double, rounded, simple as ascii), `bind`/`bind -n`/`bind -T root`/`unbind` for commands mpx accepts (including `if-shell` and `run-shell`, which bind like any command), and `set -s command-alias name=command` as the `[alias]` table.
 - Skipped or approximated lines are listed on stderr as `# line N: ...` and again in the output as `# unsupported (line N): ...` comments. Examples: `run-shell` and `if-shell` at the top level of the file (they run at tmux startup, which an mpx config cannot express; use `mpx run-shell` or bind them), TPM plugins (`run '~/.tmux/plugins/tpm/tpm'` is never executed), `source-file` (only the given file is converted), `%if` blocks (skipped; use `source-file` for a live, evaluated config), `escape-time` (no mpx setting), `set -p` and `set -s` (mpx has no pane options, and no server options other than `command-alias`), `set -w synchronize-panes` (a window option set at run time, not read from the file), `bind` of commands mpx does not have, and `split-window -c '#{pane_current_path}'` (dropped, since mpx already starts new panes in the active pane's directory).
-- Also converted: `mouse`, `mode-keys`, and the terminal options `focus-events`, `extended-keys`, `xterm-keys`, `set-titles`, `set-titles-string`, `bell-action`, `visual-bell` and `visual-activity`.
+- Also converted: `mouse`, `mode-keys`, `base-index`, `pane-base-index`, `display-time`, `status-interval`, `status-position`, `status-justify`, `status-left`, `status-right`, `status-left-length`, `status-right-length`, `window-status-format`, `window-status-current-format`, `window-status-separator`, `set-clipboard` (`external` as `on`), and the terminal options `focus-events`, `extended-keys`, `xterm-keys`, `set-titles`, `set-titles-string`, `bell-action`, `visual-bell` and `visual-activity`.
+- `bind -T copy-mode-vi` and `bind -T copy-mode` are not converted: mpx has no copy-mode key table in its config file, so those bindings are skipped with a note. Bind them in mpx with `bind-key -T copy-mode-vi KEY send-keys -X command` instead.
+- A `status-format[N]` with N at or past the five status rows tmux allows is skipped with a note.
 - `unbind KEY` is written as an empty binding, which removes mpx's default for that key.
 - `~` and `$HOME` are copied as written.
 
@@ -96,7 +98,7 @@ mpx logs [-n LINES | --tail LINES] [--plain] [--since OFFSET] [--json] [-f] <nam
 | Command | Description |
 | :--- | :--- |
 | `mpx send <name> <data>` | Raw bytes to stdin (a newline is appended). |
-| `mpx send-keys [-t pane] [-l] KEYS...` | tmux key names (`Enter`, `Escape`, `C-c`, `M-x`, `S-Tab`, `F5`, `Up`, ...). `-l` sends everything literally. |
+| `mpx send-keys [-t pane] [-l] KEYS...` | tmux key names (`Enter`, `Escape`, `C-c`, `M-x`, `S-Tab`, `F5`, `Up`, ...; `F1` to `F12`, not the keypad names `KPEnter`/`KP5` or `F13` and up). `-l` sends everything literally. |
 | `mpx paste [-t pane] [--submit] <text \| ->` | Bracketed paste into the pane (stdin with `-`). `--submit` presses Enter afterwards. |
 
 ### Capture and paste buffers
@@ -133,7 +135,7 @@ mpx wait [--timeout SECS] [--idle MS | --match REGEX] <name>
 | Condition | Satisfied when | Exit code |
 | :--- | :--- | :--- |
 | *(default)* | the process exits | the process exit code |
-| `--idle MS` | no output for `MS` milliseconds | 0 |
+| `--idle MS` | no output for `MS` milliseconds, at most 31536000000 (one year) | 0 |
 | `--match REGEX` | the screen or output matches regex | 0 |
 
 Timeout exits with `124`, matching coreutils `timeout`.
@@ -144,7 +146,7 @@ Timeout exits with `124`, matching coreutils `timeout`.
 
 | Command | Description |
 | :--- | :--- |
-| `mpx split [-t pane] [-h \| -v] [-l PERCENT] [-d] [-Z] [--pty] [--env K=V] CMD...` | Split a pane (`-h` side by side, `-v` stacked; `-d` keeps focus; `-Z` keeps a zoomed window zoomed). |
+| `mpx split [-t pane] [-h \| -v] [--direction h\|v] [-l PERCENT] [-d] [-Z] [--pty] [--env K=V] CMD...` | Split a pane (`-h` side by side, `-v` stacked; `--direction` takes `h` or `v`, default `h`; `-d` keeps focus; `-Z` keeps a zoomed window zoomed). |
 | `mpx new-window [-n name] [-c dir] [-d] [--pty] [--env K=V] [CMD...]` | New window (defaults to user's shell). |
 | `mpx kill-window [-t index]` / `mpx rename-window [-t index] <name>` | Close / rename a window. |
 | `mpx select-window -t <index>` / `mpx last-window` / `mpx last-pane [-Z]` | Navigation (`-Z` keeps a zoomed window zoomed). |
@@ -163,7 +165,7 @@ Timeout exits with `124`, matching coreutils `timeout`.
 | `mpx unlink-window [-t N] [-k]` | Remove one index of a window (default: the active index). The window stays at its other indices. Its only index needs `-k`, which kills the window and its panes. |
 | `mpx resize-window [-t N] [-x W] [-y H] [-A\|-a] [-L\|-R\|-U\|-D] [cells]` | Give a window a size of its own (default: the active window), which overrides the clients' size for that window until it is resized again. `-x` and `-y` set the width and height in cells; `-A` takes the largest attached client's size and `-a` the smallest. `-L`, `-R`, `-U` or `-D` move that border by `cells` (default 1) from the current size. |
 | `mpx select-layout [preset]` | `even-horizontal`, `even-vertical`, `main-vertical`, `main-vertical-mirrored`, `main-horizontal`, `main-horizontal-mirrored`, `tiled`, `-E`. |
-| `mpx resize-pane [-t pane] -L\|-R\|-U\|-D [cells]` | Move split border. `-x`/`-y` give the pane that width/height by moving the split border beside it, as tmux does; a pane with no border that way (alone in its window) has its terminal set to that size, and an attached client sets it back to the size it shows the pane at. |
+| `mpx resize-pane [-t pane] -L\|-R\|-U\|-D [cells]` | Move split border. `-x`/`-y` give the pane that width/height (1 to 1000 cells) by moving the split border beside it, as tmux does; a pane with no border that way (alone in its window) has its terminal set to that size, and an attached client sets it back to the size it shows the pane at. |
 | `mpx resize-pane [-t pane] -Z` | Zoom the pane's window so its focused pane fills it, or unzoom it. Zoom is the daemon's, so every attached terminal shows it. |
 | `mpx layout [--width W --height H]` | Print the computed pane geometry. |
 
@@ -215,7 +217,7 @@ In the TUI, a foreground `run-shell`, `if-shell` or `wait-for` does not block th
 
 ## Session Restore
 
-The daemon saves an atomic snapshot of the session's layout whenever it changes: windows, splits, focus, window names, the session environment, and each pane's command, working directory, and environment.
+State files are owner-only on unix: they are created `0600` in a `0700` directory, and a snapshot that another user can write is refused on load. The daemon saves an atomic snapshot of the session's layout whenever it changes: windows, splits, focus, window names, the session environment, and each pane's command, working directory, and environment.
 
 While `restore` is on, it also saves each running terminal pane's newest output (up to 2 MB) under `scrollback/` in the session's state directory: with every snapshot and at most every 5 seconds while panes write. A restored pane shows that output, as text and colors, above its new process's output, so scrollback, copy mode and `capture-pane` reach it. Output written after the last save is lost on a reboot or power loss. The files hold whatever the panes printed; `restore = false` stops saving them and deletes them at the next save.
 

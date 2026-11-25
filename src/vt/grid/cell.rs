@@ -68,6 +68,10 @@ pub struct CellStyle {
     /// Faint (SGR 2): the terminal draws the text dimmer than its color.
     pub faint: bool,
     pub italic: bool,
+    /// Blink (SGR 5), conceal (SGR 8) and strikethrough (SGR 9): drawn by the terminal.
+    pub blink: bool,
+    pub conceal: bool,
+    pub strike: bool,
     /// Underline style (SGR 4, 4:n, 21).
     pub underline: Underline,
     /// Underline color (SGR 58), `None` for the foreground color.
@@ -98,6 +102,9 @@ pub(super) const BLANK: Cell = Cell {
         bold: false,
         faint: false,
         italic: false,
+        blink: false,
+        conceal: false,
+        strike: false,
         underline: Underline::None,
         underline_color: None,
         link: None,

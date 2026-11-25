@@ -108,7 +108,10 @@ impl Perform for VtHandler {
         }
     }
 
-    fn csi_dispatch(&mut self, params: &Params, intermediates: &[u8], _ignore: bool, action: char) {
+    fn csi_dispatch(&mut self, params: &Params, intermediates: &[u8], ignore: bool, action: char) {
+        if ignore {
+            return;
+        }
         if intermediates == b" " && action == 'q' {
             self.csi_cursor_shape(params);
             return;
@@ -133,8 +136,10 @@ impl Perform for VtHandler {
         }
     }
 
-    fn hook(&mut self, _params: &Params, _intermediates: &[u8], _ignore: bool, action: char) {
-        self.dcs_hook(action);
+    fn hook(&mut self, _params: &Params, _intermediates: &[u8], ignore: bool, action: char) {
+        if !ignore {
+            self.dcs_hook(action);
+        }
     }
 
     fn put(&mut self, byte: u8) {
@@ -149,7 +154,10 @@ impl Perform for VtHandler {
         self.handle_osc(params, bell_terminated);
     }
 
-    fn esc_dispatch(&mut self, intermediates: &[u8], _ignore: bool, byte: u8) {
+    fn esc_dispatch(&mut self, intermediates: &[u8], ignore: bool, byte: u8) {
+        if ignore {
+            return;
+        }
         if self.charsets.designate(intermediates, byte) {
             return;
         }

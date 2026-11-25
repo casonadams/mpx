@@ -1,7 +1,6 @@
 pub mod app;
 pub mod canvas;
 pub mod clients;
-pub mod color;
 pub mod command;
 pub mod copy;
 pub mod frame;
@@ -20,7 +19,6 @@ pub mod prompt;
 pub mod render;
 pub mod statusline;
 pub mod stream;
-pub mod style;
 pub mod terminal;
 pub mod warm;
 
@@ -29,6 +27,6 @@ mod mouse;
 mod session;
 pub mod status;
 
-pub use app::{StartView, run_tui};
+pub use app::run_tui;
 pub use render::Compositor;
 pub use terminal::TerminalGuard;

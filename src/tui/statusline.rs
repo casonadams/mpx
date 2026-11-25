@@ -5,7 +5,7 @@ use crate::format::{Lists, PaneView, Vars, WindowFlags, pane_vars};
 use crate::layout::WindowTab;
 use std::time::{Duration, Instant};
 
-use super::style::{Style, apply_directive};
+use crate::style::{Style, apply_directive};
 
 /// A run of text drawn in one style.
 #[derive(Debug, Clone, Default, PartialEq)]

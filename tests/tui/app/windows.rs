@@ -291,11 +291,22 @@ async fn a_hidden_windows_output_never_reaches_the_tui_and_shows_once_selected()
         .await
         .expect("send");
     wait_for(&mut h.probe, "work", "BEHIND-THE-SCENES").await;
-    let quiet_end = tokio::time::Instant::now() + std::time::Duration::from_millis(150);
+    h.probe.send_input(MAIN, "SYNC-MARK\n").await.expect("send");
     let mut quiet = Vec::new();
-    while let Ok(Some(item)) = tokio::time::timeout_at(quiet_end, h.rx.recv()).await {
+    let mut synced = false;
+    while !synced {
+        let Ok(Some(item)) =
+            tokio::time::timeout(std::time::Duration::from_secs(2), h.rx.recv()).await
+        else {
+            panic!("the stream went quiet before the sync marker arrived");
+        };
         quiet.push(format!("{item:?}"));
         h.app.on_stream(Some(item), &mut h.rx).await;
+        synced = h
+            .app
+            .vt
+            .get(MAIN)
+            .is_some_and(|vt| vt.snapshot().contains("SYNC-MARK"));
     }
     let parsed = h
         .app
@@ -304,9 +315,9 @@ async fn a_hidden_windows_output_never_reaches_the_tui_and_shows_once_selected()
         .is_some_and(|vt| vt.snapshot().contains("BEHIND-THE-SCENES"));
     assert!(!parsed, "the daemon does not send a hidden window's output");
     let facts = h.facts(MAIN).await;
-    assert_eq!(
-        h.app.pacing.frame_due, None,
-        "nothing on screen changed; events in the quiet window: {quiet:#?}\n{facts}"
+    assert!(
+        quiet.iter().all(|item| item.contains("name: \"main\"")),
+        "only the visible window's output reaches the tui: {quiet:#?}\n{facts}"
     );
 
     h.prefixed_char('1').await;
@@ -542,13 +553,16 @@ async fn next_window_with_a_steps_to_the_window_that_has_activity() {
     assert_eq!(active_window(&h), first);
 
     h.probe.send_input("bg", "x\n").await.expect("input");
-    for _ in 0..100 {
+    let mut alerted = false;
+    for _ in 0..40 {
         let (_, _, tabs) = h.probe.layout(SIZE.0, SIZE.1 - 1).await.expect("layout");
         if tabs.iter().any(|t| t.name == "bg" && t.has_activity) {
+            alerted = true;
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
+    assert!(alerted, "the background window never raised an alert");
     h.frame().await;
     assert!(
         h.app

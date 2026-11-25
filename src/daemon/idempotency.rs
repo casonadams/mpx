@@ -1,13 +1,14 @@
 //! Idempotency keys: the first request with a key runs, concurrent repeats wait for its response,
 //! later repeats get the cached response. Pure state; the caller supplies the clock.
 use std::collections::{HashMap, VecDeque};
+use std::time::{Duration, Instant};
 
 use tokio::sync::oneshot;
 
-/// Keys remembered at most.
+/// Keys remembered at most, finished and running alike.
 pub const MAX_KEYS: usize = 1024;
 /// How long a finished response is replayed.
-pub const TTL_MS: u64 = 10 * 60 * 1000;
+pub const TTL: Duration = Duration::from_secs(10 * 60);
 
 /// What a request with a key must do.
 pub enum Claim<V> {
@@ -17,6 +18,8 @@ pub enum Claim<V> {
     Wait(oneshot::Receiver<Option<V>>),
     /// The key finished within the TTL.
     Cached(V),
+    /// `MAX_KEYS` requests are running: the new key is refused until one of them ends.
+    Busy,
 }
 
 enum Slot<V> {
@@ -29,7 +32,7 @@ enum Slot<V> {
 pub struct IdemCache<V> {
     slots: HashMap<String, Slot<V>>,
     /// Finished keys, oldest first, with when each finished: the one `Done` slot of each.
-    finished: VecDeque<(String, u64)>,
+    finished: VecDeque<(String, Instant)>,
 }
 
 impl<V> Default for IdemCache<V> {
@@ -42,8 +45,8 @@ impl<V> Default for IdemCache<V> {
 }
 
 impl<V: Clone> IdemCache<V> {
-    pub fn begin(&mut self, key: &str, now_ms: u64) -> Claim<V> {
-        self.expire(now_ms);
+    pub fn begin(&mut self, key: &str, now: Instant) -> Claim<V> {
+        self.expire(now);
         match self.slots.get(key) {
             Some(Slot::Done(value)) => Claim::Cached(value.clone()),
             Some(Slot::InFlight { .. }) => {
@@ -53,6 +56,7 @@ impl<V: Clone> IdemCache<V> {
                 }
                 Claim::Wait(rx)
             }
+            None if self.in_flight() >= MAX_KEYS => Claim::Busy,
             None => {
                 self.slots.insert(
                     key.to_string(),
@@ -66,14 +70,14 @@ impl<V: Clone> IdemCache<V> {
     }
 
     /// Records the response of the request that claimed `key` and answers its waiters.
-    pub fn finish(&mut self, key: &str, value: V, now_ms: u64) {
+    pub fn finish(&mut self, key: &str, value: V, now: Instant) {
         if let Some(Slot::InFlight { waiters }) = self.slots.remove(key) {
             for waiter in waiters {
                 let _ = waiter.send(Some(value.clone()));
             }
         }
         self.slots.insert(key.to_string(), Slot::Done(value));
-        self.finished.push_back((key.to_string(), now_ms));
+        self.finished.push_back((key.to_string(), now));
         self.evict();
     }
 
@@ -94,9 +98,9 @@ impl<V: Clone> IdemCache<V> {
         self.slots.is_empty()
     }
 
-    fn expire(&mut self, now_ms: u64) {
-        while let Some((key, at_ms)) = self.finished.front() {
-            if now_ms.saturating_sub(*at_ms) < TTL_MS {
+    fn expire(&mut self, now: Instant) {
+        while let Some((key, at)) = self.finished.front() {
+            if now.saturating_duration_since(*at) < TTL {
                 break;
             }
             self.slots.remove(key);
@@ -104,9 +108,15 @@ impl<V: Clone> IdemCache<V> {
         }
     }
 
-    /// Drops the oldest finished keys while over the bound. Running keys are never dropped.
+    /// Running keys: the slots that are not finished.
+    fn in_flight(&self) -> usize {
+        self.slots.len() - self.finished.len()
+    }
+
+    /// Drops the oldest finished keys while more than `MAX_KEYS` have finished. Running keys do not
+    /// count, so a finished response is not dropped for running requests.
     fn evict(&mut self) {
-        while self.slots.len() > MAX_KEYS {
+        while self.finished.len() > MAX_KEYS {
             let Some((key, _)) = self.finished.pop_front() else {
                 break;
             };

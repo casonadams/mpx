@@ -3,6 +3,7 @@ use std::io::{self, Write};
 use crate::layout::Divider;
 use crate::layout::geometry::Rect;
 use crate::protocol::NodeInfo;
+use crate::style::over_colours;
 use crate::tui::app::{App, Mode};
 use crate::tui::copy::{CopyState, SelectionKind};
 use crate::tui::panes::PaneRect;
@@ -10,7 +11,6 @@ use crate::tui::render::{
     Compositor, DividerStyle, PaneColors, RenderPaneContext, SelectionRange, parse_color,
 };
 use crate::tui::status::{exit_badge, node_named};
-use crate::tui::style::over_colours;
 use crate::vt::Color as VtColor;
 use crate::vt::VtScreen;
 use crate::vt::grid::{Cell, Grid};

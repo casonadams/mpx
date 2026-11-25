@@ -47,8 +47,16 @@ impl App {
     }
 
     pub(super) async fn open_palette(&mut self, tab: Option<PaletteTab>) -> Flow {
+        self.open_palette_with(tab.unwrap_or_default(), None).await
+    }
+
+    /// The palette on `tab`, with `query` typed into its filter when given.
+    pub(super) async fn open_palette_with(&mut self, tab: PaletteTab, query: Option<&str>) -> Flow {
         let entries = self.keymap.help_entries();
-        let view = PaletteView::new(tab.unwrap_or_default(), entries, &self.session);
+        let mut view = PaletteView::new(tab, entries, &self.session);
+        if let Some(query) = query {
+            view = view.with_query(query);
+        }
         self.open_overlay(Overlay::palette(view)).await
     }
 

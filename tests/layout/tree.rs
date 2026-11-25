@@ -172,3 +172,41 @@ fn leaf_count_and_position_follow_layout_order() {
     }
     assert_eq!(node.leaf_position("zzz"), None);
 }
+
+#[test]
+fn removing_a_leaf_gives_its_sibling_the_whole_split() {
+    let mut node = LayoutNode::leaf("a".to_string());
+    node.split_leaf("a", "b".to_string(), Direction::Horizontal);
+    assert_eq!(
+        node.remove_leaf("a"),
+        Some(LayoutNode::leaf("b".to_string()))
+    );
+}
+
+#[test]
+fn removing_the_only_leaf_leaves_no_tree() {
+    assert_eq!(LayoutNode::leaf("a".to_string()).remove_leaf("a"), None);
+}
+
+#[test]
+fn removing_an_absent_leaf_keeps_the_tree() {
+    let mut node = LayoutNode::leaf("a".to_string());
+    node.split_leaf("a", "b".to_string(), Direction::Vertical);
+    assert_eq!(node.clone().remove_leaf("zzz"), Some(node));
+}
+
+#[test]
+fn removing_from_a_nested_split_keeps_the_ratio_of_the_splits_left() {
+    let mut node = LayoutNode::leaf("a".to_string());
+    node.split_leaf_with("a", "b".to_string(), Direction::Horizontal, 0.25);
+    node.split_leaf_with("b", "c".to_string(), Direction::Vertical, 0.7);
+    assert_eq!(
+        node.remove_leaf("b"),
+        Some(LayoutNode::Split {
+            direction: Direction::Horizontal,
+            ratio: 0.25,
+            left: Box::new(LayoutNode::leaf("a".to_string())),
+            right: Box::new(LayoutNode::leaf("c".to_string())),
+        })
+    );
+}

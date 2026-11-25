@@ -1,5 +1,6 @@
 mod layout {
     mod alerts;
+    mod geometry;
     mod tree;
     mod workspace;
 

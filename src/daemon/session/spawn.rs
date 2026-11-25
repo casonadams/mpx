@@ -59,7 +59,9 @@ impl Session {
     pub(super) fn check_name(&self, name: &str) -> Result<(), String> {
         plan::validate_name(name)?;
         if self.nodes.contains_key(name) {
-            return Err(format!("Node '{}' already exists", name));
+            return Err(format!(
+                "Node '{name}' already exists: pass -n NAME to name the new pane differently"
+            ));
         }
         Ok(())
     }
@@ -178,16 +180,31 @@ impl Session {
         cwd: Option<String>,
         command: Option<Vec<String>>,
     ) -> Response {
-        let name = match self.target_name(target) {
-            Ok(name) => name,
-            Err(e) => return Response::Error(e),
-        };
+        match self.spawn_replacement(target, kill, cwd, command) {
+            Ok(replacement) => {
+                self.commit_respawn(replacement);
+                Response::Ok
+            }
+            Err(e) => Response::Error(e),
+        }
+    }
+
+    /// Starts the replacement of a pane's process without touching the pane: the process it
+    /// replaces is killed only by `commit_respawn`.
+    fn spawn_replacement(
+        &mut self,
+        target: &str,
+        kill: bool,
+        cwd: Option<String>,
+        command: Option<Vec<String>>,
+    ) -> Result<Replacement, String> {
+        let name = self.target_name(target)?;
         let Some(entry) = self.nodes.get(&name) else {
-            return Response::Error(format!("can't respawn pane: {name}"));
+            return Err(format!("can't respawn pane: {name}"));
         };
         let (exited, old_id) = (entry.exited, entry.handle.id());
         if !exited && !kill {
-            return Response::Error(format!("pane %{old_id} still active"));
+            return Err(format!("pane %{old_id} still active"));
         }
         let mut opts = entry.opts.clone();
         if let Some(argv) = command.filter(|argv| !argv.is_empty()) {
@@ -200,17 +217,30 @@ impl Session {
         }
         let id = if exited { old_id } else { self.next_pane_id };
         let spawn_cwd = opts.cwd.clone().or_else(current_dir);
-        let handle = match self.spawn_pane(&name, id, &opts, spawn_cwd, Vec::new()) {
-            Ok(handle) => handle,
-            Err(e) => return Response::Error(e),
-        };
+        let handle = self.spawn_pane(&name, id, &opts, spawn_cwd, Vec::new())?;
         if !exited {
-            drop(self.nodes[&name].handle.request_kill());
             self.next_pane_id += 1;
+        }
+        Ok(Replacement {
+            name,
+            handle,
+            opts,
+            replaces_running: !exited,
+        })
+    }
+
+    fn commit_respawn(&mut self, replacement: Replacement) {
+        let Replacement {
+            name,
+            handle,
+            opts,
+            replaces_running,
+        } = replacement;
+        if replaces_running {
+            drop(self.nodes[&name].handle.request_kill());
         }
         self.register(name.clone(), handle, opts);
         self.fanout(StreamEvent::Respawned { name });
-        Response::Ok
     }
 
     /// Restarts every pane of window `index` (the active window when `None`), as tmux
@@ -237,11 +267,30 @@ impl Session {
         if running && !kill {
             return Response::Error("window still active".to_string());
         }
+        let mut replacements = Vec::new();
         for name in panes {
-            if let Response::Error(e) = self.respawn(&name, kill, cwd.clone(), command.clone()) {
-                return Response::Error(e);
+            match self.spawn_replacement(&name, kill, cwd.clone(), command.clone()) {
+                Ok(replacement) => replacements.push(replacement),
+                Err(e) => {
+                    for replacement in replacements {
+                        drop(replacement.handle.request_kill());
+                    }
+                    return Response::Error(e);
+                }
             }
+        }
+        for replacement in replacements {
+            self.commit_respawn(replacement);
         }
         Response::Ok
     }
+}
+
+/// A pane's new process, spawned and waiting for `commit_respawn` to put it in place.
+struct Replacement {
+    name: String,
+    handle: PaneHandle,
+    opts: SpawnOpts,
+    /// The process being replaced is still running, so it is killed on commit.
+    replaces_running: bool,
 }

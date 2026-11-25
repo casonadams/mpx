@@ -102,6 +102,8 @@ pub struct Grid {
     pub history_limit: usize,
     /// Rows that have ever scrolled off the top, kept in history or not: numbers the shell marks.
     scrolled_off: usize,
+    /// Blank rows a grow added at the top of the screen: they carry no number and never reach history.
+    pad_rows: usize,
     /// Shell marks by row number, oldest first; a mark is kept while its row is in history.
     prompts: VecDeque<usize>,
     outputs: VecDeque<usize>,
@@ -110,6 +112,15 @@ pub struct Grid {
     scroll_mixed: bool,
     /// The alternate screen is shown: its rows never move to or from history on a resize.
     alternate_screen: bool,
+    /// The rows of the screen that is not shown (primary while the alternate is up, and back).
+    hidden_lines: Vec<Vec<Cell>>,
+    hidden_wrapped: Vec<bool>,
+    /// DECAWM (mode 7): printing past the right margin wraps to the next row.
+    pub autowrap: bool,
+    /// DECOM (mode 6): cursor addressing is relative to the scroll margins.
+    pub origin_mode: bool,
+    /// IRM (`CSI 4 h`): printing shifts the rest of the row right instead of overwriting it.
+    pub insert_mode: bool,
 }
 
 impl Grid {
@@ -133,11 +144,17 @@ impl Grid {
             history: VecDeque::new(),
             history_limit: 100_000,
             scrolled_off: 0,
+            pad_rows: 0,
             prompts: VecDeque::new(),
             outputs: VecDeque::new(),
             scrolled: None,
             scroll_mixed: false,
             alternate_screen: false,
+            hidden_lines: vec![vec![Cell::default(); cols]; rows],
+            hidden_wrapped: vec![false; rows],
+            autowrap: true,
+            origin_mode: false,
+            insert_mode: false,
         }
     }
 

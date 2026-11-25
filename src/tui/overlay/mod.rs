@@ -8,7 +8,7 @@ pub mod text_view;
 pub mod tree_view;
 pub mod widgets;
 
-use crossterm::event::KeyEvent;
+use crossterm::event::{KeyCode, KeyEvent};
 use std::io::{self, Write};
 use std::path::Path;
 
@@ -123,6 +123,9 @@ impl Overlay {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> OverlayAction {
+        if key.code == KeyCode::Char('c') && nav::has_ctrl(key) {
+            return OverlayAction::Close;
+        }
         each_view!(self, view => view.handle_key(key))
     }
 

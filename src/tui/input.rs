@@ -89,7 +89,7 @@ impl App {
         cs.wrap_search = self.config.wrap_search;
         let outcome = apply_bound_key(&mut cs, &key, action.as_ref(), grid, pane);
         let active = self.active_pane.clone();
-        self.apply_copy_outcome(&active, true, cs, outcome);
+        self.apply_copy_outcome(&active, cs, outcome);
         Flow::Continue
     }
 

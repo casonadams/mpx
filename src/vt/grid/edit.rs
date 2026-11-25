@@ -16,9 +16,16 @@ impl Grid {
 
     pub fn put_char(&mut self, c: char) {
         if self.cursor.x >= self.cols {
-            self.cursor.x = 0;
-            self.wrapped[self.cursor.y] = true;
-            self.newline();
+            if self.autowrap {
+                self.cursor.x = 0;
+                self.wrapped[self.cursor.y] = true;
+                self.newline();
+            } else {
+                self.cursor.x = self.cols - 1;
+            }
+        }
+        if self.insert_mode {
+            self.insert_blanks(1);
         }
 
         let x = self.cursor.x;
@@ -29,7 +36,9 @@ impl Grid {
             cell.style = style;
         }
 
-        self.cursor.x += 1;
+        if self.autowrap || x + 1 < self.cols {
+            self.cursor.x += 1;
+        }
     }
 
     pub fn newline(&mut self) {

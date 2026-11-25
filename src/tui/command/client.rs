@@ -37,7 +37,7 @@ pub(super) fn refresh_client(name: &str, args: &[String]) -> Result<Command, Str
     with_opts(name, args, REFRESH_CLIENT, Operands::Refuse, |o| {
         let size = o
             .value("-C")
-            .map(str::parse::<crate::clients::Size>)
+            .map(str::parse::<crate::config::Size>)
             .transpose()
             .map_err(|e| format!("{name}: {e}"))?;
         Ok(Command::Client(ClientCommand::RefreshClient {

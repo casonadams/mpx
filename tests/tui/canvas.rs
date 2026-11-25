@@ -9,6 +9,16 @@ fn cell(c: char) -> Cell {
     }
 }
 
+#[test]
+fn a_wide_glyph_in_the_last_column_repaints_the_row_below() {
+    let mut canvas = Canvas::default();
+    paint(&mut canvas, &["123456789\u{e9}", "abcdefghij"]);
+    let out = frame(&mut canvas, None, |c, out| {
+        put_rows(c, out, &["123456789\u{f6}", "abcdefghij"]);
+    });
+    assert!(out.contains("\x1b[2;1H"), "{out}");
+}
+
 fn row(text: &str) -> Vec<Cell> {
     text.chars().map(cell).collect()
 }

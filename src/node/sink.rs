@@ -72,6 +72,13 @@ impl Sink {
         self.push_with(|| event)
     }
 
+    /// Offers a control event (`Detached`, `Run`, `Refresh`) that the subscriber must act on, outside
+    /// the overflow policy. Returns false when it could not be queued: the subscriber is gone or its
+    /// queue is full, so the caller can report that the event was not delivered.
+    pub fn push_control(&mut self, event: StreamEvent) -> bool {
+        self.tx.try_send(event).is_ok()
+    }
+
     /// `push` for an event that costs something to make: `event` runs only if it is delivered.
     pub fn push_with(&mut self, event: impl FnOnce() -> StreamEvent) -> bool {
         if self.tx.is_closed() {

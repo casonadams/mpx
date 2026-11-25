@@ -13,8 +13,39 @@ fn kitty_flags(value: u16) -> u8 {
 
 impl VtHandler {
     pub(super) fn csi_set_mode(&mut self, action: char, intermediates: &[u8], params: &Params) {
-        if intermediates == b"?" {
-            self.handle_mode(params, action == 'h');
+        let set = action == 'h';
+        match intermediates {
+            b"?" => self.handle_mode(params, set),
+            [] => {
+                for param in params.iter() {
+                    if param[0] == 4 {
+                        self.grid.insert_mode = set;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn switch_screen(&mut self, mode: u16, set: bool) {
+        if self.grid.alternate_screen() == set {
+            return;
+        }
+        match (mode, set) {
+            (1049, true) => {
+                self.grid.save_cursor();
+                self.grid.set_alternate_screen(true);
+                self.grid.clear_alternate_screen();
+            }
+            (1049, false) => {
+                self.grid.set_alternate_screen(false);
+                self.grid.restore_cursor();
+            }
+            (1047, false) => {
+                self.grid.clear_alternate_screen();
+                self.grid.set_alternate_screen(false);
+            }
+            _ => self.grid.set_alternate_screen(set),
         }
     }
 
@@ -23,10 +54,14 @@ impl VtHandler {
             match param[0] {
                 1 => self.modes.app_cursor = set,
                 25 => self.grid.cursor.visible = set,
-                1049 | 1047 | 47 => {
-                    self.grid.set_alternate_screen(set);
-                    self.grid.clear_screen(2);
+                6 => {
+                    self.grid.origin_mode = set;
+                    self.grid.home_cursor();
                 }
+                7 => self.grid.autowrap = set,
+                1048 if set => self.grid.save_cursor(),
+                1048 => self.grid.restore_cursor(),
+                mode @ (1049 | 1047 | 47) => self.switch_screen(mode, set),
                 69 => self.grid.set_lr_margins_mode(set),
                 1000 => self.set_mouse_tracking(set, MouseTracking::X10),
                 1002 => self.set_mouse_tracking(set, MouseTracking::ButtonEvent),

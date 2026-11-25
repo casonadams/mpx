@@ -140,7 +140,7 @@ impl BellAction {
 }
 
 /// Most status rows tmux allows (`status 5`).
-const MAX_STATUS_LINES: usize = 5;
+pub const MAX_STATUS_LINES: usize = 5;
 
 pub(super) fn status_lines_in_range<'de, D: Deserializer<'de>>(de: D) -> Result<usize, D::Error> {
     let lines = usize::deserialize(de)?;

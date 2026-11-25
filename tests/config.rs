@@ -174,3 +174,99 @@ fn a_style_string_that_is_not_a_tmux_style_fails_the_load() {
     let ok = Config::parse("[style]\nwindow_status_bell_style = \"fg=red,bold\"\n").unwrap();
     assert_eq!(ok.style.window_status_bell_style, "fg=red,bold");
 }
+
+fn env_of(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<std::ffi::OsString> {
+    let map: std::collections::HashMap<String, std::ffi::OsString> = pairs
+        .iter()
+        .map(|(k, v)| (k.to_string(), std::ffi::OsString::from(v)))
+        .collect();
+    move |key: &str| map.get(key).cloned()
+}
+
+#[test]
+fn config_path_prefers_mpx_config_then_xdg_then_home() {
+    let home = Some(std::path::PathBuf::from("/home/u"));
+    let path = |pairs: &[(&str, &str)]| Config::path_with(env_of(pairs), home.clone());
+    assert_eq!(
+        path(&[("MPX_CONFIG", "/etc/m.toml"), ("XDG_CONFIG_HOME", "/xdg")]),
+        Some("/etc/m.toml".into())
+    );
+    assert_eq!(
+        path(&[("XDG_CONFIG_HOME", "/xdg")]),
+        Some("/xdg/mpx/config.toml".into())
+    );
+    assert_eq!(path(&[]), Some("/home/u/.config/mpx/config.toml".into()));
+}
+
+#[test]
+fn empty_config_variables_count_as_unset() {
+    let home = Some(std::path::PathBuf::from("/home/u"));
+    let path = |pairs: &[(&str, &str)]| Config::path_with(env_of(pairs), home.clone());
+    let fallback = Some("/home/u/.config/mpx/config.toml".into());
+    assert_eq!(path(&[("MPX_CONFIG", "")]), fallback);
+    assert_eq!(
+        path(&[("MPX_CONFIG", ""), ("XDG_CONFIG_HOME", "")]),
+        fallback
+    );
+    assert_eq!(path(&[("XDG_CONFIG_HOME", "")]), fallback);
+}
+
+#[test]
+fn no_home_and_no_variables_means_no_config_path() {
+    assert_eq!(Config::path_with(env_of(&[]), None), None);
+}
+
+#[test]
+fn missing_file_and_no_path_load_the_defaults() {
+    let dir = tempfile::tempdir().unwrap();
+    assert_eq!(Config::load_at(None).unwrap(), Config::default());
+    let missing = dir.path().join("absent.toml");
+    assert_eq!(Config::load_at(Some(&missing)).unwrap(), Config::default());
+    assert_eq!(Config::load_file(&missing).unwrap(), Config::default());
+}
+
+#[test]
+fn a_file_loads_its_settings() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("config.toml");
+    std::fs::write(&file, "prefix = \"C-a\"\n").unwrap();
+    let config = Config::load_at(Some(&file)).unwrap();
+    assert_eq!(config.prefix, "C-a");
+}
+
+#[test]
+fn a_malformed_file_is_an_error_that_names_the_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("bad.toml");
+    std::fs::write(&file, "this is = = not toml").unwrap();
+    for err in [
+        Config::load_at(Some(&file)).unwrap_err(),
+        Config::load_file(&file).unwrap_err(),
+    ] {
+        assert!(err.contains("bad.toml"), "{err}");
+    }
+}
+
+#[test]
+fn a_file_that_cannot_be_read_is_an_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let err = Config::load_file(dir.path()).unwrap_err();
+    assert!(err.contains(&dir.path().display().to_string()), "{err}");
+}
+
+#[test]
+fn bell_action_rings_by_window_shown() {
+    use mpx::config::BellAction;
+    for (action, shown, rings) in [
+        (BellAction::None, true, false),
+        (BellAction::None, false, false),
+        (BellAction::Any, true, true),
+        (BellAction::Any, false, true),
+        (BellAction::Current, true, true),
+        (BellAction::Current, false, false),
+        (BellAction::Other, true, false),
+        (BellAction::Other, false, true),
+    ] {
+        assert_eq!(action.rings(shown), rings, "{action:?} shown={shown}");
+    }
+}

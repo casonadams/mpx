@@ -1,7 +1,9 @@
 //! tmux style strings (`fg=red,bg=#202020,bold`), for the options that colour the terminal UI and
 //! for the `#[...]` directives of status formats.
-use super::render::parse_color;
+use self::color::parse_color;
 use crate::vt::Color as VtColor;
+
+pub mod color;
 
 /// Attributes and colours of a run of text. A `None` colour is the row's own colour.
 #[derive(Debug, Clone, Default, PartialEq)]

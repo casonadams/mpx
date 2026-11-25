@@ -1,3 +1,5 @@
+use std::cell::Cell;
+
 use regex::{NoExpand, RegexBuilder};
 
 use super::time::{local_time, pretty_time};
@@ -5,6 +7,12 @@ use super::{Lists, Vars, flag, truthy};
 
 /// Recursion limit for nested formats and `#{E:...}` re-expansion.
 const MAX_DEPTH: usize = 32;
+
+/// Most decimals `#{e|op|f|N:...}` prints.
+const MAX_DECIMALS: usize = 64;
+
+/// Bytes of format text one top-level expansion may process before it yields nothing more.
+const WORK_BUDGET: usize = 1 << 20;
 
 /// Characters `#{q:...}` backslash-escapes for the shell.
 const SHELL_SPECIAL: &str = "\\\"'$`!*?&;|<>()[]{}#~^ \t\n";
@@ -22,6 +30,7 @@ pub fn expand_with(fmt: &str, vars: &Vars, lists: &Lists) -> String {
         vars,
         lists,
         depth: 0,
+        budget: &Cell::new(WORK_BUDGET),
     }
     .expand(fmt)
 }
@@ -32,6 +41,7 @@ struct Scope<'a> {
     vars: &'a Vars,
     lists: &'a Lists,
     depth: usize,
+    budget: &'a Cell<usize>,
 }
 
 impl Scope<'_> {
@@ -43,9 +53,12 @@ impl Scope<'_> {
     }
 
     fn expand(self, text: &str) -> String {
-        if self.depth > MAX_DEPTH {
+        let cost = text.len() + 1;
+        if self.depth > MAX_DEPTH || self.budget.get() < cost {
+            self.budget.set(0);
             return String::new();
         }
+        self.budget.set(self.budget.get() - cost);
         let mut out = String::with_capacity(text.len());
         let mut rest = text;
         while let Some(i) = rest.find('#') {
@@ -183,7 +196,7 @@ fn eval(body: &str, sc: Scope) -> String {
         "d" => dirname(&sc.resolve(arg)),
         "n" => sc.resolve(arg).chars().count().to_string(),
         "q" => backslash_escape(&sc.resolve(arg), SHELL_SPECIAL),
-        "E" => sc.deeper().expand(&sc.resolve(arg)),
+        "E" => sc.expand(&sc.resolve(arg)),
         "l" => unescape(arg),
         "m" | "m/i" | "m/r" | "m/ri" => matching(op, &split_args(arg), sc),
         "t" => local_time(&sc.resolve(arg)),
@@ -203,6 +216,7 @@ fn eval(body: &str, sc: Scope) -> String {
 fn each(items: &[Vars], body: &str, sc: Scope) -> String {
     items
         .iter()
+        .take_while(|_| sc.budget.get() > 0)
         .map(|item| Scope { vars: item, ..sc }.expand(body))
         .collect()
 }
@@ -403,7 +417,11 @@ fn arithmetic(op: &str, args: &[&str], sc: Scope) -> String {
     };
     let (a, b) = (sc.operand(args, 0), sc.operand(args, 1));
     if parts.get(2) == Some(&"f") {
-        let decimals = parts.get(3).and_then(|n| n.parse().ok()).unwrap_or(2);
+        let decimals: usize = parts
+            .get(3)
+            .and_then(|n| n.parse().ok())
+            .unwrap_or(2)
+            .min(MAX_DECIMALS);
         let (x, y) = (
             a.trim().parse().unwrap_or(0.0),
             b.trim().parse().unwrap_or(0.0),

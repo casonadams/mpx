@@ -217,3 +217,25 @@ async fn respawn_window_restarts_an_exited_pane_in_place_and_keeps_its_id() {
     assert_eq!(respawned.id, id);
     client.kill("p").await.unwrap();
 }
+
+#[tokio::test]
+async fn respawn_window_replaces_no_pane_when_one_cannot_start() {
+    let (_daemon, mut client) = started_with(task("a", "cat", &[])).await;
+    let parent = tempfile::tempdir().unwrap();
+    let gone = parent.path().join("gone");
+    std::fs::create_dir(&gone).unwrap();
+    let mut split = split_right("a", "b");
+    split.spawn.cwd = Some(gone.display().to_string());
+    client.split(split).await.unwrap();
+    std::fs::remove_dir(&gone).unwrap();
+    let id = node(&mut client, "a").await.id;
+
+    assert!(client.respawn_window(None, true, None, None).await.is_err());
+    let after = node(&mut client, "a").await;
+    assert!(after.is_running());
+    assert_eq!(
+        after.id, id,
+        "a failed respawn-window leaves every pane as it was"
+    );
+    client.kill("a").await.unwrap();
+}

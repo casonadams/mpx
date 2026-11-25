@@ -127,7 +127,7 @@ impl Compositor {
         text: &str,
         y: u16,
         width: u16,
-        style: &crate::tui::style::Style,
+        style: &crate::style::Style,
     ) -> io::Result<()> {
         let line: String = text.chars().take(width as usize).collect();
         let pad = (width as usize).saturating_sub(line.chars().count());
@@ -171,7 +171,7 @@ pub fn draw_status_segments<W: Write>(
 
 fn write_status_run<W: Write>(
     w: &mut W,
-    style: &crate::tui::style::Style,
+    style: &crate::style::Style,
     fg: VtColor,
     bg: VtColor,
     text: &str,

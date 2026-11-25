@@ -37,7 +37,8 @@ pub fn scrollback_save_due(new_bytes: u64, saved_tail: u64, age_ms: u64) -> bool
 
 const PROBE_EVERY: Duration = Duration::from_millis(250);
 const EXITED: &str = "Node has exited";
-/// Most recent bytes of text a `Match` waiter searches: bounds its memory and the cost of each scan.
+/// Most recent bytes of text a `Match` waiter searches, at least. The text is trimmed back to this
+/// once it reaches twice as much, so the trimming moves memory once per this much output.
 const MAX_MATCH_TEXT: usize = 256 * 1024;
 
 struct Waiter {
@@ -56,10 +57,11 @@ impl Waiter {
         if matches!(self.cond, Cond::Match(_)) {
             self.plain.feed(bytes, &mut self.text);
             self.unsearched = true;
-            if let Some(excess) = self.text.len().checked_sub(MAX_MATCH_TEXT) {
-                let cut = (excess..=self.text.len())
+            if self.text.len() >= 2 * MAX_MATCH_TEXT {
+                let len = self.text.len();
+                let cut = (len - MAX_MATCH_TEXT..=len)
                     .find(|&i| self.text.is_char_boundary(i))
-                    .unwrap_or(self.text.len());
+                    .unwrap_or(len);
                 self.text.drain(..cut);
             }
         }
@@ -337,6 +339,7 @@ impl PaneActor {
     }
 
     fn resize(&mut self, cols: u16, rows: u16) -> Result<(), String> {
+        crate::clients::check_size(cols, rows)?;
         let grid = self.screen.grid();
         let from = (grid.cols, grid.rows);
         let to = (cols as usize, rows as usize);
@@ -379,7 +382,12 @@ impl PaneActor {
         self.subs.push(sink);
     }
 
-    fn logs(&self, query: LogQuery, reply: Reply<(String, u64)>) {
+    fn logs(&mut self, query: LogQuery, reply: Reply<(String, u64)>) {
+        if self.pty && query.plain && query.since.is_none() && query.until.is_none() {
+            let text = self.replay().scrollback_text(query.tail);
+            let _ = reply.send((text, self.ring.total_written()));
+            return;
+        }
         let screen = self.pty.then_some(&self.screen);
         let _ = reply.send(render_logs(&self.ring, screen, &query, self.scrollback));
     }

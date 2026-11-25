@@ -4,6 +4,10 @@ use regex::Regex;
 
 use crate::protocol::{WaitCondition, WaitOutcome};
 
+/// Longest quiet period an idle wait may ask for. Bounding it keeps `last output + quiet period`
+/// far from the clock's limits.
+pub const MAX_IDLE_MS: u64 = 365 * 24 * 60 * 60 * 1000;
+
 #[derive(Debug, Clone)]
 pub enum Cond {
     Exit,
@@ -15,7 +19,14 @@ impl Cond {
     pub fn from_condition(condition: WaitCondition) -> Result<Cond, String> {
         Ok(match condition {
             WaitCondition::Exit => Cond::Exit,
-            WaitCondition::Idle { quiet_ms } => Cond::Idle { quiet_ms },
+            WaitCondition::Idle { quiet_ms } => {
+                if quiet_ms > MAX_IDLE_MS {
+                    return Err(format!(
+                        "Idle period {quiet_ms} ms exceeds the {MAX_IDLE_MS} ms maximum"
+                    ));
+                }
+                Cond::Idle { quiet_ms }
+            }
             WaitCondition::Match { pattern } => {
                 Cond::Match(Regex::new(&pattern).map_err(|e| format!("Invalid pattern: {}", e))?)
             }

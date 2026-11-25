@@ -183,13 +183,6 @@ const COPY_EMACS_BINDINGS: &[(&str, &str)] = &[
     ("C-r", "send-keys -X search-prompt-backward"),
 ];
 
-/// What macOS terminals send for Option-j and Option-k (US and ABC layouts) unless Option is set
-/// to act as Alt (Meta / Esc+), so the same keys step through agents out of the box.
-#[cfg(target_os = "macos")]
-const MAC_OPTION_BINDINGS: &[(&str, &str)] = &[];
-#[cfg(not(target_os = "macos"))]
-const MAC_OPTION_BINDINGS: &[(&str, &str)] = &[];
-
 /// The default table: the default bindings plus `0`-`9` for `select-window`.
 pub fn default_table() -> Vec<(String, String)> {
     let defaults = [WINDOW_PANE_BINDINGS, LAYOUT_BINDINGS, SESSION_BINDINGS];
@@ -362,7 +355,6 @@ pub fn resolve(config: &Config) -> Result<Keymap, String> {
     }
     let root_defaults = ROOT_BINDINGS
         .iter()
-        .chain(MAC_OPTION_BINDINGS)
         .map(|(key, line)| (key.to_string(), line.to_string()));
     let root = merged(root_defaults, &config.bind_root)?
         .into_iter()

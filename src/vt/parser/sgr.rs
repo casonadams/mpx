@@ -80,8 +80,8 @@ fn underline_style(sub: &[u16]) -> Underline {
 /// Applies one SGR code other than the extended colour selectors (38, 48, 58).
 fn apply_sgr_code(style: &mut CellStyle, code: u16, sub: &[u16]) {
     match code {
-        0 | 22..=24 | 27 => reset_attribute(style, code),
-        1..=4 | 7 | 21 => set_attribute(style, code, sub),
+        0 | 22..=25 | 27..=29 => reset_attribute(style, code),
+        1..=5 | 7 | 8 | 9 | 21 => set_attribute(style, code, sub),
         30..=37 | 39 | 90..=97 => style.fg = basic_color(code),
         40..=47 | 49 | 100..=107 => style.bg = basic_color(code),
         59 => style.underline_color = None,
@@ -95,7 +95,10 @@ fn set_attribute(style: &mut CellStyle, code: u16, sub: &[u16]) {
         2 => style.faint = true,
         3 => style.italic = true,
         4 => style.underline = underline_style(sub),
+        5 => style.blink = true,
         7 => style.reverse = true,
+        8 => style.conceal = true,
+        9 => style.strike = true,
         21 => style.underline = Underline::Double,
         _ => {}
     }
@@ -110,7 +113,10 @@ fn reset_attribute(style: &mut CellStyle, code: u16) {
         }
         23 => style.italic = false,
         24 => style.underline = Underline::None,
+        25 => style.blink = false,
         27 => style.reverse = false,
+        28 => style.conceal = false,
+        29 => style.strike = false,
         _ => {}
     }
 }
@@ -136,14 +142,14 @@ fn parse_extended_color<'a>(
 
 fn colon_extended_color(sub: &[u16]) -> Option<Color> {
     if sub.len() >= 5 && sub[1] == 2 {
-        let (r, g, b) = if sub.len() >= 6 {
-            (sub[3] as u8, sub[4] as u8, sub[5] as u8)
+        let rgb = if sub.len() >= 6 {
+            &sub[3..6]
         } else {
-            (sub[2] as u8, sub[3] as u8, sub[4] as u8)
+            &sub[2..5]
         };
-        Some(Color::Rgb(r, g, b))
+        rgb_color(rgb[0], rgb[1], rgb[2])
     } else if sub.len() >= 3 && sub[1] == 5 {
-        Some(Color::Indexed(sub[2] as u8))
+        u8::try_from(sub[2]).ok().map(Color::Indexed)
     } else {
         None
     }
@@ -152,11 +158,19 @@ fn colon_extended_color(sub: &[u16]) -> Option<Color> {
 fn semicolon_extended_color<'a>(iter: &mut impl Iterator<Item = &'a [u16]>) -> Option<Color> {
     let sub = iter.next()?;
     match sub[0] {
-        5 => iter.next().map(|c| Color::Indexed(c[0] as u8)),
+        5 => u8::try_from(iter.next()?[0]).ok().map(Color::Indexed),
         2 => match (iter.next(), iter.next(), iter.next()) {
-            (Some(r), Some(g), Some(b)) => Some(Color::Rgb(r[0] as u8, g[0] as u8, b[0] as u8)),
+            (Some(r), Some(g), Some(b)) => rgb_color(r[0], g[0], b[0]),
             _ => None,
         },
         _ => None,
     }
+}
+
+fn rgb_color(r: u16, g: u16, b: u16) -> Option<Color> {
+    Some(Color::Rgb(
+        u8::try_from(r).ok()?,
+        u8::try_from(g).ok()?,
+        u8::try_from(b).ok()?,
+    ))
 }

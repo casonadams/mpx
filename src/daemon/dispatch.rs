@@ -21,12 +21,18 @@ async fn idempotent(state: &Arc<DaemonState>, key: String, req: Request) -> Resp
     if matches!(req, Request::Idempotent { .. } | Request::Subscribe { .. }) {
         return Response::Error("Idempotent requests cannot nest or stream".to_string());
     }
+    if key.len() > MAX_KEY_LEN {
+        return Response::Error(format!(
+            "idempotency key is longer than {MAX_KEY_LEN} bytes"
+        ));
+    }
     match state.idem_begin(&key).await {
         Ok(Claim::Cached(resp)) => resp,
         Ok(Claim::Wait(rx)) => match rx.await {
             Ok(Some(resp)) => resp,
             _ => Response::Error(format!("idempotent request '{key}' did not complete")),
         },
+        Ok(Claim::Busy) => Response::Error("too many idempotent requests are running".to_string()),
         Ok(Claim::Run) => {
             let ticket = IdemTicket {
                 state: Arc::clone(state),
@@ -40,6 +46,9 @@ async fn idempotent(state: &Arc<DaemonState>, key: String, req: Request) -> Resp
         Err(e) => Response::Error(e),
     }
 }
+
+/// The longest idempotency key accepted: keys are kept for the TTL, so they are bounded.
+const MAX_KEY_LEN: usize = 256;
 
 /// Owns the claim on an idempotency key. Dropped unfinished, it releases the key with no response.
 struct IdemTicket {
@@ -104,12 +113,6 @@ pub(super) async fn execute(state: &Arc<DaemonState>, req: Request) -> Response 
                 until,
             };
             logs(state, &name, query).await
-        }
-        Request::Subscribe { .. } => {
-            Response::Error("subscriptions require a streaming connection".to_string())
-        }
-        Request::Idempotent { .. } => {
-            Response::Error("Idempotent requests cannot nest or stream".to_string())
         }
         req => state.session_req(req).await,
     }

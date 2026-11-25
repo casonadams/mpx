@@ -13,7 +13,7 @@ use std::time::Instant;
 use serde::{Deserialize, Serialize};
 
 use super::tree::LayoutNode;
-use crate::protocol::LayoutPreset;
+use crate::layout::tree::LayoutPreset;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct WindowTab {

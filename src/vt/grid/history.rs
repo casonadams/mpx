@@ -90,6 +90,13 @@ impl Grid {
     /// default blanks, so short lines cost their length rather than the screen width. The screen
     /// row itself is reused.
     pub(super) fn keep_in_history(&mut self, y: usize) {
+        if self.pad_rows > 0 {
+            self.pad_rows -= 1;
+            if self.lines[y].iter().all(|cell| *cell == Cell::default()) {
+                self.drop_row_number();
+                return;
+            }
+        }
         self.scrolled_off += 1;
         if self.history_limit == 0 {
             return;

@@ -657,3 +657,48 @@ fn glob_matching_stays_fast_with_many_stars_and_keeps_its_semantics() {
         ],
     );
 }
+
+#[test]
+fn float_arithmetic_with_huge_decimals_does_not_panic() {
+    let out = expand("#{e|+|f|99999999:1,2}", &Vars::new());
+    assert!(out.starts_with("3.000"), "{out:?}");
+}
+
+#[test]
+fn nested_loops_stop_at_a_work_budget() {
+    let item = vars(&[("pane_title", "x")]);
+    let lists = Lists {
+        panes: vec![item; 10],
+        ..Lists::default()
+    };
+    let mut fmt = String::from("#T");
+    for _ in 0..12 {
+        fmt = format!("#{{P:{fmt}}}");
+    }
+    let out = expand_with(&fmt, &Vars::new(), &lists);
+    assert!(out.len() < 1 << 22, "len {}", out.len());
+}
+
+#[test]
+fn nested_re_expansion_stops_at_a_work_budget() {
+    let v = vars(&[("t", "#{E:#{t}}#{E:#{t}}")]);
+    let out = expand("#{E:#{t}}", &v);
+    assert!(out.len() < 1 << 22, "len {}", out.len());
+}
+
+#[test]
+fn client_tty_is_the_name_only_for_device_paths() {
+    let client = |name: &str| mpx::protocol::ClientInfo {
+        name: name.to_string(),
+        session: "main".to_string(),
+        width: 80,
+        height: 24,
+        readonly: false,
+        created_ms: 0,
+        activity_ms: 0,
+        parent_pid: None,
+    };
+    let tty = |name: &str| mpx::format::client_vars(&client(name), 1)["client_tty"].clone();
+    assert_eq!(tty("/dev/ttys004"), "/dev/ttys004");
+    assert_eq!(tty("client-42-1"), "");
+}

@@ -65,13 +65,23 @@ impl Session {
     fn spawn(&self, name: &str, cmd: &[&str]) {
         let mut args = vec!["run", "-n", name];
         args.extend_from_slice(cmd);
-        let _ = self.run(&args);
+        let out = self.run(&args);
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
     }
 
     /// Starts `body` in `sh -c` as a pty pane and waits until it has printed READY.
     fn spawn_pty(&self, name: &str, body: &str) {
         let script = format!("echo {READY}; {body}");
-        let _ = self.run(&["run", "-n", name, "--pty", "sh", "-c", script.as_str()]);
+        let out = self.run(&["run", "-n", name, "--pty", "sh", "-c", script.as_str()]);
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         assert_eq!(
             self.wait_for_match(name, READY),
             0,
@@ -182,6 +192,49 @@ fn kill_server_is_safe_without_a_daemon() {
     assert_eq!(s.code(&["kill-server"]), 1);
 }
 
+#[test]
+fn split_direction_takes_h_or_v() {
+    let s = Session::new("sd");
+    assert_fails(
+        &s.run(&["split", "--direction", "x", "sh"]),
+        2,
+        "invalid value",
+    );
+}
+
+#[test]
+fn a_taken_node_name_is_refused_with_the_name_flag_hint() {
+    let s = Session::new("nc");
+    s.spawn("dup", &["sleep", "30"]);
+    assert_fails(
+        &s.run(&["run", "-n", "dup", "sleep", "30"]),
+        1,
+        "pass -n NAME",
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn logs_follow_fails_when_the_daemon_dies_mid_stream() {
+    let s = Session::new("lfd");
+    s.spawn("idle", &["sleep", "30"]);
+    let sessions: serde_json::Value =
+        serde_json::from_str(&s.stdout(&["list-sessions", "--json"])).expect("json");
+    let pid = sessions[0]["pid"].as_i64().expect("daemon pid") as libc::pid_t;
+    let mut child = s
+        .base()
+        .args(["logs", "idle", "-f"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn logs -f");
+    std::thread::sleep(Duration::from_millis(500));
+    // SAFETY: kill(2) signals the daemon this test started.
+    unsafe { libc::kill(pid, libc::SIGKILL) };
+    let out = child.wait_with_output().expect("wait for logs -f");
+    assert_fails(&out, 1, "ended the log stream");
+}
+
 /// Asserts that `out` ended with `code` and said `needle` on stderr.
 fn assert_fails(out: &Output, code: i32, needle: &str) {
     assert_eq!(out.status.code(), Some(code));
@@ -243,7 +296,8 @@ fn idempotency_key_delivers_a_repeated_send_once() {
         );
     }
     assert_eq!(s.wait_for_match("echo", "once-token"), 0);
-    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(s.code(&["send", "echo", "sentinel-token"]), 0);
+    assert_eq!(s.wait_for_match("echo", "sentinel-token"), 0);
     let text = s.stdout(&["logs", "echo", "--plain"]);
     assert_eq!(text.matches("once-token").count(), 1, "{text}");
 }

@@ -40,10 +40,25 @@ pub fn main_entry(argv: Vec<String>) -> i32 {
     }
 }
 
-async fn entry(argv: Vec<String>) -> i32 {
+/// Logs go to stderr, which an auto-spawned daemon sends to its log file. A daemon logs at `info`;
+/// other commands at `error`.
+fn init_tracing(daemon: bool) {
+    let level = if daemon {
+        tracing_subscriber::filter::LevelFilter::INFO
+    } else {
+        tracing_subscriber::filter::LevelFilter::ERROR
+    };
+    let filter = tracing_subscriber::EnvFilter::builder()
+        .with_default_directive(level.into())
+        .from_env_lossy();
     let _ = tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_writer(std::io::stderr)
+        .with_env_filter(filter)
+        .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
         .try_init();
+}
+
+async fn entry(argv: Vec<String>) -> i32 {
     let cli = match Cli::try_parse_from(argv) {
         Ok(cli) => cli,
         Err(e) => {
@@ -52,6 +67,7 @@ async fn entry(argv: Vec<String>) -> i32 {
             return code;
         }
     };
+    init_tracing(matches!(cli.command, Some(Commands::Daemon)));
     match run_cli(cli).await {
         Ok(code) => code,
         Err(message) => {
@@ -94,6 +110,13 @@ pub struct Cli {
 
     #[command(subcommand)]
     pub command: Option<Commands>,
+}
+
+/// Direction of `mpx split`: `h` puts the new pane side by side, `v` stacks it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum SplitDirection {
+    H,
+    V,
 }
 
 #[derive(Subcommand, Debug)]
@@ -225,9 +248,9 @@ pub enum Commands {
         #[arg(short, long)]
         name: Option<String>,
 
-        /// Split direction: h (side by side) or v (stacked)
-        #[arg(long, default_value = "h")]
-        direction: String,
+        /// Split direction: h (side by side, the default) or v (stacked)
+        #[arg(long, value_enum, default_value_t = SplitDirection::H)]
+        direction: SplitDirection,
 
         /// Shorthand for --direction h (tmux -h)
         #[arg(short = 'h', conflicts_with = "vertical")]

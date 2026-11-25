@@ -1,16 +1,19 @@
 mod options;
 mod resume;
+mod size;
 mod values;
 
 pub use options::{PaneStyle, SessionOptions, StyleConfig, TerminalOptions, WindowOptions};
 pub use resume::{IdSource, ResumeRule, default_resume_rules};
+pub use size::{MAX_WINDOW_SIZE, Size, WindowSize};
 pub use values::{
-    BellAction, BorderStyle, ExtendedKeys, Justify, ModeKeys, Passthrough, RemainOnExit,
-    StatusPosition, parse_status, parse_switch,
+    BellAction, BorderStyle, ExtendedKeys, Justify, MAX_STATUS_LINES, ModeKeys, Passthrough,
+    RemainOnExit, StatusPosition, parse_status, parse_switch,
 };
 
 use serde::Deserialize;
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 /// tmux's `window-status-format` and `window-status-current-format` default.
@@ -135,17 +138,27 @@ impl Default for Config {
 
 impl Config {
     pub fn path() -> Option<PathBuf> {
-        if let Ok(p) = std::env::var("MPX_CONFIG") {
-            return Some(PathBuf::from(p));
+        Self::path_with(|key| std::env::var_os(key), home_dir())
+    }
+
+    /// `MPX_CONFIG`, else `$XDG_CONFIG_HOME/mpx/config.toml` (`%APPDATA%` on Windows), else
+    /// `~/.config/mpx/config.toml`. Empty variables count as unset.
+    pub fn path_with(
+        env: impl Fn(&str) -> Option<OsString>,
+        home: Option<PathBuf>,
+    ) -> Option<PathBuf> {
+        let set = |key: &str| env(key).filter(|v| !v.is_empty()).map(PathBuf::from);
+        if let Some(path) = set("MPX_CONFIG") {
+            return Some(path);
         }
-        if let Ok(dir) = std::env::var("XDG_CONFIG_HOME") {
-            return Some(PathBuf::from(dir).join("mpx").join("config.toml"));
+        if let Some(dir) = set("XDG_CONFIG_HOME") {
+            return Some(dir.join("mpx").join("config.toml"));
         }
         #[cfg(windows)]
-        if let Ok(dir) = std::env::var("APPDATA") {
-            return Some(PathBuf::from(dir).join("mpx").join("config.toml"));
+        if let Some(dir) = set("APPDATA") {
+            return Some(dir.join("mpx").join("config.toml"));
         }
-        home_dir().map(|h| h.join(".config").join("mpx").join("config.toml"))
+        home.map(|h| h.join(".config").join("mpx").join("config.toml"))
     }
 
     pub fn parse(text: &str) -> Result<Config, String> {
@@ -167,13 +180,6 @@ impl Config {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Config::default()),
             Err(e) => Err(format!("{}: {}", path.display(), e)),
         }
-    }
-
-    pub fn load_or_default() -> Config {
-        Self::load().unwrap_or_else(|e| {
-            tracing::warn!("ignoring invalid mpx config: {}", e);
-            Config::default()
-        })
     }
 
     /// Config from `path`, or the defaults when there is none. A missing file yields defaults; a

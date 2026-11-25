@@ -6,14 +6,18 @@ use mpx::vt::capture::{CaptureLine, CaptureSpec};
 
 use super::support::{fresh, logs_until, pty};
 
-/// The capture of `pane` once it contains `needle`, polled for at most two seconds.
+/// The capture of `pane` once it contains `needle`, polled for at most two seconds; panics when it never does.
 async fn capture_until(client: &mut Client, pane: &str, spec: CaptureSpec, needle: &str) -> String {
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         let text = client.capture_pane(pane, spec).await.expect("capture");
-        if text.contains(needle) || Instant::now() >= deadline {
+        if text.contains(needle) {
             return text;
         }
+        assert!(
+            Instant::now() < deadline,
+            "'{needle}' never appeared in {pane}:\n{text}"
+        );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
 }

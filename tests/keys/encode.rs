@@ -233,6 +233,55 @@ fn sgr_mouse_encoding_formats_clicks_and_wheel() {
     );
 }
 
+#[test]
+fn x10_mouse_reports_presses_releases_and_wheel_but_not_drags_or_moves() {
+    use crossterm::event::{MouseButton, MouseEventKind};
+    use mpx::keys::{MouseTracking, encode_mouse_event};
+
+    let modes = TermModes {
+        mouse_tracking: MouseTracking::X10,
+        mouse_sgr: false,
+        ..Default::default()
+    };
+    let at = |kind| encode_mouse_event(&modes, kind, 15, 5, NONE);
+
+    assert_eq!(
+        at(MouseEventKind::Down(MouseButton::Left)),
+        Some(vec![0x1b, b'[', b'M', 32, 47, 37])
+    );
+    assert_eq!(
+        at(MouseEventKind::Up(MouseButton::Left)),
+        Some(vec![0x1b, b'[', b'M', 35, 47, 37])
+    );
+    assert_eq!(
+        at(MouseEventKind::ScrollUp),
+        Some(vec![0x1b, b'[', b'M', 96, 47, 37])
+    );
+    assert_eq!(
+        at(MouseEventKind::ScrollDown),
+        Some(vec![0x1b, b'[', b'M', 97, 47, 37])
+    );
+    assert_eq!(at(MouseEventKind::Drag(MouseButton::Left)), None);
+    assert_eq!(at(MouseEventKind::Moved), None);
+}
+
+#[test]
+fn x10_mouse_clamps_coordinates_to_the_encodable_range() {
+    use crossterm::event::{MouseButton, MouseEventKind};
+    use mpx::keys::{MouseTracking, encode_mouse_event};
+
+    let modes = TermModes {
+        mouse_tracking: MouseTracking::X10,
+        mouse_sgr: false,
+        ..Default::default()
+    };
+    let down = MouseEventKind::Down(MouseButton::Right);
+    assert_eq!(
+        encode_mouse_event(&modes, down, 300, 0, NONE),
+        Some(vec![0x1b, b'[', b'M', 34, 255, 33])
+    );
+}
+
 fn default_policy() -> KeyPolicy {
     KeyPolicy::of(&Config::default())
 }

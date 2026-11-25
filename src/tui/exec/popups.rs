@@ -1,5 +1,5 @@
 //! What opens over the panes: the pane numbers, the clock, popups and menus.
-use crate::daemon::plan::fallback_shell;
+use crate::daemon::plan;
 use crate::tui::app::{App, Flow, Mode};
 use crate::tui::command::PopupCommand;
 use crate::tui::frame;
@@ -55,13 +55,10 @@ impl App {
                 .find(|node| node.name == pane)
                 .and_then(|node| node.cwd.clone());
         }
-        let shell = self
-            .config
-            .session
-            .default_shell
-            .clone()
-            .or_else(|| std::env::var("SHELL").ok())
-            .unwrap_or_else(|| fallback_shell().to_string());
+        let shell = plan::default_shell(
+            self.config.session.default_shell.as_deref(),
+            std::env::var("SHELL").ok().as_deref(),
+        );
         let screen = (self.viewport.0, self.rows.screen_h);
         match PopupState::open(opts, screen, &shell, &self.config.session.default_terminal) {
             Ok(popup) => {

@@ -1,5 +1,5 @@
 //! `mpx import-tmux` conversion of a tmux config.
-use mpx::config::{BorderStyle, Config};
+use mpx::config::{BorderStyle, Config, Justify, StatusPosition};
 use mpx::import_tmux::{Converted, convert};
 use mpx::tui::keymap;
 
@@ -174,7 +174,7 @@ fn sample_output_resolves_to_a_keymap() {
 #[test]
 fn sample_notes_carry_original_line_numbers() {
     let c = convert(SAMPLE);
-    for line in [2, 13, 14, 15, 17, 18, 23, 26, 31, 32, 33] {
+    for line in [2, 13, 15, 17, 18, 23, 26, 31, 32, 33] {
         assert!(
             has_note(&c, line),
             "expected a note for line {line}: {:?}",
@@ -182,7 +182,7 @@ fn sample_notes_carry_original_line_numbers() {
         );
     }
     for line in [
-        3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 19, 20, 21, 22, 24, 25, 27, 28, 34, 35,
+        3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 19, 20, 21, 22, 24, 25, 27, 28, 34, 35,
     ] {
         assert!(
             !has_note(&c, line),
@@ -415,4 +415,78 @@ fn startup_run_shell_has_no_config_equivalent_and_is_noted() {
         "{:?}",
         c.notes
     );
+}
+
+#[test]
+fn window_and_status_options_map_to_their_config_keys() {
+    let cases: [(&str, fn(&Config) -> bool); 16] = [
+        ("set -g base-index 1", |c| c.base_index == 1),
+        ("set -g pane-base-index 2", |c| {
+            c.window.pane_base_index == 2
+        }),
+        ("set -g display-time 750", |c| c.display_time_ms == 750),
+        ("set -g status-interval 5", |c| c.status_interval == 5),
+        ("set -g status-position top", |c| {
+            matches!(c.status_position, StatusPosition::Top)
+        }),
+        ("set -g status-justify right", |c| {
+            matches!(c.status_justify, Justify::Right)
+        }),
+        ("set -g status-left '#{session_name} '", |c| {
+            c.status_left == "#{session_name} "
+        }),
+        ("set -g status-right R", |c| c.status_right == "R"),
+        ("set -g status-left-length 12", |c| {
+            c.status_left_length == 12
+        }),
+        ("set -g status-right-length 33", |c| {
+            c.status_right_length == 33
+        }),
+        ("set -g window-status-format '#I'", |c| {
+            c.window_status_format == "#I"
+        }),
+        ("set -g window-status-current-format '#I*'", |c| {
+            c.window_status_current_format == "#I*"
+        }),
+        ("set -g window-status-separator '|'", |c| {
+            c.window_status_separator == "|"
+        }),
+        ("set -g set-clipboard off", |c| !c.set_clipboard),
+        ("set -g set-clipboard external", |c| c.set_clipboard),
+        ("set -g set-clipboard on", |c| c.set_clipboard),
+    ];
+    for (line, check) in cases {
+        let c = convert(line);
+        assert!(c.notes.is_empty(), "{line}: {:?}", c.notes);
+        assert!(check(&parsed(&c)), "{line}: {}", c.toml);
+    }
+}
+
+#[test]
+fn invalid_window_and_status_values_are_noted_and_skipped() {
+    let c = convert(
+        "set -g base-index one\nset -g display-time -1\nset -g status-position middle\nset -g status-justify up\nset -g set-clipboard maybe\n",
+    );
+    let config = parsed(&c);
+    assert_eq!(config.base_index, Config::default().base_index);
+    assert_eq!(config.display_time_ms, Config::default().display_time_ms);
+    assert!((1..=5).all(|line| has_note(&c, line)), "{:?}", c.notes);
+}
+
+#[test]
+fn status_format_indexes_past_the_tmux_status_rows_are_refused() {
+    let c = convert("set -g status-format[5] \"x\"\nset -g status-format[99999999999] \"y\"\n");
+    assert!(has_note(&c, 1) && has_note(&c, 2), "{:?}", c.notes);
+    assert!(parsed(&c).status_format.is_empty());
+}
+
+#[test]
+fn every_command_of_a_chain_loses_the_pane_directory_format() {
+    let c = convert("bind x select-pane -t 1 \\; split-window -c '#{pane_current_path}' -h\n");
+    let config = parsed(&c);
+    assert_eq!(
+        config.bind.get("x").map(String::as_str),
+        Some("select-pane -t 1 ; split-window -h")
+    );
+    assert!(has_note(&c, 1), "{:?}", c.notes);
 }

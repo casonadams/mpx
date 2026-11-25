@@ -14,5 +14,5 @@ pub use pacing::{
 pub use run::{run_tui, sync_mouse_capture};
 pub use state::{
     App, AppOptions, AttachOpts, Attachment, Chrome, Clipboard, ClockSource, Flow, FramePacing,
-    HostTerm, Interaction, Launch, Mode, StartView, StatusHits, StreamRx, Subscription, YankState,
+    HostTerm, Interaction, Launch, Mode, StatusHits, StreamRx, Subscription, YankState,
 };

@@ -73,7 +73,7 @@ impl Grid {
     /// rows leaving the top of a full screen to history and blanks rows entering at the bottom;
     /// scrolling down blanks rows entering at the top.
     fn scroll_region(&mut self, count: usize, up: bool) {
-        if count == 0 || self.scroll_top >= self.scroll_bottom {
+        if count == 0 || self.scroll_top > self.scroll_bottom {
             return;
         }
         if let Some(columns) = self.narrow_margins() {
@@ -88,6 +88,7 @@ impl Grid {
             self.lines[top..=bottom].rotate_left(n);
             self.wrapped[top..=bottom].rotate_left(n);
         } else {
+            self.pad_rows = 0;
             self.note_scroll(top, bottom, -(n as isize));
             self.lines[top..=bottom].rotate_right(n);
             self.wrapped[top..=bottom].rotate_right(n);
@@ -99,7 +100,7 @@ impl Grid {
             top..=top + n - 1
         };
         for y in entering {
-            if up && top == 0 && !self.alternate_screen {
+            if up && top == 0 && bottom + 1 == self.rows && !self.alternate_screen {
                 self.keep_in_history(y);
             }
             self.lines[y].fill(blank);

@@ -265,6 +265,7 @@ async fn wait_for_returns_once_the_channel_is_signalled() {
         send(&mut client, wait_for("ready", ChannelOp::Wait)).await
     });
     tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(!waiter.is_finished(), "the wait holds until the signal");
     let mut signaller = connect(&daemon.endpoint).await;
     send(&mut signaller, wait_for("ready", ChannelOp::Signal))
         .await
@@ -322,6 +323,34 @@ async fn a_second_lock_waits_until_the_first_is_released() {
         .await
         .expect("the second lock is granted")
         .unwrap();
+    assert!(taken.is_ok());
+}
+
+#[tokio::test]
+async fn a_lock_is_not_handed_to_a_waiter_that_disconnected() {
+    let daemon = start().await;
+    let mut holder = connect(&daemon.endpoint).await;
+    send(&mut holder, wait_for("gate", ChannelOp::Lock))
+        .await
+        .unwrap();
+    let endpoint = daemon.endpoint.clone();
+    let queued = tokio::spawn(async move {
+        let mut client = connect(&endpoint).await;
+        send(&mut client, wait_for("gate", ChannelOp::Lock)).await
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    queued.abort();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    send(&mut holder, wait_for("gate", ChannelOp::Unlock))
+        .await
+        .unwrap();
+    let mut next = connect(&daemon.endpoint).await;
+    let taken = tokio::time::timeout(
+        Duration::from_secs(2),
+        send(&mut next, wait_for("gate", ChannelOp::Lock)),
+    )
+    .await
+    .expect("the lock is free: the disconnected waiter did not take it");
     assert!(taken.is_ok());
 }
 

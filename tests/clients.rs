@@ -1,4 +1,5 @@
-use mpx::clients::{ClientRow, Size, WindowSize, client_lines, effective_size};
+use mpx::clients::{ClientRow, client_lines, effective_size};
+use mpx::config::{Size, WindowSize};
 use mpx::protocol::ClientInfo;
 use mpx::tui::command::{Command, parse, read_only_allowed};
 

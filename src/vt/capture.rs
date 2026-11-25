@@ -119,7 +119,10 @@ pub(super) fn push_sgr(out: &mut String, style: CellStyle) {
         (style.bold, "1"),
         (style.faint, "2"),
         (style.italic, "3"),
+        (style.blink, "5"),
         (style.reverse, "7"),
+        (style.conceal, "8"),
+        (style.strike, "9"),
     ] {
         if on {
             let _ = write!(out, ";{code}");

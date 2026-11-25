@@ -6,6 +6,13 @@ fn cell(c: char, style: CellStyle) -> Cell {
     Cell { c, style }
 }
 
+#[test]
+fn a_control_character_in_a_link_target_does_not_change_the_link() {
+    let clean = LinkId::intern(";https://canvas.test/c");
+    assert!(clean.is_some());
+    assert_eq!(LinkId::intern(";https://canvas.test/\u{9b}c"), clean);
+}
+
 /// Draws one row of `cells` at the top-left of a 10x3 canvas and returns what was sent.
 fn draw(cells: &[Cell]) -> String {
     frame(&mut Canvas::default(), None, |canvas, out| {

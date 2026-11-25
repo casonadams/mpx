@@ -143,6 +143,21 @@ async fn resize_pane_is_accepted_for_pty_nodes() {
 }
 
 #[tokio::test]
+async fn resize_pane_refuses_sizes_outside_the_pane_bounds() {
+    let daemon = start().await;
+    let mut client = connect(&daemon.endpoint).await;
+    client.spawn(pty("bounded", "cat", &[])).await.unwrap();
+    for (cols, rows) in [(0, 24), (80, 0), (1001, 24), (80, 1001)] {
+        assert!(
+            client.resize_pane("bounded", cols, rows).await.is_err(),
+            "{cols}x{rows} refused"
+        );
+    }
+    client.resize_pane("bounded", 1000, 1).await.unwrap();
+    client.kill("bounded").await.unwrap();
+}
+
+#[tokio::test]
 async fn new_window_reports_cwd_and_split_inherits_it() {
     let daemon = start().await;
     let mut client = connect(&daemon.endpoint).await;

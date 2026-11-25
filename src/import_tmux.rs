@@ -1,6 +1,9 @@
 //! `mpx import-tmux`: converts a tmux config into an mpx `config.toml` fragment. Pure: the caller reads the file.
 use std::collections::BTreeMap;
+use std::fmt::Display;
+use std::str::FromStr;
 
+use crate::config::{Justify, MAX_STATUS_LINES, StatusPosition};
 use crate::keys::KeySpec;
 use crate::tui::command::parse as parse_command;
 
@@ -127,8 +130,8 @@ impl Conv {
                 if opts.has('r') {
                     self.note(line, format!("bind {key}: -r (repeat) is ignored"));
                 }
-                if let Some(dropped) = dropped {
-                    self.note(line, format!("bind {key}: {dropped}"));
+                for note in dropped {
+                    self.note(line, format!("bind {key}: {note}"));
                 }
                 self.table(root).insert(key.clone(), cmd);
             }
@@ -231,7 +234,8 @@ impl Conv {
         if !(self.session_option(line, name, value)
             || self.style_option(line, name, value)
             || self.ui_option(line, name, value)
-            || self.status_option(line, name, value))
+            || self.status_option(line, name, value)
+            || self.status_text_option(line, name, value))
         {
             self.note(
                 line,
@@ -248,6 +252,9 @@ impl Conv {
                 Err(e) => self.note(line, format!("prefix '{value}' is not a valid key ({e})")),
             },
             "prefix2" => self.note(line, "prefix2 is not supported: mpx has one prefix key"),
+            "base-index" => self.number::<usize>(line, name, "base_index", value),
+            "pane-base-index" => self.number::<usize>(line, name, "pane_base_index", value),
+            "display-time" => self.number::<u64>(line, name, "display_time_ms", value),
             "history-limit" => match value.parse::<usize>() {
                 Ok(n) => self.set_top("scrollback_lines", n.to_string()),
                 Err(_) => self.note(line, format!("history-limit '{value}' is not a number")),
@@ -309,7 +316,7 @@ impl Conv {
             }
             _ => return false,
         };
-        match crate::tui::style::parse(value) {
+        match crate::style::parse(value) {
             Ok(_) => {
                 self.style.insert(key, toml_str(value));
             }
@@ -334,6 +341,10 @@ impl Conv {
             "visual-bell" => self.flag(line, name, "visual_bell", value),
             "visual-activity" => self.flag(line, name, "visual_activity", value),
             "set-titles" => self.flag(line, name, "set_titles", value),
+            "set-clipboard" if value == "external" => {
+                self.set_top("set_clipboard", true.to_string())
+            }
+            "set-clipboard" => self.flag(line, name, "set_clipboard", value),
             "set-titles-string" => {
                 self.top.insert("set_titles_string", toml_str(value));
             }
@@ -361,6 +372,12 @@ impl Conv {
             .and_then(|rest| rest.strip_suffix(']'))
         {
             match index.parse::<usize>() {
+                Ok(i) if i >= MAX_STATUS_LINES => self.note(
+                    line,
+                    format!(
+                        "{name}: tmux has {MAX_STATUS_LINES} status rows, index {i} is past them"
+                    ),
+                ),
                 Ok(i) => {
                     self.status_format.insert(i, value.to_string());
                 }
@@ -382,6 +399,45 @@ impl Conv {
             Err(e) => self.note(line, format!("status: {e}")),
         }
         true
+    }
+
+    /// Status-line text, placement and tab formats. False when `name` is not one of them.
+    fn status_text_option(&mut self, line: usize, name: &str, value: &str) -> bool {
+        match name {
+            "status-left" => self.set_top("status_left", toml_str(value)),
+            "status-right" => self.set_top("status_right", toml_str(value)),
+            "status-left-length" => self.number::<usize>(line, name, "status_left_length", value),
+            "status-right-length" => self.number::<usize>(line, name, "status_right_length", value),
+            "status-interval" => self.number::<u64>(line, name, "status_interval", value),
+            "status-position" => match value.parse::<StatusPosition>() {
+                Ok(position) => self.set_top("status_position", toml_str(position.as_str())),
+                Err(e) => self.note(line, format!("status-position: {e}")),
+            },
+            "status-justify" => match value.parse::<Justify>() {
+                Ok(justify) => self.set_top("status_justify", toml_str(justify.as_str())),
+                Err(e) => self.note(line, format!("status-justify: {e}")),
+            },
+            "window-status-format" => self.set_top("window_status_format", toml_str(value)),
+            "window-status-current-format" => {
+                self.set_top("window_status_current_format", toml_str(value));
+            }
+            "window-status-separator" => self.set_top("window_status_separator", toml_str(value)),
+            _ => return false,
+        }
+        true
+    }
+
+    fn number<T: FromStr + Display>(
+        &mut self,
+        line: usize,
+        name: &str,
+        key: &'static str,
+        value: &str,
+    ) {
+        match value.parse::<T>() {
+            Ok(n) => self.set_top(key, n.to_string()),
+            Err(_) => self.note(line, format!("{name} '{value}' is not a number")),
+        }
     }
 
     fn border_lines(&mut self, line: usize, value: &str) {
@@ -475,38 +531,47 @@ fn root_table(opts: &Opts) -> Result<bool, String> {
     }
 }
 
-/// The mpx command line for a tmux command, plus a note when an option had to be dropped.
-fn mpx_command(words: &[String]) -> Result<(String, Option<String>), String> {
+/// The mpx command line for a tmux command, plus a note for each option dropped. Every command of a
+/// `;` chain is checked on its own.
+fn mpx_command(words: &[String]) -> Result<(String, Vec<String>), String> {
     let Some(name) = words.first() else {
         return Err("missing command".to_string());
     };
-    let takes_cwd = matches!(
-        name.as_str(),
-        "split-window" | "split" | "sp" | "vsplit" | "vs" | "new-window" | "new" | "tabnew"
-    );
     let mut kept: Vec<String> = Vec::with_capacity(words.len());
-    let mut dropped = None;
-    let mut iter = words.iter();
-    while let Some(word) = iter.next() {
-        if takes_cwd && word == "-c" {
-            let Some(dir) = iter.next() else {
-                return Err(format!("command '{name}': -c needs a value"));
-            };
-            if dir == "#{pane_current_path}" {
-                dropped = Some(
-                    "-c '#{pane_current_path}' dropped: mpx starts new panes in the active pane's directory"
-                        .to_string(),
-                );
-            } else if dir.contains("#{") {
-                return Err(format!(
-                    "command '{name}': -c '{dir}' format is not supported"
-                ));
+    let mut dropped = Vec::new();
+    for (index, segment) in words.split(|w: &String| w.as_str() == ";").enumerate() {
+        if index > 0 {
+            kept.push(";".to_string());
+        }
+        let Some(segment_name) = segment.first() else {
+            return Err(format!("command '{name}': missing command after ';'"));
+        };
+        let takes_cwd = matches!(
+            segment_name.as_str(),
+            "split-window" | "split" | "sp" | "vsplit" | "vs" | "new-window" | "new" | "tabnew"
+        );
+        let mut iter = segment.iter();
+        while let Some(word) = iter.next() {
+            if takes_cwd && word == "-c" {
+                let Some(dir) = iter.next() else {
+                    return Err(format!("command '{segment_name}': -c needs a value"));
+                };
+                if dir == "#{pane_current_path}" {
+                    dropped.push(
+                        "-c '#{pane_current_path}' dropped: mpx starts new panes in the active pane's directory"
+                            .to_string(),
+                    );
+                } else if dir.contains("#{") {
+                    return Err(format!(
+                        "command '{segment_name}': -c '{dir}' format is not supported"
+                    ));
+                } else {
+                    kept.push(word.clone());
+                    kept.push(dir.clone());
+                }
             } else {
                 kept.push(word.clone());
-                kept.push(dir.clone());
             }
-        } else {
-            kept.push(word.clone());
         }
     }
     let line = crate::cmdline::join_words(&kept);

@@ -1,5 +1,8 @@
 //! The session's attached clients: the subscribers that are terminals, and what requests do to them.
 //! A client is registered by its session-wide subscription and gone when that subscription ends.
+use tracing::warn;
+
+use crate::clients::check_size;
 use crate::node::now_ms;
 use crate::protocol::{ClientInfo, ClientTarget, StreamEvent};
 
@@ -43,11 +46,11 @@ pub(super) fn detach(subs: &mut Vec<Subscriber>, target: &ClientTarget) -> Resul
     {
         return Err(not_found(name));
     }
-    Ok(retain_detaching(subs, |name| match target {
+    retain_detaching(subs, |name| match target {
         ClientTarget::Named(n) => n == name,
         ClientTarget::Others(keep) => keep != name,
         ClientTarget::All => true,
-    }))
+    })
 }
 
 /// Detaches every client except the one called `keep`, as `attach -d` does for the new client.
@@ -60,7 +63,9 @@ pub(super) fn detach_others(subs: &mut Vec<Subscriber>, keep: &str) -> Vec<u32> 
         .filter(|c| c.name != keep)
         .filter_map(|c| c.parent_pid)
         .collect();
-    retain_detaching(subs, |name| keep != name);
+    if let Err(e) = retain_detaching(subs, |name| keep != name) {
+        warn!("{e}");
+    }
     parents
 }
 
@@ -82,8 +87,12 @@ pub(super) fn hang_up(pids: &[u32]) {
 #[cfg(not(unix))]
 pub(super) fn hang_up(_pids: &[u32]) {}
 
-fn retain_detaching(subs: &mut Vec<Subscriber>, selected: impl Fn(&str) -> bool) -> bool {
+fn retain_detaching(
+    subs: &mut Vec<Subscriber>,
+    selected: impl Fn(&str) -> bool,
+) -> Result<bool, String> {
     let mut detached = false;
+    let mut stuck = None;
     subs.retain_mut(|s| {
         let Some(name) = s.client.as_ref().map(|c| c.name.as_str()) else {
             return true;
@@ -91,11 +100,18 @@ fn retain_detaching(subs: &mut Vec<Subscriber>, selected: impl Fn(&str) -> bool)
         if !selected(name) {
             return true;
         }
-        detached = true;
-        let _ = s.sink.push(StreamEvent::Detached);
-        false
+        if s.sink.push_control(StreamEvent::Detached) {
+            detached = true;
+            false
+        } else {
+            stuck.get_or_insert_with(|| name.to_string());
+            true
+        }
     });
-    detached
+    match stuck {
+        Some(name) => Err(format!("client {name} is not reading: not detached")),
+        None => Ok(detached),
+    }
 }
 
 /// Marks the client `name` as the most recently active one.
@@ -111,6 +127,7 @@ pub(super) fn resize(
     width: u16,
     height: u16,
 ) -> Result<bool, String> {
+    check_size(width, height)?;
     let info = client_mut(subs, name)?;
     let changed = (info.width, info.height) != (width, height);
     info.width = width;
@@ -139,8 +156,11 @@ pub(super) fn send(subs: &mut [Subscriber], name: &str, event: StreamEvent) -> R
         .iter_mut()
         .find(|s| is_client(s, name))
         .ok_or_else(|| not_found(name))?;
-    let _ = sub.sink.push(event);
-    Ok(())
+    if sub.sink.push_control(event) {
+        Ok(())
+    } else {
+        Err(format!("client {name} is not reading"))
+    }
 }
 
 fn is_client(sub: &Subscriber, name: &str) -> bool {

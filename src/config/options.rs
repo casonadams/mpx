@@ -1,5 +1,5 @@
+use super::size::{Size, WindowSize};
 use super::values::{BellAction, BorderStyle, ExtendedKeys};
-use crate::clients::{Size, WindowSize};
 use serde::Deserialize;
 
 /// Window options: how windows are named, monitored, numbered and sized (tmux window options).
@@ -179,7 +179,7 @@ impl StyleConfig {
     /// Every style string must read as a tmux style, so a bad value is an error at load.
     pub fn check(&self) -> Result<(), String> {
         let check = |key: &str, value: &str| {
-            crate::tui::style::parse(value).map_err(|e| format!("style.{key}: {e}"))
+            crate::style::parse(value).map_err(|e| format!("style.{key}: {e}"))
         };
         check("status_style", &self.status_style)?;
         check("message_style", &self.message_style)?;

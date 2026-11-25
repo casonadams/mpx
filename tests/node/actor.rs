@@ -272,7 +272,7 @@ fn match_wait_resolves_only_on_the_output_that_matches() {
 
 #[test]
 fn match_wait_searches_only_the_recent_output() {
-    let filler = vec![b'x'; 300 * 1024];
+    let filler = vec![b'x'; 600 * 1024];
     assert_eq!(
         match_after(&[b"start", &filler, b"end"], "(?s)start.*end"),
         None

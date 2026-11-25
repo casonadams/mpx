@@ -25,6 +25,8 @@ impl LinkId {
     /// The id of an OSC 8 target `body` (`params;uri`, as sent after `8;`). `None` once
     /// `MAX_LINKS` targets are stored.
     pub fn intern(body: &str) -> Option<Self> {
+        let body: String = body.chars().filter(|c| !c.is_control()).collect();
+        let body = body.as_str();
         let mut table = table();
         if let Some(&id) = table.ids.get(body) {
             return Some(Self(id));

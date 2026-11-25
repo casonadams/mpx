@@ -135,3 +135,21 @@ fn decode_rejects_newer_version_before_reading_body() {
 fn decode_rejects_missing_version() {
     assert!(decode_snapshot(r#"{"session": "s"}"#).is_err());
 }
+
+#[cfg(unix)]
+#[test]
+fn a_snapshot_writable_by_others_is_refused() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let store = SnapshotStore::in_dir(&session_dir(&dir));
+    store.save(&sample()).unwrap();
+    let file = snapshot_file(&dir);
+
+    for mode in [0o666, 0o620, 0o602] {
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(mode)).unwrap();
+        let err = store.load().unwrap_err();
+        assert!(err.contains("not private"), "{mode:o}: {err}");
+    }
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert_eq!(store.load().unwrap(), Some(sample()));
+}

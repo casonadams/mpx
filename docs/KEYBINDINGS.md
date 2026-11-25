@@ -104,7 +104,7 @@ In copy mode the active pane keeps the mouse for its own selection, so a right c
 
 ## Changing bindings while running
 
-`:bind-key [-n] key command...` and `:unbind-key [-n] key` change the keymap of the running session at once, in every attached terminal; a terminal attaching later picks them up too. `-n` binds without the prefix. Chain commands with `\;` (`:bind r reload-config \; display-message reloaded`). Bindings last until the daemon stops; put lasting ones in `[bind]` / `[bind_root]` of `config.toml`. Only the commands in the table below are available; others fail with `unknown command`.
+`:bind-key [-n] key command...` and `:unbind-key [-n] key` change the keymap of the running session at once, in every attached terminal; a terminal attaching later picks them up too. `-n` binds without the prefix. `unbind-key -a` is refused. Chain commands with `\;` (`:bind r reload-config \; display-message reloaded`). Bindings last until the daemon stops; put lasting ones in `[bind]` / `[bind_root]` of `config.toml`. Only the commands in the table below are available; others fail with `unknown command`.
 
 ## Command Prompt (`Prefix :`)
 
@@ -177,7 +177,7 @@ Vim-style command line on the status row. Supports tab-completion, history (`Up`
 | `Ctrl-u` / `Ctrl-d` | Half page up / down |
 | `g` / `G` | Top / bottom of scrollback |
 | `0` / `$` | Start / end of line |
-| `w` / `b` | Forward / backward word |
+| `w` / `b` | Forward / backward four columns (mpx's own motion, not a word) |
 | `v` | Start character selection |
 | `V` | Start line selection |
 | `C-v` | Start or stop rectangle selection: the selection covers the block between its corners |
@@ -196,7 +196,7 @@ Set `mode_keys = "emacs"` in `config.toml`, or `set -g mode-keys emacs` at runti
 | :--- | :--- |
 | `C-b` / `C-f`, Left / Right | Move cursor left / right |
 | `C-p` / `C-n`, Up / Down | Move cursor up / down |
-| `M-b` / `M-f` | Word backward / forward |
+| `M-b` / `M-f` | Four columns backward / forward |
 | `C-a` / `C-e`, Home / End | Start / end of line |
 | `C-v` / PageDown | Scroll down a page, toward the bottom |
 | `M-v` / PageUp | Scroll up a page, into history |

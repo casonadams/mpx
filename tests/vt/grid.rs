@@ -183,6 +183,10 @@ fn scrolling_the_alternate_screen_adds_no_history() {
 fn growing_the_alternate_screen_never_pulls_history() {
     let mut grid = with_two_in_history();
     grid.set_alternate_screen(true);
+    for (y, text) in ["r2", "r3", "r4"].into_iter().enumerate() {
+        grid.move_cursor(0, y);
+        write_str(&mut grid, text);
+    }
     grid.resize(4, 5);
     assert_eq!(screen(&grid), ["r2", "r3", "r4", "", ""]);
     assert_eq!(grid.cursor.y, 2);
@@ -217,6 +221,10 @@ fn shrinking_with_the_cursor_mid_screen_cuts_rows_from_the_bottom() {
 fn shrinking_the_alternate_screen_cuts_rows_from_the_bottom() {
     let mut grid = numbered(4, 3);
     grid.set_alternate_screen(true);
+    for y in 0..3 {
+        grid.move_cursor(0, y);
+        write_str(&mut grid, &format!("r{y}"));
+    }
     grid.resize(4, 2);
     assert_eq!(screen(&grid), ["r0", "r1"]);
     assert_eq!(grid.cursor.y, 1);
@@ -280,10 +288,10 @@ fn shell_marks_keep_their_rows_through_a_grow_and_a_shrink() {
     grid.resize(4, 2);
     assert_eq!(
         grid.shell_marks(ShellMark::Prompt).collect::<Vec<_>>(),
-        [4],
-        "the prompt is still at its row number after the rows above it went to history"
+        [2],
+        "the unnumbered pad rows above it were dropped, not kept in history"
     );
-    assert_eq!(grid.line_text(4).as_deref(), Some("r2"));
+    assert_eq!(grid.line_text(2).as_deref(), Some("r2"));
 }
 
 #[test]
@@ -484,4 +492,40 @@ fn line_cell_reads_history_and_screen_cells_like_line_cells() {
     }
     assert_eq!(grid.line_cell(99, 0), None);
     assert_eq!(grid.line_cell(0, 99), None);
+}
+
+#[test]
+fn delete_and_insert_line_on_the_bottom_margin_blank_that_row() {
+    let mut grid = numbered(4, 5);
+    grid.scroll_bottom = 3;
+    grid.move_cursor(0, 3);
+    grid.delete_lines(1);
+    assert_eq!(screen(&grid), ["r0", "r1", "r2", "", "r4"]);
+    grid.move_cursor(0, 2);
+    grid.scroll_bottom = 2;
+    grid.insert_lines(1);
+    assert_eq!(screen(&grid), ["r0", "r1", "", "", "r4"]);
+}
+
+#[test]
+fn scrolling_a_region_that_starts_at_the_top_adds_no_history() {
+    let mut grid = numbered(4, 5);
+    grid.scroll_bottom = 2;
+    grid.scroll_up(1);
+    assert_eq!(screen(&grid), ["r1", "r2", "", "r3", "r4"]);
+    assert!(grid.history.is_empty());
+}
+
+#[test]
+fn a_grow_then_shrink_round_trip_leaves_no_phantom_history() {
+    let mut grid = Grid::new(4, 3);
+    line(&mut grid, "r0");
+    write_str(&mut grid, "r1");
+    grid.move_cursor(0, 2);
+    grid.resize(4, 6);
+    assert_eq!(screen(&grid), ["", "", "", "r0", "r1", ""]);
+    grid.resize(4, 3);
+    assert_eq!(grid.history_len(), 0);
+    assert_eq!(grid.rows_scrolled_off(), 0);
+    assert_eq!(screen(&grid), ["r0", "r1", ""]);
 }

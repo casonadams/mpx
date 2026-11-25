@@ -1,4 +1,4 @@
-use mpx::tui::style::{Style, apply_directive, over_colours, parse};
+use mpx::style::{Style, apply_directive, over_colours, parse};
 use mpx::vt::Color;
 
 #[test]

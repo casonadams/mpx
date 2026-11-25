@@ -1,7 +1,55 @@
 use serde::{Deserialize, Serialize};
 
 use super::geometry::Rect;
-use crate::protocol::{LayoutPreset, Side};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Side {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LayoutPreset {
+    EvenHorizontal,
+    EvenVertical,
+    MainVertical,
+    MainVerticalMirrored,
+    MainHorizontal,
+    MainHorizontalMirrored,
+    Tiled,
+}
+
+impl LayoutPreset {
+    pub const ALL: [LayoutPreset; 7] = [
+        LayoutPreset::EvenHorizontal,
+        LayoutPreset::EvenVertical,
+        LayoutPreset::MainVertical,
+        LayoutPreset::MainVerticalMirrored,
+        LayoutPreset::MainHorizontal,
+        LayoutPreset::MainHorizontalMirrored,
+        LayoutPreset::Tiled,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            LayoutPreset::EvenHorizontal => "even-horizontal",
+            LayoutPreset::EvenVertical => "even-vertical",
+            LayoutPreset::MainVertical => "main-vertical",
+            LayoutPreset::MainVerticalMirrored => "main-vertical-mirrored",
+            LayoutPreset::MainHorizontal => "main-horizontal",
+            LayoutPreset::MainHorizontalMirrored => "main-horizontal-mirrored",
+            LayoutPreset::Tiled => "tiled",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|p| p.name() == s)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Direction {

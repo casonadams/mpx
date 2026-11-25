@@ -15,6 +15,7 @@ pub mod options;
 pub mod protocol;
 pub mod source;
 pub mod store;
+pub mod style;
 pub mod tui;
 pub mod vt;
 pub mod wire;

@@ -2,11 +2,11 @@ use std::time::{Duration, Instant};
 
 use mpx::config::Justify;
 use mpx::layout::WindowTab;
+use mpx::style::Style;
 use mpx::tui::statusline::{
     Item, Line, Seg, Target, compose, parse_styled, rows, segs_width, status_due, status_vars,
     strftime, tab_flags, truncate,
 };
-use mpx::tui::style::Style;
 use mpx::vt::Color;
 
 /// 2024-03-05 14:07:09 UTC.

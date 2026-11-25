@@ -155,3 +155,20 @@ async fn a_key_whose_request_is_cancelled_runs_its_repeat() {
     };
     assert!(!outcome.satisfied);
 }
+
+#[tokio::test]
+async fn a_key_longer_than_the_limit_is_refused() {
+    let daemon = super::support::start().await;
+    let mut client = connect(&daemon.endpoint).await;
+    let resp = client
+        .call(Request::Idempotent {
+            key: "k".repeat(257),
+            request: Box::new(Request::Ping),
+        })
+        .await
+        .unwrap();
+    assert!(
+        matches!(&resp, Response::Error(e) if e.contains("longer than 256 bytes")),
+        "{resp:?}"
+    );
+}

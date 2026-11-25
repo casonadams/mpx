@@ -4,8 +4,8 @@ use mpx::layout::LinkPlace;
 use mpx::protocol::{LayoutPreset, LinkOpts, ResizeOpts, Side, UnlinkOpts, WindowFit};
 use mpx::tui::command::{BufferCommand, EnvCommand};
 use mpx::tui::command::{
-    ClientCommand, Command, CopyModeOpts, JoinOpts, PaneCommand, PromptSpec, SessionCommand,
-    WindowCommand, parse, parse_scoped, split_words,
+    COMMAND_NAMES, ClientCommand, Command, CopyModeOpts, JoinOpts, PaneCommand, PromptSpec,
+    SessionCommand, WindowCommand, parse, parse_scoped, split_words,
 };
 use mpx::tui::keymap::Table;
 use mpx::tui::prompt::PromptKind;
@@ -590,6 +590,25 @@ fn link_window_takes_this_sessions_name_and_refuses_others() {
 }
 
 #[test]
+fn select_window_refuses_another_session_and_names_windows_of_its_own() {
+    let aliases = BTreeMap::new();
+    assert_eq!(
+        parse_scoped("select-window -t work:2", &aliases, "work").unwrap(),
+        Command::Window(WindowCommand::SelectWindow { index: 2 })
+    );
+    assert_eq!(
+        parse_scoped("select-window -t work:logs", &aliases, "work").unwrap(),
+        Command::Window(WindowCommand::SelectWindowNamed {
+            name: "logs".into()
+        })
+    );
+    let refused = parse_scoped("select-window -t other:1", &aliases, "work").unwrap_err();
+    assert!(refused.contains("another session"), "{refused}");
+    let refused = parse_scoped("select-window -t other:logs", &aliases, "work").unwrap_err();
+    assert!(refused.contains("another session"), "{refused}");
+}
+
+#[test]
 fn split_words_honours_quotes_and_escapes() {
     assert_eq!(
         split_words("a 'b c' \"d e\"").unwrap(),
@@ -599,6 +618,7 @@ fn split_words_honours_quotes_and_escapes() {
         split_words(r#""say \"hi\"" x"#).unwrap(),
         vec![r#"say "hi""#, "x"]
     );
+    assert_eq!(split_words(r#""e\$f""#).unwrap(), vec!["e$f"]);
     assert_eq!(split_words(r"a\ b").unwrap(), vec!["a b"]);
     assert_eq!(split_words("''").unwrap(), vec![""]);
     assert_eq!(
@@ -656,6 +676,38 @@ fn semicolons_chain_commands_and_escaped_ones_are_literal() {
         ok("rename-window 'a;b'"),
         Command::Window(WindowCommand::RenameWindow { name }) if name == "a;b"
     ));
+}
+
+#[test]
+fn every_name_parse_dispatches_on_is_listed_for_completion() {
+    const DISPATCHED: &str = "bind bind-key break-pane capture-pane capturep choose-buffer \
+        choose-client choose-tree clock-mode command-palette command-prompt confirm confirm-before \
+        copy-mode delete-buffer deleteb detach detach-client display display-menu display-message \
+        display-panes display-popup displayp find-window findw help if-shell join-pane joinp \
+        kill-pane kill-server kill-window last-pane last-window link-window linkw list-buffers \
+        list-clients list-keys load-buffer loadb lsb lsc mark-pane menu move-pane move-window movep \
+        movew new new-window next-layout next-pane next-session next-window palette paste \
+        paste-buffer pasteb popup prev-session prev-window previous-window q qa quit refresh \
+        refresh-client reload-config rename rename-session rename-window resize-pane resize-window \
+        resizew respawn-pane respawn-window respawnp respawnw rotate-window rotatew run-shell \
+        save-buffer saveb select-layout select-pane select-window send-keys send-prefix session set \
+        set-buffer set-environment set-hook set-option set-window-option setb setenv setw show \
+        show-buffer show-environment show-hooks show-messages show-options show-window-options showb \
+        showenv showmsgs showw source-file sp split split-window suspend-client suspendc swap-pane \
+        swap-window swapw switch-client tabn tabnew tabnext tabp tabprevious unbind unbind-key \
+        unlink-window unlinkw vs vsplit wait-for";
+    for name in DISPATCHED.split_whitespace() {
+        assert!(
+            COMMAND_NAMES.contains(&name),
+            "{name} is accepted but missing from COMMAND_NAMES"
+        );
+    }
+}
+
+#[test]
+fn unbind_all_is_refused_rather_than_unbinding_only_one_key() {
+    assert!(err("unbind-key -a").contains("-a is not supported"));
+    assert!(err("unbind-key -a C-x").contains("-a is not supported"));
 }
 
 #[test]

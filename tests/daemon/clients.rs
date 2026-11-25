@@ -4,7 +4,7 @@ use tokio::sync::mpsc;
 use tokio::time::{Instant, sleep, timeout};
 
 use mpx::client::Client;
-use mpx::protocol::{ClientInfo, ClientTarget, StreamEvent};
+use mpx::protocol::{ClientInfo, ClientRequest, ClientTarget, Request, Response, StreamEvent};
 
 use super::support::{SESSION, connect, start};
 
@@ -249,4 +249,25 @@ async fn plain_exclusive_attach_leaves_the_parent_of_a_detached_client_alone() {
         "-d must not signal the parent"
     );
     parent.kill().expect("stop the parent");
+}
+
+#[tokio::test]
+async fn a_client_size_outside_the_window_bounds_is_refused() {
+    let daemon = start().await;
+    let _events = attach(&daemon.endpoint, terminal("term"), false, false).await;
+    let mut probe = connect(&daemon.endpoint).await;
+    await_clients(&mut probe, 1).await;
+
+    let resized = probe
+        .call(Request::Client(ClientRequest::Resized {
+            name: "term".into(),
+            width: u16::MAX,
+            height: u16::MAX,
+        }))
+        .await
+        .unwrap();
+    assert!(
+        matches!(&resized, Response::Error(e) if e.contains("out of range")),
+        "{resized:?}"
+    );
 }

@@ -23,26 +23,25 @@ use crate::tui::overlay::Overlay;
 /// What `display-message` shows without a format.
 const DEFAULT_DISPLAY_MESSAGE: &str = "[#{session_name}] #{window_index}:#{window_name}, current pane #{pane_index} - (#{pane_title})";
 
-/// Commands that destroy something interactively need a `y` first.
-fn needs_confirm(cmd: &Command) -> Option<String> {
-    match cmd {
-        Command::Window(WindowCommand::KillWindow { index: None }) => {
-            Some("kill-window? (y/n)".to_string())
-        }
-        _ => None,
-    }
-}
-
 impl App {
+    /// Commands that destroy something interactively need a `y` first.
+    fn needs_confirm(&self, cmd: &Command) -> Option<String> {
+        match cmd {
+            Command::Window(WindowCommand::KillWindow { index: None }) => {
+                Some("kill-window? (y/n)".to_string())
+            }
+            Command::Pane(PaneCommand::KillPane { target: None }) => {
+                Some(format!("kill-pane {}? (y/n)", self.active_pane))
+            }
+            _ => None,
+        }
+    }
+
     /// Runs a command typed or bound by the user, asking first when it is destructive.
     pub async fn dispatch(&mut self, cmd: Command) -> Flow {
         self.layout.dirty = true;
-        if let Some(question) = needs_confirm(&cmd) {
+        if let Some(question) = self.needs_confirm(&cmd) {
             self.mode = Mode::Confirm(question, cmd);
-            return Flow::Continue;
-        }
-        if let Command::Pane(PaneCommand::KillPane { target: None }) = cmd {
-            self.mode = Mode::Confirm(format!("kill-pane {}? (y/n)", self.active_pane), cmd);
             return Flow::Continue;
         }
         self.run(cmd).await
@@ -121,11 +120,11 @@ impl App {
 
     /// The index of the active window in the daemon's numbering.
     fn active_window(&self) -> Option<usize> {
-        self.layout
-            .tabs
-            .iter()
-            .find(|t| t.is_active)
-            .map(|t| t.index)
+        self.active_tab().map(|tab| tab.index)
+    }
+
+    fn active_tab(&self) -> Option<&crate::layout::WindowTab> {
+        self.layout.tabs.iter().find(|t| t.is_active)
     }
 
     /// `target` when given, else the active pane.

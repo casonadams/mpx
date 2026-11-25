@@ -14,6 +14,15 @@ pub fn write_sgr<W: Write>(out: &mut W, style: &CellStyle) -> io::Result<()> {
     if style.italic {
         out.write_all(b";3")?;
     }
+    for (on, code) in [
+        (style.blink, &b";5"[..]),
+        (style.conceal, b";8"),
+        (style.strike, b";9"),
+    ] {
+        if on {
+            out.write_all(code)?;
+        }
+    }
     match style.underline {
         Underline::None => {}
         Underline::Single => out.write_all(b";4")?,

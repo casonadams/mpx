@@ -55,11 +55,14 @@ impl Client {
     }
 
     pub async fn shutdown(&mut self) -> Result<(), String> {
-        let _ = tokio::time::timeout(
+        match tokio::time::timeout(
             SHUTDOWN_TIMEOUT,
             self.call_ok("Shutdown", Request::Shutdown),
         )
-        .await;
-        Ok(())
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => Err("the daemon did not answer the shutdown request".to_string()),
+        }
     }
 }

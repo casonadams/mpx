@@ -68,11 +68,15 @@ pub fn resolve(
 }
 
 /// Config from the `-f` file when given, else from the default location. A missing file is defaults;
-/// a malformed `-f` file is an error, while a malformed default file only logs a warning.
+/// a malformed `-f` file is an error, while a malformed default file is reported on stderr and the
+/// defaults are used.
 pub fn load_config(path: Option<&Path>) -> Result<Config, String> {
     match path {
         Some(path) => Config::load_file(path),
-        None => Ok(Config::load_or_default()),
+        None => Config::load().or_else(|e| {
+            eprintln!("mpx: ignoring invalid config, using defaults: {e}");
+            Ok(Config::default())
+        }),
     }
 }
 

@@ -20,8 +20,8 @@ use crate::import_tmux::convert;
 use crate::ipc;
 use crate::store;
 use crate::tui::app::{AppOptions, AttachOpts};
+use crate::tui::run_tui;
 use crate::tui::status::{clock_hms, local_utc_offset};
-use crate::tui::{StartView, run_tui};
 
 const SPAWN_RETRIES: u32 = 1000;
 const SHUTDOWN_POLLS: u32 = 20;
@@ -34,6 +34,7 @@ pub async fn run_cli(cli: Cli) -> Result<i32, String> {
         env_var("MPX_ENDPOINT").as_deref(),
         &ipc::socket_dir(),
     );
+    ipc::check_endpoint(&target.endpoint)?;
     target.idempotency_key = resolve_idempotency_key(cli.idempotency_key.as_deref());
     target.config = load_config(cli.config.as_deref())?;
     target.config_path = cli.config;
@@ -163,6 +164,7 @@ pub async fn ensure_client(r: &Resolved) -> Result<Client, String> {
         Probe::Down => {}
     }
     clear_stale_socket(&r.endpoint).await;
+    let log_from = daemon_log_len(&r.state_dir);
     spawn_daemon(r)?;
     for _ in 0..SPAWN_RETRIES {
         tokio::time::sleep(Duration::from_millis(2)).await;
@@ -171,8 +173,9 @@ pub async fn ensure_client(r: &Resolved) -> Result<Client, String> {
         }
     }
     Err(format!(
-        "Could not connect to mpx daemon at '{}'",
-        r.endpoint
+        "Could not connect to mpx daemon at '{}'{}",
+        r.endpoint,
+        daemon_failure(&r.state_dir, log_from)
     ))
 }
 
@@ -298,16 +301,55 @@ pub fn daemon_args(r: &Resolved) -> Vec<OsString> {
     args
 }
 
+/// Where an auto-spawned daemon writes its output: the log in its state directory.
+fn daemon_log_path(state_dir: &Path) -> PathBuf {
+    state_dir.join("daemon.log")
+}
+
+fn open_daemon_log(state_dir: &Path) -> Result<std::fs::File, String> {
+    std::fs::create_dir_all(state_dir).map_err(|e| format!("{}: {e}", state_dir.display()))?;
+    let path = daemon_log_path(state_dir);
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// The daemon's log length, so what it writes after a spawn can be found.
+fn daemon_log_len(state_dir: &Path) -> u64 {
+    std::fs::metadata(daemon_log_path(state_dir)).map_or(0, |m| m.len())
+}
+
+/// Why an auto-spawned daemon did not answer: the last line it logged since `from`, else where its
+/// log is.
+fn daemon_failure(state_dir: &Path, from: u64) -> String {
+    let path = daemon_log_path(state_dir);
+    let written = std::fs::read(&path).ok().and_then(|bytes| {
+        bytes
+            .get(from as usize..)
+            .map(|b| String::from_utf8_lossy(b).into_owned())
+    });
+    match written
+        .as_deref()
+        .and_then(|text| text.lines().rev().find(|line| !line.trim().is_empty()))
+    {
+        Some(line) => format!(": {}", line.trim()),
+        None => format!(" (see {})", path.display()),
+    }
+}
+
 fn spawn_daemon(r: &Resolved) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let log = open_daemon_log(&r.state_dir)?;
     let mut cmd = std::process::Command::new(exe);
     cmd.args(daemon_args(r))
         .env_remove("MPX_PANE")
         .env_remove("MPX_ENDPOINT")
         .env_remove("TMUX")
         .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
+        .stdout(log.try_clone().map_err(|e| e.to_string())?)
+        .stderr(log);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -334,10 +376,9 @@ fn spawn_daemon(r: &Resolved) -> Result<(), String> {
 }
 
 async fn kill_server(r: &Resolved) -> Result<i32, String> {
+    let mut shutdown_error = None;
     match probe(&r.endpoint).await {
-        Probe::Ready(mut client) => {
-            let _ = client.shutdown().await;
-        }
+        Probe::Ready(mut client) => shutdown_error = client.shutdown().await.err(),
         Probe::Incompatible(Some(pid)) => terminate(pid)?,
         Probe::Incompatible(None) => return Err(incompatible(&r.endpoint, None)),
         Probe::Down => return Err(format!("no server running on {}", r.endpoint)),
@@ -348,7 +389,11 @@ async fn kill_server(r: &Resolved) -> Result<i32, String> {
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    Ok(0)
+    if matches!(probe(&r.endpoint).await, Probe::Down) {
+        return Ok(0);
+    }
+    let reason = shutdown_error.map_or_else(String::new, |e| format!(": {e}"));
+    Err(format!("server on {} is still running{reason}", r.endpoint))
 }
 
 /// Stops a daemon that cannot be asked to shut down, such as one from another mpx version.
@@ -424,6 +469,11 @@ async fn restore(r: &Resolved) -> Result<i32, String> {
     Ok(0)
 }
 
+/// The part of a `session:window.pane` target after its session, or the whole target without one.
+pub fn strip_session(target: &str) -> &str {
+    target.rsplit_once(':').map_or(target, |(_, rest)| rest)
+}
+
 pub(super) fn target_resolved(current: &Resolved, target: &str) -> Resolved {
     let endpoint = if target == current.session {
         current.endpoint.clone()
@@ -473,7 +523,6 @@ async fn attach(
     run_tui(
         &target.endpoint,
         &target.session,
-        StartView::Panes,
         AppOptions {
             attach: attach_opts,
             ..tui_options(&target)
@@ -485,7 +534,7 @@ async fn attach(
 
 pub async fn has_session(r: &Resolved, target: Option<&str>) -> Result<i32, String> {
     let target = match target {
-        Some(t) => target_resolved(r, t.rsplit(':').next().unwrap_or(t)),
+        Some(t) => target_resolved(r, strip_session(t)),
         None => r.clone(),
     };
     Ok(match probe(&target.endpoint).await {
@@ -523,7 +572,7 @@ async fn list_panes(r: &Resolved, json: bool) -> Result<i32, String> {
 }
 async fn rename_session(r: &Resolved, target: Option<&str>, new_name: &str) -> Result<i32, String> {
     let resolved = match target {
-        Some(t) => target_resolved(r, t.rsplit(':').next().unwrap_or(t)),
+        Some(t) => target_resolved(r, strip_session(t)),
         None => r.clone(),
     };
     let mut client = ensure_client(&resolved).await?;

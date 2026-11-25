@@ -993,3 +993,135 @@ fn the_cursor_shape_survives_cursor_restore_and_falls_back_on_reset() {
     feed(&mut vt, "\x1bc");
     assert_eq!(vt.grid().cursor_shape, CursorShape::Default);
 }
+
+#[test]
+fn decstbm_with_a_zero_bottom_means_the_last_row() {
+    let mut vt = VtScreen::new(10, 4);
+    feed(&mut vt, "\x1b[2;0r");
+    assert_eq!(vt.grid().scroll_top, 1);
+    assert_eq!(vt.grid().scroll_bottom, 3);
+}
+
+#[test]
+fn out_of_range_extended_colours_are_ignored() {
+    for seq in [
+        "\x1b[38;5;300mx",
+        "\x1b[38;2;256;0;0mx",
+        "\x1b[38:5:300mx",
+        "\x1b[38:2::0:300:0mx",
+    ] {
+        assert_eq!(styles_after(seq)[0].fg, None, "{seq:?}");
+    }
+    assert_eq!(
+        styles_after("\x1b[38;5;255mx")[0].fg,
+        Some(Color::Indexed(255))
+    );
+}
+
+#[test]
+fn csi_with_too_many_parameters_is_dropped() {
+    let mut vt = VtScreen::new(20, 5);
+    feed(&mut vt, "\x1b[3;3H");
+    feed(&mut vt, &format!("\x1b[{}H", "1;".repeat(40)));
+    assert_eq!(cursor(&vt), (2, 2));
+}
+
+#[test]
+fn osc_52_clipboard_queries_are_not_forwarded() {
+    let mut vt = VtScreen::new(20, 5);
+    feed(&mut vt, "\x1b]52;c;?\x07\x1b]52;c;aGk=\x07");
+    assert_eq!(vt.take_passthroughs(), vec![b"\x1b]52;c;aGk=\x07".to_vec()]);
+}
+
+#[test]
+fn an_oversized_dcs_passthrough_is_dropped_whole() {
+    let mut vt = VtScreen::new(20, 5);
+    feed(
+        &mut vt,
+        &format!(
+            "\x1bPmpx;{}\x1b\\\x1bPmpx;kept\x1b\\",
+            "a".repeat(2 * 1024 * 1024)
+        ),
+    );
+    assert_eq!(vt.take_passthroughs(), vec![b"kept".to_vec()]);
+}
+
+#[test]
+fn the_alternate_screen_keeps_the_primary_rows_and_1049_restores_the_cursor() {
+    let mut vt = VtScreen::new(10, 4);
+    feed(&mut vt, "one\r\ntwo\x1b[2;2H");
+    feed(&mut vt, "\x1b[?1049h");
+    assert_eq!(row(&vt, 0), "", "alternate starts blank");
+    feed(&mut vt, "\x1b[Halt");
+    feed(&mut vt, "\x1b[?1049l");
+    assert_eq!((row(&vt, 0), row(&vt, 1)), ("one".into(), "two".into()));
+    assert_eq!(cursor(&vt), (1, 1));
+}
+
+#[test]
+fn modes_47_and_1047_differ_on_whether_the_alternate_rows_survive() {
+    let mut vt = VtScreen::new(10, 3);
+    feed(&mut vt, "main\x1b[?47h\x1b[Halt\x1b[?47l");
+    assert_eq!(row(&vt, 0), "main");
+    feed(&mut vt, "\x1b[?47h");
+    assert_eq!(row(&vt, 0), "alt", "47 does not clear");
+    feed(&mut vt, "\x1b[?1047l\x1b[?1047h");
+    assert_eq!(row(&vt, 0), "", "1047 clears the alternate screen");
+    feed(&mut vt, "\x1b[?1047l");
+    assert_eq!(row(&vt, 0), "main");
+}
+
+#[test]
+fn mode_1048_saves_and_restores_the_cursor() {
+    let mut vt = VtScreen::new(10, 4);
+    feed(&mut vt, "\x1b[3;4H\x1b[?1048h\x1b[H\x1b[?1048l");
+    assert_eq!(cursor(&vt), (3, 2));
+}
+
+#[test]
+fn autowrap_off_overwrites_the_last_column() {
+    let mut vt = VtScreen::new(5, 2);
+    feed(&mut vt, "\x1b[?7labcdefg");
+    assert_eq!((row(&vt, 0), row(&vt, 1)), ("abcdg".into(), "".into()));
+    feed(&mut vt, "\x1b[?7hxy");
+    assert_eq!((row(&vt, 0), row(&vt, 1)), ("abcdx".into(), "y".into()));
+}
+
+#[test]
+fn origin_mode_addresses_inside_the_scroll_region() {
+    let mut vt = VtScreen::new(10, 8);
+    feed(&mut vt, "\x1b[3;6r\x1b[?6h");
+    assert_eq!(cursor(&vt), (0, 2), "enabling homes into the region");
+    feed(&mut vt, "\x1b[2;3H");
+    assert_eq!(cursor(&vt), (2, 3));
+    feed(&mut vt, "\x1b[99;1H");
+    assert_eq!(cursor(&vt), (0, 5), "clamped to the region");
+    feed(&mut vt, "\x1b[2d\x1b[6n");
+    assert_eq!(cursor(&vt).1, 3);
+    assert_eq!(vt.take_responses(), vec![b"\x1b[2;1R".to_vec()]);
+    feed(&mut vt, "\x1b[?6l\x1b[2;3H");
+    assert_eq!(cursor(&vt), (2, 1));
+}
+
+#[test]
+fn insert_mode_shifts_the_row_right() {
+    let mut vt = VtScreen::new(6, 2);
+    feed(&mut vt, "abcd\x1b[1G\x1b[4hXY");
+    assert_eq!(row(&vt, 0), "XYabcd");
+    feed(&mut vt, "Z");
+    assert_eq!(row(&vt, 0), "XYZabc", "the last cell falls off");
+    feed(&mut vt, "\x1b[4l\x1b[1GQ");
+    assert_eq!(row(&vt, 0), "QYZabc");
+}
+
+#[test]
+fn blink_conceal_and_strike_are_kept_and_reset() {
+    let style = styles_after("\x1b[5ma\x1b[8mb\x1b[9mc\x1b[25md\x1b[28me\x1b[29mf");
+    let flags = |i: usize| (style[i].blink, style[i].conceal, style[i].strike);
+    assert_eq!(flags(0), (true, false, false));
+    assert_eq!(flags(1), (true, true, false));
+    assert_eq!(flags(2), (true, true, true));
+    assert_eq!(flags(3), (false, true, true));
+    assert_eq!(flags(4), (false, false, true));
+    assert_eq!(flags(5), (false, false, false));
+}

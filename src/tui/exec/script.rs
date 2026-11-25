@@ -4,6 +4,8 @@ use crate::protocol::{Request, Response, ScriptRequest};
 use crate::tui::app::{App, Flow};
 use crate::tui::command::{Command, ScriptCommand, parse_scoped};
 
+const MAX_SOURCE_DEPTH: usize = 16;
+
 impl App {
     pub(super) async fn run_script(&mut self, script: ScriptCommand) -> Flow {
         match script {
@@ -71,8 +73,22 @@ impl App {
     }
 
     /// `source-file`: runs the commands of each file, in order. A line that does not parse is
-    /// reported and skipped; a missing file is reported unless `-q` silences it.
+    /// reported and skipped; a missing file is reported unless `-q` silences it. Files may source
+    /// files up to `MAX_SOURCE_DEPTH` deep; a deeper `source-file` is reported and skipped.
     async fn source_file(&mut self, paths: Vec<String>, quiet: bool) -> Flow {
+        if self.source_depth >= MAX_SOURCE_DEPTH {
+            self.say(format!(
+                "source-file: nested more than {MAX_SOURCE_DEPTH} deep"
+            ));
+            return Flow::Continue;
+        }
+        self.source_depth += 1;
+        let flow = self.source_paths(paths, quiet).await;
+        self.source_depth -= 1;
+        flow
+    }
+
+    async fn source_paths(&mut self, paths: Vec<String>, quiet: bool) -> Flow {
         let vars = crate::format::session_vars(
             &self.session,
             self.attachment.times,

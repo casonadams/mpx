@@ -68,12 +68,13 @@ fn decode_output(rest: &[u8]) -> Result<StreamEvent, String> {
     let (name, rest) = rest.split_at_checked(name_len).ok_or_else(short)?;
     let (offset, rest) = rest.split_first_chunk::<8>().ok_or_else(short)?;
     let (next, data) = rest.split_first_chunk::<8>().ok_or_else(short)?;
-    let text = |bytes: &[u8], what: &str| {
-        String::from_utf8(bytes.to_vec()).map_err(|_| format!("output frame {what} is not UTF-8"))
-    };
     Ok(StreamEvent::Output {
-        name: text(name, "name")?,
-        data: text(data, "data")?.into(),
+        name: std::str::from_utf8(name)
+            .map_err(|_| "output frame name is not UTF-8".to_string())?
+            .into(),
+        data: std::str::from_utf8(data)
+            .map_err(|_| "output frame data is not UTF-8".to_string())?
+            .into(),
         offset: u64::from_be_bytes(*offset),
         next: u64::from_be_bytes(*next),
     })

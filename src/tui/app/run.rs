@@ -5,7 +5,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 
 use super::input::latest_of_run;
 use super::pacing::needs_redraw;
-use super::state::{App, AppOptions, Flow, StartView, StreamRx};
+use super::state::{App, AppOptions, Flow, StreamRx};
 use crate::config::ExtendedKeys;
 use crate::node::sleep_until_opt;
 use crate::protocol::StreamEvent;
@@ -17,13 +17,8 @@ use crate::tui::statusline;
 use crate::tui::terminal::{TerminalGuard, query_terminal};
 
 /// Runs the attached TUI until detach, session end or no panes left.
-pub async fn run_tui(
-    endpoint: &str,
-    session: &str,
-    start: StartView,
-    opts: AppOptions,
-) -> Result<(), String> {
-    let mut tui = Tui::attach(endpoint, session, start, opts).await?;
+pub async fn run_tui(endpoint: &str, session: &str, opts: AppOptions) -> Result<(), String> {
+    let mut tui = Tui::attach(endpoint, session, opts).await?;
     while tui.step().await {}
     Ok(())
 }
@@ -96,15 +91,10 @@ struct Tui {
 
 impl Tui {
     /// Enters the terminal and attaches the app to the session.
-    async fn attach(
-        endpoint: &str,
-        session: &str,
-        start: StartView,
-        opts: AppOptions,
-    ) -> Result<Self, String> {
+    async fn attach(endpoint: &str, session: &str, opts: AppOptions) -> Result<Self, String> {
         let guard = TerminalGuard::enter().map_err(|e| format!("Failed to enter raw mode: {e}"))?;
         let report = query_terminal(opts.config.style.dim_inactive);
-        let (mut app, stream) = App::open(endpoint, session, start, opts).await?;
+        let (mut app, stream) = App::open(endpoint, session, opts).await?;
         app.canvas.set_lr_margins(report.margins);
         app.host.colors = HostColors::from_report(&report);
         app.host.original = app.host.colors;

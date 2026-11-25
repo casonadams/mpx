@@ -135,7 +135,7 @@ impl App {
                 break;
             }
         }
-        self.apply_copy_outcome(name, active, cs, outcome);
+        self.apply_copy_outcome(name, cs, outcome);
         Flow::Continue
     }
 
@@ -148,14 +148,9 @@ impl App {
     }
 
     /// Carries out what a copy-mode command decided for pane `name` and puts its copy state back:
-    /// `active` says whether the pane is the focused one, else its state is parked.
-    pub fn apply_copy_outcome(
-        &mut self,
-        name: &str,
-        active: bool,
-        cs: CopyState,
-        outcome: CopyOutcome,
-    ) {
+    /// the focused pane keeps it in `mode`, any other pane's is parked.
+    pub fn apply_copy_outcome(&mut self, name: &str, cs: CopyState, outcome: CopyOutcome) {
+        let active = name == self.active_pane;
         let (text, pipe, exit) = match outcome {
             CopyOutcome::Stay => (None, None, false),
             CopyOutcome::Exit => (None, None, true),

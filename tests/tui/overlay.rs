@@ -2,7 +2,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use mpx::layout::{Rect, WindowTab};
 use mpx::protocol::{NodeInfo, NodeState};
 use mpx::tui::command::{Command, PaneCommand, SessionCommand, WindowCommand};
-use mpx::tui::overlay::nav::fuzzy_match;
+use mpx::tui::overlay::nav::{Filter, FilterEvent, fuzzy_match};
 use mpx::tui::overlay::tree_view::session_from_snapshot;
 use mpx::tui::overlay::widgets::{age_label, printable, short_path};
 use mpx::tui::overlay::{
@@ -295,11 +295,26 @@ fn tree_filter_keeps_matching_rows_and_their_ancestors() {
 }
 
 #[test]
+fn filter_edit_passes_motion_keys_through_and_never_types_alt_characters() {
+    let mut filter = Filter::default();
+    assert_eq!(filter.handle(key('/')), FilterEvent::Consumed);
+    let alt_j = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::ALT);
+    assert_eq!(filter.handle(alt_j), FilterEvent::Consumed);
+    assert_eq!(filter.text, "");
+    assert_eq!(filter.handle(code(KeyCode::Down)), FilterEvent::Ignored);
+    assert_eq!(filter.handle(code(KeyCode::Up)), FilterEvent::Ignored);
+    assert_eq!(filter.handle(key('a')), FilterEvent::Edited);
+    assert_eq!(filter.text, "a");
+}
+
+#[test]
 fn overlays_close_on_their_close_keys() {
-    let cases: [(&str, Overlay, KeyEvent); 6] = [
+    let cases: [(&str, Overlay, KeyEvent); 8] = [
         ("tree q", Overlay::Tree(tree()), key('q')),
         ("tree esc", Overlay::Tree(tree()), code(KeyCode::Esc)),
+        ("tree ctrl-c", Overlay::Tree(tree()), ctrl('c')),
         ("help q", Overlay::help(help_entries()), key('q')),
+        ("help ctrl-c", Overlay::help(help_entries()), ctrl('c')),
         (
             "help esc",
             Overlay::help(help_entries()),

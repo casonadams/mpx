@@ -51,7 +51,8 @@ impl VtHandler {
             }
             'd' => {
                 let x = self.grid.cursor.x;
-                self.grid.move_cursor(x, n - 1);
+                let (_, y) = self.grid.addressed_position(0, n - 1);
+                self.grid.move_cursor(x, y);
             }
             'a' => {
                 let x = self.grid.cursor.x + n;
@@ -90,8 +91,10 @@ impl VtHandler {
             'H' | 'f' => {
                 let row = first_param(params, 1);
                 let col = param(params, 1).unwrap_or(1);
-                self.grid
-                    .move_cursor(col.saturating_sub(1), row.saturating_sub(1));
+                let (x, y) = self
+                    .grid
+                    .addressed_position(col.saturating_sub(1), row.saturating_sub(1));
+                self.grid.move_cursor(x, y);
             }
             'A' => self.cursor_up(count_param(params)),
             'B' => self.cursor_down(count_param(params)),
@@ -147,8 +150,9 @@ impl VtHandler {
         match first_param(params, 0) {
             // Cursor Position Report (DSR): ESC [ row ; col R
             6 => {
-                let r = self.grid.cursor.y + 1;
-                let c = self.grid.cursor.x + 1;
+                let origin = self.grid.addressed_position(0, 0);
+                let r = (self.grid.cursor.y + 1).saturating_sub(origin.1);
+                let c = (self.grid.cursor.x + 1).saturating_sub(origin.0);
                 self.responses
                     .push(format!("\x1b[{};{}R", r, c).into_bytes());
             }
@@ -179,13 +183,13 @@ impl VtHandler {
     pub(super) fn csi_set_margins(&mut self, params: &Params) {
         let grid = &mut self.grid;
         let top = first_param(params, 1).max(1);
-        let bottom = param(params, 1).unwrap_or(grid.rows);
+        let bottom = param(params, 1).filter(|&b| b != 0).unwrap_or(grid.rows);
         let top = top.saturating_sub(1);
         let bottom = bottom.saturating_sub(1).min(grid.rows.saturating_sub(1));
         if top < bottom {
             grid.scroll_top = top;
             grid.scroll_bottom = bottom;
         }
-        grid.move_cursor(0, 0);
+        grid.home_cursor();
     }
 }

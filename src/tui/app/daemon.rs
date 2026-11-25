@@ -3,7 +3,7 @@ use std::time::Instant;
 use tokio::sync::mpsc;
 
 use super::pacing::TYPING_WINDOW;
-use super::state::{App, AppOptions, AttachOpts, Flow, Mode, StartView, StreamRx};
+use super::state::{App, AppOptions, AttachOpts, Flow, Mode, StreamRx};
 use crate::client::Client;
 use crate::protocol::{NewWindowOpts, SpawnOpts, StreamEvent};
 use crate::tui::keymap;
@@ -23,7 +23,6 @@ impl App {
     pub async fn open(
         endpoint: &str,
         session: &str,
-        _start: StartView,
         opts: AppOptions,
     ) -> Result<(Self, StreamRx), String> {
         let keymap = keymap::resolve(&opts.config)?;
@@ -69,15 +68,18 @@ impl App {
         let tx = self.sub.tx.clone();
         let terminal = self.attachment.terminal.clone();
         self.sub.task = Some(tokio::spawn(async move {
-            let _ = client
+            let result = client
                 .stream_as_client(
                     terminal,
                     attach.exclusive,
                     attach.hangup,
-                    tx,
+                    tx.clone(),
                     move |event| (generation, event),
                 )
                 .await;
+            if result.is_err() {
+                let _ = tx.send((generation, StreamEvent::Detached)).await;
+            }
         }));
     }
 
@@ -107,6 +109,7 @@ impl App {
                 break;
             }
         }
+        batch.retain(|(generation, _)| *generation == self.sub.generation);
         let (runs, detached) = take_control_events(&mut batch);
         if detached {
             return Flow::Quit;

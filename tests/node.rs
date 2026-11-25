@@ -4,5 +4,7 @@ mod node {
     mod logs;
     mod pacing;
     mod process;
+    mod pty;
     mod sink;
+    mod waits;
 }

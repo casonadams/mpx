@@ -35,6 +35,7 @@ impl VtHandler {
                 self.passthroughs.push(format_osc(params, bell_terminated));
             }
             // Palette (4), Foreground (10), Cursor (12), Clipboard (52), Resets (104, 110, 111, 112)
+            [b"52", .., b"?"] => {}
             [
                 b"4" | b"10" | b"12" | b"52" | b"104" | b"110" | b"111" | b"112",
                 ..,
@@ -89,7 +90,12 @@ fn format_osc(params: &[&[u8]], bell_terminated: bool) -> Vec<u8> {
 fn join_osc(parts: &[&[u8]]) -> String {
     parts
         .iter()
-        .map(|part| String::from_utf8_lossy(part))
+        .map(|part| {
+            String::from_utf8_lossy(part)
+                .chars()
+                .filter(|c| !c.is_control())
+                .collect::<String>()
+        })
         .collect::<Vec<_>>()
         .join(";")
 }

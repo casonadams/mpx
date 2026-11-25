@@ -88,9 +88,18 @@ impl Session {
     }
 
     async fn resize(&self, name: &str, cols: u16, rows: u16) -> Result<(), String> {
+        if let Some(bad) = [cols, rows]
+            .into_iter()
+            .find(|v| !(1..=MAX_PANE_SIZE).contains(v))
+        {
+            return Err(format!("size {bad} out of range (1 to {MAX_PANE_SIZE})"));
+        }
         self.handle_of(name)?.resize(cols, rows).await
     }
 }
+
+/// Largest size a pane's terminal may be resized to: every cell of its grid is kept in memory.
+const MAX_PANE_SIZE: u16 = 1_000;
 
 /// The bytes `send-keys` writes: the names encoded for the pane's terminal modes, or the keys
 /// verbatim with `literal`.

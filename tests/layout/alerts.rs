@@ -24,6 +24,13 @@ fn a_background_window_goes_silent_after_its_quiet_period() {
 }
 
 #[test]
+fn a_silence_period_past_the_clock_range_never_fires() {
+    let mut ws = two_windows();
+    ws.note_output("pane2", Instant::now());
+    assert_eq!(ws.next_silence(u64::MAX), None);
+}
+
+#[test]
 fn output_clears_the_silence_flag_and_selecting_the_window_does_too() {
     let mut ws = two_windows();
     let t0 = Instant::now();
@@ -57,4 +64,37 @@ fn output_from_a_pane_in_no_window_starts_no_silence_timer() {
     let mut ws = two_windows();
     ws.note_output("ghost", Instant::now());
     assert_eq!(ws.next_silence(10), None);
+}
+
+#[test]
+fn bell_and_activity_flag_background_indices_showing_the_pane_window_once() {
+    use mpx::layout::LinkPlace;
+
+    let mut ws = two_windows();
+    ws.link_window(0, None, LinkPlace::default()).unwrap();
+    assert!(ws.select_window(1));
+    assert!(
+        ws.mark_bell("pane1"),
+        "both background indices show pane1's window"
+    );
+    assert!(ws.window_tabs()[0].has_bell);
+    assert!(!ws.mark_bell("pane1"), "already set, so nothing newly set");
+    assert!(!ws.mark_bell("pane2"), "the active index is never flagged");
+
+    assert!(ws.mark_activity("pane1"));
+    assert!(ws.window_tabs()[0].has_activity);
+    assert!(!ws.mark_activity("pane1"));
+    assert!(!ws.mark_activity("pane2"));
+}
+
+#[test]
+fn bell_and_activity_for_an_unknown_pane_change_nothing() {
+    let mut ws = two_windows();
+    assert!(!ws.mark_bell("ghost"));
+    assert!(!ws.mark_activity("ghost"));
+    assert!(
+        ws.window_tabs()
+            .iter()
+            .all(|t| !t.has_bell && !t.has_activity)
+    );
 }

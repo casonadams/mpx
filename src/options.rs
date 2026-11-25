@@ -68,7 +68,7 @@ macro_rules! style_option {
             name: $name,
             get: |c| quoted(c.style.$field.clone()),
             set: |c, v| {
-                crate::tui::style::parse(v)?;
+                crate::style::parse(v)?;
                 c.style.$field = v.to_string();
                 Ok(())
             },

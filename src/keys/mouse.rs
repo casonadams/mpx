@@ -14,7 +14,13 @@ pub fn encode_mouse_event(
 ) -> Option<Vec<u8>> {
     let reported = match (modes.mouse_tracking, kind) {
         (MouseTracking::None, _) => false,
-        (MouseTracking::X10, MouseEventKind::Down(_)) => true,
+        (
+            MouseTracking::X10,
+            MouseEventKind::Down(_)
+            | MouseEventKind::Up(_)
+            | MouseEventKind::ScrollUp
+            | MouseEventKind::ScrollDown,
+        ) => true,
         (MouseTracking::X10, _) => false,
         (MouseTracking::ButtonEvent, MouseEventKind::Moved) => false,
         (MouseTracking::ButtonEvent | MouseTracking::AnyEvent, _) => true,

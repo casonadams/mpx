@@ -188,6 +188,16 @@ impl Canvas {
         if under_chrome {
             self.status.clear();
         }
+        // A non-ASCII glyph in the last column may wrap onto the row below, so that row is repainted.
+        let last_col = self.width as usize - 1;
+        let wraps = cells
+            .iter()
+            .enumerate()
+            .any(|(dx, cell)| x as usize + dx == last_col && !cell.c.is_ascii());
+        if wraps && y + 1 < self.height {
+            let below = self.index(0, y + 1);
+            self.front[below..below + self.width as usize].fill(None);
+        }
         self.cursor = None;
         let row_end = self.index(0, y) + self.width as usize;
         self.front[start + cells.len()..row_end].fill(None);

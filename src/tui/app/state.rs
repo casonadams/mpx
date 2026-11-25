@@ -26,12 +26,6 @@ use crate::tui::statusline::{self, Rows, Target};
 use crate::tui::warm::Warm;
 use crate::vt::VtScreen;
 
-/// Initial screen when attaching.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StartView {
-    Panes,
-}
-
 /// What the event loop does after handling one input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Flow {
@@ -132,6 +126,8 @@ pub struct App {
     pub chrome: Chrome,
     /// This TUI as its session's client, and the session it is attached to.
     pub attachment: Attachment,
+    /// `source-file` runs in progress, nested; bounded so a file that sources itself stops.
+    pub source_depth: usize,
 }
 
 /// Frame pacing state (see `drew` and `prepare_frame`).
@@ -377,6 +373,7 @@ impl App {
                 previous_session: None,
                 reported_activity: None,
             },
+            source_depth: 0,
         }
     }
 }

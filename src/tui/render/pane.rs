@@ -10,8 +10,8 @@ use super::Compositor;
 use super::colors::PaneColors;
 use super::selection::SelectionRange;
 use crate::layout::geometry::Rect;
+use crate::style::color::{Palette, from_terminal_palette, inactive_color};
 use crate::tui::canvas::Canvas;
-use crate::tui::color::{Palette, from_terminal_palette, inactive_color};
 use crate::vt::grid::Grid;
 use crate::vt::{Cell, CellStyle, Color as VtColor};
 

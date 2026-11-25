@@ -4,7 +4,6 @@ use crate::layout::LinkPlace;
 use crate::protocol::WindowResize;
 use crate::tui::app::{App, Flow};
 use crate::tui::command::{PaletteTab, WindowCommand};
-use crate::tui::overlay::{Overlay, PaletteView};
 
 impl App {
     pub(super) async fn window_command(&mut self, cmd: WindowCommand) -> Flow {
@@ -80,17 +79,6 @@ impl App {
         number.map(|number| self.window_slot(number)).transpose()
     }
 
-    /// As `window_target`, for the commands whose message does not name the window.
-    fn daemon_window(&mut self, number: Option<usize>) -> Result<Option<usize>, Flow> {
-        match number {
-            None => Ok(None),
-            Some(number) => match number.checked_sub(self.config.base_index) {
-                Some(index) => Ok(Some(index)),
-                None => Err(self.say("can't find window")),
-            },
-        }
-    }
-
     async fn select_window(&mut self, index: usize) -> Flow {
         let result = self.client.select_window(index).await;
         self.settle(result)
@@ -162,13 +150,16 @@ impl App {
 
     /// `swap-window`: exchanges window `src` (the active one unless given) with `dst`.
     async fn swap_window(&mut self, src: Option<usize>, dst: usize) -> Flow {
-        let base = self.config.base_index;
         let from = match src {
-            Some(number) => number.checked_sub(base),
-            None => self.active_window(),
+            Some(number) => self.window_slot(number),
+            None => match self.active_window() {
+                Some(index) => Ok(index),
+                None => Err(self.say("can't find window")),
+            },
         };
-        let (Some(from), Some(to)) = (from, dst.checked_sub(base)) else {
-            return self.say("can't find window");
+        let (from, to) = match (from, self.window_slot(dst)) {
+            (Ok(from), Ok(to)) => (from, to),
+            (Err(flow), _) | (_, Err(flow)) => return flow,
         };
         let result = self.client.swap_window(from, to).await;
         self.settle(result)
@@ -181,7 +172,7 @@ impl App {
         dst: Option<usize>,
         place: LinkPlace,
     ) -> Flow {
-        let (src, dst) = match (self.daemon_window(src), self.daemon_window(dst)) {
+        let (src, dst) = match (self.window_target(src), self.window_target(dst)) {
             (Ok(src), Ok(dst)) => (src, dst),
             (Err(flow), _) | (_, Err(flow)) => return flow,
         };
@@ -191,7 +182,7 @@ impl App {
 
     /// `unlink-window`: removes one index of a window, killing it with `kill`.
     async fn unlink_window(&mut self, index: Option<usize>, kill: bool) -> Flow {
-        match self.daemon_window(index) {
+        match self.window_target(index) {
             Ok(index) => {
                 let result = self.client.unlink_window(index, kill).await;
                 self.settle(result)
@@ -202,7 +193,7 @@ impl App {
 
     /// `resize-window`: gives a window a size of its own.
     async fn resize_window(&mut self, index: Option<usize>, resize: WindowResize) -> Flow {
-        match self.daemon_window(index) {
+        match self.window_target(index) {
             Ok(index) => {
                 let result = self.client.resize_window(index, resize).await;
                 self.settle(result)
@@ -213,12 +204,7 @@ impl App {
 
     /// `find-window`: the sessions and windows palette with `pattern` typed into its filter.
     async fn find_window(&mut self, pattern: &str) -> Flow {
-        let view = PaletteView::new(
-            PaletteTab::Sessions,
-            self.keymap.help_entries(),
-            &self.session,
-        )
-        .with_query(pattern);
-        self.open_overlay(Overlay::palette(view)).await
+        self.open_palette_with(PaletteTab::Sessions, Some(pattern))
+            .await
     }
 }

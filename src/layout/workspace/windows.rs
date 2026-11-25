@@ -86,10 +86,14 @@ impl Workspace {
     }
 
     /// Sets the automatic name of the window at index `number` unless it was renamed explicitly.
-    pub fn set_auto_name(&mut self, number: usize, name: Option<String>) {
-        if let Some(win) = self.window_numbered_mut(number).filter(|w| !w.renamed) {
-            win.name = name.unwrap_or_else(|| win.label.clone());
-        }
+    pub fn set_auto_name(&mut self, number: usize, name: Option<String>) -> bool {
+        let Some(win) = self.window_numbered_mut(number).filter(|w| !w.renamed) else {
+            return false;
+        };
+        let next = name.unwrap_or_else(|| win.label.clone());
+        let changed = win.name != next;
+        win.name = next;
+        changed
     }
 
     /// Turns `synchronize-panes` on or off for the window at index `number` (the active window when

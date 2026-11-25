@@ -378,6 +378,25 @@ fn join_pane_keeps_the_active_pane_with_detach_and_focuses_the_joined_pane_witho
 }
 
 #[test]
+fn join_pane_with_detach_keeps_the_active_window_when_the_focused_pane_moves() {
+    let mut ws = Workspace::new("main".to_string());
+    ws.add_or_split("a".to_string(), Direction::Horizontal);
+    ws.split_pane(
+        Some("a"),
+        "c".to_string(),
+        Direction::Horizontal,
+        None,
+        false,
+    )
+    .unwrap();
+    ws.new_window("w1".to_string(), "b".to_string());
+    assert!(ws.select_window(0));
+    ws.join_pane("a", "b", Direction::Horizontal, true).unwrap();
+    assert_eq!(ws.window_of("a"), Some(1));
+    assert_eq!(ws.active_window().unwrap().focused.as_deref(), Some("c"));
+}
+
+#[test]
 fn zoomed_at_and_zoom_window_of_follow_the_window_holding_the_pane() {
     let mut ws = Workspace::new("main".to_string());
     ws.new_window("w1".to_string(), "a".to_string());

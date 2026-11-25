@@ -49,7 +49,9 @@ fn parse_maps_names_prefixes_and_chars() {
 
 #[test]
 fn parse_rejects_empty_unknown_and_dangling_names() {
-    for bad in ["", "Bogus", "F13", "F0", "C-", "C-Bogus", "Ctrl-x", "M-"] {
+    for bad in [
+        "", "Bogus", "F13", "F0", "F01", "C-", "C-Bogus", "Ctrl-x", "M-",
+    ] {
         assert!(KeySpec::parse(bad).is_err(), "{bad:?} should be rejected");
     }
 }
