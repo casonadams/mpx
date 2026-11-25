@@ -308,7 +308,7 @@ pub(super) async fn run(boot: Boot, mut rx: mpsc::UnboundedReceiver<SessionMsg>)
         save_due: None,
         shutting_down: false,
     };
-    session.start();
+    session.start().await;
     let _ = ready.send(());
 
     let mut client_check = tokio::time::interval(CLIENT_CHECK);
@@ -350,8 +350,8 @@ async fn next_event(
 
 impl Session {
     /// Restores the last snapshot, then fires `after-new-session` when the session is fresh.
-    fn start(&mut self) {
-        self.startup_restore();
+    async fn start(&mut self) {
+        self.startup_restore().await;
         if self.restored_ms.is_none() {
             self.fire("after-new-session", None);
         }

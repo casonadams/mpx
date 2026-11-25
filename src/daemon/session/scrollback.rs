@@ -1,6 +1,7 @@
 //! Saving and restoring pane scrollback while `restore` is on: each running terminal pane's newest
 //! output is written next to the snapshot, so a restore after a crash or reboot shows it again.
 
+use std::collections::HashMap;
 use std::sync::mpsc;
 use std::thread;
 
@@ -120,22 +121,43 @@ impl Session {
         self.scrollback.send(Job::Retain(panes));
     }
 
-    /// What restored pane `pane` shows before its process writes: its saved scrollback, when
-    /// `restore` is on and there is one.
-    pub(super) fn restored_scrollback(&self, pane: &str) -> Vec<u8> {
+    /// What each of the restored panes `names` shows before its process writes: its saved
+    /// scrollback, when `restore` is on and there is one. Replayed on the blocking pool, panes in
+    /// parallel, so the session keeps serving while a large history is read.
+    pub(super) async fn restored_scrollbacks(
+        &self,
+        names: Vec<String>,
+    ) -> HashMap<String, Vec<u8>> {
         if !self.config.session.restore {
-            return Vec::new();
+            return HashMap::new();
         }
-        match self.scrollback.store.load(pane) {
-            Ok(Some(saved)) => {
-                let size = (usize::from(saved.size.0), usize::from(saved.size.1));
-                restored_scrollback(&saved.log, size, self.config.session.scrollback_lines)
-            }
-            Ok(None) => Vec::new(),
-            Err(e) => {
-                warn!("could not load scrollback of pane '{pane}': {e}");
-                Vec::new()
-            }
+        let lines = self.config.session.scrollback_lines;
+        let loads = names.into_iter().map(|pane| {
+            let store = self.scrollback.store.clone();
+            tokio::task::spawn_blocking(move || {
+                let restored = load_restored(&store, &pane, lines);
+                (pane, restored)
+            })
+        });
+        join_all(loads)
+            .await
+            .into_iter()
+            .filter_map(|joined| joined.ok())
+            .filter(|(_, restored)| !restored.is_empty())
+            .collect()
+    }
+}
+
+fn load_restored(store: &ScrollbackStore, pane: &str, lines: usize) -> Vec<u8> {
+    match store.load(pane) {
+        Ok(Some(saved)) => {
+            let size = (usize::from(saved.size.0), usize::from(saved.size.1));
+            restored_scrollback(&saved.log, size, lines)
+        }
+        Ok(None) => Vec::new(),
+        Err(e) => {
+            warn!("could not load scrollback of pane '{pane}': {e}");
+            Vec::new()
         }
     }
 }

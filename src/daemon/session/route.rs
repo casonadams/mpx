@@ -121,7 +121,7 @@ impl Session {
         match req {
             Request::Ping => Response::Pong,
             Request::Info => Response::Session(self.session_info()),
-            Request::Restore => self.restore(),
+            Request::Restore => self.restore().await,
             Request::Node(req) => self.node_request(req).await,
             Request::Pane(req) => self.pane_request(req).await,
             Request::Window(req) => self.window_request(req).await,

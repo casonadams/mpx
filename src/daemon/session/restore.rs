@@ -2,6 +2,8 @@
 //! windows rebuilt from the part of each layout that survived, and linked windows shown at their
 //! restored indices.
 
+use std::collections::HashMap;
+
 use tracing::warn;
 
 use super::Session;
@@ -13,13 +15,13 @@ use crate::store::{SessionSnapshot, WindowPlan, plan_restore};
 
 impl Session {
     /// `restore`: restores the saved snapshot into a session with no panes.
-    pub(super) fn restore(&mut self) -> Response {
+    pub(super) async fn restore(&mut self) -> Response {
         if !self.nodes.is_empty() {
             return Response::Error("Session already has panes".to_string());
         }
         match self.snapshots.load() {
             Ok(Some(snapshot)) => {
-                self.restore_snapshot(&snapshot);
+                self.restore_snapshot(&snapshot).await;
                 Response::Ok
             }
             Ok(None) => Response::Error("No snapshot to restore".to_string()),
@@ -28,26 +30,32 @@ impl Session {
     }
 
     /// Restores the snapshot at startup, when the config asks for it.
-    pub(super) fn startup_restore(&mut self) {
+    pub(super) async fn startup_restore(&mut self) {
         if !self.config.session.restore {
             return;
         }
         match self.snapshots.load() {
-            Ok(Some(snapshot)) => self.restore_snapshot(&snapshot),
+            Ok(Some(snapshot)) => self.restore_snapshot(&snapshot).await,
             Ok(None) => {}
             Err(e) => warn!("could not load session snapshot: {}", e),
         }
     }
 
-    fn restore_snapshot(&mut self, snapshot: &SessionSnapshot) {
+    async fn restore_snapshot(&mut self, snapshot: &SessionSnapshot) {
         self.stores.restore_environment(&snapshot.environment);
         let plan = plan_restore(snapshot, &self.config.resume);
+        let names = plan
+            .windows
+            .iter()
+            .flat_map(|window| window.panes.iter().map(|opts| opts.name.clone()))
+            .collect();
+        let mut scrollbacks = self.restored_scrollbacks(names).await;
         // What each restored index shows, by its position among the restored windows.
         let mut shown: Vec<Option<(usize, usize)>> = Vec::with_capacity(plan.windows.len());
         for window in plan.windows {
             let restored = match window.shares {
                 Some(owner) => self.restore_link(owner, &shown, window.number),
-                None => self.restore_window(window),
+                None => self.restore_window(window, &mut scrollbacks),
             };
             shown.push(restored);
         }
@@ -71,10 +79,14 @@ impl Session {
 
     /// Spawns the window's panes, then installs it with the surviving part of its layout. Returns the
     /// installed window's index and window id, or None when no pane of it survived.
-    fn restore_window(&mut self, window: WindowPlan) -> Option<(usize, usize)> {
+    fn restore_window(
+        &mut self,
+        window: WindowPlan,
+        scrollbacks: &mut HashMap<String, Vec<u8>>,
+    ) -> Option<(usize, usize)> {
         let mut root = Some(window.layout);
         for opts in &window.panes {
-            match self.spawn_restored(opts) {
+            match self.spawn_restored(opts, scrollbacks.remove(&opts.name).unwrap_or_default()) {
                 Ok(()) => {
                     if let Some(line) = window.startup_input.get(&opts.name) {
                         self.type_into(&opts.name, line);
@@ -125,10 +137,9 @@ impl Session {
         });
     }
 
-    fn spawn_restored(&mut self, opts: &SpawnOpts) -> Result<(), String> {
+    fn spawn_restored(&mut self, opts: &SpawnOpts, restored: Vec<u8>) -> Result<(), String> {
         self.check_name(&opts.name)?;
         let id = self.next_pane_id;
-        let restored = self.restored_scrollback(&opts.name);
         let handle = self.spawn_pane(&opts.name, id, opts, opts.cwd.clone(), restored)?;
         self.next_pane_id += 1;
         self.register(opts.name.clone(), handle, opts.clone());
