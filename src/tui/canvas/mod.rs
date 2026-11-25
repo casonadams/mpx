@@ -20,7 +20,7 @@ pub struct Canvas {
     occluded: Vec<Rect>,
     cursor: Option<(u16, u16)>,
     style: Option<CellStyle>,
-    status: Vec<u8>,
+    status: Vec<Vec<u8>>,
     lr_margins: bool,
 }
 
@@ -234,13 +234,18 @@ impl Canvas {
         Ok(())
     }
 
-    /// Whether the status row bytes differ from the ones last sent; remembers `row` as sent.
-    pub fn status_changed(&mut self, row: &[u8]) -> bool {
-        if self.status == row {
+    /// Whether the bytes of status row `slot` (0 for the first) differ from the ones last sent;
+    /// remembers `row` as sent.
+    pub fn status_changed(&mut self, slot: usize, row: &[u8]) -> bool {
+        if self.status.len() <= slot {
+            self.status.resize_with(slot + 1, Vec::new);
+        }
+        let sent = &mut self.status[slot];
+        if sent == row {
             return false;
         }
-        self.status.clear();
-        self.status.extend_from_slice(row);
+        sent.clear();
+        sent.extend_from_slice(row);
         true
     }
 }

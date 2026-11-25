@@ -14,15 +14,19 @@ use crate::tui::style::{self, Style, over_colours};
 pub(super) fn draw_status_row<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
     let mut row = Vec::new();
     status_row(app, &mut row)?;
-    if app.canvas.status_changed(&row) {
+    if app.canvas.status_changed(0, &row) {
         out.write_all(&row)?;
     }
     Ok(())
 }
 
 /// The status rows below the first, each drawing its `status-format` with the active pane's
-/// variables. Drawn on every frame, so a message or overlay that covered a row never leaves it stale.
-pub(super) fn draw_status_extra<W: Write>(app: &App, out: &mut W) -> io::Result<()> {
+/// variables. A row is sent only when it differs from the one on screen.
+pub(super) fn draw_status_extra<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
+    let extra = app.rows.extra_status_rows();
+    if extra.is_empty() {
+        return Ok(());
+    }
     let first = app.rows.status.unwrap_or(0);
     let width = usize::from(app.viewport.0);
     let bg = parse_color(&app.config.style.status_bg);
@@ -30,14 +34,22 @@ pub(super) fn draw_status_extra<W: Write>(app: &App, out: &mut W) -> io::Result<
     let vars = active_vars(app);
     let lists = loop_lists(app);
     let now = crate::node::now_ms();
-    for y in app.rows.extra_status_rows() {
+    let mut rows = Vec::new();
+    for y in extra {
         let fmt = app
             .config
             .status_format
             .get(usize::from(y - first))
             .map_or("", String::as_str);
         let line = format_row(fmt, &vars, &lists, now, width);
-        draw_status_segments(out, &line.segs, y, bg, fg)?;
+        let mut row = Vec::new();
+        draw_status_segments(&mut row, &line.segs, y, bg, fg)?;
+        rows.push((usize::from(y - first), row));
+    }
+    for (slot, row) in rows {
+        if app.canvas.status_changed(slot, &row) {
+            out.write_all(&row)?;
+        }
     }
     Ok(())
 }

@@ -246,11 +246,11 @@ fn cells_right_of_a_reprinted_wide_row_are_repainted() {
 fn the_status_row_is_sent_only_when_it_changes() {
     let mut canvas = Canvas::default();
     canvas.begin(10, 3, None);
-    assert!(canvas.status_changed(b"[s] 0:main"));
-    assert!(!canvas.status_changed(b"[s] 0:main"));
-    assert!(canvas.status_changed(b"[s] 0:work"));
+    assert!(canvas.status_changed(0, b"[s] 0:main"));
+    assert!(!canvas.status_changed(0, b"[s] 0:main"));
+    assert!(canvas.status_changed(0, b"[s] 0:work"));
     canvas.invalidate();
-    assert!(canvas.status_changed(b"[s] 0:work"));
+    assert!(canvas.status_changed(0, b"[s] 0:work"));
 }
 
 #[test]
@@ -258,18 +258,18 @@ fn a_row_reprinted_under_the_prompt_sends_the_prompt_again() {
     let mut canvas = Canvas::default();
     let prompt = Rect::new(0, 2, 10, 1);
     canvas.begin(10, 3, [prompt]);
-    assert!(canvas.status_changed(b":cmd"));
+    assert!(canvas.status_changed(0, b":cmd"));
     let mut out = Vec::new();
     canvas.begin(10, 3, [prompt]);
     canvas.put_row(&mut out, 0, 2, &row("plain")).unwrap();
     assert!(
-        !canvas.status_changed(b":cmd"),
+        !canvas.status_changed(0, b":cmd"),
         "an ASCII row skips the covered cells"
     );
     canvas.begin(10, 3, [prompt]);
     canvas.put_row(&mut out, 0, 2, &row("café ❯")).unwrap();
     assert!(
-        canvas.status_changed(b":cmd"),
+        canvas.status_changed(0, b":cmd"),
         "a reprinted row wrote over the prompt"
     );
 }
@@ -279,17 +279,30 @@ fn the_status_row_is_sent_again_once_chrome_over_it_closes() {
     let mut canvas = Canvas::default();
     let menu = Rect::new(2, 1, 6, 2);
     canvas.begin(10, 3, [menu]);
-    assert!(canvas.status_changed(b"[s] 0:main"));
+    assert!(canvas.status_changed(0, b"[s] 0:main"));
     canvas.begin(10, 3, [menu]);
     assert!(
-        !canvas.status_changed(b"[s] 0:main"),
+        !canvas.status_changed(0, b"[s] 0:main"),
         "the menu still covers it"
     );
     canvas.begin(10, 3, None);
     assert!(
-        canvas.status_changed(b"[s] 0:main"),
+        canvas.status_changed(0, b"[s] 0:main"),
         "the menu's border is drawn over and must be replaced"
     );
+}
+
+#[test]
+fn each_status_row_is_tracked_on_its_own_and_forgotten_with_the_chrome_over_it() {
+    let mut canvas = Canvas::default();
+    canvas.begin(10, 3, None);
+    assert!(canvas.status_changed(1, b"second"));
+    assert!(!canvas.status_changed(1, b"second"));
+    assert!(canvas.status_changed(0, b"first"));
+    assert!(canvas.status_changed(1, b"other"));
+    canvas.begin(10, 3, [Rect::new(0, 0, 4, 2)]);
+    canvas.begin(10, 3, None);
+    assert!(canvas.status_changed(1, b"other"));
 }
 
 #[test]
