@@ -112,28 +112,35 @@ pub(super) fn blank_uncovered<W: Write>(app: &mut App, out: &mut W) -> io::Resul
         c: ' ',
         style: Default::default(),
     };
+    let width = usize::from(w);
+    let mut covered = vec![false; width * usize::from(h)];
+    let mut cover = |x0: u16, y0: u16, cols: u16, rows: u16| {
+        let xs = usize::from(x0)..usize::from(x0.saturating_add(cols)).min(width);
+        let ys = y0.max(top)..y0.saturating_add(rows).min(top + h);
+        for y in ys {
+            let row = usize::from(y - top) * width;
+            covered[row + xs.start.min(xs.end)..row + xs.end].fill(true);
+        }
+    };
+    for (_, r, _) in &app.panes {
+        cover(r.x, r.y, r.width, r.height);
+    }
+    for d in dividers {
+        if d.is_vertical {
+            cover(d.x, d.y, 1, d.length);
+        } else {
+            cover(d.x, d.y, d.length, 1);
+        }
+    }
     for y in top..top + h {
+        let row = usize::from(y - top) * width;
         for x in 0..w {
-            let drawn = app
-                .panes
-                .iter()
-                .any(|(_, r, _)| r.width > 0 && r.height > 0 && r.contains(x, y))
-                || dividers.iter().any(|d| divider_covers(d, x, y));
-            if !drawn {
+            if !covered[row + usize::from(x)] {
                 app.canvas.put(out, x, y, blank)?;
             }
         }
     }
     Ok(())
-}
-
-/// Whether the border cell of `divider` at (`x`, `y`) is one it draws.
-fn divider_covers(divider: &Divider, x: u16, y: u16) -> bool {
-    if divider.is_vertical {
-        x == divider.x && y >= divider.y && y - divider.y < divider.length
-    } else {
-        y == divider.y && x >= divider.x && x - divider.x < divider.length
-    }
 }
 
 /// Panes are drawn left to right so a row that spills past its pane is repainted over by its neighbor.
