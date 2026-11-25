@@ -251,6 +251,18 @@ fn dcs_tmux_and_mpx_passthroughs() {
 }
 
 #[test]
+fn other_dcs_sequences_are_ignored_and_passthroughs_after_them_still_work() {
+    let mut vt = VtScreen::new(20, 5);
+    feed(
+        &mut vt,
+        &format!("\x1bPq{}\x1b\\", "#0;2;0;0;0~".repeat(10_000)),
+    );
+    feed(&mut vt, "\x1bPtmuy;nope\x1b\\\x1bPmpx;kept\x1b\\");
+    assert_eq!(vt.take_passthroughs(), vec![b"kept".to_vec()]);
+    assert_eq!(vt.snapshot().trim(), "");
+}
+
+#[test]
 fn alerts_drain_in_arrival_order() {
     let mut vt = VtScreen::new(20, 5);
     feed(&mut vt, "\x07\x1b]9;done\x07\x07");

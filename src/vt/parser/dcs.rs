@@ -1,6 +1,14 @@
 use super::VtHandler;
 
 const MAX_DCS_LEN: usize = 1024 * 1024;
+const PASSTHROUGH_PREFIXES: [&[u8]; 2] = [b"tmux;", b"mpx;"];
+
+/// Whether a DCS that begins with `head` is, or may still turn out to be, a passthrough.
+fn may_pass_through(head: &[u8]) -> bool {
+    PASSTHROUGH_PREFIXES
+        .iter()
+        .any(|prefix| prefix.starts_with(head) || head.starts_with(prefix))
+}
 
 impl VtHandler {
     pub(super) fn dcs_hook(&mut self, action: char) {
@@ -9,10 +17,14 @@ impl VtHandler {
     }
 
     pub(super) fn dcs_put(&mut self, byte: u8) {
-        if let Some(buf) = &mut self.dcs_buf
-            && buf.len() < MAX_DCS_LEN
-        {
+        let Some(buf) = &mut self.dcs_buf else {
+            return;
+        };
+        if buf.len() < MAX_DCS_LEN {
             buf.push(byte);
+        }
+        if buf.len() <= PASSTHROUGH_PREFIXES[0].len() && !may_pass_through(buf) {
+            self.dcs_buf = None;
         }
     }
 
