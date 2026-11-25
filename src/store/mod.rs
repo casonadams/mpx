@@ -86,6 +86,7 @@ pub struct PaneSnapshot {
     pub session_id: Option<String>,
 }
 /// The session's snapshot file. Writes are atomic (temp file + rename).
+#[derive(Clone)]
 pub struct SnapshotStore {
     path: PathBuf,
 }

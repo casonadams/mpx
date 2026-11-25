@@ -300,7 +300,10 @@ pub(super) async fn run(boot: Boot, mut rx: mpsc::UnboundedReceiver<SessionMsg>)
         pending: Vec::new(),
         idem: IdemCache::default(),
         snapshots: SnapshotStore::in_dir(&state_dir),
-        scrollback: scrollback::ScrollbackWriter::spawn(ScrollbackStore::in_dir(&state_dir)),
+        scrollback: scrollback::ScrollbackWriter::spawn(
+            ScrollbackStore::in_dir(&state_dir),
+            SnapshotStore::in_dir(&state_dir),
+        ),
         stores: Stores::default(),
         save_due: None,
         shutting_down: false,

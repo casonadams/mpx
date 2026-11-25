@@ -5,7 +5,6 @@ use std::time::Duration;
 
 use futures_util::future::join_all;
 use tokio::time::Instant;
-use tracing::warn;
 
 use super::Session;
 use crate::config::ResumeRule;
@@ -24,22 +23,20 @@ impl Session {
         }
     }
 
-    /// Writes the snapshot, then the scrollback its panes have to restore. An unclean save is
+    /// Queues the snapshot to be written, then the scrollback its panes have to restore. An unclean save is
     /// dropped once shutdown has begun.
     pub(super) async fn save(&mut self, clean: bool) {
         if self.shutting_down && !clean {
             return;
         }
         let snapshot = self.snapshot(clean).await;
-        if let Err(e) = self.snapshots.save(&snapshot) {
-            warn!("could not save session snapshot: {}", e);
-        }
-        self.flush_scrollback().await;
         let panes = snapshot
             .windows
             .iter()
             .flat_map(|window| window.panes.iter().map(|pane| pane.name.clone()))
             .collect();
+        self.scrollback.save_snapshot(snapshot);
+        self.flush_scrollback().await;
         self.retain_scrollback(panes);
     }
 

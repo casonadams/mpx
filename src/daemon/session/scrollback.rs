@@ -10,10 +10,11 @@ use tracing::warn;
 
 use super::Session;
 use crate::node::pane::PaneHandle;
-use crate::store::{PaneScrollback, ScrollbackStore};
+use crate::store::{PaneScrollback, ScrollbackStore, SessionSnapshot, SnapshotStore};
 use crate::vt::capture::restored_scrollback;
 
 enum Job {
+    Snapshot(Box<SessionSnapshot>),
     Save(Vec<(String, PaneScrollback)>),
     /// Deletes the scrollback of every pane but these.
     Retain(Vec<String>),
@@ -21,20 +22,20 @@ enum Job {
     Sync(oneshot::Sender<()>),
 }
 
-/// Writes scrollback files on its own thread, in the order the jobs were sent, so neither the
-/// session nor its panes wait for the disk. The thread ends with the writer.
+/// Writes the snapshot and scrollback files on its own thread, in the order the jobs were sent, so
+/// neither the session nor its panes wait for the disk. The thread ends with the writer.
 pub(super) struct ScrollbackWriter {
     store: ScrollbackStore,
     jobs: mpsc::Sender<Job>,
 }
 
 impl ScrollbackWriter {
-    pub(super) fn spawn(store: ScrollbackStore) -> Self {
+    pub(super) fn spawn(store: ScrollbackStore, snapshots: SnapshotStore) -> Self {
         let (jobs, rx) = mpsc::channel();
         let disk = store.clone();
         thread::spawn(move || {
             for job in rx {
-                run(&disk, job);
+                run(&snapshots, &disk, job);
             }
         });
         Self { store, jobs }
@@ -46,6 +47,11 @@ impl ScrollbackWriter {
         }
     }
 
+    /// Queues `snapshot` to be written.
+    pub(super) fn save_snapshot(&self, snapshot: SessionSnapshot) {
+        self.send(Job::Snapshot(Box::new(snapshot)));
+    }
+
     /// Waits until every job sent so far is written.
     pub(super) async fn sync(&self) {
         let (done, wait) = oneshot::channel();
@@ -54,8 +60,13 @@ impl ScrollbackWriter {
     }
 }
 
-fn run(store: &ScrollbackStore, job: Job) {
+fn run(snapshots: &SnapshotStore, store: &ScrollbackStore, job: Job) {
     match job {
+        Job::Snapshot(snapshot) => {
+            if let Err(e) = snapshots.save(&snapshot) {
+                warn!("could not save session snapshot: {}", e);
+            }
+        }
         Job::Save(panes) => {
             for (pane, scrollback) in panes {
                 if let Err(e) = store.save(&pane, &scrollback) {
