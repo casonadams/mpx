@@ -121,5 +121,8 @@ fn an_unwritable_state_dir_fails_to_save_and_to_purge() {
     std::fs::write(&blocker, "file").unwrap();
     let store = ScrollbackStore::in_dir(&blocker);
     assert!(store.save("shell", &saved(b"x")).is_err());
+    // Windows reports the scrollback directory under a file as not found, which leaves nothing to
+    // purge; unix reports that the path is not a directory.
+    #[cfg(unix)]
     assert!(store.retain(&[]).is_err());
 }
