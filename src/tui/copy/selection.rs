@@ -1,6 +1,6 @@
 //! The selection: its shape and anchor, and the text it covers.
 use crate::tui::render::SelectionRange;
-use crate::vt::grid::Grid;
+use crate::vt::grid::{Cell, Grid};
 
 use super::{CopyState, SelectionKind};
 
@@ -84,18 +84,23 @@ impl CopyState {
     }
 }
 
-fn row_chars(grid: &Grid, abs_y: usize) -> Option<Vec<char>> {
-    grid.line_cells(abs_y)
-        .map(|cells| cells.iter().map(|c| c.c).collect())
+fn row_cells(grid: &Grid, abs_y: usize) -> Option<Vec<Cell>> {
+    grid.line_cells(abs_y).map(|cells| cells.into_owned())
+}
+
+/// The text `cells` draw: wide characters once, with their combining marks.
+fn cells_text(cells: &[Cell]) -> String {
+    let mut text = String::with_capacity(cells.len());
+    for cell in cells {
+        cell.push_text(&mut text);
+    }
+    text
 }
 
 /// The text of one history line from column `from`, trailing blanks dropped.
 pub(super) fn line_text(grid: &Grid, abs_y: usize, from: usize) -> String {
-    row_chars(grid, abs_y).map_or_else(String::new, |cells| {
-        cells
-            .into_iter()
-            .skip(from)
-            .collect::<String>()
+    row_cells(grid, abs_y).map_or_else(String::new, |cells| {
+        cells_text(cells.get(from..).unwrap_or_default())
             .trim_end()
             .to_string()
     })
@@ -107,7 +112,7 @@ fn yank_lines(grid: &Grid, anchor_abs_y: usize, cursor_abs_y: usize) -> String {
         anchor_abs_y.max(cursor_abs_y),
     );
     join_rows((top..=bot).filter_map(|y| {
-        let text: String = row_chars(grid, y)?.into_iter().collect();
+        let text = cells_text(&row_cells(grid, y)?);
         Some((text, grid.line_wrapped(y) && y < bot))
     }))
 }
@@ -117,14 +122,14 @@ fn yank_rows(
     grid: &Grid,
     anchor_abs_y: usize,
     cursor_abs_y: usize,
-    cut: impl Fn(&[char]) -> String,
+    cut: impl Fn(&[Cell]) -> String,
 ) -> String {
     let (top, bot) = (
         anchor_abs_y.min(cursor_abs_y),
         anchor_abs_y.max(cursor_abs_y),
     );
     (top..=bot)
-        .filter_map(|y| row_chars(grid, y))
+        .filter_map(|y| row_cells(grid, y))
         .map(|cells| cut(&cells).trim_end().to_string())
         .collect::<Vec<_>>()
         .join("\n")
@@ -138,7 +143,7 @@ fn yank_chars(grid: &Grid, cs: &CopyState, cursor_abs_y: usize) -> String {
     let lines: Vec<Option<SelectionRow>> = (top..=bot)
         .map(|y| {
             Some(SelectionRow {
-                cells: row_chars(grid, y)?,
+                cells: row_cells(grid, y)?,
                 wrapped: grid.line_wrapped(y),
             })
         })
@@ -167,7 +172,7 @@ fn join_rows(rows: impl Iterator<Item = (String, bool)>) -> String {
 
 /// One screen or history row of a selection: its cells and whether it soft-wraps into the next.
 pub struct SelectionRow {
-    pub cells: Vec<char>,
+    pub cells: Vec<Cell>,
     pub wrapped: bool,
 }
 
@@ -227,10 +232,10 @@ fn ordered_span(a: (usize, usize), b: (usize, usize)) -> ((usize, usize), (usize
 }
 
 /// Cells `from..=to` of one row as text; `None` when the span is empty.
-fn row_text(cells: &[char], from: usize, to: usize) -> Option<String> {
+fn row_text(cells: &[Cell], from: usize, to: usize) -> Option<String> {
     if from > to || from >= cells.len() {
         return None;
     }
     let end = (to + 1).min(cells.len());
-    Some(cells[from..end].iter().collect())
+    Some(cells_text(&cells[from..end]))
 }

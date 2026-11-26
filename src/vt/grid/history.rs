@@ -2,6 +2,7 @@ use std::borrow::Cow;
 
 use super::Grid;
 use super::cell::{BLANK, Cell, CellStyle};
+use crate::vt::combining::Combining;
 
 /// Text of a history row: one byte per character when it is all ASCII.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,6 +19,8 @@ pub struct HistoryRow {
     text: RowText,
     /// First column and style of each run, in column order; the first run starts at column 0.
     runs: Box<[(u16, CellStyle)]>,
+    /// Column and zero-width characters of each cell that has some, in column order.
+    combining: Box<[(u16, Combining)]>,
     /// The row wrapped at the right margin: its text continues on the next row.
     pub(super) wrapped: bool,
 }
@@ -26,22 +29,29 @@ impl HistoryRow {
     pub fn from_cells(cells: &[Cell]) -> Self {
         let used = cells.iter().rposition(|c| *c != BLANK).map_or(0, |i| i + 1);
         let cells = &cells[..used];
-        let text = if cells.iter().all(|c| c.c.is_ascii()) {
+        let mut ascii = true;
+        let mut runs: Vec<(u16, CellStyle)> = Vec::new();
+        let mut combining = Vec::new();
+        let mut style = None;
+        for (x, cell) in cells.iter().enumerate() {
+            ascii &= cell.c.is_ascii();
+            if style != Some(cell.style) {
+                style = Some(cell.style);
+                runs.push((x as u16, cell.style));
+            }
+            if let Some(run) = cell.combining {
+                combining.push((x as u16, run));
+            }
+        }
+        let text = if ascii {
             RowText::Ascii(cells.iter().map(|c| c.c as u8).collect())
         } else {
             RowText::Wide(cells.iter().map(|c| c.c).collect())
         };
-        let starts_run = |i: usize| i == 0 || cells[i - 1].style != cells[i].style;
-        let mut runs: Vec<(u16, CellStyle)> =
-            Vec::with_capacity((0..cells.len()).filter(|&i| starts_run(i)).count());
-        runs.extend(
-            (0..cells.len())
-                .filter(|&i| starts_run(i))
-                .map(|i| (i as u16, cells[i].style)),
-        );
         Self {
             text,
             runs: runs.into_boxed_slice(),
+            combining: combining.into_boxed_slice(),
             wrapped: false,
         }
     }
@@ -66,7 +76,19 @@ impl HistoryRow {
         };
         let run = self.runs.partition_point(|(start, _)| *start as usize <= x);
         let style = self.runs[run.saturating_sub(1)].1;
-        Some(Cell { c, style })
+        let combining = if self.combining.is_empty() {
+            None
+        } else {
+            self.combining
+                .binary_search_by_key(&(x as u16), |(at, _)| *at)
+                .ok()
+                .map(|i| self.combining[i].1)
+        };
+        Some(Cell {
+            c,
+            style,
+            combining,
+        })
     }
 
     /// The row as cells, padded with default blanks to at least `width`.
@@ -160,7 +182,10 @@ impl Grid {
     /// Returns the text of line `abs_line` (history or live screen), trailing blanks trimmed.
     pub fn line_text(&self, abs_line: usize) -> Option<String> {
         let cells = self.line_cells(abs_line)?;
-        let mut text: String = cells.iter().map(|c| c.c).collect();
+        let mut text = String::with_capacity(cells.len());
+        for cell in cells.iter() {
+            cell.push_text(&mut text);
+        }
         text.truncate(text.trim_end().len());
         Some(text)
     }

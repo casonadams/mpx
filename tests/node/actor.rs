@@ -70,6 +70,7 @@ fn pane_restoring(pid: Option<u32>, restored: Vec<u8>) -> Pane {
         term: "xterm-256color".to_string(),
         scrollback: 100_000,
         restored,
+        size: (80, 24),
     };
     Pane {
         actor: PaneActor::new(&spec, Box::new(process), None, ctx),

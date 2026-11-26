@@ -8,6 +8,7 @@ use tracing::warn;
 
 use super::Session;
 use crate::layout::RestoredLayout;
+use crate::layout::geometry::Rect;
 use crate::node::now_ms;
 use crate::node::pane::TermView;
 use crate::protocol::{Response, SpawnOpts};
@@ -100,8 +101,18 @@ impl Session {
         scrollbacks: &mut HashMap<String, Vec<u8>>,
     ) -> Option<(usize, usize)> {
         let mut root = Some(window.layout);
+        let (width, height) = self.window_size(self.requested);
+        let planned = root
+            .as_ref()
+            .map(|r| r.compute_rects(Rect::new(0, 0, width, height)))
+            .unwrap_or_default();
         for opts in &window.panes {
-            match self.spawn_restored(opts, scrollbacks.remove(&opts.name).unwrap_or_default()) {
+            let size = planned
+                .iter()
+                .find(|(name, _)| *name == opts.name)
+                .map_or((width, height), |(_, rect)| (rect.width, rect.height));
+            let scrollback = scrollbacks.remove(&opts.name).unwrap_or_default();
+            match self.spawn_restored(opts, scrollback, size) {
                 Ok(()) => {
                     if let Some(line) = window.startup_input.get(&opts.name) {
                         self.type_into(&opts.name, line);
@@ -152,10 +163,16 @@ impl Session {
         });
     }
 
-    fn spawn_restored(&mut self, opts: &SpawnOpts, restored: Vec<u8>) -> Result<(), String> {
+    /// Spawns a restored pane at `size`, the size it has in its planned layout.
+    fn spawn_restored(
+        &mut self,
+        opts: &SpawnOpts,
+        restored: Vec<u8>,
+        size: (u16, u16),
+    ) -> Result<(), String> {
         self.check_name(&opts.name)?;
         let id = self.next_pane_id;
-        let handle = self.spawn_pane(&opts.name, id, opts, opts.cwd.clone(), restored)?;
+        let handle = self.spawn_pane(&opts.name, id, opts, opts.cwd.clone(), restored, size)?;
         self.next_pane_id += 1;
         self.register(opts.name.clone(), handle, opts.clone());
         Ok(())

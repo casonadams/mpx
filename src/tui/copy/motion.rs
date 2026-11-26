@@ -325,4 +325,23 @@ pub(super) fn apply_motion(
         Motion::GotoLine(line) => goto_line(cs, grid, line, pane_h),
         Motion::Jump { forward, to, ch } => jump(cs, grid, forward, to, ch),
     }
+    if let Some(g) = grid {
+        step_off_wide_spacer(cs, g, motion == Motion::Right, last_col);
+    }
+}
+
+/// Moves the cursor off the right half of a wide character: onto the character, or past it when
+/// moving right, as vim's cursor never rests inside a character.
+fn step_off_wide_spacer(cs: &mut CopyState, g: &Grid, rightward: bool, last_col: usize) {
+    let on_spacer = g
+        .line_cell(cs.cursor_abs_y(g), cs.cursor_x)
+        .is_some_and(|cell| cell.is_wide_spacer());
+    if !on_spacer {
+        return;
+    }
+    cs.cursor_x = if rightward && cs.cursor_x < last_col {
+        cs.cursor_x + 1
+    } else {
+        cs.cursor_x.saturating_sub(1)
+    };
 }

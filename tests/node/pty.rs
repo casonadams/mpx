@@ -8,6 +8,10 @@ use mpx::node::{Process, SpawnSpec};
 use tokio::sync::mpsc::{self, UnboundedReceiver};
 
 fn spawn_sh(script: &str) -> (PtyNode, UnboundedReceiver<PaneMsg>) {
+    spawn_sh_sized(script, (80, 24))
+}
+
+fn spawn_sh_sized(script: &str, size: (u16, u16)) -> (PtyNode, UnboundedReceiver<PaneMsg>) {
     let spec = SpawnSpec {
         name: "stubborn".to_string(),
         id: 1,
@@ -19,6 +23,7 @@ fn spawn_sh(script: &str) -> (PtyNode, UnboundedReceiver<PaneMsg>) {
         term: "xterm-256color".to_string(),
         scrollback: 1000,
         restored: Vec::new(),
+        size,
     };
     let (tx, rx) = mpsc::unbounded_channel();
     let node = PtyNode::spawn(
@@ -61,6 +66,16 @@ fn wait_for_exit(rx: &mut UnboundedReceiver<PaneMsg>, within: Duration) -> bool 
         }
     }
     false
+}
+
+#[test]
+fn a_program_starts_on_a_terminal_of_the_pane_size() {
+    let (_node, mut rx) = spawn_sh_sized("echo size=$(stty size)", (57, 13));
+    assert!(wait_for_output(
+        &mut rx,
+        b"size=13 57",
+        Duration::from_secs(1)
+    ));
 }
 
 #[test]

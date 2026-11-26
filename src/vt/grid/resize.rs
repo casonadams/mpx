@@ -1,5 +1,6 @@
 use super::Grid;
 use super::cell::Cell;
+use super::edit::heal;
 
 impl Grid {
     /// Resizes the screen. Rows are where the content moves: see `grow_rows` and `shrink_rows`.
@@ -18,12 +19,16 @@ impl Grid {
         }
         for line in self.lines.iter_mut().chain(&mut self.hidden_lines) {
             line.resize(new_cols, Cell::default());
+            heal(line, new_cols);
         }
         self.hidden_lines.resize(new_rows, Vec::new());
         self.hidden_wrapped.resize(new_rows, false);
         for line in self.hidden_lines.iter_mut().filter(|line| line.is_empty()) {
             line.resize(new_cols, Cell::default());
         }
+        let kept = self.tab_stops.len().min(new_cols);
+        self.tab_stops.truncate(kept);
+        self.tab_stops.extend((kept..new_cols).map(|x| x % 8 == 0));
         self.cols = new_cols;
         self.rows = new_rows;
         self.scroll_top = 0;

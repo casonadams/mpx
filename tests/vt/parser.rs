@@ -790,6 +790,21 @@ fn a_resized_grid_pulls_the_log_back_from_history_and_pads_the_top() {
 }
 
 #[test]
+fn a_width_change_reflows_the_main_screen_but_not_the_alternate_screen() {
+    let shell = b"0123456789abcd";
+    let reflowed = VtScreen::resized_grid(shell, &[], (10, 3), (14, 3), 0);
+    assert_eq!(grid_rows(&reflowed), ["0123456789abcd", "", ""]);
+
+    let app = b"\x1b[?1049h\x1b[H0123456789abcd\x1b[3;1H|x";
+    let replayed = VtScreen::resized_grid(app, b"!", (10, 3), (14, 3), 0);
+    assert_eq!(
+        grid_rows(&replayed),
+        ["0123456789", "abcd", "|x!"],
+        "the app's rows stay as it drew them, as a terminal keeps them"
+    );
+}
+
+#[test]
 fn a_resized_grid_keeps_scrollback_only_when_asked() {
     let log = b"a\r\nb\r\nc\r\nd\r\ne";
     let kept = VtScreen::resized_grid(log, &[], (10, 5), (10, 1), 100_000);
@@ -879,6 +894,8 @@ fn a_resize_in_place_is_taken_only_where_it_matches_a_replay_of_the_log() {
         case(lines, (10, 5), (8, 5), 0, false),
         case(alternate, (10, 2), (10, 6), 0, true),
         case(alternate, (10, 6), (10, 2), 0, true),
+        case(alternate, (10, 2), (6, 2), 0, true),
+        case(alternate, (10, 2), (14, 4), 0, true),
     ];
     for ResizeCase {
         log,

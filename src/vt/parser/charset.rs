@@ -61,7 +61,7 @@ fn dec_special_graphic(c: char) -> char {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Copy)]
 pub(super) struct Charsets {
     g0: Charset,
     g1: Charset,

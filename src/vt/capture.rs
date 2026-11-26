@@ -39,21 +39,35 @@ pub struct CaptureSpec {
 /// Text of the lines `spec` selects, history before the screen. Each line ends with a newline,
 /// except a wrapped line that is joined onto the next one.
 pub fn capture_text(grid: &Grid, spec: &CaptureSpec) -> String {
-    let history = grid.history_len();
-    let last = history + grid.rows - 1;
+    capture_pane_text(grid, grid, spec)
+}
+
+/// `capture_text` over the history of `history` and the visible rows of `screen`: a live pane's
+/// screen, which took every resize where it happened, under the scrollback a replay rebuilt.
+pub fn capture_pane_text(history: &Grid, screen: &Grid, spec: &CaptureSpec) -> String {
+    let kept = history.history_len();
+    let last = kept + screen.rows - 1;
     let at = |line: CaptureLine| match line {
         CaptureLine::First => 0,
         CaptureLine::Last => last,
-        CaptureLine::Line(n) => (history as i64).saturating_add(n).clamp(0, last as i64) as usize,
+        CaptureLine::Line(n) => (kept as i64).saturating_add(n).clamp(0, last as i64) as usize,
     };
-    let start = spec.start.map_or(history, at);
+    let grid_of = |abs: usize| {
+        if abs < kept {
+            (history, abs)
+        } else {
+            (screen, screen.history_len() + abs - kept)
+        }
+    };
+    let start = spec.start.map_or(kept, at);
     let end = spec.end.map_or(last, at);
     let mut out = String::new();
     for abs in start..=end {
-        let Some(cells) = grid.line_cells(abs) else {
+        let (grid, row) = grid_of(abs);
+        let Some(cells) = grid.line_cells(row) else {
             break;
         };
-        let joined = spec.join && grid.line_wrapped(abs);
+        let joined = spec.join && grid.line_wrapped(row);
         let used = if joined {
             cells.len()
         } else {
@@ -97,7 +111,9 @@ pub fn restored_scrollback(log: &[u8], size: (usize, usize), scrollback: usize) 
 
 fn push_line(out: &mut String, cells: &[Cell], escapes: bool) {
     if !escapes {
-        out.extend(cells.iter().map(|cell| cell.c));
+        for cell in cells {
+            cell.push_text(out);
+        }
         return;
     }
     let mut current = CellStyle::default();
@@ -106,7 +122,7 @@ fn push_line(out: &mut String, cells: &[Cell], escapes: bool) {
             push_sgr(out, cell.style);
             current = cell.style;
         }
-        out.push(cell.c);
+        cell.push_text(out);
     }
     if current != CellStyle::default() {
         out.push_str("\x1b[0m");

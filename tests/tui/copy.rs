@@ -4,11 +4,16 @@ use mpx::tui::copy::{
     CopyOutcome, CopyState, SearchDirection, SelectionKind, SelectionRow, WHEEL_STEP,
     apply_key as apply_key_in, char_selection_text, find_next_match, line_matches,
 };
+use mpx::vt::VtScreen;
 use mpx::vt::grid::Grid;
 
+/// A row as a pane's grid holds `text`: wide characters take two cells, combining marks none.
 fn row(text: &str) -> Option<SelectionRow> {
+    let mut vt = VtScreen::new(64, 1);
+    vt.feed(text.as_bytes());
+    let used = vt.grid().cursor.x;
     Some(SelectionRow {
-        cells: text.chars().collect(),
+        cells: vt.grid().screen_lines().next().unwrap()[..used].to_vec(),
         wrapped: false,
     })
 }
@@ -64,6 +69,47 @@ fn character_selection_takes_the_span_and_trims_trailing_blanks() {
     assert_eq!(char_selection_text(&padded, (0, 0), (5, 0)), "abc");
     let two_rows = vec![row("ab  "), row("cd   ")];
     assert_eq!(char_selection_text(&two_rows, (0, 0), (4, 1)), "ab\ncd");
+}
+
+#[test]
+fn character_selection_takes_wide_characters_once_with_their_marks() {
+    let lines = vec![row("a漢字 cafe\u{301}!")];
+    assert_eq!(
+        char_selection_text(&lines, (0, 0), (10, 0)),
+        "a漢字 cafe\u{301}!"
+    );
+    assert_eq!(char_selection_text(&lines, (3, 0), (4, 0)), "字");
+}
+
+#[test]
+fn the_copy_cursor_steps_over_the_right_half_of_wide_characters() {
+    let grid = grid_with("a漢字b");
+    let mut cs = fresh_at_origin();
+    let mut seen = Vec::new();
+    for _ in 0..3 {
+        apply_key(&mut cs, &key('l'), Some(&grid), (10, 3));
+        seen.push(cs.cursor_x);
+    }
+    assert_eq!(seen, [1, 3, 5], "right lands on each character");
+    apply_key(&mut cs, &key('h'), Some(&grid), (10, 3));
+    assert_eq!(
+        cs.cursor_x, 3,
+        "left lands on the character, not its right half"
+    );
+}
+
+#[test]
+fn search_matches_text_across_wide_characters() {
+    let mut grid = Grid::new(20, 2);
+    for c in "x 漢字 漢字y".chars() {
+        grid.put_char(c);
+    }
+    let first = find_next_match(&grid, "漢字", (0, 0), SearchDirection::Down, false);
+    assert_eq!(first, Some((2, 0)));
+    let second = find_next_match(&grid, "漢字y", (2, 0), SearchDirection::Down, false);
+    assert_eq!(second, Some((7, 0)));
+    let past_the_end = find_next_match(&grid, "y漢", (0, 0), SearchDirection::Down, false);
+    assert_eq!(past_the_end, None);
 }
 
 #[test]

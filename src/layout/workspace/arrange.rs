@@ -86,6 +86,19 @@ impl Workspace {
         self.compute_layout_with_dividers(width, height).0
     }
 
+    /// Where pane `name` goes when the window showing it is laid out at `size(number)`, given the
+    /// window's index `number`. None when no window shows the pane.
+    pub fn pane_rect(&self, name: &str, size: impl Fn(usize) -> (u16, u16)) -> Option<Rect> {
+        let number = self.number_of(name)?;
+        let (width, height) = size(number);
+        let win = self.window_numbered(number)?;
+        let (rects, _) = win.compute_layout(Rect::new(0, 0, width, height));
+        rects
+            .into_iter()
+            .find(|(pane, _, _)| pane == name)
+            .map(|(_, rect, _)| rect)
+    }
+
     pub fn compute_layout_with_dividers(
         &self,
         width: u16,

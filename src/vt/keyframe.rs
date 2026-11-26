@@ -4,6 +4,7 @@
 use std::fmt::Write;
 
 use super::capture::push_sgr;
+use super::grid::SavedCursor;
 use super::{Cell, CellStyle, CursorShape, Grid, LinkId};
 
 /// The sequences that paint `grid` onto a fresh screen of its own size.
@@ -19,7 +20,7 @@ pub fn keyframe(grid: &Grid) -> String {
             paint_rows(&mut out, hidden.into_iter());
         }
         if let Some(saved) = grid.saved_cursor {
-            let _ = write!(out, "\x1b[{};{}H", saved.y + 1, saved.x + 1);
+            push_saved(&mut out, saved, (0, 0));
         }
         out.push_str("\x1b[?1049h");
     }
@@ -49,8 +50,8 @@ pub fn keyframe(grid: &Grid) -> String {
         );
     }
     if let Some(saved) = grid.saved_cursor {
-        push_visibility(&mut out, saved.visible);
-        let _ = write!(out, "\x1b[{};{}H\x1b7", saved.y + 1, saved.x + 1);
+        let left = if grid.lr_margins { grid.scroll_left } else { 0 };
+        push_saved(&mut out, saved, (left, grid.scroll_top));
     }
     let (origin_x, origin_y) = grid.addressed_position(0, 0);
     if grid.origin_mode {
@@ -58,19 +59,20 @@ pub fn keyframe(grid: &Grid) -> String {
     }
     let cursor = grid.cursor;
     if cursor.x >= grid.cols {
-        // Waiting to wrap: print the last cell again to leave the cursor past it.
-        let last = grid
-            .get_cell(grid.cols - 1, cursor.y)
-            .copied()
-            .unwrap_or_default();
+        // Waiting to wrap: print the last character again to leave the cursor past it.
+        let mut x = grid.cols - 1;
+        if grid.get_cell(x, cursor.y).is_some_and(Cell::is_wide_spacer) && x > 0 {
+            x -= 1;
+        }
+        let last = grid.get_cell(x, cursor.y).copied().unwrap_or_default();
         let _ = write!(
             out,
             "\x1b[{};{}H",
             (cursor.y + 1).saturating_sub(origin_y),
-            grid.cols - origin_x
+            (x + 1).saturating_sub(origin_x)
         );
         push_sgr(&mut out, last.style);
-        out.push(last.c);
+        last.push_text(&mut out);
     } else {
         let _ = write!(
             out,
@@ -112,7 +114,7 @@ fn paint_rows<'a>(out: &mut String, rows: impl Iterator<Item = (&'a [Cell], bool
                 push_link(out, cell.style.link);
                 link = cell.style.link;
             }
-            out.push(cell.c);
+            cell.push_text(out);
         }
         continued = wraps;
     }
@@ -126,6 +128,34 @@ fn push_link(out: &mut String, link: Option<LinkId>) {
             let _ = write!(out, "\x1b]8;{body}\x1b\\");
         }),
         None => out.push_str("\x1b]8;;\x1b\\"),
+    }
+}
+
+/// Leaves `saved` as what DECSC saves, with the margins' corner at `origin`; the pen is left in
+/// the saved rendition and origin mode off.
+fn push_saved(out: &mut String, saved: SavedCursor, origin: (usize, usize)) {
+    let SavedCursor {
+        cursor,
+        style,
+        origin_mode,
+    } = saved;
+    push_visibility(out, cursor.visible);
+    let (x0, y0) = if origin_mode {
+        out.push_str("\x1b[?6h");
+        origin
+    } else {
+        (0, 0)
+    };
+    let _ = write!(
+        out,
+        "\x1b[{};{}H",
+        (cursor.y + 1).saturating_sub(y0),
+        (cursor.x + 1).saturating_sub(x0)
+    );
+    push_sgr(out, style);
+    out.push_str("\x1b7");
+    if origin_mode {
+        out.push_str("\x1b[?6l");
     }
 }
 

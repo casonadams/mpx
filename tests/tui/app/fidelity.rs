@@ -39,8 +39,8 @@ pub(super) async fn check_masked(h: &mut Harness, step: &str, masked: &[Rect]) {
                     .copied()
                     .unwrap_or_default();
                 assert_eq!(
-                    got.c,
-                    want.c,
+                    (got.c, got.combining),
+                    (want.c, want.combining),
                     "{step}: pane {name} char at ({x},{y})\nterminal:\n{}",
                     h.terminal.snapshot()
                 );
@@ -87,7 +87,11 @@ fn number_areas(h: &Harness) -> Vec<Rect> {
 fn numbered_lines(prefix: &str, n: usize) -> String {
     (1..=n)
         .map(|i| {
-            let accent = if i % 2 == 0 { " café → ✓" } else { "" };
+            let accent = if i % 2 == 0 {
+                " café → ✓ 漢字 e\u{301}"
+            } else {
+                ""
+            };
             format!(
                 "{prefix} line {i:02}{accent} \x1b[3{};1mcolored\x1b[0m \x1b[9{}mbright\x1b[0m\r\n",
                 i % 8,
@@ -107,6 +111,15 @@ const VIM_LIKE: &str = concat!(
     "\x1b[7;1H\x1b[3M",
     "\x1b[r\x1b[20;10H\x1b[4mpositioned\x1b[24m\x1b[20;30G\x1b[38;5;208mcha\x1b[38;2;10;20;30mrgb\x1b[0m",
     "\x1b[22;1H\x1b[KVIM-DONE"
+);
+
+/// Wide characters, a combining mark and an emoji, a row of wide characters that wraps at the pane's
+/// edge, then halves of wide characters overwritten, straddled and cut by DCH.
+const WIDE: &str = concat!(
+    "\x1b[2J\x1b[H漢字かな \u{1f600} e\u{301}x \u{ff21}\u{ff22} \u{2764}\u{fe0f}#\u{fe0f}\u{20e3}\r\n",
+    "漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字!\r\n",
+    "\x1b[1;2HX\x1b[1;5H字\x1b[2;1H\x1b[P\x1b[6;1H── 漢 ──",
+    "\x1b[8;1HWIDE-DONE"
 );
 
 #[tokio::test]
@@ -144,6 +157,10 @@ async fn frames_keep_the_terminal_identical_to_the_panes() {
     let side = format!("{}SIDE-DONE", numbered_lines("side", 35));
     h.emit("side", &side, "SIDE-DONE").await;
     check(&mut h, "unfocused pane scrolls").await;
+    h.emit("side", WIDE, "WIDE-DONE").await;
+    check(&mut h, "wide characters in a split pane").await;
+    h.emit(MAIN, WIDE, "WIDE-DONE").await;
+    check(&mut h, "wide characters in the focused pane").await;
 
     h.prefixed_char('z').await;
     check(&mut h, "zoomed").await;

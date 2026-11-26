@@ -3,7 +3,11 @@ use mpx::tui::canvas::Canvas;
 use mpx::vt::{Cell, CellStyle, Color, LinkId, Underline};
 
 fn cell(c: char, style: CellStyle) -> Cell {
-    Cell { c, style }
+    Cell {
+        c,
+        style,
+        combining: None,
+    }
 }
 
 #[test]

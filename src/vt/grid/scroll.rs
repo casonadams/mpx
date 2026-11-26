@@ -1,3 +1,4 @@
+use super::edit::heal;
 use super::{Grid, ScrollHint};
 
 impl Grid {
@@ -62,6 +63,10 @@ impl Grid {
             (top..=bottom).for_each(&mut shift);
         } else {
             (top..=bottom).rev().for_each(&mut shift);
+        }
+        for row in &mut self.lines[top..=bottom] {
+            heal(row, left);
+            heal(row, right + 1);
         }
     }
 

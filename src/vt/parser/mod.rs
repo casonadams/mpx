@@ -32,6 +32,8 @@ pub struct VtHandler {
     last_char: Option<char>,
     dcs_buf: Option<Vec<u8>>,
     charsets: Charsets,
+    /// The character sets DECSC saved, restored by DECRC.
+    saved_charsets: Option<Charsets>,
 }
 
 impl VtHandler {
@@ -55,7 +57,20 @@ impl VtHandler {
             last_char: None,
             dcs_buf: None,
             charsets: Charsets::default(),
+            saved_charsets: None,
         }
+    }
+
+    /// DECSC: the grid's cursor state and the character sets.
+    fn save_cursor(&mut self) {
+        self.grid.save_cursor();
+        self.saved_charsets = Some(self.charsets);
+    }
+
+    /// DECRC: what `save_cursor` saved, or the defaults when nothing was.
+    fn restore_cursor(&mut self) {
+        self.grid.restore_cursor();
+        self.charsets = self.saved_charsets.unwrap_or_default();
     }
 
     fn reverse_index(&mut self) {
@@ -76,6 +91,7 @@ impl VtHandler {
         self.dcs_buf = None;
         self.last_char = None;
         self.charsets = Charsets::default();
+        self.saved_charsets = None;
     }
 }
 
@@ -100,10 +116,7 @@ impl Perform for VtHandler {
             0x08 => self.grid.backspace(),
             0x0E => self.charsets.shift_g1(true),
             0x0F => self.charsets.shift_g1(false),
-            b'\t' => {
-                let next_tab = (self.grid.cursor.x / 8 + 1) * 8;
-                self.grid.cursor.x = next_tab.min(self.grid.cols.saturating_sub(1));
-            }
+            b'\t' => self.grid.tab_forward(1),
             _ => {}
         }
     }
@@ -162,10 +175,17 @@ impl Perform for VtHandler {
             return;
         }
         match (intermediates, byte) {
-            ([], b'7') => self.grid.save_cursor(),
-            ([], b'8') => self.grid.restore_cursor(),
+            ([], b'7') => self.save_cursor(),
+            ([], b'8') => self.restore_cursor(),
             ([], b'c') => self.full_reset(),
             ([], b'M') => self.reverse_index(),
+            ([], b'D') => self.grid.newline(),
+            ([], b'E') => {
+                self.grid.carriage_return();
+                self.grid.newline();
+            }
+            ([], b'H') => self.grid.set_tab_stop(),
+            (b"#", b'8') => self.grid.align_test(),
             _ => {}
         }
     }

@@ -1,5 +1,5 @@
-use super::Grid;
-use super::cell::Cell;
+use super::cell::{Cell, CellStyle};
+use super::{Cursor, Grid, SavedCursor};
 
 impl Grid {
     /// Whether the alternate screen is shown.
@@ -78,14 +78,51 @@ impl Grid {
         self.lines.get_mut(y).and_then(|line| line.get_mut(x))
     }
 
+    /// DECSC: saves the cursor, the rendition and origin mode.
     pub fn save_cursor(&mut self) {
-        self.saved_cursor = Some(self.cursor);
+        self.saved_cursor = Some(SavedCursor {
+            cursor: self.cursor,
+            style: self.current_style,
+            origin_mode: self.origin_mode,
+        });
     }
 
+    /// DECRC: restores what DECSC saved; with nothing saved, homes the cursor and resets the
+    /// rendition and origin mode, as xterm does.
     pub fn restore_cursor(&mut self) {
-        if let Some(cursor) = self.saved_cursor {
-            self.cursor = cursor;
+        let saved = self.saved_cursor.unwrap_or(SavedCursor {
+            cursor: Cursor {
+                x: 0,
+                y: 0,
+                visible: self.cursor.visible,
+            },
+            style: CellStyle::default(),
+            origin_mode: false,
+        });
+        self.cursor = saved.cursor;
+        self.cursor.x = self.cursor.x.min(self.cols);
+        self.cursor.y = self.cursor.y.min(self.rows - 1);
+        self.current_style = saved.style;
+        self.origin_mode = saved.origin_mode;
+    }
+
+    /// DECALN: fills the screen with `E`, resets the margins and homes the cursor.
+    pub fn align_test(&mut self) {
+        let e = Cell {
+            c: 'E',
+            ..Cell::default()
+        };
+        for line in &mut self.lines {
+            line.fill(e);
         }
+        self.wrapped.fill(false);
+        self.scroll_top = 0;
+        self.scroll_bottom = self.rows - 1;
+        self.scroll_left = 0;
+        self.scroll_right = self.cols - 1;
+        self.origin_mode = false;
+        self.cursor.x = 0;
+        self.cursor.y = 0;
     }
 
     pub fn move_cursor(&mut self, x: usize, y: usize) {
@@ -96,8 +133,11 @@ impl Grid {
     pub fn render_plain(&self) -> String {
         let mut out = String::with_capacity(self.rows * (self.cols + 1));
         for line in &self.lines {
-            let text: String = line.iter().map(|cell| cell.c).collect();
-            out.push_str(text.trim_end());
+            let start = out.len();
+            for cell in line {
+                cell.push_text(&mut out);
+            }
+            out.truncate(start + out[start..].trim_end().len());
             out.push('\n');
         }
         while out.ends_with("\n\n") {

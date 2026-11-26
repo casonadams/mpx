@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::num::NonZeroU32;
 use std::sync::{LazyLock, Mutex, MutexGuard};
 
 /// Distinct hyperlink targets kept for the whole process. A target past this limit is not stored:
@@ -8,11 +9,11 @@ pub const MAX_LINKS: usize = 4096;
 /// A hyperlink target (OSC 8), interned so a cell names it by a small id. Equal targets share an
 /// id, so screens and the renderer compare links by value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct LinkId(u32);
+pub struct LinkId(NonZeroU32);
 
 #[derive(Default)]
 struct Table {
-    ids: HashMap<String, u32>,
+    ids: HashMap<String, NonZeroU32>,
     bodies: Vec<String>,
 }
 
@@ -34,7 +35,7 @@ impl LinkId {
         if table.bodies.len() >= MAX_LINKS {
             return None;
         }
-        let id = u32::try_from(table.bodies.len()).ok()?;
+        let id = NonZeroU32::new(u32::try_from(table.bodies.len() + 1).ok()?)?;
         table.bodies.push(body.to_owned());
         table.ids.insert(body.to_owned(), id);
         Some(Self(id))
@@ -43,6 +44,6 @@ impl LinkId {
     /// The OSC 8 target body this id stands for.
     pub fn with_body<T>(self, f: impl FnOnce(&str) -> T) -> T {
         let table = table();
-        f(&table.bodies[self.0 as usize])
+        f(&table.bodies[self.0.get() as usize - 1])
     }
 }

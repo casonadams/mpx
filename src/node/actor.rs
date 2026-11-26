@@ -20,7 +20,7 @@ use super::{Process, SpawnSpec, now_ms};
 use crate::buffer::{PlainStream, RING_CAPACITY, RingBuffer, Utf8Stream, lossy};
 use crate::protocol::{NodeInfo, NodeState, PaneId, StreamEvent, WaitOutcome};
 use crate::vt::VtScreen;
-use crate::vt::capture::{CaptureSpec, capture_text};
+use crate::vt::capture::{CaptureSpec, capture_pane_text};
 use crate::vt::keyframe::keyframe;
 
 /// Saving rewrites the whole saved tail, so output must grow it by this fraction (1 in N) before a
@@ -149,7 +149,7 @@ impl PaneActor {
         };
         let started_ms = now_ms();
         let mut ring = RingBuffer::for_scrollback(spec.scrollback);
-        let mut screen = VtScreen::live(80, 24);
+        let mut screen = VtScreen::live(spec.size.0.max(1).into(), spec.size.1.max(1).into());
         ring.write(&spec.restored);
         screen.feed(&spec.restored);
         Self {
@@ -384,7 +384,8 @@ impl PaneActor {
 
     fn logs(&mut self, query: LogQuery, reply: Reply<(String, u64)>) {
         if self.pty && query.plain && query.since.is_none() && query.until.is_none() {
-            let text = self.replay().scrollback_text(query.tail);
+            let (history, live) = self.replay();
+            let text = history.scrollback_text_over(live.grid(), query.tail);
             let _ = reply.send((text, self.ring.total_written()));
             return;
         }
@@ -394,7 +395,8 @@ impl PaneActor {
 
     /// The history and screen `capture-pane` reads from.
     fn capture(&mut self, spec: &CaptureSpec) -> String {
-        capture_text(self.replay().grid(), spec)
+        let (history, live) = self.replay();
+        capture_pane_text(history.grid(), live.grid(), spec)
     }
 
     /// The newest `RING_CAPACITY` bytes of output, from a line start, with the screen size, when
@@ -477,8 +479,10 @@ impl PaneActor {
     }
 
     /// The retained output replayed with scrollback at the pane's size, brought up to date by
-    /// feeding it only the output since its last use. A resize drops it.
-    fn replay(&mut self) -> &VtScreen {
+    /// feeding it only the output since its last use, and the live screen. The replay supplies the
+    /// history; the visible rows are the live screen's, which took each resize where it happened.
+    /// A resize drops the replay.
+    fn replay(&mut self) -> (&VtScreen, &VtScreen) {
         let replay = self.replay.get_or_insert_with(|| {
             let grid = self.screen.grid();
             let mut screen = VtScreen::new(grid.cols, grid.rows);
@@ -494,7 +498,7 @@ impl PaneActor {
         let _ = replay.screen.take_passthroughs();
         let _ = replay.screen.take_alerts();
         replay.fed = next;
-        &replay.screen
+        (&replay.screen, &self.screen)
     }
 
     fn cwd(&self) -> Option<String> {

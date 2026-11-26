@@ -42,6 +42,33 @@ async fn the_screen_and_the_history_of_a_pty_pane_are_captured() {
     assert!(text.contains("line30\n"), "{text}");
 }
 
+/// Unix only: ConPTY repaints the screen itself at a resize, so the rows after one are its own.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_capture_after_a_resize_shows_the_screen_the_pane_shows() {
+    let (_daemon, mut client) = fresh().await;
+    let script = "read x; printf '\\033[?1049h\\033[H0123456789abcde\\033[5;1Hend'; sleep 5";
+    client.spawn(pty("p", "sh", &["-c", script])).await.unwrap();
+    client.resize_pane("p", 10, 5).await.unwrap();
+    client.send_input("p", "\n").await.unwrap();
+    logs_until(&mut client, "p", "end").await;
+    client.resize_pane("p", 20, 5).await.unwrap();
+
+    let text = client
+        .capture_pane("p", CaptureSpec::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        text, "0123456789\nabcde\n\n\nend\n",
+        "the alternate screen keeps the rows the program drew at 10 columns"
+    );
+    let (plain, _) = client.logs("p", None, true, None).await.unwrap();
+    assert_eq!(
+        plain, "0123456789\nabcde\n\n\nend",
+        "logs --plain reads the same screen"
+    );
+}
+
 #[tokio::test]
 async fn join_keeps_a_wrapped_line_whole_and_escapes_keep_its_colors() {
     let (_daemon, mut client) = fresh().await;

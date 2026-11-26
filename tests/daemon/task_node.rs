@@ -28,6 +28,7 @@ fn spawn_paced(
         term: "xterm-256color".to_string(),
         scrollback: 100_000,
         restored: Vec::new(),
+        size: (80, 24),
     };
     let (tx, rx) = mpsc::unbounded_channel();
     let ctx = PaneCtx {

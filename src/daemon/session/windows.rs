@@ -212,7 +212,7 @@ impl Session {
     }
 
     /// The size window `number` is laid out at: its manual size, else the size the clients give.
-    fn window_size_at(&self, number: usize) -> (u16, u16) {
+    pub(super) fn window_size_at(&self, number: usize) -> (u16, u16) {
         self.workspace
             .manual_size_at(Some(number))
             .unwrap_or_else(|| self.window_size(self.requested))

@@ -78,6 +78,7 @@ fn divider_cell(
             bg: own_bg.or(style.bg),
             ..CellStyle::default()
         },
+        combining: None,
     }
 }
 fn vertical_char(style: BorderStyle) -> char {

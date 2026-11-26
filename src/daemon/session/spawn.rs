@@ -44,11 +44,18 @@ impl Session {
             Some(cwd) => Some(cwd),
             None => self.anchor_cwd(anchor).await.or_else(current_dir),
         };
-        let handle = self.spawn_pane(&name, id, &opts, cwd, Vec::new())?;
-        if let Err(e) = self.place(&name, place) {
-            drop(handle.request_kill());
-            return Err(e);
-        }
+        // Placed first, so the pane starts at the size it takes in the layout; a pane that fails
+        // to start leaves the layout as it was.
+        let before = self.workspace.clone();
+        self.place(&name, place)?;
+        let size = self.pane_size(&name);
+        let handle = match self.spawn_pane(&name, id, &opts, cwd, Vec::new(), size) {
+            Ok(handle) => handle,
+            Err(e) => {
+                self.workspace = before;
+                return Err(e);
+            }
+        };
 
         self.next_pane_id += 1;
         self.register(name.clone(), handle, opts);
@@ -133,7 +140,19 @@ impl Session {
         opts.args = args;
     }
 
-    /// Starts pane `name`; it shows `restored` before its process writes.
+    /// The size (cols, rows) pane `name` has in its window's layout, at the size the window is laid
+    /// out at; the window's size when the pane is in no window.
+    pub(super) fn pane_size(&self, name: &str) -> (u16, u16) {
+        self.workspace
+            .pane_rect(name, |number| self.window_size_at(number))
+            .filter(|rect| rect.width > 0 && rect.height > 0)
+            .map_or_else(
+                || self.window_size(self.requested),
+                |rect| (rect.width, rect.height),
+            )
+    }
+
+    /// Starts pane `name` at `size`; it shows `restored` before its process writes.
     pub(super) fn spawn_pane(
         &self,
         name: &str,
@@ -141,6 +160,7 @@ impl Session {
         opts: &SpawnOpts,
         cwd: Option<String>,
         restored: Vec<u8>,
+        size: (u16, u16),
     ) -> Result<PaneHandle, String> {
         let identity = PaneIdentity {
             endpoint: &self.endpoint,
@@ -161,6 +181,7 @@ impl Session {
             term: self.config.session.default_terminal.clone(),
             scrollback: self.config.session.scrollback_lines,
             restored,
+            size,
         };
         let ctx = PaneCtx {
             notify: Arc::clone(&self.notifier),
@@ -217,7 +238,8 @@ impl Session {
         }
         let id = if exited { old_id } else { self.next_pane_id };
         let spawn_cwd = opts.cwd.clone().or_else(current_dir);
-        let handle = self.spawn_pane(&name, id, &opts, spawn_cwd, Vec::new())?;
+        let size = self.pane_size(&name);
+        let handle = self.spawn_pane(&name, id, &opts, spawn_cwd, Vec::new(), size)?;
         if !exited {
             self.next_pane_id += 1;
         }

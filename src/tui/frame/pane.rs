@@ -108,10 +108,7 @@ pub(super) fn blank_uncovered<W: Write>(app: &mut App, out: &mut W) -> io::Resul
     } else {
         &app.layout.dividers
     };
-    let blank = Cell {
-        c: ' ',
-        style: Default::default(),
-    };
+    let blank = Cell::default();
     let width = usize::from(w);
     let mut covered = vec![false; width * usize::from(h)];
     let mut cover = |x0: u16, y0: u16, cols: u16, rows: u16| {

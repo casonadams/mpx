@@ -342,11 +342,11 @@ fn scrolled_lines_are_kept_in_history() {
 }
 
 #[test]
-fn clear_screen_resets_cursor_and_cells() {
+fn clear_screen_blanks_cells_and_keeps_the_cursor() {
     let mut grid = Grid::new(10, 2);
     write_str(&mut grid, "abc");
     grid.clear_screen(2);
-    assert_eq!(grid.cursor.x, 0);
+    assert_eq!(grid.cursor.x, 3);
     assert_eq!(grid.cursor.y, 0);
     assert_eq!(grid.get_cell(0, 0).unwrap().c, ' ');
 }
@@ -411,6 +411,7 @@ fn take_scroll_gives_up_on_mixed_regions_and_resizes() {
 fn styled(c: char, fg: Option<Color>, bg: Option<Color>, bold: bool) -> Cell {
     Cell {
         c,
+        combining: None,
         style: CellStyle {
             fg,
             bg,

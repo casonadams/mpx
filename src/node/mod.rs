@@ -45,6 +45,9 @@ pub struct SpawnSpec {
     pub scrollback: usize,
     /// Output the pane shows before its process writes: scrollback restored from a snapshot.
     pub restored: Vec<u8>,
+    /// The pane's size (cols, rows) in its window's layout: the terminal starts at it, so the
+    /// program never draws for a size it is about to leave.
+    pub size: (u16, u16),
 }
 
 /// Resolves at `at`, or never without a deadline: a `select!` arm for an optional timer.

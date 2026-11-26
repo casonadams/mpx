@@ -202,8 +202,7 @@ impl PopupState {
                     write_sgr(out, &cell.style)?;
                     style = Some(cell.style);
                 }
-                let mut utf8 = [0u8; 4];
-                out.write_all(cell.c.encode_utf8(&mut utf8).as_bytes())?;
+                cell.write_text(out)?;
             }
         }
         out.write_all(b"\x1b[0m")

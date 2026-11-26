@@ -13,8 +13,6 @@ use super::{NodeError, Process, SpawnSpec};
 /// now and then with errno -6. Panes open their PTYs one at a time.
 static OPEN_PTY: Mutex<()> = Mutex::new(());
 
-const COLS: u16 = 80;
-const ROWS: u16 = 24;
 /// How long a killed pane may take to exit after its SIGHUP before its process group gets SIGKILL.
 const KILL_GRACE: Duration = Duration::from_secs(1);
 
@@ -94,8 +92,8 @@ impl PtyNode {
         let pair = {
             let _one_at_a_time = OPEN_PTY.lock().unwrap_or_else(|e| e.into_inner());
             native_pty_system().openpty(PtySize {
-                rows: ROWS,
-                cols: COLS,
+                rows: spec.size.1.max(1),
+                cols: spec.size.0.max(1),
                 pixel_width: 0,
                 pixel_height: 0,
             })

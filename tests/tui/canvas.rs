@@ -1,11 +1,12 @@
 use mpx::layout::Rect;
 use mpx::tui::canvas::{Canvas, write_sgr};
-use mpx::vt::{Cell, CellStyle, Color, Underline};
+use mpx::vt::{Cell, CellStyle, Color, Underline, VtScreen};
 
 fn cell(c: char) -> Cell {
     Cell {
         c,
         style: CellStyle::default(),
+        combining: None,
     }
 }
 
@@ -19,8 +20,12 @@ fn a_wide_glyph_in_the_last_column_repaints_the_row_below() {
     assert!(out.contains("\x1b[2;1H"), "{out}");
 }
 
+/// The cells a pane's grid holds for `text`: wide characters take two, combining marks none.
 fn row(text: &str) -> Vec<Cell> {
-    text.chars().map(cell).collect()
+    let mut vt = VtScreen::new(64, 1);
+    vt.feed(text.as_bytes());
+    let used = vt.grid().cursor.x;
+    vt.grid().screen_lines().next().unwrap()[..used].to_vec()
 }
 
 /// Puts `rows` at the top-left of `c`, one per line from row 0.
@@ -180,6 +185,7 @@ fn gaps_longer_than_a_cursor_move_or_in_another_style_are_jumped() {
     let mut canvas = Canvas::default();
     let bold = Cell {
         c: ' ',
+        combining: None,
         style: CellStyle {
             bold: true,
             ..CellStyle::default()
@@ -209,16 +215,37 @@ fn a_row_with_wide_glyphs_is_reprinted_whole_and_in_sequence() {
         c.put_row(out, 0, 0, &row("漢字 2")).unwrap()
     });
     assert_eq!(
-        sent, "\x1b[1;1H\x1b[0m\x1b[4X漢字 2",
+        sent, "\x1b[1;1H\x1b[0m\x1b[6X漢字 2",
         "one address, its span erased, then the row in order"
     );
 
     let to_ascii = frame(&mut canvas, None, |c, out| {
-        c.put_row(out, 0, 0, &row("ab   ")).unwrap()
+        c.put_row(out, 0, 0, &row("ab    ")).unwrap()
     });
     assert_eq!(
-        to_ascii, "\x1b[1;1H\x1b[0m\x1b[5Xab   ",
+        to_ascii, "\x1b[1;1H\x1b[0m\x1b[6Xab    ",
         "a row last sent with wide glyphs is reprinted too"
+    );
+}
+
+#[test]
+fn a_wide_character_without_its_right_half_is_drawn_blank() {
+    let mut canvas = Canvas::default();
+    let clipped = frame(&mut canvas, None, |c, out| {
+        c.put_row(out, 0, 0, &row("abcdefghi漢")).unwrap()
+    });
+    assert_eq!(
+        clipped, "\x1b[1;1H\x1b[0m\x1b[10Xabcdefghi ",
+        "cut at the right edge it would wrap"
+    );
+    let mut halves = row("漢字");
+    halves[1] = cell('x');
+    let sent = frame(&mut canvas, None, |c, out| {
+        c.put_row(out, 0, 1, &halves).unwrap()
+    });
+    assert_eq!(
+        sent, "\x1b[2;1H\x1b[0m\x1b[4X x字",
+        "each cell takes one column whatever covered its other half"
     );
 }
 
@@ -230,8 +257,8 @@ fn a_row_with_zero_width_marks_erases_what_its_short_rendering_leaves() {
         c.put_row(out, 0, 0, &row("cafe\u{301} ok!!")).unwrap()
     });
     assert_eq!(
-        sent, "\x1b[1;1H\x1b[0m\x1b[10Xcafe\u{301} ok!!",
-        "the terminal draws the mark on the e, so the row ends a column early over blanks"
+        sent, "\x1b[1;1H\x1b[0m\x1b[9Xcafe\u{301} ok!!",
+        "the mark joins the e's cell, so the row takes nine columns"
     );
 }
 

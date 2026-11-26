@@ -17,10 +17,6 @@ fn count_param(params: &Params) -> usize {
     first_param(params, 1).max(1)
 }
 
-fn back_tab(x: usize) -> usize {
-    x.saturating_sub(1) / 8 * 8
-}
-
 impl VtHandler {
     fn cursor_up(&mut self, n: usize) {
         let grid = &mut self.grid;
@@ -67,11 +63,9 @@ impl VtHandler {
                 self.cursor_up(n);
                 self.grid.cursor.x = 0;
             }
-            'Z' => {
-                for _ in 0..n {
-                    self.grid.cursor.x = back_tab(self.grid.cursor.x);
-                }
-            }
+            'Z' => self.grid.tab_backward(n),
+            'I' => self.grid.tab_forward(n),
+            'g' => self.grid.clear_tab_stops(first_param(params, 0)),
             'X' => self.grid.erase_chars(n),
             '@' => self.grid.insert_blanks(n),
             'P' => self.grid.delete_chars(n),
@@ -105,7 +99,8 @@ impl VtHandler {
             }
             _ => {
                 let count = count_param(params);
-                self.grid.cursor.x = self.grid.cursor.x.saturating_sub(count);
+                let x = self.grid.cursor.x.min(self.grid.cols - 1);
+                self.grid.cursor.x = x.saturating_sub(count);
             }
         }
     }
@@ -135,14 +130,12 @@ impl VtHandler {
             let value = |i: usize| param(params, i).filter(|&v| v > 0);
             self.grid.set_lr_margins(value(0), value(1));
         } else {
-            self.grid.saved_cursor = Some(self.grid.cursor);
+            self.save_cursor();
         }
     }
 
     pub(super) fn csi_restore_cursor(&mut self) {
-        if let Some(c) = self.grid.saved_cursor {
-            self.grid.cursor = c;
-        }
+        self.restore_cursor();
     }
 
     /// `CSI 5 n` reports terminal status; `CSI 6 n` reports the cursor position (DSR).

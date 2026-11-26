@@ -5,10 +5,11 @@ mod marks;
 mod resize;
 mod screen;
 mod scroll;
+mod tabs;
 
 use std::collections::VecDeque;
 
-pub use cell::{Cell, CellStyle, Color, Underline};
+pub use cell::{Cell, CellStyle, Color, Underline, WIDE_SPACER, char_width};
 pub use history::HistoryRow;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,6 +73,14 @@ pub struct ScrollHint {
     pub lines: isize,
 }
 
+/// What DECSC saves and DECRC restores: the cursor, the rendition and origin mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SavedCursor {
+    pub cursor: Cursor,
+    pub style: CellStyle,
+    pub origin_mode: bool,
+}
+
 /// A shell-integration mark (OSC 133): where a prompt starts (`A`) or command output starts (`C`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShellMark {
@@ -88,7 +97,7 @@ pub struct Grid {
     /// Per screen row: the row wrapped at the right margin, so its text continues on the next row.
     wrapped: Vec<bool>,
     pub cursor: Cursor,
-    pub saved_cursor: Option<Cursor>,
+    pub saved_cursor: Option<SavedCursor>,
     pub cursor_shape: CursorShape,
     pub scroll_top: usize,
     pub scroll_bottom: usize,
@@ -121,6 +130,8 @@ pub struct Grid {
     pub origin_mode: bool,
     /// IRM (`CSI 4 h`): printing shifts the rest of the row right instead of overwriting it.
     pub insert_mode: bool,
+    /// Tab stops (HTS, TBC), one flag per column; every eighth column is set at first.
+    tab_stops: Vec<bool>,
 }
 
 impl Grid {
@@ -155,6 +166,7 @@ impl Grid {
             autowrap: true,
             origin_mode: false,
             insert_mode: false,
+            tab_stops: default_tab_stops(cols),
         }
     }
 
@@ -169,4 +181,8 @@ impl Grid {
             ..fresh
         };
     }
+}
+
+fn default_tab_stops(cols: usize) -> Vec<bool> {
+    (0..cols).map(|x| x > 0 && x % 8 == 0).collect()
 }

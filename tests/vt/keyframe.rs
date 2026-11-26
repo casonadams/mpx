@@ -48,6 +48,18 @@ fn corpus() -> Vec<(&'static str, String)> {
             "\x1b[3;8r\x1b[?7l\x1b[?6h\x1b[4h\x1b[2;3Hx".to_string(),
         ),
         ("bar cursor", "\x1b[5 qinsert".to_string()),
+        (
+            "wide characters wrapping, combining marks, pending wrap after a wide character",
+            format!(
+                "{}\r\ne\u{301} \u{1f600}\r\n{}\u{4e2d}",
+                "\u{6f22}".repeat(COLS / 2 + 3),
+                "x".repeat(COLS - 2)
+            ),
+        ),
+        (
+            "saved rendition and origin mode",
+            "\x1b[3;9r\x1b[?6h\x1b[2;4H\x1b[1;32m\x1b7\x1b[0m\x1b[?6l\x1b[1;1Hx".to_string(),
+        ),
     ]
 }
 

@@ -141,10 +141,12 @@ fn cell_content(
         .get_cell_scrolled(col, row, ctx.scroll_offset)
         .unwrap_or_default();
     if ctx.selection.is_some_and(|s| s.contains_abs(col, abs_row)) {
-        highlighted(cell.c)
+        Cell {
+            style: highlighted(cell.c).style,
+            ..cell
+        }
     } else if ctx.dimmed {
         Cell {
-            c: cell.c,
             style: CellStyle {
                 fg: inactive_color(
                     cell.style
@@ -165,6 +167,7 @@ fn cell_content(
                 bold: false,
                 ..cell.style
             },
+            ..cell
         }
     } else {
         apply_active_style(cell, ctx.active_fg, ctx.active_bg)
@@ -182,12 +185,12 @@ pub fn apply_active_style(
         cell
     } else {
         Cell {
-            c: cell.c,
             style: CellStyle {
                 fg,
                 bg,
                 ..cell.style
             },
+            ..cell
         }
     }
 }
@@ -201,5 +204,6 @@ fn highlighted(c: char) -> Cell {
             bg: Some(VtColor::Rgb(255, 140, 0)),
             ..CellStyle::default()
         },
+        combining: None,
     }
 }

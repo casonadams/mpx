@@ -213,7 +213,17 @@ fn find_cell_match(
         return None;
     }
     let last = len - query.len();
-    let matches_at = |i: usize| chars_match(cells[i..].iter().map(|c| c.c), query, smart_case);
+    let matches_at = |i: usize| {
+        !cells[i].is_wide_spacer()
+            && chars_match(
+                cells[i..]
+                    .iter()
+                    .filter(|c| !c.is_wide_spacer())
+                    .map(|c| c.c),
+                query,
+                smart_case,
+            )
+    };
     if forward {
         let start = bound.map_or(0, |c| c + 1);
         (start..=last).find(|&i| matches_at(i))
@@ -227,8 +237,11 @@ fn find_cell_match(
     }
 }
 
-fn chars_match(text: impl Iterator<Item = char>, query: &[char], smart_case: bool) -> bool {
-    text.zip(query).all(|(a, &b)| cell_match(a, b, smart_case))
+/// Whether `text` starts with `query`.
+fn chars_match(mut text: impl Iterator<Item = char>, query: &[char], smart_case: bool) -> bool {
+    query
+        .iter()
+        .all(|&b| text.next().is_some_and(|a| cell_match(a, b, smart_case)))
 }
 
 fn trimmed_cell_len(cells: &[Cell]) -> usize {

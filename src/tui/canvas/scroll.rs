@@ -4,10 +4,10 @@ use super::Canvas;
 use crate::layout::geometry::Rect;
 use crate::vt::Cell;
 
-/// Characters known to take one column: ASCII, and the box drawing and block elements mpx draws its
+/// Cells known to take one column: plain ASCII, and the box drawing and block elements mpx draws its
 /// own borders and dividers with (the layout already assumes those are narrow).
-fn narrow(c: char) -> bool {
-    c.is_ascii() || ('\u{2500}'..='\u{259F}').contains(&c)
+fn narrow(cell: &Cell) -> bool {
+    cell.is_plain() || (('\u{2500}'..='\u{259F}').contains(&cell.c) && cell.combining.is_none())
 }
 
 impl Canvas {
@@ -92,7 +92,7 @@ impl Canvas {
             let row = y as usize * width;
             self.front[row + from..row + to]
                 .iter()
-                .all(|cell| cell.is_some_and(|c| narrow(c.c)))
+                .all(|cell| cell.as_ref().is_some_and(narrow))
         })
     }
 }

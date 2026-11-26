@@ -38,8 +38,9 @@ impl VtScreen {
     /// at the old size with its scrollback and the grid resizes as `Grid::resize` does, so rows that
     /// a grow pulls back from history come back on top; `after` is then fed at the new size, as the
     /// live pane took it. A width change replays both at the new width instead, since the lines
-    /// reflow. The grid keeps at most `history` lines of scrollback (0 for a live pane, the
-    /// scrollback limit for a pane in copy mode).
+    /// reflow, unless the alternate screen is up at the resize: terminals keep an app's rows as it
+    /// drew them, and the app redraws from those. The grid keeps at most `history` lines of
+    /// scrollback (0 for a live pane, the scrollback limit for a pane in copy mode).
     pub fn resized_grid(
         before: &[u8],
         after: &[u8],
@@ -47,11 +48,17 @@ impl VtScreen {
         to: (usize, usize),
         history: usize,
     ) -> Grid {
-        let replay_at = if from.0 == to.0 { from } else { to };
-        let mut screen = Self::new(replay_at.0, replay_at.1);
-        let replay_limit = screen.grid().history_limit.max(history);
-        screen.grid_mut().set_history_limit(replay_limit);
-        screen.feed(before);
+        let replay = |at: (usize, usize)| {
+            let mut screen = Self::new(at.0, at.1);
+            let replay_limit = screen.grid().history_limit.max(history);
+            screen.grid_mut().set_history_limit(replay_limit);
+            screen.feed(before);
+            screen
+        };
+        let mut screen = replay(if from.0 == to.0 { from } else { to });
+        if from.0 != to.0 && screen.grid().alternate_screen() {
+            screen = replay(from);
+        }
         screen.grid_mut().resize(to.0, to.1);
         screen.feed(after);
         let _ = screen.take_responses();
@@ -62,13 +69,15 @@ impl VtScreen {
     }
 
     /// Resizes the screen to `to` (cols, rows) where that gives what `resized_grid` would rebuild
-    /// from the log, without replaying it: the width is kept, so no line reflows, and every row a
-    /// grow brings in comes from this grid (its own scrollback, or blank in the alternate screen,
-    /// which keeps none). Returns false, leaving the screen as it is, when only a replay can.
+    /// from the log, without replaying it: no line reflows (the width is kept, or the alternate
+    /// screen is up, whose rows never reflow), and every row a grow brings in comes from this grid
+    /// (its own scrollback, or blank in the alternate screen, which keeps none). Returns false,
+    /// leaving the screen as it is, when only a replay can.
     pub fn resize_in_place(&mut self, (cols, rows): (usize, usize)) -> bool {
         let grid = self.grid();
-        let rows_known = rows <= grid.rows || grid.alternate_screen() || grid.history_limit > 0;
-        if cols != grid.cols || !rows_known {
+        let alternate = grid.alternate_screen();
+        let rows_known = rows <= grid.rows || alternate || grid.history_limit > 0;
+        if (cols != grid.cols && !alternate) || !rows_known {
             return false;
         }
         self.grid_mut().resize(cols, rows);
@@ -133,6 +142,12 @@ impl VtScreen {
     /// Scrollback history plus the visible screen as plain text, trailing blank lines trimmed;
     /// `tail` keeps only the last N lines.
     pub fn scrollback_text(&self, tail: Option<usize>) -> String {
+        self.scrollback_text_over(&self.handler.grid, tail)
+    }
+
+    /// `scrollback_text` with the visible rows of `screen`: a live pane's screen, which took every
+    /// resize where it happened, under the history this screen rebuilt.
+    pub fn scrollback_text_over(&self, screen: &Grid, tail: Option<usize>) -> String {
         if tail == Some(0) {
             return String::new();
         }
@@ -141,7 +156,7 @@ impl VtScreen {
             .history
             .iter()
             .map(|row| Cow::Owned(row.to_cells(0)))
-            .chain(grid.screen_lines().map(Cow::Borrowed));
+            .chain(screen.screen_lines().map(Cow::Borrowed));
 
         let non_blank_from_end = all_rows.rev().skip_while(|row| is_blank_row(row));
 
@@ -160,9 +175,10 @@ fn is_blank_row(row: &[Cell]) -> bool {
 }
 
 fn row_text(row: &[Cell]) -> String {
-    row.iter()
-        .map(|cell| cell.c)
-        .collect::<String>()
-        .trim_end()
-        .to_owned()
+    let mut text = String::with_capacity(row.len());
+    for cell in row {
+        cell.push_text(&mut text);
+    }
+    text.truncate(text.trim_end().len());
+    text
 }

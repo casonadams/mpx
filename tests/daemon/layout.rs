@@ -243,3 +243,33 @@ async fn window_navigation_and_select_window_report_bounds() {
     assert!(client.select_window(9).await.is_err());
     kill_all(&mut client, &["nav-a", "nav-b-pane"]).await;
 }
+
+#[tokio::test]
+async fn a_new_pane_starts_at_the_size_it_takes_in_the_layout() {
+    let (_daemon, mut client) = started_with(task("left", "cat", &[])).await;
+    client.layout(90, 10).await.unwrap();
+    let size_probe =
+        |name: &str| super::support::pty(name, "sh", &["-c", "echo size=$(stty size); cat"]);
+    let mut split = split_right("left", "right");
+    split.spawn = size_probe("right");
+    client.split(split).await.unwrap();
+    let (layout, _, _) = client.layout(90, 10).await.unwrap();
+    let right = layout.iter().find(|p| p.0 == "right").unwrap().1;
+    let want = format!("size={} {}", right.height, right.width);
+    assert!(
+        super::support::logs_until(&mut client, "right", &want)
+            .await
+            .contains(&want)
+    );
+
+    client
+        .new_window(NewWindowOpts {
+            name: Some("bg".into()),
+            spawn: size_probe("bg"),
+            focus: false,
+        })
+        .await
+        .unwrap();
+    super::support::logs_until(&mut client, "bg", "size=10 90").await;
+    kill_all(&mut client, &["left", "right", "bg"]).await;
+}

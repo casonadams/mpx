@@ -33,13 +33,13 @@ impl VtHandler {
         }
         match (mode, set) {
             (1049, true) => {
-                self.grid.save_cursor();
+                self.save_cursor();
                 self.grid.set_alternate_screen(true);
                 self.grid.clear_alternate_screen();
             }
             (1049, false) => {
                 self.grid.set_alternate_screen(false);
-                self.grid.restore_cursor();
+                self.restore_cursor();
             }
             (1047, false) => {
                 self.grid.clear_alternate_screen();
@@ -59,8 +59,8 @@ impl VtHandler {
                     self.grid.home_cursor();
                 }
                 7 => self.grid.autowrap = set,
-                1048 if set => self.grid.save_cursor(),
-                1048 => self.grid.restore_cursor(),
+                1048 if set => self.save_cursor(),
+                1048 => self.restore_cursor(),
                 mode @ (1049 | 1047 | 47) => self.switch_screen(mode, set),
                 69 => self.grid.set_lr_margins_mode(set),
                 1000 => self.set_mouse_tracking(set, MouseTracking::X10),

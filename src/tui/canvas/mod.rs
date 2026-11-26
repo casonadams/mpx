@@ -87,8 +87,8 @@ impl Canvas {
             write!(out, "\x1b[{};{}H", y + 1, x + 1)?;
         }
         self.write_cell(out, cell)?;
-        // The grid has no width model: after a non-ASCII glyph the terminal's column is not known.
-        self.cursor = (cell.c.is_ascii() && x + 1 < self.width).then_some((x + 1, y));
+        // The terminal's column after anything but plain ASCII depends on its own width table.
+        self.cursor = (cell.is_plain() && x + 1 < self.width).then_some((x + 1, y));
         self.front[i] = Some(cell);
         Ok(())
     }
@@ -107,9 +107,8 @@ impl Canvas {
         }
         let start = self.index(from, y);
         let gap = &self.front[start..start + usize::from(x - from)];
-        let plain = |cell: &Option<Cell>| {
-            cell.is_some_and(|c| c.c.is_ascii() && Some(c.style) == self.style)
-        };
+        let plain =
+            |cell: &Option<Cell>| cell.is_some_and(|c| c.is_plain() && Some(c.style) == self.style);
         let hidden = self.covers(Rect::new(from, y, x - from, 1));
         if hidden || !gap.iter().all(plain) {
             return Ok(false);
@@ -119,10 +118,10 @@ impl Canvas {
         Ok(true)
     }
 
-    /// Writes a row of pane cells starting at `(x, y)`. A row holding non-ASCII glyphs, now or as last
-    /// sent, is reprinted whole and in sequence when anything in it changed or chrome covers part of it:
-    /// the grid has no width model, so where a wide glyph pushes later cells is left to the terminal, as
-    /// in a full repaint. Whatever such a row may spill over to its right is forgotten, to be repainted.
+    /// Writes a row of pane cells starting at `(x, y)`. A row holding anything but plain ASCII, now
+    /// or as last sent, is reprinted whole and in sequence when anything in it changed or chrome
+    /// covers part of it: where a wide character really ends is up to the terminal's width table,
+    /// as in a full repaint. Whatever such a row may spill over to its right is forgotten.
     pub fn put_row<W: Write>(
         &mut self,
         out: &mut W,
@@ -139,7 +138,7 @@ impl Canvas {
         let maybe_wide = cells
             .iter()
             .chain(shown.iter().flatten())
-            .any(|cell| !cell.c.is_ascii());
+            .any(|cell| !cell.is_plain());
         if !maybe_wide {
             for (dx, cell) in cells.iter().enumerate() {
                 self.put(out, x + dx as u16, y, *cell)?;
@@ -167,8 +166,8 @@ impl Canvas {
         cells: &[Cell],
     ) -> io::Result<()> {
         write!(out, "\x1b[{};{}H", y + 1, x + 1)?;
-        // Zero-width marks take a cell here but no column on the terminal, which then draws the row
-        // short: its span is erased first, so the columns left over are blank, not the old glyphs.
+        // A terminal whose width table disagrees draws the row short: its span is erased first, so
+        // the columns left over are blank, not the old glyphs.
         self.end_link(out)?;
         if self.style != Some(CellStyle::default()) {
             out.write_all(b"\x1b[0m")?;
@@ -177,8 +176,11 @@ impl Canvas {
         write!(out, "\x1b[{}X", cells.len())?;
         let start = self.index(x, y);
         let mut under_chrome = false;
+        let mut wide_open = false;
         for (dx, cell) in cells.iter().enumerate() {
-            self.write_cell(out, *cell)?;
+            let shown = row_cell(cells, dx, wide_open);
+            wide_open = shown.is_wide();
+            self.write_cell(out, shown)?;
             let hidden = self.covers(Rect::new(x + dx as u16, y, 1, 1));
             under_chrome |= hidden;
             self.front[start + dx] = (!hidden).then_some(*cell);
@@ -188,12 +190,13 @@ impl Canvas {
         if under_chrome {
             self.status.clear();
         }
-        // A non-ASCII glyph in the last column may wrap onto the row below, so that row is repainted.
+        // Anything but plain ASCII in the last column may wrap onto the row below, so that row is
+        // repainted.
         let last_col = self.width as usize - 1;
         let wraps = cells
             .iter()
             .enumerate()
-            .any(|(dx, cell)| x as usize + dx == last_col && !cell.c.is_ascii());
+            .any(|(dx, cell)| x as usize + dx == last_col && !cell.is_plain());
         if wraps && y + 1 < self.height {
             let below = self.index(0, y + 1);
             self.front[below..below + self.width as usize].fill(None);
@@ -213,8 +216,7 @@ impl Canvas {
             }
             self.style = Some(cell.style);
         }
-        let mut utf8 = [0u8; 4];
-        out.write_all(cell.c.encode_utf8(&mut utf8).as_bytes())
+        cell.write_text(out)
     }
 
     /// Whether chrome covers any cell of `region`.
@@ -262,4 +264,25 @@ impl Canvas {
 
 fn digits(n: u16) -> usize {
     n.checked_ilog10().map_or(1, |d| d as usize + 1)
+}
+
+/// What column `dx` of a row being printed draws, so every cell takes exactly one column: a wide
+/// character draws only when its right half follows (`wide_open` says the cell before drew one),
+/// and a right half draws nothing after it; either alone, cut by an edge or an overlay, is a blank.
+fn row_cell(cells: &[Cell], dx: usize, wide_open: bool) -> Cell {
+    let cell = cells[dx];
+    let lone = if cell.is_wide_spacer() {
+        !wide_open
+    } else {
+        cell.is_wide() && !cells.get(dx + 1).is_some_and(Cell::is_wide_spacer)
+    };
+    if lone {
+        Cell {
+            c: ' ',
+            combining: None,
+            ..cell
+        }
+    } else {
+        cell
+    }
 }
