@@ -1,0 +1,15 @@
+[package]
+name = "vtcmp"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+mpx = { path = "../.." }
+alacritty_terminal = "0.26"
+vt100 = "0.16"
+
+[profile.release]
+debug = false
