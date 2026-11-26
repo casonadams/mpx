@@ -20,6 +20,10 @@ use crate::vt::capture::CaptureSpec;
 
 pub type Reply<T> = oneshot::Sender<T>;
 
+/// A pane's newest retained output, from a line start, and the screen size (cols, rows) it was
+/// written at: what a session snapshot saves as the pane's scrollback.
+pub type SavedScrollback = (Vec<u8>, (u16, u16));
+
 /// Builds input bytes from the pane's current terminal modes.
 pub type InputBuild = Box<dyn FnOnce(&TermView) -> Vec<u8> + Send>;
 
@@ -134,7 +138,7 @@ pub enum PaneMsg {
     /// `force` hands the output over even when too little arrived since the last save to be due.
     UnsavedScrollback {
         force: bool,
-        reply: Reply<Option<(Vec<u8>, (u16, u16))>>,
+        reply: Reply<Option<SavedScrollback>>,
     },
     Cwd {
         reply: Reply<Option<String>>,
@@ -261,10 +265,7 @@ impl PaneHandle {
 
     /// The newest output, from a line start, and the screen size (cols, rows), when the pane wrote
     /// output since the last call; `None` when it wrote none.
-    pub async fn unsaved_scrollback(
-        &self,
-        force: bool,
-    ) -> Result<Option<(Vec<u8>, (u16, u16))>, String> {
+    pub async fn unsaved_scrollback(&self, force: bool) -> Result<Option<SavedScrollback>, String> {
         self.ask(|reply| PaneMsg::UnsavedScrollback { force, reply })
             .await
     }

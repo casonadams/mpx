@@ -485,10 +485,7 @@ fn line_cell_reads_history_and_screen_cells_like_line_cells() {
     for abs_line in 0..grid.history_len() + 3 {
         let cells = grid.line_cells(abs_line).expect("line");
         for x in 0..4 {
-            assert_eq!(
-                grid.line_cell(abs_line, x).unwrap_or(Cell::default()),
-                cells[x]
-            );
+            assert_eq!(grid.line_cell(abs_line, x).unwrap_or_default(), cells[x]);
         }
     }
     assert_eq!(grid.line_cell(99, 0), None);

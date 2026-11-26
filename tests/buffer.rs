@@ -304,9 +304,12 @@ fn tail_returns_the_newest_bytes_across_a_wrapped_ring() {
     assert!(rb.tail(0).is_empty());
 }
 
+/// What a case checks, the writes, the tail length asked for and the tail expected.
+type LineTailCase = (&'static str, &'static [&'static [u8]], usize, &'static [u8]);
+
 #[test]
 fn a_line_tail_starts_on_a_line_unless_it_holds_all_output() {
-    let cases: [(&str, &[&[u8]], usize, &[u8]); 4] = [
+    let cases: [LineTailCase; 4] = [
         ("whole output", &[b"\x1b[1mab\ncd"], 100, b"\x1b[1mab\ncd"),
         ("cut inside a line", &[b"ab\ncd\nef"], 4, b"ef"),
         ("cut at a line start", &[b"ab\ncd\nef"], 5, b"cd\nef"),

@@ -417,9 +417,12 @@ fn startup_run_shell_has_no_config_equivalent_and_is_noted() {
     );
 }
 
+/// A tmux config line and what the imported config must hold after it.
+type OptionCase = (&'static str, fn(&Config) -> bool);
+
 #[test]
 fn window_and_status_options_map_to_their_config_keys() {
-    let cases: [(&str, fn(&Config) -> bool); 16] = [
+    let cases: [OptionCase; 16] = [
         ("set -g base-index 1", |c| c.base_index == 1),
         ("set -g pane-base-index 2", |c| {
             c.window.pane_base_index == 2

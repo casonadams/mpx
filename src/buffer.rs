@@ -159,7 +159,7 @@ impl RingBuffer {
     }
 
     /// The retained bytes from index `skip` on, counted from the oldest retained byte.
-    fn from_index(&self, skip: usize) -> Vec<u8> {
+    fn bytes_from(&self, skip: usize) -> Vec<u8> {
         let (first, second) = self.buffer.as_slices();
         let mut out = Vec::with_capacity((first.len() + second.len()).saturating_sub(skip));
         out.extend_from_slice(&first[skip.min(first.len())..]);
@@ -169,7 +169,7 @@ impl RingBuffer {
 
     /// The newest `n` retained bytes (all of them when fewer are held).
     pub fn tail(&self, n: usize) -> Vec<u8> {
-        self.from_index(self.buffer.len().saturating_sub(n))
+        self.bytes_from(self.buffer.len().saturating_sub(n))
     }
 
     /// The newest `n` retained bytes (at most), from the start of a line: unless they are all the
@@ -179,13 +179,13 @@ impl RingBuffer {
         let skip = len.saturating_sub(n.saturating_add(1));
         let held = len - skip;
         if held <= n && held as u64 == self.written {
-            return self.from_index(skip);
+            return self.bytes_from(skip);
         }
         let start = match self.buffer.range(skip..).position(|&b| b == b'\n') {
             Some(at) => skip + at + 1,
             None => skip + held.saturating_sub(n),
         };
-        self.from_index(start)
+        self.bytes_from(start)
     }
 
     pub fn snapshot_str(&self) -> String {

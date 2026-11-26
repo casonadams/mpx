@@ -9,7 +9,8 @@ use tokio::time::Instant;
 
 use super::pacing::Inflight;
 use super::pane::{
-    InputBuild, LogQuery, Notifier, PaneCtx, PaneMsg, PaneNotice, Reply, TermView, render_logs,
+    InputBuild, LogQuery, Notifier, PaneCtx, PaneMsg, PaneNotice, Reply, SavedScrollback, TermView,
+    render_logs,
 };
 use super::process::{self, foreground_name as fg_name};
 use super::pty::PtyTerminal;
@@ -401,7 +402,7 @@ impl PaneActor {
 
     /// The newest `RING_CAPACITY` bytes of output, from a line start, with the screen size, when
     /// output arrived since they were last handed out.
-    fn unsaved_scrollback(&mut self, force: bool) -> Option<(Vec<u8>, (u16, u16))> {
+    fn unsaved_scrollback(&mut self, force: bool) -> Option<SavedScrollback> {
         let written = self.ring.total_written();
         let (new_bytes, age_ms) = (
             written - self.saved_at,

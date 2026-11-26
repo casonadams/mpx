@@ -14,6 +14,7 @@ use super::{NodeError, Process, SpawnSpec};
 static OPEN_PTY: Mutex<()> = Mutex::new(());
 
 /// How long a killed pane may take to exit after its SIGHUP before its process group gets SIGKILL.
+#[cfg(unix)]
 const KILL_GRACE: Duration = Duration::from_secs(1);
 
 type Master = Arc<Mutex<Option<Box<dyn MasterPty + Send>>>>;
@@ -24,6 +25,7 @@ pub struct PtyNode {
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     pid: Option<u32>,
     /// Set once the child has been reaped.
+    #[cfg(unix)]
     exited: Arc<AtomicBool>,
 }
 
@@ -164,6 +166,7 @@ impl PtyNode {
             master: Arc::new(Mutex::new(Some(pair.master))),
             killer: Mutex::new(killer),
             pid,
+            #[cfg(unix)]
             exited,
         })
     }

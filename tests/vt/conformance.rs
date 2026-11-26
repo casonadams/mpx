@@ -19,10 +19,19 @@ fn cursor(vt: &VtScreen) -> (usize, usize) {
     (grid.cursor.x.min(grid.cols - 1), grid.cursor.y)
 }
 
+/// What a case checks, its screen size (cols, rows), the input, the screen rows and the cursor.
+type Case = (
+    &'static str,
+    usize,
+    usize,
+    &'static str,
+    &'static [&'static str],
+    (usize, usize),
+);
+
 #[test]
 fn control_sequences_match_xterm() {
-    // (what, cols, rows, input, screen rows, cursor)
-    let cases: &[(&str, usize, usize, &str, &[&str], (usize, usize))] = &[
+    let cases: &[Case] = &[
         (
             "ED 2 keeps the cursor",
             10,

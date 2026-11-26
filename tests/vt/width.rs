@@ -19,10 +19,18 @@ fn cursor(vt: &VtScreen) -> (usize, usize) {
     (grid.cursor.x.min(grid.cols - 1), grid.cursor.y)
 }
 
+/// What a case checks, the screen width, the input, the first row and the cursor.
+type Case = (
+    &'static str,
+    usize,
+    &'static str,
+    &'static str,
+    (usize, usize),
+);
+
 #[test]
 fn characters_take_their_unicode_width() {
-    // (what, cols, input, first row, cursor)
-    let cases: &[(&str, usize, &str, &str, (usize, usize))] = &[
+    let cases: &[Case] = &[
         (
             "CJK takes two columns",
             20,

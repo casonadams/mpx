@@ -221,7 +221,7 @@ fn logs_follow_fails_when_the_daemon_dies_mid_stream() {
     let sessions: serde_json::Value =
         serde_json::from_str(&s.stdout(&["list-sessions", "--json"])).expect("json");
     let pid = sessions[0]["pid"].as_i64().expect("daemon pid") as libc::pid_t;
-    let mut child = s
+    let child = s
         .base()
         .args(["logs", "idle", "-f"])
         .stdout(Stdio::null())
