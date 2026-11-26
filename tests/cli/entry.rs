@@ -104,6 +104,8 @@ fn malformed_default_config_is_reported_on_stderr_and_defaults_apply() {
     assert!(out.stdout.is_empty());
 }
 
+/// Unix only: the limit is the unix socket address length; Windows pipe names have no such limit.
+#[cfg(unix)]
 #[test]
 fn a_session_name_too_long_for_a_socket_path_is_refused_before_any_daemon_starts() {
     let dir = tempfile::tempdir().expect("temp dir");
@@ -132,5 +134,10 @@ fn log_output_never_reaches_stdout() {
         .output()
         .expect("spawn");
     assert!(out.status.success());
-    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "[]");
+    // Windows lists the shared pipe namespace, where other tests' daemons may run: the output is
+    // checked to be the JSON array alone, not to be empty.
+    let listed: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|e| {
+        panic!("{e}: {}", String::from_utf8_lossy(&out.stdout));
+    });
+    assert!(listed.is_array(), "{listed}");
 }
