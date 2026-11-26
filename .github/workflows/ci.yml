@@ -69,3 +69,7 @@ jobs:
 
       - name: Test
         run: cargo test --locked --no-fail-fast
+        env:
+          # Windows runners have 4 vCPUs; the 8 threads in .cargo/config.toml overload ConPTY and
+          # Git sh there (4 of 8 probe runs failed at 8 threads, 1 of 8 at 4, from a test race).
+          RUST_TEST_THREADS: ${{ runner.os == 'Windows' && '4' || '8' }}

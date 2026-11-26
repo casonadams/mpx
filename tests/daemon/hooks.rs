@@ -19,6 +19,19 @@ async fn appears(path: &Path) -> bool {
     false
 }
 
+/// Whether the file at `path` comes to hold exactly `want` within a bounded wait. A shell `>`
+/// creates the file before the command writes to it, so its existence alone is not enough.
+async fn reads(path: &Path, want: &str) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline {
+        if std::fs::read_to_string(path).is_ok_and(|text| text == want) {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    false
+}
+
 /// `path` as the shell hook commands spell it: `sh` reads backslashes as escapes, so Windows
 /// separators become forward slashes.
 fn sh_path(path: &Path) -> String {
@@ -156,10 +169,10 @@ async fn after_new_window_runs_its_hook_with_the_hook_variables() {
     .await
     .unwrap();
     new_window(&mut client, "hooked").await;
-    assert!(appears(&marker).await, "hook did not run");
-    assert_eq!(
-        std::fs::read_to_string(&marker).unwrap(),
-        "after-new-window"
+    assert!(
+        reads(&marker, "after-new-window").await,
+        "hook did not write its name: {:?}",
+        std::fs::read_to_string(&marker)
     );
 }
 
