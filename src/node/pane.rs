@@ -341,10 +341,12 @@ pub fn spawn(spec: SpawnSpec, pty: bool, ctx: PaneCtx) -> Result<PaneHandle, Nod
         pty,
         tx,
     };
-    tokio::spawn(
-        PaneActor::new(&spec, process, terminal, ctx)
-            .with_inflight(inflight)
-            .run(rx),
-    );
+    let actor = PaneActor::new(&spec, process, terminal, ctx).with_inflight(inflight);
+    let actor = if cfg!(windows) && pty {
+        actor.with_input_held_until_output()
+    } else {
+        actor
+    };
+    tokio::spawn(actor.run(rx));
     Ok(handle)
 }

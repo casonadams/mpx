@@ -398,6 +398,35 @@ fn kill_is_answered_when_the_process_exits() {
 }
 
 #[test]
+fn held_input_waits_for_the_first_output_and_follows_its_replies() {
+    let mut p = plain();
+    p.actor = p.actor.with_input_held_until_output();
+    let (reply, mut sent) = oneshot::channel();
+    p.actor.handle(PaneMsg::Input {
+        build: Box::new(|_| b"typed".to_vec()),
+        reply,
+    });
+    assert!(sent.try_recv().unwrap().is_ok(), "held input is accepted");
+    assert!(
+        p.input.lock().unwrap().is_empty(),
+        "nothing reaches the program yet"
+    );
+
+    p.actor.handle(output(b"\x1b[6n"));
+    assert_eq!(
+        p.input.lock().unwrap().as_slice(),
+        b"\x1b[1;1Rtyped",
+        "the cursor report first, then what was typed"
+    );
+    let (reply, _sent) = oneshot::channel();
+    p.actor.handle(PaneMsg::Input {
+        build: Box::new(|_| b"!".to_vec()),
+        reply,
+    });
+    assert_eq!(p.input.lock().unwrap().as_slice(), b"\x1b[1;1Rtyped!");
+}
+
+#[test]
 fn input_to_an_exited_pane_is_refused() {
     let mut p = plain();
     p.actor.handle(PaneMsg::Exited(Some(0)));

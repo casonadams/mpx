@@ -107,6 +107,9 @@ pub struct PaneActor {
     process: Option<Box<dyn Process>>,
     /// Terminal control while a PTY process runs; `None` for task panes and after exit.
     terminal: Option<PtyTerminal>,
+    /// Input waiting for the pane's first output, written after that output's replies; `None` once
+    /// input goes straight to the program.
+    held_input: Option<Vec<u8>>,
     ring: RingBuffer,
     /// Scrollback lines a plain capture keeps (tmux `history-limit`).
     scrollback: usize,
@@ -164,6 +167,7 @@ impl PaneActor {
             started_ms,
             process: Some(process),
             terminal,
+            held_input: None,
             ring,
             scrollback: spec.scrollback,
             screen,
@@ -200,6 +204,14 @@ impl PaneActor {
     /// Counts processed output off `inflight`, which the pane's reader waits on.
     pub fn with_inflight(mut self, inflight: Arc<Inflight>) -> Self {
         self.inflight = inflight;
+        self
+    }
+
+    /// Holds input until the pane's first output is handled, then writes it after that output's
+    /// replies. A ConPTY pane opens with a cursor query (`ESC[6n`) and drops input written
+    /// before the query is answered (measured on the Windows CI runners).
+    pub fn with_input_held_until_output(mut self) -> Self {
+        self.held_input = Some(Vec::new());
         self
     }
 
@@ -257,6 +269,11 @@ impl PaneActor {
         self.screen.feed(bytes);
         for reply in self.screen.take_responses() {
             self.write_raw(&reply);
+        }
+        if let Some(held) = self.held_input.take()
+            && !held.is_empty()
+        {
+            self.write_raw(&held);
         }
         let _ = self.screen.take_passthroughs();
         let _ = self.screen.take_alerts();
@@ -336,6 +353,10 @@ impl PaneActor {
             modes: self.screen.modes(),
         };
         let bytes = build(&view);
+        if let Some(held) = &mut self.held_input {
+            held.extend_from_slice(&bytes);
+            return Ok(());
+        }
         process.send_input(&bytes).map_err(|e| e.to_string())
     }
 
