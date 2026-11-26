@@ -1,6 +1,7 @@
 mod node {
     mod actor;
     mod cwd;
+    mod input_gate;
     mod logs;
     mod pacing;
     mod process;

@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use mpx::node::actor::{PaneActor, scrollback_save_due};
+use mpx::node::input_gate::InputGate;
 use mpx::node::pane::{LogQuery, PaneCtx, PaneMsg, PaneNotice};
 use mpx::node::sink::Sink;
 use mpx::node::waits::Cond;
@@ -400,7 +401,7 @@ fn kill_is_answered_when_the_process_exits() {
 #[test]
 fn held_input_waits_for_the_first_output_and_follows_its_replies() {
     let mut p = plain();
-    p.actor = p.actor.with_input_held_until_output();
+    p.actor = p.actor.with_input_gate(InputGate::new(true));
     let (reply, mut sent) = oneshot::channel();
     p.actor.handle(PaneMsg::Input {
         build: Box::new(|_| b"typed".to_vec()),

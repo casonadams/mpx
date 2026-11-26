@@ -2,6 +2,7 @@
 //! agent state, subscribers and waiters. Blocking PTY reads and child waits run on threads that
 //! only forward messages to the actor.
 pub mod actor;
+pub mod input_gate;
 pub mod pacing;
 pub mod pane;
 pub mod process;

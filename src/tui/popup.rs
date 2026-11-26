@@ -19,6 +19,7 @@ use super::overlay::widgets::{draw_box, inner};
 use super::placement::{Extent, Offset};
 use crate::keys::{KeyPolicy, encode_key};
 use crate::layout::geometry::Rect;
+use crate::node::input_gate::InputGate;
 use crate::vt::VtScreen;
 
 /// `display-popup` options after parsing. The size defaults to 80% of the screen in each direction,
@@ -58,6 +59,8 @@ pub struct PopupState {
     pub exited: bool,
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,
+    /// Holds keys until the command's first output has been handled (see `InputGate`).
+    input_gate: InputGate,
     killer: Box<dyn ChildKiller + Send + Sync>,
     rx: mpsc::UnboundedReceiver<PopupEvent>,
 }
@@ -129,6 +132,7 @@ impl PopupState {
             exited: false,
             master: pair.master,
             writer,
+            input_gate: InputGate::for_pty(),
             killer,
             rx,
         })
@@ -164,6 +168,10 @@ impl PopupState {
             let _ = self.writer.write_all(&reply);
             let _ = self.writer.flush();
         }
+        if let Some(held) = self.input_gate.open() {
+            let _ = self.writer.write_all(&held);
+            let _ = self.writer.flush();
+        }
     }
 
     /// Sends a key to the command, encoded with the input modes it set.
@@ -172,6 +180,9 @@ impl PopupState {
         if bytes.is_empty() {
             return Ok(());
         }
+        let Some(bytes) = self.input_gate.pass(bytes) else {
+            return Ok(());
+        };
         self.writer.write_all(&bytes)?;
         self.writer.flush()
     }

@@ -30,8 +30,16 @@ async fn paren_keys_step_between_running_sessions() {
 async fn the_tui_ends_when_its_daemon_goes_away() {
     let mut h = Harness::idle().await;
     let _ = h.probe.shutdown().await;
-    h.app.layout.dirty = true;
-    assert!(!h.app.prepare_frame().await, "nothing left to show");
+    // The daemon stops after it replies, and a Windows pipe can still answer for a moment.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        h.app.layout.dirty = true;
+        if !h.app.prepare_frame().await {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "nothing left to show");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
 }
 
 #[tokio::test]

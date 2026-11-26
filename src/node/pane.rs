@@ -6,6 +6,7 @@ use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 
 use super::actor::PaneActor;
+use super::input_gate::InputGate;
 use super::pacing::{Inflight, Pacing};
 use super::pty::{PtyNode, PtyTerminal};
 use super::sink::Sink;
@@ -341,12 +342,14 @@ pub fn spawn(spec: SpawnSpec, pty: bool, ctx: PaneCtx) -> Result<PaneHandle, Nod
         pty,
         tx,
     };
-    let actor = PaneActor::new(&spec, process, terminal, ctx).with_inflight(inflight);
-    let actor = if cfg!(windows) && pty {
-        actor.with_input_held_until_output()
+    let gate = if pty {
+        InputGate::for_pty()
     } else {
-        actor
+        InputGate::default()
     };
+    let actor = PaneActor::new(&spec, process, terminal, ctx)
+        .with_inflight(inflight)
+        .with_input_gate(gate);
     tokio::spawn(actor.run(rx));
     Ok(handle)
 }

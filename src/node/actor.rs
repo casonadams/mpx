@@ -7,6 +7,7 @@ use std::time::Duration;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::Instant;
 
+use super::input_gate::InputGate;
 use super::pacing::Inflight;
 use super::pane::{
     InputBuild, LogQuery, Notifier, PaneCtx, PaneMsg, PaneNotice, Reply, SavedScrollback, TermView,
@@ -107,9 +108,8 @@ pub struct PaneActor {
     process: Option<Box<dyn Process>>,
     /// Terminal control while a PTY process runs; `None` for task panes and after exit.
     terminal: Option<PtyTerminal>,
-    /// Input waiting for the pane's first output, written after that output's replies; `None` once
-    /// input goes straight to the program.
-    held_input: Option<Vec<u8>>,
+    /// Holds input until the pane's first output has been handled (see `InputGate`).
+    input_gate: InputGate,
     ring: RingBuffer,
     /// Scrollback lines a plain capture keeps (tmux `history-limit`).
     scrollback: usize,
@@ -167,7 +167,7 @@ impl PaneActor {
             started_ms,
             process: Some(process),
             terminal,
-            held_input: None,
+            input_gate: InputGate::default(),
             ring,
             scrollback: spec.scrollback,
             screen,
@@ -207,11 +207,10 @@ impl PaneActor {
         self
     }
 
-    /// Holds input until the pane's first output is handled, then writes it after that output's
-    /// replies. A ConPTY pane opens with a cursor query (`ESC[6n`) and drops input written
-    /// before the query is answered (measured on the Windows CI runners).
-    pub fn with_input_held_until_output(mut self) -> Self {
-        self.held_input = Some(Vec::new());
+    /// Holds input until the pane's first output has been handled, then writes it after that
+    /// output's replies.
+    pub fn with_input_gate(mut self, gate: InputGate) -> Self {
+        self.input_gate = gate;
         self
     }
 
@@ -270,9 +269,7 @@ impl PaneActor {
         for reply in self.screen.take_responses() {
             self.write_raw(&reply);
         }
-        if let Some(held) = self.held_input.take()
-            && !held.is_empty()
-        {
+        if let Some(held) = self.input_gate.open() {
             self.write_raw(&held);
         }
         let _ = self.screen.take_passthroughs();
@@ -352,11 +349,9 @@ impl PaneActor {
             pty: self.pty,
             modes: self.screen.modes(),
         };
-        let bytes = build(&view);
-        if let Some(held) = &mut self.held_input {
-            held.extend_from_slice(&bytes);
+        let Some(bytes) = self.input_gate.pass(build(&view)) else {
             return Ok(());
-        }
+        };
         process.send_input(&bytes).map_err(|e| e.to_string())
     }
 
