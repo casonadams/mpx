@@ -10,6 +10,7 @@ mod cli {
     #[cfg(unix)]
     mod incompatible;
     mod nodes;
+    mod panic_log;
     mod render;
     mod resolve;
     mod windows;

@@ -7,6 +7,7 @@ mod clients;
 mod environment;
 mod hooks;
 mod panes;
+pub mod panic_log;
 pub mod render;
 mod resolve;
 mod sessions;
