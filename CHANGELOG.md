@@ -1,5 +1,60 @@
 # Changelog
 
+## [0.4.1](https://github.com/casonadams/mpx/compare/v0.4.0...v0.4.1) (2026-11-28)
+
+
+### Features
+
+* **cli:** append panics to panic.log in the state directory ([b57ed8e](https://github.com/casonadams/mpx/commit/b57ed8e3175f21548496e0c6bfadec291ab1f288))
+
+
+### Bug Fixes
+
+* address audit findings across vt, tui, daemon, node, config and cli ([e9adbfb](https://github.com/casonadams/mpx/commit/e9adbfb7eb8e4112dd580170310c7a7af260e49a))
+* **ci:** clear the warnings that build.warnings = deny turns into errors ([ae5a9bf](https://github.com/casonadams/mpx/commit/ae5a9bf8372cf694c722e1983fe8f348af48b748))
+* **ci:** run Windows tests on 4 threads and fix a hook-marker race ([48f6bbd](https://github.com/casonadams/mpx/commit/48f6bbdc394d715e3806b6e340ea50b729c6ded6))
+* **daemon:** bound output relayed to a stalled session ([60af618](https://github.com/casonadams/mpx/commit/60af61894d0f713cbdfe781482280d67a2d843c2))
+* **daemon:** drop wait-for waiters of disconnected clients ([0fc20d8](https://github.com/casonadams/mpx/commit/0fc20d86f8fa3731479c38170f5af76a90bb6571))
+* **daemon:** prune closed subscribers waiting for a pane ([f4bbe2e](https://github.com/casonadams/mpx/commit/f4bbe2e985a1db8efe03eb034fd89c80a85ef31c))
+* **node:** hold a Windows pane's input until ConPTY's startup query is answered ([bda3510](https://github.com/casonadams/mpx/commit/bda3510cbd86f63675c484ad2936c90c5465b9f6))
+* **protocol:** cap the length of a JSON line a peer may send ([feaa05a](https://github.com/casonadams/mpx/commit/feaa05aa3a0e0b7f341885c9645fcd223048ced8))
+* **vt:** bound pending alerts and drain them on the live pane screen ([532bfc5](https://github.com/casonadams/mpx/commit/532bfc52ac542a94994ad0fc34320469ce3446ad))
+* **vt:** keep alternate-screen scrolling out of history ([111d5c4](https://github.com/casonadams/mpx/commit/111d5c410676133bf2d7a866f1349ec7f09b7c48))
+* **vt:** unicode widths, xterm conformance gaps, layout-sized spawns, live-screen captures ([525fb34](https://github.com/casonadams/mpx/commit/525fb347376d3e7abf84402d1c56459b3a4abfe7))
+
+
+### Performance Improvements
+
+* **buffer:** copy the saved scrollback tail once ([bedda76](https://github.com/casonadams/mpx/commit/bedda7636ca5d6aee85c439c6a351d048bf72ef7))
+* **buffer:** give up on an escape sequence that never ends ([fe96f6b](https://github.com/casonadams/mpx/commit/fe96f6bb8726a605d14cd079ab3c9c7875ee2fed))
+* **cli:** reuse the layout already fetched by resize-pane -x/-y ([2d1025a](https://github.com/casonadams/mpx/commit/2d1025ae9f963d86ce30e31d831690a8a551131d))
+* **daemon:** ask every window's pane for its label concurrently ([37e4df3](https://github.com/casonadams/mpx/commit/37e4df3d3d76a6621f8f0f14ebb661ee5a6fab56))
+* **daemon:** batch JSON event writes and serialize messages without a String ([9028e94](https://github.com/casonadams/mpx/commit/9028e9463eb439662946dcaa8ed75f69816477db))
+* **daemon:** clone a fanout event only for subscribers that take it ([a508b01](https://github.com/casonadams/mpx/commit/a508b01f82bd17334067c91f286237a6b0edbbe3))
+* **daemon:** expire and evict idempotency keys from an ordered queue ([2cf34db](https://github.com/casonadams/mpx/commit/2cf34dba4c07c7ee0954a6b3f21487daf91b8cdf))
+* **daemon:** look up resume session ids on the blocking pool ([34b0659](https://github.com/casonadams/mpx/commit/34b0659ed39f54558c1f47be22d9dd5783e03762))
+* **daemon:** replay saved scrollback on the blocking pool when restoring ([579e432](https://github.com/casonadams/mpx/commit/579e432c1ade2e6519351e503153d0d5e7a82c25))
+* **daemon:** write session snapshots on the disk writer thread ([d1377f4](https://github.com/casonadams/mpx/commit/d1377f4c8a2f32ae56d32dda3182eaa17f5a2bd7))
+* **format:** match globs without exponential backtracking ([6c47313](https://github.com/casonadams/mpx/commit/6c47313ceac070c6eec64f81958aa5cefb0e0eba))
+* **layout:** count and locate panes without listing every leaf ([ec06aca](https://github.com/casonadams/mpx/commit/ec06aca97a8ee239c783daec641a526308ead0ab))
+* **node:** back off while a blocked pane reader polls ([ca0ea7d](https://github.com/casonadams/mpx/commit/ca0ea7d8bcd56c6e9196e3fd6b37f145778e6e51))
+* **node:** cap the text a match wait rescans ([50178c2](https://github.com/casonadams/mpx/commit/50178c2c59385db029012d4cc86e86b1185501eb))
+* **node:** save a pane's scrollback only once enough has changed ([5696257](https://github.com/casonadams/mpx/commit/5696257d594af2c378a8ef5835c5bc08465017ce))
+* **protocol:** share pane output data between subscribers instead of copying it ([414fe90](https://github.com/casonadams/mpx/commit/414fe90461185abcb06743a55e5721096f12b6fb))
+* **tui:** catch up once per batch of lag events ([3c41496](https://github.com/casonadams/mpx/commit/3c414963416c1bb1c5fdbb4b60940c5753d3cd0a))
+* **tui:** find uncovered pane-area cells with a coverage mask ([c28882f](https://github.com/casonadams/mpx/commit/c28882f13ce7333a4e540d929ca7c65e5cf4c63d))
+* **tui:** load tree sessions concurrently and time out slow daemons ([37a59cd](https://github.com/casonadams/mpx/commit/37a59cd8bb236ca766b5bb22e7e9806c72e535d4))
+* **tui:** palette reloads sessions only on its sessions tab and renders without cloning items ([bfdaa54](https://github.com/casonadams/mpx/commit/bfdaa54366388f8dc969341a686406768f1a933d))
+* **tui:** read single cells for word motions instead of whole history rows ([19313ca](https://github.com/casonadams/mpx/commit/19313caea5891f9c181eb23cba9bb94740c4cd84))
+* **tui:** rebuild warm scrollback less often and cancel abandoned builds ([029a1f7](https://github.com/casonadams/mpx/commit/029a1f73ffb235551b7553371a9b4526b833ab17))
+* **tui:** reload the clients overlay at most every few seconds ([69e330f](https://github.com/casonadams/mpx/commit/69e330f89652f262f24f7444924646341c90625d))
+* **tui:** resolve a divider cell's glyph in one pass over the dividers ([5e1193a](https://github.com/casonadams/mpx/commit/5e1193a9718d5378b89581b8de960db5e99b9461))
+* **tui:** send extra status rows only when they change ([d74adbf](https://github.com/casonadams/mpx/commit/d74adbffb37e1f21e246be5fce221e1ac1bcfa4b))
+* **vt:** buffer a DCS only while it can still be a passthrough ([aa2503f](https://github.com/casonadams/mpx/commit/aa2503f4269cf5fad76fa21e298a62f89eaf64e6))
+* **vt:** shift columns under left/right margins without allocating ([817aad6](https://github.com/casonadams/mpx/commit/817aad6636ac5af7e88cc60155d7b8df5aded7f0))
+* **vt:** size history row runs exactly when a line scrolls off ([7efb2a5](https://github.com/casonadams/mpx/commit/7efb2a5b6ac276f71ae157ae0a83918507a6960d))
+* **vt:** write SGR sequences without temporary strings ([8b5dc54](https://github.com/casonadams/mpx/commit/8b5dc54f614474bd3d2e9c552a8ceb52a208c9ce))
+
 ## [0.4.0](https://github.com/casonadams/mpx/compare/v0.3.2...v0.4.0) (2026-11-23)
 
 
